@@ -139,11 +139,33 @@ pub struct SurfaceInterfaceDeclaration {
     pub public: bool,
     /// The declared interface spelling.
     pub name: SurfaceName,
-    /// The interface's single type parameter.
-    pub parameter: SurfaceTypeParameter,
+    /// The interface's nonempty ordered type parameters.
+    pub parameters: Box<[SurfaceTypeParameter]>,
+    /// The optional source determination edge.
+    pub determination: Option<SurfaceInterfaceDetermination>,
     /// The nonempty ordered method signatures.
     pub methods: Vec<SurfaceInterfaceMethod>,
     /// The complete interface declaration span.
+    pub span: Span,
+}
+
+/// One optional source determination edge on an interface declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceInterfaceDetermination {
+    /// The determinant side before `->`.
+    pub determinant: SurfaceDeterminationSide,
+    /// The dependent side after `->`.
+    pub dependent: SurfaceDeterminationSide,
+    /// The complete `where` determination span.
+    pub span: Span,
+}
+
+/// One nonempty source-ordered side of an interface determination.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceDeterminationSide {
+    /// Interface-parameter names in written order.
+    pub parameters: Box<[SurfaceName]>,
+    /// The complete side span, including parentheses when present.
     pub span: Span,
 }
 
@@ -167,10 +189,8 @@ pub struct SurfaceImplementation {
     pub public: bool,
     /// The optional complete explicit type-parameter list.
     pub type_parameters: Option<Vec<SurfaceTypeParameter>>,
-    /// The implemented interface reference.
-    pub interface: SurfaceReference,
-    /// The interface's single head type argument.
-    pub argument: SurfaceType,
+    /// The complete implemented interface application.
+    pub head: SurfaceInterfaceApplication,
     /// Ordered implementation prerequisites.
     pub prerequisites: Vec<SurfaceRequirement>,
     /// Flat method equations in source order.
@@ -262,16 +282,19 @@ pub struct SurfaceInlineOperationalHeader {
     pub span: Span,
 }
 
-/// One explicit interface requirement outside the ordinary type algebra.
+/// One complete source interface application outside the ordinary type algebra.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SurfaceRequirement {
+pub struct SurfaceInterfaceApplication {
     /// The unqualified or module-qualified interface reference.
     pub interface: SurfaceReference,
-    /// The interface's single type argument.
-    pub argument: SurfaceType,
+    /// The nonempty ordered type arguments.
+    pub arguments: Box<[SurfaceType]>,
     /// The complete interface application span.
     pub span: Span,
 }
+
+/// One explicit interface requirement outside the ordinary type algebra.
+pub type SurfaceRequirement = SurfaceInterfaceApplication;
 
 /// A source expression.
 #[derive(Clone, Debug, Eq, PartialEq)]

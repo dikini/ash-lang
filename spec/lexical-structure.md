@@ -30,10 +30,10 @@ The remaining punctuation admitted by Ash is `(`, `)`, `{`, `}`, `<`, `>`,
 introduces a named module root. A period separates module-path segments or a
 module alias from a qualified member; it does not begin a floating-point
 literal. Angle brackets delimit parameter lists on nominal, global, and
-implementation declarations, method parameter lists, the single parameter of
-an interface declaration, named type applications, and the single type argument
-of an interface application. The longest token wins where one spelling
-prefixes another.
+implementation declarations, method parameter lists, named type applications,
+and interface declarations and applications. Angle brackets delimit nonempty
+ordered parameter and argument lists on interfaces. The longest token wins
+where one spelling prefixes another.
 Semicolon is recognized only to provide its specified source rejection; no
 grammar production admits it as source punctuation.
 

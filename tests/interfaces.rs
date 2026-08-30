@@ -15,7 +15,7 @@ use ash::{
     elaborate::{Elaborator, TypeError, check_module, link_modules},
     eval::{TraceEvent, evaluate},
     evidence_validation::validate_interface_evidence,
-    interface::{EvidenceSlot, InterfaceId, MethodId, RequirementOwner},
+    interface::{EvidenceNode, EvidenceSlot, InterfaceId, MethodId, RequirementOwner},
     module::{ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, resolve_module},
     resolved::{
@@ -275,6 +275,179 @@ fn rejects_interface_method_without_parameter_occurrence() {
 }
 
 #[test]
+fn ordinary_multi_parameter_relation_selects_and_evaluates() {
+    let source = concat!(
+        "interface Pairwise<Left, Right> {\n",
+        "pairwise : (Left, Right) -> Bool\n",
+        "}\n\n",
+        "impl Pairwise<Int, Bool> {\n",
+        "pairwise pair = true\n",
+        "}\n\n",
+        "main : Unit -> Bool\n",
+        "main () = pairwise((1, true))\n",
+    );
+    let checked = checked_module(source);
+    let [interface] = checked.interface_facts() else {
+        panic!("the ordinary relation should retain one checked interface");
+    };
+    assert_eq!(
+        interface
+            .parameters
+            .iter()
+            .map(|parameter| parameter.spelling.as_str())
+            .collect::<Vec<_>>(),
+        ["Left", "Right"],
+    );
+    let [implementation] = checked.implementation_facts() else {
+        panic!("the ordinary relation should retain one checked implementation");
+    };
+    assert_eq!(implementation.interface(), interface.id);
+    assert_eq!(implementation.arguments(), &[Type::Int, Type::Bool]);
+
+    let method = MethodId::new(interface.id, 0);
+    let main = checked
+        .definitions()
+        .iter()
+        .find(|definition| match definition.kind() {
+            ash::resolved::ResolvedDefinitionKind::Equational(global) => {
+                global.interface.name.spelling == "main"
+            }
+            ash::resolved::ResolvedDefinitionKind::InlineOperational(_) => false,
+        })
+        .expect("the checked main definition should remain available");
+    let occurrences = method_occurrences(main, method);
+    let [occurrence] = occurrences.as_slice() else {
+        panic!("main should retain one relational method occurrence");
+    };
+    let selection = occurrence
+        .selection()
+        .expect("the complete ordinary application should select evidence");
+    assert_eq!(selection.interface(), interface.id);
+    assert_eq!(selection.arguments(), &[Type::Int, Type::Bool]);
+    assert!(matches!(
+        selection.node(selection.root()),
+        Some(EvidenceNode::Implementation { implementation: selected, .. })
+            if selected == implementation.id
+    ));
+
+    drop(validated_interface_core(source));
+    observe_source(source, "true", Type::Bool);
+}
+
+#[test]
+fn ordinary_multi_parameter_method_requires_every_parameter() {
+    let error = check_error(concat!(
+        "interface Pairwise<Left, Right> {\n",
+        "pairwise : Left -> Bool\n",
+        "}\n",
+    ));
+
+    assert_eq!(reason(&error), "interface.method-parameter");
+}
+
+#[test]
+fn total_determination_admits_single_composite_and_non_final_dependents() {
+    let checked = checked_module(concat!(
+        "interface Iterable<I, Item> where I -> Item {\n",
+        "next : I -> Item\n",
+        "}\n\n",
+        "interface Decode<Format, Source, Value> where (Format, Source) -> Value {\n",
+        "decode : (Format, Source) -> Value\n",
+        "}\n\n",
+        "interface Lookup<Key, Value, Context> where (Key, Context) -> Value {\n",
+        "lookup : (Key, Context) -> Value\n",
+        "}\n",
+    ));
+    let [single, composite, non_final] = checked.interface_facts() else {
+        panic!("all three total determinations should reach checked publication");
+    };
+    assert_eq!(
+        single
+            .parameters
+            .iter()
+            .map(|parameter| parameter.spelling.as_str())
+            .collect::<Vec<_>>(),
+        ["I", "Item"],
+    );
+    assert_eq!(
+        composite
+            .parameters
+            .iter()
+            .map(|parameter| parameter.spelling.as_str())
+            .collect::<Vec<_>>(),
+        ["Format", "Source", "Value"],
+    );
+    assert_eq!(
+        non_final
+            .parameters
+            .iter()
+            .map(|parameter| parameter.spelling.as_str())
+            .collect::<Vec<_>>(),
+        ["Key", "Value", "Context"],
+    );
+}
+
+#[test]
+fn rejects_non_partitioning_determination_parameters_uniformly() {
+    let cases = [
+        // Repeated determinant member.
+        "interface Bad<A, B> where (A, A) -> B {\nbad : A -> B\n}\n",
+        // Omitted interface parameter.
+        "interface Bad<A, B, C> where A -> B {\nbad : A -> B\n}\n",
+        // Determinant members do not follow declaration order.
+        "interface Bad<A, B, C> where (B, A) -> C {\nbad : (A, B) -> C\n}\n",
+        // The two sides overlap.
+        "interface Bad<A, B, C> where (A, B) -> (B, C) {\nbad : (A, B) -> C\n}\n",
+        // The written key covers the full parameter list, leaving no dependent complement.
+        "interface Bad<A, B> where (A, B) -> A {\nbad : (A, B) -> A\n}\n",
+        // Dependent members do not follow declaration order.
+        "interface Bad<A, B, C> where A -> (C, B) {\nbad : A -> (B, C)\n}\n",
+    ];
+
+    for source in cases {
+        let error = check_error(source);
+        assert_eq!(reason(&error), "interface.determination-parameter");
+    }
+}
+
+#[test]
+fn determined_methods_require_the_complete_key_only() {
+    check_valid(concat!(
+        "type Wrapper<A> = Wrapper(A)\n\n",
+        "interface Relation<Format, Value, Source> where (Format, Source) -> Value {\n",
+        "dependent_in_domain : (Format, Source, Value) -> Int\n",
+        "dependent_in_result : (Format, Source) -> Value\n",
+        "dependent_nested : (Format, Source) -> Wrapper<Value>\n",
+        "dependent_absent : (Format, Source) -> Int\n",
+        "}\n",
+    ));
+
+    let missing_composite_member = check_error(concat!(
+        "interface Relation<Format, Value, Source> where (Format, Source) -> Value {\n",
+        "bad : Format -> Value\n",
+        "}\n",
+    ));
+    assert_eq!(
+        reason(&missing_composite_member),
+        "interface.method-parameter"
+    );
+
+    let before_outer_shape = check_error(concat!(
+        "interface Relation<Format, Value, Source> where (Format, Source) -> Value {\n",
+        "bad : Format\n",
+        "}\n",
+    ));
+    assert_eq!(reason(&before_outer_shape), "interface.method-parameter");
+
+    let no_edge = check_error(concat!(
+        "interface Ordinary<Left, Right> {\n",
+        "ordinary : Left -> Int\n",
+        "}\n",
+    ));
+    assert_eq!(reason(&no_edge), "interface.method-parameter");
+}
+
+#[test]
 fn rejects_duplicate_global_requirement_before_scheme_construction() {
     let error = check_error(
         "interface Equal<A> {\nequal : (A, A) -> Bool\n}\n\nsame : A -> Bool where Equal<A>, Equal<A>\nsame value = true\n",
@@ -399,8 +572,11 @@ fn linked_polymorphic_method_evidence_evaluates() {
     let [functor] = checked_interface.interface_facts() else {
         panic!("the product should retain exactly one higher-kinded interface");
     };
+    let [functor_parameter] = functor.parameters.as_ref() else {
+        panic!("Functor should retain exactly one interface parameter");
+    };
     assert_eq!(
-        functor.parameter.kind,
+        functor_parameter.kind,
         Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
     );
     let [map_method] = functor.methods.as_ref() else {
@@ -709,6 +885,62 @@ fn rejects_undetermined_global_requirement_parameter() {
 }
 
 #[test]
+fn determined_global_retains_dependent_only_binder_in_scheme_order() {
+    let checked = checked_module(concat!(
+        "interface Iterator<I, Item> where I -> Item {\n",
+        "measure : I -> Int\n",
+        "}\n\n",
+        "size<I, Item> : I -> Int where Iterator<I, Item>\n",
+        "size value = measure value\n",
+    ));
+    let scheme = checked
+        .schemes()
+        .iter()
+        .find(|scheme| scheme.spelling == "size")
+        .expect("the determined constrained global should retain its scheme");
+    let [key, dependent] = scheme.scheme.type_parameters.as_ref() else {
+        panic!("the scheme should retain key then dependent binder order");
+    };
+    let [requirement] = scheme.scheme.requirements.as_ref() else {
+        panic!("the scheme should retain its complete abstract requirement");
+    };
+
+    assert!(
+        matches!(requirement.arguments(), [Type::Variable(found), Type::Variable(output)]
+        if *found == key.0 && *output == dependent.0)
+    );
+}
+
+#[test]
+fn determined_global_rejects_missing_key_even_when_another_requirement_supplies_it() {
+    let error = check_error(concat!(
+        "interface First<A, B> where A -> B {\nfirst : A -> Int\n}\n",
+        "interface Second<B, C> where B -> C {\nsecond : B -> Int\n}\n\n",
+        "chain<A, B, C> : A -> C where First<A, B>, Second<B, C>\n",
+        "chain value = value\n",
+    ));
+
+    assert_eq!(reason(&error), "constraint.undetermined-parameter");
+}
+
+#[test]
+fn determined_global_requirement_pair_classifies_full_duplicate_and_key_conflict() {
+    let duplicate = check_error(concat!(
+        "interface Relation<A, B> where A -> B {\nrelate : A -> Int\n}\n\n",
+        "probe<A, B> : A -> Int where Relation<A, B>, Relation<A, B>\n",
+        "probe value = 0\n",
+    ));
+    assert_eq!(reason(&duplicate), "constraint.duplicate-requirement");
+
+    let conflict = check_error(concat!(
+        "interface Relation<A, B> where A -> B {\nrelate : A -> Int\n}\n\n",
+        "probe<A, B, C> : A -> Int where Relation<A, B>, Relation<A, C>\n",
+        "probe value = 0\n",
+    ));
+    assert_eq!(reason(&conflict), "constraint.determination-conflict");
+}
+
+#[test]
 fn explicit_requirement_only_binder_keeps_determination_failure_ownership() {
     let error = check_error(
         "type Pair<Left, Right> = Pair(Left, Right)\n\ninterface Equal<A> {\nequal : (A, A) -> Bool\n}\n\nsame<B : Type, A : Type> : A -> Bool where Equal<Pair<A, B>>\nsame value = true\n",
@@ -762,8 +994,11 @@ fn checked_equational_and_operational_schemes_keep_ordered_requirements_outside_
             RequirementOwner::Global(scheme.binder)
         );
         assert_eq!(requirement.id.declaration(), 0);
+        let [argument] = requirement.arguments() else {
+            panic!("the unary Equal requirement should retain one argument");
+        };
         assert_eq!(
-            requirement.argument(),
+            argument,
             &Type::Variable(scheme.scheme.type_parameters[0].0)
         );
     }
@@ -1638,6 +1873,20 @@ fn ground_cross_interface_prerequisite_cycle_has_the_exact_reason() {
         "impl Second<Int> where First<Int> {\nsecond value = value\n}\n\n",
         "main : Unit -> Int\n",
         "main () = first 1\n",
+    ));
+
+    assert_eq!(reason(&error), "constraint.cycle");
+}
+
+#[test]
+fn determined_ground_cycle_tracks_complete_applications_with_different_dependents() {
+    let error = check_error(concat!(
+        "interface First<A, B> where A -> B {\nfirst : (A, B) -> Int\n}\n\n",
+        "interface Second<A, B> where A -> B {\nsecond : (A, B) -> Int\n}\n\n",
+        "impl First<Int, Bool> where Second<Int, Unit> {\nfirst value = 0\n}\n\n",
+        "impl Second<Int, Unit> where First<Int, Bool> {\nsecond value = 0\n}\n\n",
+        "main : Unit -> Int\n",
+        "main () = first((1, true))\n",
     ));
 
     assert_eq!(reason(&error), "constraint.cycle");

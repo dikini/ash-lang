@@ -17,8 +17,9 @@ unification.
 The typing environment `GAMMA` maps resolved `BinderId` identities to rank-1
 constrained schemes. Interface methods do not have binder identities. The
 immutable method registry `MU` instead maps each resolved `MethodId` to its
-owning `InterfaceId`, interface parameter, ordered method-local parameters,
-declared method value type, declaration order, and provenance. A constrained
+owning `InterfaceId`, ordered interface parameters, optional determinant
+positions, ordered method-local parameters, declared method value type,
+declaration order, and provenance. A constrained
 scheme has three fields:
 
 ```text
@@ -36,13 +37,13 @@ scheme with no requirements has the ordinary `forall parameters. type`
 behavior. Rigid variables from annotations never unify with a different type.
 
 One registry method has a distinct method scheme under its owning interface
-parameter:
+parameter vector:
 
 ```text
 MethodScheme = forall method_parameters. method_value_type
 ```
 
-The interface parameter remains free relative to this scheme and is owned by
+The interface parameters remain free relative to this scheme and are owned by
 the enclosing interface. A method scheme never enters `GAMMA`, and no source
 occurrence can name it without instantiating every method parameter.
 
@@ -62,8 +63,8 @@ Four environments determine monotype kinds:
   kind;
 - `OMEGA` maps every live `InferenceVariableId` to exactly one fixed kind;
 - `XI` maps every accessible `NominalTypeId` to its constructor kind; and
-- `IOTA` maps every accessible `InterfaceId` to its canonical single parameter
-  record `(TypeVariableId, Kind)`.
+- `IOTA` maps every accessible `InterfaceId` to its nonempty ordered canonical
+  parameter records and optional ordered determinant positions.
 
 A nominal declared with ordered parameter kinds `kind_1` through `kind_n` has
 the constructor kind obtained by the right fold
@@ -76,8 +77,9 @@ The total synthesis judgment
 `DELTA; OMEGA; XI |- monotype => kind` assigns a kind to every well-formed
 monotype. `all_type` means that each listed monotype synthesizes `Type` under
 the supplied environments. The last two rules are owning checks: ordinary
-value positions require `Type`, while an interface constraint requires the
-kind declared by the selected interface parameter.
+value positions require `Type`, while an interface constraint requires one
+complete argument per declared interface parameter and the corresponding kind
+at every position. Arity is checked before any positional kind.
 
 ```sequent
 family kind-synthesis:
@@ -124,10 +126,12 @@ family kind-synthesis:
     DELTA; OMEGA; XI |- value monotype ok
 
   K-Interface-Argument :=
-    IOTA(interface) = (parameter, parameter_kind)
-    DELTA; OMEGA; XI |- argument => parameter_kind
+    IOTA(interface) = (parameters, determination)
+    length(arguments) = length(parameters)
+    for each corresponding (argument_i, parameter_i),
+      DELTA; OMEGA; XI |- argument_i => kind(parameter_i)
     ===>
-    DELTA; OMEGA; XI; IOTA |- constraint Interface(argument) ok
+    DELTA; OMEGA; XI; IOTA |- constraint Interface(arguments) ok
 ```
 
 An unsaturated nominal constructor synthesizes its derived function kind. A
@@ -145,7 +149,7 @@ annotations use `K-Value-Type`. Requirements, method obligations,
 implementation heads and prerequisites, and evidence goals use
 `K-Interface-Argument`. An interface constraint has no monotype kind of its
 own. An interface parameter without an annotation has kind `Type`, which
-recovers the predecessor behavior for its constraints.
+recovers the predecessor behavior at that argument position.
 
 A scheme is distinct from a monotype and has no ordinary kind. It has the form
 `forall (A_1 : kind_1) ... (A_n : kind_n). body`, with distinct binders and a
@@ -681,80 +685,96 @@ main () = true + 1
 
 ## Interfaces and constrained schemes
 
-An interface has one fixed-kinded parameter and a nonempty ordered method list.
-An omitted parameter annotation means `Type`. Each method may have an explicit
-ordered list of fixed-kinded local parameters; an omitted method-parameter kind
-means `Type`. Its value type has kind `Type`, contains the interface parameter,
-contains exactly its listed local parameters as its other free variables, and
-has `Function` as its outermost constructor. Interface declaration order fixes
-the order of the method positions used by checked evidence, and written method-
-parameter order fixes each method scheme's binder order.
+An interface has a nonempty ordered vector of fixed-kinded parameters and a
+nonempty ordered method list. An omitted parameter annotation means `Type`.
+The interface may declare exactly one total determination edge. A determination edge is total: its nonempty, disjoint sides preserve declaration order and together name every interface parameter exactly once.
+The left side supplies determinant positions; the right side is the dependent
+complement. A dependent may occupy any declaration position.
+
+Each method may have an explicit ordered list of fixed-kinded local parameters;
+an omitted method-parameter kind means `Type`. Its value type has kind `Type`,
+contains exactly its listed local parameters as its free variables outside the
+interface parameter set, and has `Function` as its outermost constructor. With
+no edge, every interface parameter must occur in each method value type. With
+an edge, every determinant parameter must occur; a dependent parameter may
+occur anywhere or nowhere. This occurrence rule is relational and does not
+make a dependent an associated result. Interface declaration order fixes the
+method positions used by checked evidence, and written method-parameter order
+fixes each method scheme's binder order.
 
 The following judgments check an interface method and then the complete
-interface. `free_type_variables` compares resolved binder identities, not
-spellings. The equation `method_type = domain -> codomain` decomposes only the
-outermost constructor; it does not search `domain` or `codomain` for another
-arrow. Resolution has already established method-name freshness.
+interface. `free_type_variables` and `occurs` compare resolved binder
+identities, not spellings. The equation `method_type = domain -> codomain`
+decomposes only the outermost constructor.
 
 ```sequent
 family interface-well-formedness:
   WF-Interface-Method :=
     method_parameters = ordered declared parameters of method
-    DELTA = {parameter -> parameter_kind} union kinds(method_parameters)
+    DELTA = kinds(interface_parameters) union kinds(method_parameters)
     DELTA; empty_OMEGA; XI |- method_value_type => Type
-    free_type_variables(method_value_type)
-      = {parameter} union set(method_parameters)
-    parameter occurs in method_value_type
+    free_type_variables(method_value_type) - set(interface_parameters)
+      = set(method_parameters)
+    required_parameters =
+      if determination is absent then interface_parameters
+      else parameters_at(determination.determinant_positions)
+    every required_parameter occurs in method_value_type
     method_value_type = domain -> codomain
     ===>
-    interface<parameter : parameter_kind>
+    interface<interface_parameters> determination
       |-method method_name<method_parameters> : method_value_type ok
 
   WF-Interface :=
-    IOTA(interface) = (parameter, parameter_kind)
+    IOTA(interface) = (interface_parameters, determination)
+    interface_parameters is nonempty
+    determination is absent or a total ordered partition of interface_parameters
     methods is nonempty
-    for each method, interface<parameter> |-method method ok
+    for each method,
+      interface<interface_parameters> determination |-method method ok
     ===>
-    |-interface visibility interface<parameter : parameter_kind> { methods } ok
+    |-interface visibility interface<interface_parameters> determination
+      { methods } ok
 ```
 
 Resolved declaration checking supplies an empty `OMEGA`. `XI` contains all
-accessible authenticated nominal kinds, including kinds derived for all local
-nominals before any interface method is checked. `IOTA` contains authenticated
-imported interface parameters and pre-frozen canonical parameter records for
-all local interfaces before the first local type-bearing declaration is
-checked. `WF-Interface` authenticates its parameter against that record. Only
-the complete interface and its method registry enter later checking after all
-of the declaration's methods are accepted.
+accessible authenticated nominal kinds. `IOTA` contains authenticated imported
+interfaces and pre-frozen canonical parameter and determinant records for all
+local interfaces before the first local type-bearing declaration is checked.
+`WF-Interface` authenticates the complete record. Only an entirely accepted
+interface enters later checking.
 
-After interface admission, a method occurrence consults `MU` by `MethodId`
-rather than `GAMMA` by `BinderId`. It freshens the interface parameter followed
-by every method parameter at the same fixed kinds and substitutes all those
-arguments into the value type. Only the interface argument creates an evidence
-obligation. The exact `MethodId`, ordered method arguments, checked occurrence
-type, and selection remain private pending state until whole-module inference
-closure.
+After admission, a method occurrence consults `MU` by `MethodId`. It freshens
+the whole interface vector in declaration order and then every method parameter
+at the same fixed kinds. It applies one simultaneous substitution to the value
+type. The complete interface argument vector creates one evidence obligation;
+method arguments create none. The exact `MethodId`, ordered method arguments,
+checked occurrence type, and selection remain private pending state until
+whole-module inference closure.
 
 ```sequent
 T-Method-Occurrence :=
-  MU(method_id)
-    = interface_id, interface_parameter, method_parameters, method_value_type
-  freshen(interface_parameter) = interface_argument
-  method_scheme = MethodScheme(method_parameters, method_value_type)
-  instantiate(method_scheme) = instantiated_method_type, method_arguments
-  type = substitute(interface_parameter, interface_argument, instantiated_method_type)
-  obligation = interface_id<interface_argument>
+  MU(method_id) =
+    interface_id, interface_parameters, determination,
+    method_parameters, method_value_type
+  freshen(interface_parameters) = interface_arguments
+  freshen(method_parameters) = method_arguments
+  type = simultaneous_substitute(
+    interface_parameters ++ method_parameters,
+    interface_arguments ++ method_arguments,
+    method_value_type)
+  obligation = interface_id<interface_arguments>
   record_pending(occurrence(method_id), method_arguments, type, [obligation])
   ===>
   GAMMA; MU |- method_id ⇒ type
 ```
 
-Evidence selection sees only `obligation`. It does not inspect, choose, infer,
-or refine `method_arguments`. An unresolved interface argument is
-`constraint.ambiguous` when the owning evidence scope closes. An otherwise
-unresolved method argument remains subject to `type.ambiguous` at whole-module
-inference closure. No method-determination, improvement, kind-inference, or
-higher-order matching rule follows from method instantiation.
+Evidence improvement and selection see the complete `obligation`. Neither
+operation inspects, chooses, infers, or refines `method_arguments`. An
+unresolved determinant argument is `constraint.ambiguous` when the owning
+evidence scope closes. An otherwise unresolved method argument remains
+`type.ambiguous` at whole-module inference closure. No kind inference,
+higher-order matching, reversal of a determination edge, or inference of a
+method-local argument follows from method instantiation.
 
 A global signature carries an ordered requirement list after its complete
 value type. When the declaration has an explicit binder list, that list must be
@@ -767,17 +787,26 @@ requirements, and its order becomes scheme order. An extra explicit binder is
 When the declaration omits the binder list, free uppercase variables become
 outer parameters in first-occurrence order: occurrences in the value type come
 first, followed by first occurrences found only in requirements. Every such
-implicit binder has kind `Type`. In either form, an accepted requirement may
-use only parameters that occur in the value type. This determination rule
-rejects a requirement-only parameter instead of silently adding an inferred
-input. Requirements in one signature must be distinct by interface identity
-and argument type. A public global may require only public interfaces. A
-private global may also require a private interface declared in its own
-module.
+implicit binder has kind `Type`. In either form, a requirement without a
+determination edge requires every free variable in its complete application to
+occur in the value type. For a determined interface, every free variable in
+the determinant key slice must occur in the value type; a dependent-only binder
+may remain quantified in the constrained scheme. Determination never
+propagates between requirements.
+Here `requirement_key` is the determinant slice for a determined interface and
+the whole ordered application otherwise.
+
+Requirements in one signature are compared in source order. Identity-equal
+complete applications are `constraint.duplicate-requirement`. Identity-equal
+interfaces and keys with different dependent tuples are
+`constraint.determination-conflict`. A public global may require only public
+interfaces. A private global may also require a private interface declared in
+its own module.
 
 The judgment below constructs the checked constrained scheme for either an
-equational or operational global signature. `determined` means that every type
-variable in the requirement argument occurs in the value type.
+equational or operational global signature. `requirement_key` is the complete
+application for a no-edge interface and only its determinant slice otherwise;
+dependent-only variables remain quantified.
 
 ```sequent
 WF-Global-Signature :=
@@ -786,8 +815,12 @@ WF-Global-Signature :=
   DELTA; empty_OMEGA; XI |- value value_type ok
   for each requirement, requirement is a resolved interface application
   for each requirement, DELTA; empty_OMEGA; XI; IOTA |- requirement ok
-  requirements are pairwise identity-distinct
-  for each requirement, determined(requirement, value_type)
+  requirements have no duplicate complete applications
+  determined requirements for the same InterfaceId have no equal-key,
+    unequal-dependent pair
+  for each requirement,
+    free_type_variables(requirement_key(requirement))
+      is a subset of free_type_variables(value_type)
   visibility = public implies every required interface is public
   checked_scheme = ConstrainedScheme(parameters, requirements, value_type)
   ===>
@@ -802,75 +835,102 @@ the ordered `(TypeVariableId, Kind)` records rather than a second authoritative
 kind representation.
 
 A method with an absent parameter list and another free variable, or a method
-that omits the interface parameter, is `interface.method-parameter`. The
+that omits any required interface parameter, is
+`interface.method-parameter`. The
 absent-list check precedes any deferred invalid application-kind failure.
 Present-list kind failures belong to kind checking. After kind checking
-succeeds, the interface-parameter check precedes outer decomposition; a method
+succeeds, the required-parameter check precedes outer decomposition; a method
 whose outermost constructor is not `Function` is
 `interface.method-not-function`. Duplicate
-identity-equal global requirements are `constraint.duplicate-requirement`,
-requirement-only parameters are `constraint.undetermined-parameter`, and a
+complete requirements are `constraint.duplicate-requirement`; equal determined
+keys with unequal dependent tuples are `constraint.determination-conflict`;
+an undetermined key variable is `constraint.undetermined-parameter`; and a
 public signature that exposes a private interface is
 `constraint.private-interface`.
 
 ## Implementations
 
-An implementation head fixes one interface application. When the declaration
-has an explicit binder list, that list must be an ordered bijection with the
-free variables of the head argument, and its order becomes head-parameter
-order. A listed binder absent from the head argument is
+An implementation head fixes one complete interface application. When the
+declaration has an explicit binder list, that list must be an ordered bijection
+with the free variables across the complete head vector, and its order becomes
+head-parameter order. A listed binder absent from the head is
 `resolve.unused-type-parameter`; an unlisted free head variable is
 `resolve.unknown-type`; and duplicate explicit binders are
 `resolve.duplicate-type-parameter`. When the declaration omits the list, free
-uppercase variables in the head become ordered rigid parameters in
-first-occurrence order, each fixed to kind `Type`.
+uppercase variables in the head become ordered rigid parameters in first-
+occurrence order across all arguments, each fixed to kind `Type`.
 
-A bare type-variable head is invalid. A prerequisite cannot bind a new
-parameter: every free variable in a prerequisite must already occur in the
-head. A prerequisite-only variable remains `impl.prerequisite-variable` rather
-than becoming an implicit binder. A public implementation must implement a
-public interface and may name only public interfaces in its prerequisites.
+For a determined interface, the selection key is the determinant slice of the
+complete application. Without an edge, the selection key is the complete
+application. A generic head is `impl.variable-head` only when every selection-
+key argument is a bare type variable. The dependent-head free variables must
+be a subset of the key free variables; otherwise admission fails with
+`impl.determination-coverage`.
+
+A prerequisite cannot bind a new parameter: every free variable in its
+complete application must already occur somewhere in the complete head. A
+prerequisite-only variable remains `impl.prerequisite-variable` rather than
+becoming an implicit binder. Prerequisites are compared in source order: each
+current prerequisite is compared with earlier prerequisites in their source
+order, complete identity before key identity. The first classified pair owns
+the failure. Complete identity is `constraint.duplicate-requirement`; an equal
+determined key with a different dependent tuple is
+`constraint.determination-conflict`.
 
 The orphan rule admits an implementation in a module that owns the interface
-or the outer nominal constructor of the head argument. Primitive and structural
-heads have no nominal owner, so only the interface owner can implement them.
-For example, an implementation for `Equal<Option<A>>` may be declared by the
-owner of `Equal` or by the owner of `Option`; neither a third module nor the
-owner of a nominal nested below the outer `Option` may declare it.
+or an outer nominal constructor of one selection-key argument. A nominal nested
+below a foreign outer constructor does not establish ownership. Primitive and
+structural key arguments have no nominal owner, so only the interface owner can
+implement such a key. Dependent arguments do not contribute orphan ownership.
 
-After freshening and alpha-normalizing a generic implementation, the type
-argument of every non-ground prerequisite must be a strict syntactic subterm of
-the head argument. The comparison uses resolved structure and identities. A
-ground prerequisite is exempt from this check; a cycle made only from ground
-prerequisites is detected later during selection.
+After freshening and alpha-normalizing a generic implementation, compare the
+current selection-key tuple with each non-ground prerequisite selection-key
+tuple. The tuples must have equal width. Each prerequisite component must be
+identity-equal to or a strict syntactic subterm of the corresponding head
+component, and at least one component must be strict. The comparison uses
+resolved structure and identities. A ground prerequisite is exempt; a cycle
+made only from ground complete applications is detected later during
+selection. A public implementation must implement a public interface and may
+name only public interfaces in its prerequisites.
 
 These premises admit an implementation header. `owner` returns the defining
-module of an interface or outer nominal constructor, when one exists.
+module of an interface or an outer nominal constructor, when one exists. Header
+checking performs application arity before positional kinds; prerequisite pair
+classification; variable-head, containment, determination-coverage, orphan,
+decrease, and privacy checks in that order.
 
 ```sequent
 WF-Implementation-Header :=
-  parameters = bind_head_parameters(explicit_binders, head_argument)
+  parameters = bind_head_parameters(explicit_binders, head_arguments)
   DELTA = kinds(parameters)
-  DELTA; empty_OMEGA; XI; IOTA |- constraint interface(head_argument) ok
+  DELTA; empty_OMEGA; XI; IOTA |- constraint interface(head_arguments) ok
   for each prerequisite,
     DELTA; empty_OMEGA; XI; IOTA |- prerequisite ok
-  head_argument is not a type variable
-  free_type_variables(prerequisites) is a subset of parameters
-  module = owner(interface) or module = owner(outer_nominal(head_argument))
+  prerequisites have no duplicate complete applications
+  determined prerequisites for the same InterfaceId have no equal-key,
+    unequal-dependent pair
+  selection_key(head) is not an all-bare-variable tuple
+  free_type_variables(prerequisites) is a subset of free_type_variables(head)
+  free_type_variables(dependent_slice(head))
+    is a subset of free_type_variables(selection_key(head))
+  module = owner(interface)
+    or module owns an outer nominal of selection_key(head)
   for each non-ground prerequisite,
-    prerequisite.argument is a strict syntactic subterm of head_argument
+    decreases(selection_key(prerequisite), selection_key(head))
   visibility = public implies interface and prerequisite interfaces are public
-  checked_header = ImplementationHeader(visibility, parameters, interface, head_argument, prerequisites)
+  checked_header = ImplementationHeader(
+    visibility, parameters, interface, head_arguments, prerequisites)
   ===>
-  module |-impl visibility interface<head_argument> where prerequisites ⇒ checked_header
+  module |-impl visibility interface<head_arguments> where prerequisites
+    ⇒ checked_header
 ```
 
 An implementation supplies every interface method exactly once and supplies no
 other method. Contiguous equations with one method spelling form one method
 definition. Method groups may appear in any order, but each definition checks
-against its interface method type after substituting the head argument for the
-interface parameter and retaining the method parameters. The implementation
-head and method parameters stay rigid as two ordered, distinguishable
+against its interface method type after simultaneously substituting the
+complete head vector for the interface parameter vector and retaining the
+method parameters. The implementation head and method parameters stay rigid as two ordered, distinguishable
 sequences. Source equations do not inherit or bind the interface method's
 parameter spellings. All ordinary globals and implementation methods in one
 module share one simultaneous recursive scope.
@@ -906,12 +966,13 @@ family implementation-method-checking:
     grouped_methods(body) contains every required method exactly once
     grouped_methods(body) contains no method outside required_methods
     ===>
-    |-impl-membership interface<head_argument> { body } ok
+    |-impl-membership interface<head_arguments> { body } ok
 
   T-Implementation-Method :=
     method<method_parameters> : method_value_type in declared_methods(interface)
-    expected = substitute(interface_parameter, head_argument, method_value_type)
-    head_parameters = ordered rigid parameters of head_argument
+    expected = simultaneous_substitute(
+      interface_parameters, head_arguments, method_value_type)
+    head_parameters = ordered rigid parameters of head_arguments
     current = the exact current implementation header and identity
     abstracts = ordered abstract evidence for current.prerequisites
     head_parameters followed by method_parameters is the checked scheme order
@@ -928,7 +989,7 @@ family implementation-method-checking:
 
 The abstract evidence in `T-Implementation-Method` has one requirement identity
 per declared prerequisite in order. Substitution preserves kinds, so replacing
-the interface parameter with the already checked head argument leaves the
+the interface parameters with the already checked head arguments leaves the
 method value type at kind `Type`. Exact current-implementation selection may
 use only the same rigid head and that abstract prerequisite evidence. A direct
 recursive occurrence of this implementation method reuses its rigid method
@@ -940,9 +1001,10 @@ inference closure freezes the zonked interface and method arguments. The
 selection vector.
 
 A public implementation that exposes a private implemented or prerequisite
-interface is `impl.private-interface`. A bare variable head is
+interface is `impl.private-interface`. An all-variable selection key is
 `impl.variable-head`; a prerequisite-only variable is
-`impl.prerequisite-variable`; an owner violation is `impl.orphan`; and a
+`impl.prerequisite-variable`; dependent coverage failure is
+`impl.determination-coverage`; an owner violation is `impl.orphan`; and a
 non-decreasing generic prerequisite is
 `impl.prerequisite-not-decreasing`. Missing, repeated, and extra method groups
 are `impl.missing-method`, `impl.duplicate-method`, and `impl.extra-method`.
@@ -962,14 +1024,18 @@ route.
 
 Every pair of distinct implementation heads for one interface in the effective
 environment is freshened independently, preserving every binder kind. Matching
-and unification use the kind-preserving first-order application structure. If
-the heads unify, the environment is rejected with `impl.overlap`.
+and unification use kind-preserving first-order application structure. If the
+selection keys do not unify, the pair is coherent. If the keys and complete
+applications unify, the environment is rejected with `impl.overlap`. If the
+keys unify but the complete applications cannot unify, it is rejected with
+`impl.determination-conflict`. For an interface without an edge, the key is the
+whole application, so this reduces to the predecessor overlap rule.
 Prerequisites, source order, dependency order, and import order never select a
 winner. Header admission precedes environment construction, so an invalid local
-header reports its own failure and cannot cause a secondary overlap failure.
+header reports its own failure and cannot cause a secondary coherence failure.
 The first module whose effective environment combines the two distinct facts
-owns the overlap and publishes no summary. Membership and bodies are checked
-only after overlap succeeds.
+owns the failure and publishes no summary. Membership and bodies are checked
+only after coherence succeeds.
 
 ```sequent
 WF-Effective-Implementations :=
@@ -978,7 +1044,7 @@ WF-Effective-Implementations :=
   effective = local union selected
   effective is deduplicated by stable implementation identity
   for each distinct pair for one interface,
-    not unifies(freshen(left.head), freshen(right.head))
+    not unifies(freshen(selection_key(left)), freshen(selection_key(right)))
   ===>
   module |-implementations effective coherent
 ```
@@ -986,27 +1052,62 @@ WF-Effective-Implementations :=
 ## Constraint satisfaction and checked evidence
 
 Instantiating a constrained term creates one evidence obligation for each
-requirement in source order. Ordinary bidirectional typing determines the type
-argument of each obligation. Selection cannot solve an inference variable to
-make an implementation applicable. An obligation that still contains an
-unsolved inference variable when its owning definition closes is
-`constraint.ambiguous` before candidate or active-goal inspection.
+requirement in source order. A method occurrence creates one obligation with a
+complete application. Ordinary kind-aware bidirectional unification runs before
+interface improvement.
 
-Selection begins only after the complete goal is zonked and contains no
-inference variable. A candidate is freshened independently with its declared
-binder kinds. First-order matching may substitute only that candidate's head
-parameters, and every substitution must preserve the parameter kind. Matching
-cannot solve or refine a variable in the goal, synthesize a type lambda, or use
-higher-order unification.
+Before improvement mutates inference state, the checker takes one fixed
+snapshot of the determined obligations whose complete determinant keys contain
+no unsolved inference variable. It visits only those obligations, once, in
+source order. For each, the first applicable source is:
+
+1. an abstract requirement with the same interface identity and identity-equal
+   zonked key;
+2. the exact current implementation with that key; or
+3. the unique visible implementation whose independently freshened key
+   kind-preservingly first-order matches the known key.
+
+The source supplies its complete dependent tuple. Improvement is mandatory
+when a source exists, even when ordinary typing already fixed every dependent.
+The checker transactionally unifies the whole supplied tuple with the pending
+application. A disagreement is `constraint.determination-conflict` and
+publishes no partial inference solution. Improvement never guesses or refines a
+key, reverses an edge, inspects prerequisites, constructs evidence, records a
+selection, repeats to saturation, or unlocks an obligation outside the fixed
+snapshot. It creates no cross-obligation or cross-requirement propagation.
+
+After improvement, the owning closure begins root selection only when the
+complete goal is zonked and contains no inference variable. Snapshot eligibility
+gates only pending determined occurrence roots at their owning closure. Such a
+root must have belonged to the fixed snapshot. An unresolved key, a known key
+with no source and an unresolved dependent, or a pending determined root outside
+the snapshot is `constraint.ambiguous`. An eligible inference-free complete root
+with no matching evidence source is `constraint.unsatisfied`. A pending root for
+an interface without an edge does not participate in the snapshot and retains
+the predecessor full-application gate.
+
+After that root gate succeeds, the evidence-selection judgment below carries no
+snapshot context. A prerequisite generated by concrete selection has already
+been substituted to a complete application. It uses ordinary full-application
+selection and full-application active-cycle detection without snapshot
+membership.
+
+A selection candidate is freshened independently with its declared binder
+kinds. First-order matching may substitute only that candidate's head
+parameters, must preserve their kinds, and matches the complete application.
+Matching cannot solve or refine a variable in the goal, synthesize a type
+lambda, or use higher-order unification.
 
 Selection receives the ordered abstract requirements of the current global or
 implementation, an optional current implementation, the effective
-implementation environment, an active-goal set, and one resolved interface
-application. It considers sources in this order:
+implementation environment, an active-goal set, and one resolved complete
+interface application. It does not receive the determination snapshot; the
+owning closure has already applied that gate to the pending root. Selection
+considers sources in this order:
 
-1. An identity-equal abstract requirement from the current definition.
+1. An identity-equal complete abstract requirement from the current definition.
 2. Exact current-implementation evidence for an implementation method's rigid
-   head.
+   complete head.
 3. The unique matching concrete implementation in the effective environment.
 
 Abstract evidence therefore shadows concrete evidence. Exact current evidence
@@ -1021,21 +1122,21 @@ that the preceding entries in the ordered search above did not apply.
 `select_all(abstracts, current, effective, active, goals)` applies this same
 selection judgment to `goals` in order with the supplied abstract, current,
 effective, and active contexts. It returns the corresponding ordered evidence
-sequence.
+sequence and never consults the determination snapshot.
 
 ```sequent
 family evidence-selection:
   Select-Abstract :=
     goal contains no inference variable
-    requirement = identity_equal_requirement(abstracts, goal)
+    requirement = identity_equal_complete_requirement(abstracts, goal)
     ===>
     abstracts; current; effective; active |- goal
       ⇓ Abstract(requirement, interface_methods(goal.interface))
 
   Select-Current-Implementation :=
     goal contains no inference variable
-    no identity-equal abstract requirement exists
-    current has the same interface and exact rigid head as goal
+    no identity-equal complete abstract requirement exists
+    current has the same interface and exact rigid complete head as goal
     ===>
     abstracts; current; effective; active |- goal
       ⇓ Implementation(current, identity, abstract_prerequisites, impl_methods(current))
@@ -1057,9 +1158,13 @@ family evidence-selection:
 The matching substitution is applied to every prerequisite before recursive
 selection. Sibling prerequisite goals preserve declaration order, share the
 same abstract, exact-current, and effective environments, and keep their parent
-goal active until their ordered selections complete.
+goal active until their ordered selections complete. The implementation-header
+containment rule ensures that substituting a complete matched head also makes
+each prerequisite free of inference variables. These recursively created goals
+were never pending occurrence roots and therefore need no snapshot membership.
 
-If the concrete branch re-enters an active canonical interface-and-type goal,
+If the concrete branch re-enters an active canonical complete interface
+application,
 selection reports `constraint.cycle`. If no implementation matches, it reports
 `constraint.unsatisfied`. Coherent effective environments ensure that concrete
 selection has at most one matching implementation after identity
@@ -1087,9 +1192,10 @@ obligations at the enclosing global or implementation method. Recursive
 constrained globals reuse their declared abstract requirements and cannot gain
 polymorphic recursion.
 
-Checked selections have two recursive forms. An abstract selection records its
-requirement identity and ordered interface methods. An implementation selection
-records the stable implementation identity, its head substitution, its ordered
+Checked selections have two recursive forms. Each root retains one complete
+interface application. An abstract selection records its requirement identity
+and ordered interface methods. An implementation selection records the stable
+implementation identity, its head substitution, its ordered
 prerequisite selections, and its implementation-method identities. These are
 compiler annotations, not source values or runtime dictionaries.
 
@@ -1101,7 +1207,7 @@ EvidenceSelection =
 
 Every resolved method or constrained-global occurrence owns one structural
 evidence field. A method field has one position for its interface requirement
-and retains the exact `MethodId`, zonked interface argument, ordered zonked
+and retains the exact `MethodId`, complete zonked interface arguments, ordered zonked
 method arguments, checked occurrence type, and selection. A constrained-global
 field follows the global signature's requirement order. The first closure that
 owns an occurrence fixes its selection. An eligible unannotated anonymous-
@@ -1142,6 +1248,32 @@ impl Equal<Option<A>> where Equal<A> {
 
 main : Unit -> Bool
 main () = equal(Some(1), Some(1))
+```
+
+The executable test
+`static_semantics_determined_generic_prerequisite_uses_recursive_complete_selection`
+checks that a determined prerequisite created by concrete selection uses the
+ordinary recursive path rather than the pending-root snapshot gate:
+
+```ash
+type Option<A> =
+    None
+    | Some(A)
+
+interface Measure<Key, Result> where Key -> Result {
+    measure : Key -> Int
+}
+
+impl Measure<Int, Int> {
+    measure value = value
+}
+
+impl<A> Measure<Option<A>, Option<A>> where Measure<A, A> {
+    measure value = 42
+}
+
+main : Unit -> Int
+main () = measure(Some(1))
 ```
 
 ## Globals and modules
@@ -1239,8 +1371,8 @@ defining kind.
 
 After resolution allocates all local nominal and parameter identities, kind
 checking derives and freezes every local nominal constructor kind and every
-canonical local interface parameter record before entering declaration-order
-checking. It then checks constructor payloads, global signatures, interface
+canonical local interface parameter vector and determinant record before
+entering declaration-order checking. It then checks constructor payloads, global signatures, interface
 methods, implementation heads, and prerequisites in deterministic dependency,
 declaration, binder, and type traversal order. No body or public summary can
 observe a partially admitted kind registry.
@@ -1259,7 +1391,8 @@ family module-and-program-typing:
     imported kinded facts authenticate from direct dependency summaries
     allocate all local nominal and declaration-parameter identities
     XI = imported nominal kinds plus derived local nominal kinds
-    IOTA = imported interface parameters plus pre-frozen local interface parameters
+    IOTA = imported interface parameter vectors and determinant positions
+      plus pre-frozen local interface parameter vectors and determinant positions
     for each local constructor payload, DELTA; empty_OMEGA; XI |- value payload ok
     GAMMA_D = checked kinded schemes imported from direct dependency summaries
     for each local interface, |-interface interface ok
@@ -1309,8 +1442,9 @@ publication after the complete module succeeds. Any failure publishes neither
 result. Public local declarations and implementations retain the facts
 established by their owning judgments. The summary retains public
 kinds and the hidden kind and identity closure required by public schemes,
-constructors, interfaces, ordered method binders and bodies, implementation
-heads, prerequisites, and selected evidence. Publicly selected name and
+constructors, interfaces, ordered parameters and determinant positions,
+ordered method binders and bodies, complete implementation heads,
+prerequisites, and selected evidence. Publicly selected name and
 implementation re-exports preserve the
 checked facts and defining identities from their dependency summary while
 adding the current public spelling or authorization hop. Any import admission,
@@ -1318,6 +1452,10 @@ kind, header, overlap, membership, body, inference-closure, or selection failure
 publishes no summary. The [name-resolution
 specification](name-resolution.md#imports-and-namespaces) defines the summary's
 public facts, required hidden closure, access effects, and authorization routes.
+Summary admission authenticates complete interface-application arity and
+positional kinds before classifying detached prerequisite pairs. It then uses
+the same current-then-earlier source order and complete-before-key identity
+precedence as source header admission.
 
 The filled occurrence fields and checked modules become inputs to
 [module linking and linked interface-evidence validation](elaboration.md#module-linking-and-entry-generation).
@@ -1352,19 +1490,30 @@ main () = add(20, 22)
 
 ## Failure ownership and constraint resources
 
-The first judgment that can establish a failure owns it. Interface method and
-global requirement failures belong to their well-formedness judgments.
-Implementation visibility, head, prerequisite, orphan, and termination
-failures belong to header admission; overlap belongs to effective-environment
-construction; method membership and bodies belong to their respective checks;
-and satisfaction failures belong to selection. Kind checking owns the first
-kind rule that can establish an invalid resolved source type:
+The first judgment that can establish a failure owns it. Parsing owns malformed
+parameter lists and determination syntax. Resolution owns duplicate interface
+binders and unknown names in a determination side. Interface-application
+checking owns missing or extra arguments as `interface.argument-count` before
+kind checking owns an arity-correct positional failure. Interface admission
+owns an invalid partition as `interface.determination-parameter` and an
+incomplete method seed as `interface.method-parameter`.
+
+Implementation requirement pairs, visibility, head, prerequisite, coverage,
+orphan, and termination failures belong to header admission. Effective-
+environment construction owns `impl.overlap` and
+`impl.determination-conflict`. Method membership and bodies belong to their
+respective checks. Improvement owns a dependent disagreement as
+`constraint.determination-conflict`; ambiguity, cycle, and unsatisfied failures
+belong to the closing improvement-and-selection path. Linked and Core
+validation own forged retained carriers only after all source checks succeed.
+Kind checking owns the first kind rule that can establish an invalid resolved
+source type:
 
 - `kind.not-applicable` means the function position of a type application did
   not synthesize a function kind;
 - `kind.argument` means a type-application argument did not match the function
-  kind's domain, or an interface argument did not match the selected interface
-  parameter kind; and
+  kind's domain, or an arity-correct interface argument did not match its
+  positional interface parameter kind; and
 - `kind.expected-type` means an owning `K-Value-Type` check found a kind other
   than `Type`.
 
@@ -1374,20 +1523,47 @@ expected and found kinds. Rendering does not reconstruct these fields from
 diagnostic text. An unavailable implementation item, an interface used as an
 ordinary type constructor, or a file-wide import-name conflict remains a
 resolution failure. Earlier parser and resolution failures are not reclassified
-by static checking. Kind checking precedes ordinary unification, evidence
-selection, and Core synthesis for the same fact. Traversal follows dependency,
-import, selector, declaration, binder, type, requirement, and method order.
-Chosen authorization routes follow their deterministic hop order, so one
-source program has a deterministic first failure and label sequence.
+by static checking.
+
+Within one source unit, causal precedence is:
+
+1. parsing and recovery;
+2. name resolution;
+3. interface-application arity, then positional argument kinds;
+4. determination partition admission;
+5. method-binder and method-kind checks, then method seed and function shape;
+6. implementation prerequisites in current-then-earlier source order with
+   complete identity before key identity, then variable-head, containment,
+   determination coverage, orphan, decrease, and privacy;
+7. effective-environment pair coherence;
+8. implementation method membership and bodies;
+9. per-occurrence ordinary unification, unresolved-key ambiguity, atomic
+   improvement and dependent conflict, remaining dependent ambiguity,
+   full-application selection, active-goal cycle detection, and unsatisfied
+   evidence; and
+10. whole-module method ambiguity and publication, then summary admission,
+    linking, elaboration, and Core validation.
+
+An earlier failure prevents publication to later boundaries. Existing
+predecessor diagnostics within one listed family retain their internal order
+unless a rule above narrows it. Traversal follows dependency, import, selector,
+declaration, binder, type, requirement, and method order. Chosen authorization
+routes follow their deterministic hop order, so one source program has a
+deterministic first failure and label sequence.
 
 One graph-wide interface-and-constraint work budget persists from dependency-
 summary admission through effective-environment construction, header and body
 checking, evidence selection, linking, and linked evidence validation. The
 static stages charge proportional work before retaining or visiting interface
-and implementation facts, selector expansions, effective and public routes,
-summary closure, occurrence evidence, overlap pairs, obligations, candidates,
-substitutions, prerequisite edges, active goals, routes, and linked
-authentication facts.
+and implementation facts, each parameter and complete-application argument,
+determinant position, selector expansion, effective and public route, summary
+field, occurrence evidence field, coherence pair and key comparison,
+improvement snapshot entry and candidate, obligation, selection candidate,
+substitution, prerequisite edge, active complete goal, route hop, and linked
+authentication fact. A retained simultaneous vector and any separately retained
+owner index are charged independently before allocation. Validation of one
+canonical improvement goal is charged once; each candidate and comparison
+remains separately charged.
 [Elaboration](elaboration.md#module-linking-and-entry-generation) defines the
 link-retention and full-route-validation charges. Exhaustion at any stage is
 `internal.resource.constraint-work`; validation has no separate resource
@@ -1422,8 +1598,14 @@ source term type application, type lambdas, higher-order unification, broad
 application-shaped local generalization, subtyping, implicit conversions,
 explicit structural recursive-type operators, or polymorphic recursion.
 Unauthenticated nested Core schemes remain invalid. Interfaces add no
-associated types, specialization, priority, default or negative
-implementations, inferred global requirements, first-class dictionaries,
-runtime implementation lookup, or interface-specific Core mechanism. Nominal
-declarations may refer to themselves and to other nominal declarations in the
-same module. Recursive global visibility does not cross a module boundary.
+associated declarations, associated-output projections or equations, multiple
+or partial edges, neutral parameters, reverse or injective determination,
+specialization, priority, default or negative implementations, inferred global
+requirements, first-class dictionaries, runtime implementation lookup, or
+interface-specific Core mechanism. Nominal declarations may refer to
+themselves and to other nominal declarations in the same module. Recursive
+global visibility does not cross a module boundary. The interface evidence
+family is not effect-handler or provider authority, proof or proposition
+evidence, common universal evidence, or an existential package. Effects,
+proofs, and existentials require their own future source, Core,
+authentication, and dynamic rules; none is inferred from determination.

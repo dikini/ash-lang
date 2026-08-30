@@ -7,10 +7,13 @@ use std::{
 
 use crate::{
     interface::{
-        CheckedImplementation, ConstrainedScheme, EvidenceNode, EvidenceSelection,
-        EvidenceSelectionBuilder, EvidenceSlotHandle, EvidenceSubstitution, HeadMatchFailure,
-        ImplId, ImplMethodId, InterfaceConstraintBudget, InterfaceId, InterfaceOperationWork,
-        InterfaceReason, MethodId, RequirementId, match_implementation_head_in_environment,
+        CheckedImplementation, ConstrainedScheme, DeterminationKey, EvidenceNode,
+        EvidenceSelection, EvidenceSelectionBuilder, EvidenceSlotHandle, EvidenceSubstitution,
+        HeadMatchFailure, ImplId, ImplMethodId, InterfaceApplication, InterfaceConstraintBudget,
+        InterfaceId, InterfaceOperationWork, InterfaceReason, MethodId, RequirementId,
+        authenticate_implementation_application_goal,
+        match_implementation_application_head_against_canonical_goal,
+        match_implementation_application_head_in_environment,
     },
     kind::{
         CanonicalEnvironmentFailure, KindEnvironments, KindFailure,
@@ -109,8 +112,8 @@ impl Drop for MethodEntry {
 #[derive(Debug)]
 struct InterfaceEntry {
     id: InterfaceId,
-    parameter: TypeVariableId,
-    parameter_kind: Kind,
+    parameters: Box<[(TypeVariableId, Kind)]>,
+    determination: Option<DeterminationKey>,
     methods: Box<[MethodEntry]>,
     method_ids: Box<[MethodId]>,
     span: Span,
@@ -125,22 +128,15 @@ struct SchemeEntry {
 #[derive(Debug)]
 struct RequirementEntry {
     id: RequirementId,
-    interface: InterfaceId,
-    argument: Type,
-}
-
-impl Drop for RequirementEntry {
-    fn drop(&mut self) {
-        discard_type_iteratively(std::mem::replace(&mut self.argument, Type::Unit));
-    }
+    application: InterfaceApplication,
+    span: Span,
 }
 
 #[derive(Debug)]
 struct ImplementationEntry {
     id: ImplId,
-    interface: InterfaceId,
+    application: InterfaceApplication,
     parameters: Box<[TypeVariableId]>,
-    argument: Type,
     prerequisites: Box<[RequirementEntry]>,
     methods: Box<[ImplMethodId]>,
     span: Span,
@@ -148,17 +144,10 @@ struct ImplementationEntry {
     import_spans: Box<[Span]>,
 }
 
-impl Drop for ImplementationEntry {
-    fn drop(&mut self) {
-        discard_type_iteratively(std::mem::replace(&mut self.argument, Type::Unit));
-    }
-}
-
 #[derive(Debug)]
 struct PendingObligation {
-    interface: InterfaceId,
     checked_method: Option<MethodId>,
-    argument: Type,
+    application: InterfaceApplication,
     method_arguments: Box<[Type]>,
     checked_value_type: Option<Type>,
     method_rigidity: Option<MethodRigidityCondition>,
@@ -166,6 +155,109 @@ struct PendingObligation {
     span: Span,
     declaration_span: Option<Span>,
     import_span: Option<Span>,
+}
+
+/// One source-order improvement transaction prepared from the pre-pass key
+/// snapshot. The elaborator applies these tuples while it still owns inference.
+#[derive(Debug)]
+pub(crate) struct ImprovementTask {
+    key: Box<[Type]>,
+    expected_dependents: Box<[Type]>,
+    actual_dependents: Box<[Type]>,
+    obligation_span: Span,
+    source_span: Span,
+}
+
+type ImprovementTaskParts = (Box<[Type]>, Box<[Type]>, Box<[Type]>, Span, Span);
+
+impl ImprovementTask {
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        key: Box<[Type]>,
+        expected_dependents: Box<[Type]>,
+        actual_dependents: Box<[Type]>,
+        obligation_span: Span,
+        source_span: Span,
+    ) -> Self {
+        Self {
+            key,
+            expected_dependents,
+            actual_dependents,
+            obligation_span,
+            source_span,
+        }
+    }
+
+    pub(crate) fn into_parts(mut self) -> ImprovementTaskParts {
+        (
+            std::mem::take(&mut self.key),
+            std::mem::take(&mut self.expected_dependents),
+            std::mem::take(&mut self.actual_dependents),
+            self.obligation_span,
+            self.source_span,
+        )
+    }
+}
+
+impl Drop for ImprovementTask {
+    fn drop(&mut self) {
+        for ty in std::mem::take(&mut self.key).into_vec() {
+            discard_type_iteratively(ty);
+        }
+        for ty in std::mem::take(&mut self.expected_dependents).into_vec() {
+            discard_type_iteratively(ty);
+        }
+        for ty in std::mem::take(&mut self.actual_dependents).into_vec() {
+            discard_type_iteratively(ty);
+        }
+    }
+}
+
+/// Exact pending prefix captured before a nested obligation suffix is staged.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PendingObligationMarker {
+    pending_len: usize,
+    determined_count: usize,
+}
+
+impl PendingObligationMarker {
+    #[cfg(test)]
+    const fn for_test(pending_len: usize, determined_count: usize) -> Self {
+        Self {
+            pending_len,
+            determined_count,
+        }
+    }
+}
+
+/// Eligibility fixed before any improvement transaction mutates inference.
+#[derive(Debug)]
+pub(crate) struct DeterminationSnapshot {
+    marker: PendingObligationMarker,
+    eligible: Box<[bool]>,
+    tasks: Vec<ImprovementTask>,
+}
+
+impl DeterminationSnapshot {
+    pub(crate) fn take_tasks(&mut self) -> Vec<ImprovementTask> {
+        std::mem::take(&mut self.tasks)
+    }
+}
+
+/// Eligibility for only the causally matching failed-body rigidity root.
+#[derive(Debug)]
+pub(crate) struct MethodRigidityDeterminationSnapshot {
+    target: MethodRigidityTarget,
+    matching_index: Option<usize>,
+    determined: bool,
+    eligible: bool,
+    task: Option<ImprovementTask>,
+}
+
+impl MethodRigidityDeterminationSnapshot {
+    pub(crate) fn take_task(&mut self) -> Option<ImprovementTask> {
+        self.task.take()
+    }
 }
 
 /// Diagnostic location retained until selection determines whether a same-method
@@ -236,12 +328,12 @@ impl MethodRigiditySite {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MethodRigidityTarget {
-    marker: usize,
+    marker: PendingObligationMarker,
     failure_span: Span,
 }
 
 impl MethodRigidityTarget {
-    pub(crate) const fn new(marker: usize, failure_span: Span) -> Self {
+    pub(crate) const fn new(marker: PendingObligationMarker, failure_span: Span) -> Self {
         Self {
             marker,
             failure_span,
@@ -412,7 +504,6 @@ impl SelectionSite {
 
 impl Drop for PendingObligation {
     fn drop(&mut self) {
-        discard_type_iteratively(std::mem::replace(&mut self.argument, Type::Unit));
         for argument in std::mem::take(&mut self.method_arguments).into_vec() {
             discard_type_iteratively(argument);
         }
@@ -425,7 +516,7 @@ impl Drop for PendingObligation {
 #[derive(Debug)]
 struct SelectedOccurrence {
     checked_method: Option<MethodId>,
-    checked_argument: Type,
+    checked_application: InterfaceApplication,
     method_arguments: Box<[Type]>,
     checked_value_type: Option<Type>,
     selection: Option<EvidenceSelection>,
@@ -434,7 +525,6 @@ struct SelectedOccurrence {
 
 impl Drop for SelectedOccurrence {
     fn drop(&mut self) {
-        discard_type_iteratively(std::mem::replace(&mut self.checked_argument, Type::Unit));
         for argument in std::mem::take(&mut self.method_arguments).into_vec() {
             discard_type_iteratively(argument);
         }
@@ -489,7 +579,11 @@ impl PendingEvidencePublication {
     pub(crate) fn publish(mut self) -> Result<(), SelectionFailure> {
         self.preflight()?;
         while let Some(mut occurrence) = self.occurrences.pop() {
-            let checked_argument = std::mem::replace(&mut occurrence.checked_argument, Type::Unit);
+            let interface = occurrence.checked_application.interface();
+            let checked_application = std::mem::replace(
+                &mut occurrence.checked_application,
+                InterfaceApplication::new(interface, Box::new([])),
+            );
             let checked_method = occurrence.checked_method.take();
             let method_arguments = std::mem::take(&mut occurrence.method_arguments);
             let checked_value_type = occurrence.checked_value_type.take();
@@ -503,7 +597,7 @@ impl PendingEvidencePublication {
                 .expect("publication preflight authenticates every slot")
                 .fill_preflighted(
                     checked_method,
-                    checked_argument,
+                    checked_application,
                     method_arguments,
                     checked_value_type,
                     selection,
@@ -516,8 +610,7 @@ impl PendingEvidencePublication {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SelectionMethod<'a> {
     interface: InterfaceId,
-    interface_parameter: TypeVariableId,
-    interface_parameter_kind: &'a Kind,
+    interface_parameters: &'a [(TypeVariableId, Kind)],
     type_parameters: &'a [(TypeVariableId, Kind)],
     value_type: &'a Type,
     declaration_span: Span,
@@ -528,12 +621,8 @@ impl<'a> SelectionMethod<'a> {
         self.interface
     }
 
-    pub(crate) const fn interface_parameter(self) -> TypeVariableId {
-        self.interface_parameter
-    }
-
-    pub(crate) const fn interface_parameter_kind(self) -> &'a Kind {
-        self.interface_parameter_kind
+    pub(crate) const fn interface_parameters(self) -> &'a [(TypeVariableId, Kind)] {
+        self.interface_parameters
     }
 
     pub(crate) const fn value_type(self) -> &'a Type {
@@ -563,16 +652,17 @@ pub(crate) struct EvidenceSelector {
     abstracts: Vec<RequirementEntry>,
     current: Option<ImplId>,
     pending: Vec<PendingObligation>,
+    pending_determined_count: usize,
     pending_method_rigidity_count: usize,
     selected: Vec<SelectedOccurrence>,
     method_rigidities: Vec<SelectedMethodRigidity>,
 }
 
-struct ImplementationCandidateAuthentication<'a, P> {
+struct ImplementationCandidateAuthentication<'a> {
     parameter_records: &'a [ResolvedTypeVariable],
-    interface: InterfaceId,
-    argument: &'a Type,
-    prerequisites: P,
+    interfaces: &'a [InterfaceId],
+    argument_counts: &'a [usize],
+    arguments: &'a [&'a Type],
     span: Span,
 }
 
@@ -590,6 +680,7 @@ impl EvidenceSelector {
             abstracts: Vec::new(),
             current: None,
             pending: Vec::new(),
+            pending_determined_count: 0,
             pending_method_rigidity_count: 0,
             selected: Vec::new(),
             method_rigidities: Vec::new(),
@@ -623,23 +714,47 @@ impl EvidenceSelector {
         constraint_work: &mut InterfaceConstraintBudget,
         type_work: &mut TypeWorkBudget,
     ) -> Result<(), SelectionFailure> {
-        let canonical =
-            canonical_type_variable_kind(registry, fact.parameter.id, fact.span, constraint_work)
-                .map_err(map_ingress_kind_failure)?;
-        let equal = same_kind_with_charge(canonical, &fact.parameter.kind, || {
-            constraint_work.charge(1)
-        })
-        .map_err(|()| SelectionFailure::ConstraintResource)?;
-        if !equal {
+        if fact.parameters.is_empty() {
             return Err(SelectionFailure::InvalidState);
         }
-        let ingress_records = fact
-            .methods
-            .len()
-            .checked_add(1)
-            .ok_or(SelectionFailure::ConstraintResource)?;
+        // One retained row is allocated. Checked and summary authentication
+        // establish its declaration owner; same-module source ordinals in strict
+        // local order establish qualification, uniqueness, and declaration order
+        // without a second index.
         constraint_work
-            .charge(ingress_records)
+            .charge(fact.parameters.len())
+            .map_err(|()| SelectionFailure::ConstraintResource)?;
+        type_work
+            .charge(fact.parameters.len())
+            .map_err(|()| SelectionFailure::TypeResource)?;
+        let mut parameters = Vec::new();
+        parameters
+            .try_reserve_exact(fact.parameters.len())
+            .map_err(|_| SelectionFailure::ConstraintResource)?;
+        let mut previous_parameter = None;
+        for parameter in &fact.parameters {
+            if parameter.id.module() != Some(fact.id.module())
+                || previous_parameter.is_some_and(|previous| parameter.id.local() <= previous)
+            {
+                return Err(SelectionFailure::InvalidState);
+            }
+            previous_parameter = Some(parameter.id.local());
+            let canonical =
+                canonical_type_variable_kind(registry, parameter.id, fact.span, constraint_work)
+                    .map_err(map_ingress_kind_failure)?;
+            if !same_kind_with_charge(canonical, &parameter.kind, || constraint_work.charge(1))
+                .map_err(|()| SelectionFailure::ConstraintResource)?
+            {
+                return Err(SelectionFailure::InvalidState);
+            }
+            parameters.push((
+                parameter.id,
+                clone_kind_with_budget(canonical, type_work)
+                    .map_err(|()| SelectionFailure::TypeResource)?,
+            ));
+        }
+        constraint_work
+            .charge(fact.methods.len())
             .map_err(|()| SelectionFailure::ConstraintResource)?;
         if self.interface_indices.contains_key(&fact.id) {
             return Err(SelectionFailure::InvalidState);
@@ -653,11 +768,6 @@ impl EvidenceSelector {
                 return Err(SelectionFailure::InvalidState);
             }
         }
-        type_work
-            .charge(1)
-            .map_err(|()| SelectionFailure::TypeResource)?;
-        let parameter_kind = clone_kind_with_budget(canonical, type_work)
-            .map_err(|()| SelectionFailure::TypeResource)?;
         let mut methods = Vec::new();
         let mut method_ids = Vec::new();
         methods
@@ -691,7 +801,10 @@ impl EvidenceSelector {
             seen.try_reserve(method_parameters.len())
                 .map_err(|_| SelectionFailure::ConstraintResource)?;
             for parameter in method_parameters {
-                if parameter.id == fact.parameter.id || !seen.insert(parameter.id) {
+                if parameter.id.module() != Some(fact.id.module())
+                    || previous_parameter.is_some_and(|previous| parameter.id.local() <= previous)
+                    || !seen.insert(parameter.id)
+                {
                     return Err(SelectionFailure::InvalidState);
                 }
                 let canonical = canonical_type_variable_kind(
@@ -721,6 +834,11 @@ impl EvidenceSelector {
             });
             method_ids.push(method.id);
         }
+        let determination = fact
+            .determination()
+            .map(|determination| determination.clone_with_budget(constraint_work))
+            .transpose()
+            .map_err(|()| SelectionFailure::ConstraintResource)?;
         self.interfaces
             .try_reserve(1)
             .map_err(|_| SelectionFailure::ConstraintResource)?;
@@ -739,8 +857,8 @@ impl EvidenceSelector {
         let _ = self.interface_indices.insert(fact.id, interface_index);
         self.interfaces.push(InterfaceEntry {
             id: fact.id,
-            parameter: fact.parameter.id,
-            parameter_kind,
+            parameters: parameters.into_boxed_slice(),
+            determination,
             methods: methods.into_boxed_slice(),
             method_ids: method_ids.into_boxed_slice(),
             span: fact.span,
@@ -802,9 +920,11 @@ impl EvidenceSelector {
             .charge_type(&scheme.value_type)
             .map_err(|()| SelectionFailure::ConstraintResource)?;
         for requirement in &scheme.requirements {
-            constraint_work
-                .charge_type(&requirement.argument)
-                .map_err(|()| SelectionFailure::ConstraintResource)?;
+            for argument in requirement.arguments() {
+                constraint_work
+                    .charge_type(argument)
+                    .map_err(|()| SelectionFailure::ConstraintResource)?;
+            }
         }
         let scheme = scheme
             .clone_with_budget(type_work)
@@ -837,16 +957,57 @@ impl EvidenceSelector {
         if self.implementation_indices.contains_key(&fact.id) {
             return Err(SelectionFailure::InvalidState);
         }
+        let relation_count = fact
+            .prerequisites
+            .len()
+            .checked_add(1)
+            .ok_or(SelectionFailure::ConstraintResource)?;
+        let total_argument_count = fact
+            .arguments()
+            .len()
+            .checked_add(
+                fact.prerequisites
+                    .iter()
+                    .map(|prerequisite| prerequisite.arguments().len())
+                    .try_fold(0usize, |sum, count| sum.checked_add(count))
+                    .ok_or(SelectionFailure::ConstraintResource)?,
+            )
+            .ok_or(SelectionFailure::ConstraintResource)?;
+        constraint_work
+            .charge(
+                relation_count
+                    .checked_mul(2)
+                    .and_then(|work| work.checked_add(total_argument_count))
+                    .ok_or(SelectionFailure::ConstraintResource)?,
+            )
+            .map_err(|()| SelectionFailure::ConstraintResource)?;
+        let mut candidate_interfaces = Vec::new();
+        let mut candidate_argument_counts = Vec::new();
+        let mut candidate_arguments = Vec::new();
+        candidate_interfaces
+            .try_reserve_exact(relation_count)
+            .map_err(|_| SelectionFailure::ConstraintResource)?;
+        candidate_argument_counts
+            .try_reserve_exact(relation_count)
+            .map_err(|_| SelectionFailure::ConstraintResource)?;
+        candidate_arguments
+            .try_reserve_exact(total_argument_count)
+            .map_err(|_| SelectionFailure::ConstraintResource)?;
+        candidate_interfaces.push(fact.interface());
+        candidate_argument_counts.push(fact.arguments().len());
+        candidate_arguments.extend(fact.arguments());
+        for prerequisite in &fact.prerequisites {
+            candidate_interfaces.push(prerequisite.interface());
+            candidate_argument_counts.push(prerequisite.arguments().len());
+            candidate_arguments.extend(prerequisite.arguments());
+        }
         let parameters = self.authenticate_implementation_candidate(
             registry,
             ImplementationCandidateAuthentication {
                 parameter_records: &fact.head_parameters,
-                interface: fact.interface,
-                argument: &fact.argument,
-                prerequisites: fact
-                    .prerequisites
-                    .iter()
-                    .map(|prerequisite| (prerequisite.interface, &prerequisite.argument)),
+                interfaces: &candidate_interfaces,
+                argument_counts: &candidate_argument_counts,
+                arguments: &candidate_arguments,
                 span: fact.span,
             },
             constraint_work,
@@ -861,9 +1022,11 @@ impl EvidenceSelector {
                     .saturating_add(1),
             )
             .map_err(|()| SelectionFailure::ConstraintResource)?;
-        constraint_work
-            .charge_type(&fact.argument)
-            .map_err(|()| SelectionFailure::ConstraintResource)?;
+        for argument in fact.arguments() {
+            constraint_work
+                .charge_type(argument)
+                .map_err(|()| SelectionFailure::ConstraintResource)?;
+        }
         let mut prerequisites = Vec::new();
         let mut methods = Vec::new();
         let mut method_spans = Vec::new();
@@ -880,16 +1043,20 @@ impl EvidenceSelector {
         import_spans
             .try_reserve_exact(imported.authorization().hops().len())
             .map_err(|_| SelectionFailure::ConstraintResource)?;
-        let staged_candidate_bucket = self.reserve_implementation_publication(fact.interface)?;
+        let staged_candidate_bucket = self.reserve_implementation_publication(fact.interface())?;
         for prerequisite in &fact.prerequisites {
-            constraint_work
-                .charge_type(&prerequisite.argument)
-                .map_err(|()| SelectionFailure::ConstraintResource)?;
+            for argument in prerequisite.arguments() {
+                constraint_work
+                    .charge_type(argument)
+                    .map_err(|()| SelectionFailure::ConstraintResource)?;
+            }
             prerequisites.push(RequirementEntry {
                 id: prerequisite.id,
-                interface: prerequisite.interface,
-                argument: clone_type_with_budget(&prerequisite.argument, type_work)
+                application: prerequisite
+                    .application()
+                    .clone_with_budget(type_work)
                     .map_err(|()| SelectionFailure::TypeResource)?,
+                span: prerequisite.span,
             });
         }
         methods.extend(fact.methods.iter().map(|method| method.id));
@@ -901,15 +1068,13 @@ impl EvidenceSelector {
                 .iter()
                 .map(|hop| hop.import_span),
         );
-        let argument = IterativeTypeOwner::new(
-            clone_type_with_budget(&fact.argument, type_work)
-                .map_err(|()| SelectionFailure::TypeResource)?,
-        );
         let entry = ImplementationEntry {
             id: fact.id,
-            interface: fact.interface,
+            application: fact
+                .application()
+                .clone_with_budget(type_work)
+                .map_err(|()| SelectionFailure::TypeResource)?,
             parameters: parameters.into_boxed_slice(),
-            argument: argument.into_inner(),
             prerequisites: prerequisites.into_boxed_slice(),
             methods: methods.into_boxed_slice(),
             span: fact.span,
@@ -928,26 +1093,92 @@ impl EvidenceSelector {
         constraint_work: &mut InterfaceConstraintBudget,
         type_work: &mut TypeWorkBudget,
     ) -> Result<(), SelectionFailure> {
+        constraint_work
+            .charge(resolved.prerequisites.len().saturating_add(1))
+            .map_err(|()| SelectionFailure::ConstraintResource)?;
         if resolved.id != checked.id
-            || resolved.interface.id != checked.interface
+            || resolved.head.interface.id != checked.interface()
+            || resolved.head.arguments.len() != checked.arguments().len()
             || !resolved.prerequisite_only_parameters.is_empty()
             || checked.methods.len() != resolved.method_groups.len()
         {
             return Err(SelectionFailure::InvalidState);
         }
+        for (resolved_argument, checked_argument) in
+            resolved.head.arguments.iter().zip(checked.arguments())
+        {
+            if !same_type_with_constraint_budget(
+                &resolved_argument.ty,
+                checked_argument,
+                constraint_work,
+            )
+            .map_err(|()| SelectionFailure::ConstraintResource)?
+            {
+                return Err(SelectionFailure::InvalidState);
+            }
+        }
         if self.implementation_indices.contains_key(&checked.id) {
             return Err(SelectionFailure::InvalidState);
+        }
+        let relation_count = resolved
+            .prerequisites
+            .len()
+            .checked_add(1)
+            .ok_or(SelectionFailure::ConstraintResource)?;
+        let total_argument_count = resolved
+            .head
+            .arguments
+            .len()
+            .checked_add(
+                resolved
+                    .prerequisites
+                    .iter()
+                    .map(|prerequisite| prerequisite.application.arguments.len())
+                    .try_fold(0usize, |sum, count| sum.checked_add(count))
+                    .ok_or(SelectionFailure::ConstraintResource)?,
+            )
+            .ok_or(SelectionFailure::ConstraintResource)?;
+        constraint_work
+            .charge(
+                relation_count
+                    .checked_mul(2)
+                    .and_then(|work| work.checked_add(total_argument_count))
+                    .ok_or(SelectionFailure::ConstraintResource)?,
+            )
+            .map_err(|()| SelectionFailure::ConstraintResource)?;
+        let mut candidate_interfaces = Vec::new();
+        let mut candidate_argument_counts = Vec::new();
+        let mut candidate_arguments = Vec::new();
+        candidate_interfaces
+            .try_reserve_exact(relation_count)
+            .map_err(|_| SelectionFailure::ConstraintResource)?;
+        candidate_argument_counts
+            .try_reserve_exact(relation_count)
+            .map_err(|_| SelectionFailure::ConstraintResource)?;
+        candidate_arguments
+            .try_reserve_exact(total_argument_count)
+            .map_err(|_| SelectionFailure::ConstraintResource)?;
+        candidate_interfaces.push(resolved.head.interface.id);
+        candidate_argument_counts.push(resolved.head.arguments.len());
+        candidate_arguments.extend(resolved.head.arguments.iter().map(|argument| &argument.ty));
+        for prerequisite in &resolved.prerequisites {
+            candidate_interfaces.push(prerequisite.application.interface.id);
+            candidate_argument_counts.push(prerequisite.application.arguments.len());
+            candidate_arguments.extend(
+                prerequisite
+                    .application
+                    .arguments
+                    .iter()
+                    .map(|argument| &argument.ty),
+            );
         }
         let parameters = self.authenticate_implementation_candidate(
             registry,
             ImplementationCandidateAuthentication {
                 parameter_records: &resolved.head_parameters,
-                interface: resolved.interface.id,
-                argument: &resolved.argument.ty,
-                prerequisites: resolved
-                    .prerequisites
-                    .iter()
-                    .map(|prerequisite| (prerequisite.interface.id, &prerequisite.argument.ty)),
+                interfaces: &candidate_interfaces,
+                argument_counts: &candidate_argument_counts,
+                arguments: &candidate_arguments,
                 span: resolved.span,
             },
             constraint_work,
@@ -957,9 +1188,7 @@ impl EvidenceSelector {
                 resolved
                     .head_parameters
                     .len()
-                    .saturating_add(resolved.prerequisites.len())
-                    .saturating_add(checked.methods.len().saturating_mul(2))
-                    .saturating_add(1),
+                    .saturating_add(checked.methods.len().saturating_mul(2)),
             )
             .map_err(|()| SelectionFailure::ConstraintResource)?;
         let mut method_spans = Vec::new();
@@ -981,9 +1210,11 @@ impl EvidenceSelector {
             }
             method_spans.push(source.span);
         }
-        constraint_work
-            .charge_type(&resolved.argument.ty)
-            .map_err(|()| SelectionFailure::ConstraintResource)?;
+        for argument in &resolved.head.arguments {
+            constraint_work
+                .charge_type(&argument.ty)
+                .map_err(|()| SelectionFailure::ConstraintResource)?;
+        }
         let mut prerequisites = Vec::new();
         let mut methods = Vec::new();
         prerequisites
@@ -992,28 +1223,33 @@ impl EvidenceSelector {
         methods
             .try_reserve(checked.methods.len())
             .map_err(|_| SelectionFailure::ConstraintResource)?;
-        let staged_candidate_bucket = self.reserve_implementation_publication(checked.interface)?;
+        let staged_candidate_bucket =
+            self.reserve_implementation_publication(checked.interface())?;
         for prerequisite in &resolved.prerequisites {
-            constraint_work
-                .charge_type(&prerequisite.argument.ty)
-                .map_err(|()| SelectionFailure::ConstraintResource)?;
+            for argument in &prerequisite.application.arguments {
+                constraint_work
+                    .charge_type(&argument.ty)
+                    .map_err(|()| SelectionFailure::ConstraintResource)?;
+            }
+            let application_arguments =
+                clone_local_prerequisite_arguments(&prerequisite.application.arguments, type_work)?;
             prerequisites.push(RequirementEntry {
                 id: prerequisite.id,
-                interface: prerequisite.interface.id,
-                argument: clone_type_with_budget(&prerequisite.argument.ty, type_work)
-                    .map_err(|()| SelectionFailure::TypeResource)?,
+                application: InterfaceApplication::new(
+                    prerequisite.application.interface.id,
+                    application_arguments.into_boxed_slice(),
+                ),
+                span: prerequisite.application.span,
             });
         }
         methods.extend(checked.methods.iter().map(|method| method.id));
-        let argument = IterativeTypeOwner::new(
-            clone_type_with_budget(&resolved.argument.ty, type_work)
-                .map_err(|()| SelectionFailure::TypeResource)?,
-        );
         let entry = ImplementationEntry {
             id: checked.id,
-            interface: checked.interface,
+            application: checked
+                .application()
+                .clone_with_budget(type_work)
+                .map_err(|()| SelectionFailure::TypeResource)?,
             parameters: parameters.into_boxed_slice(),
-            argument: argument.into_inner(),
             prerequisites: prerequisites.into_boxed_slice(),
             methods: methods.into_boxed_slice(),
             span: resolved.span,
@@ -1060,7 +1296,7 @@ impl EvidenceSelector {
         staged_candidate_bucket: Option<Vec<usize>>,
     ) -> Result<(), SelectionFailure> {
         let implementation_index = self.implementations.len();
-        let interface = entry.interface;
+        let interface = entry.application.interface();
         let implementation = entry.id;
         if self.implementation_indices.contains_key(&implementation) {
             return Err(SelectionFailure::InvalidState);
@@ -1095,8 +1331,7 @@ impl EvidenceSelector {
         let method = interface.methods.get(method_index)?;
         Some(SelectionMethod {
             interface: interface.id,
-            interface_parameter: interface.parameter,
-            interface_parameter_kind: &interface.parameter_kind,
+            interface_parameters: &interface.parameters,
             type_parameters: &method.type_parameters,
             value_type: &method.value_type,
             declaration_span: method.span,
@@ -1154,13 +1389,19 @@ impl EvidenceSelector {
         for requirement in &scheme.requirements {
             constraint_work
                 .charge(1)
-                .and_then(|()| constraint_work.charge_type(&requirement.argument))
                 .map_err(|()| SelectionFailure::ConstraintResource)?;
+            for argument in requirement.arguments() {
+                constraint_work
+                    .charge_type(argument)
+                    .map_err(|()| SelectionFailure::ConstraintResource)?;
+            }
             abstracts.push(RequirementEntry {
                 id: requirement.id,
-                interface: requirement.interface,
-                argument: clone_type_with_budget(&requirement.argument, type_work)
+                application: requirement
+                    .application()
+                    .clone_with_budget(type_work)
                     .map_err(|()| SelectionFailure::TypeResource)?,
+                span: requirement.span,
             });
         }
         self.abstracts = abstracts;
@@ -1192,13 +1433,19 @@ impl EvidenceSelector {
         for prerequisite in &implementation.prerequisites {
             constraint_work
                 .charge(1)
-                .and_then(|()| constraint_work.charge_type(&prerequisite.argument))
                 .map_err(|()| SelectionFailure::ConstraintResource)?;
+            for argument in prerequisite.application.arguments() {
+                constraint_work
+                    .charge_type(argument)
+                    .map_err(|()| SelectionFailure::ConstraintResource)?;
+            }
             abstracts.push(RequirementEntry {
                 id: prerequisite.id,
-                interface: prerequisite.interface,
-                argument: clone_type_with_budget(&prerequisite.argument, type_work)
+                application: prerequisite
+                    .application
+                    .clone_with_budget(type_work)
                     .map_err(|()| SelectionFailure::TypeResource)?,
+                span: prerequisite.span,
             });
         }
         self.abstracts = abstracts;
@@ -1219,19 +1466,54 @@ impl EvidenceSelector {
             .charge(1)
             .and_then(|()| constraint_work.charge_type(&argument))
             .map_err(|()| SelectionFailure::ConstraintResource)?;
+        let span = self.interface_entry(interface)?.span;
         self.abstracts
             .try_reserve(1)
             .map_err(|_| SelectionFailure::ConstraintResource)?;
         self.abstracts.push(RequirementEntry {
             id,
-            interface,
-            argument: argument.into_inner(),
+            application: InterfaceApplication::new(interface, Box::new([argument.into_inner()])),
+            span,
         });
         Ok(())
     }
 
-    pub(crate) const fn pending_marker(&self) -> usize {
-        self.pending.len()
+    pub(crate) const fn pending_marker(&self) -> PendingObligationMarker {
+        PendingObligationMarker {
+            pending_len: self.pending.len(),
+            determined_count: self.pending_determined_count,
+        }
+    }
+
+    fn interface_is_determined(&self, interface: InterfaceId) -> bool {
+        self.interface_indices
+            .get(&interface)
+            .and_then(|index| self.interfaces.get(*index))
+            .is_some_and(|entry| entry.determination.is_some())
+    }
+
+    fn pending_suffix_counts(
+        &self,
+        marker: PendingObligationMarker,
+    ) -> Result<(usize, usize), SelectionFailure> {
+        if marker.determined_count > marker.pending_len
+            || self.pending_determined_count > self.pending.len()
+        {
+            return Err(SelectionFailure::InvalidState);
+        }
+        let pending_count = self
+            .pending
+            .len()
+            .checked_sub(marker.pending_len)
+            .ok_or(SelectionFailure::InvalidState)?;
+        let determined_count = self
+            .pending_determined_count
+            .checked_sub(marker.determined_count)
+            .ok_or(SelectionFailure::InvalidState)?;
+        if determined_count > pending_count {
+            return Err(SelectionFailure::InvalidState);
+        }
+        Ok((pending_count, determined_count))
     }
 
     #[cfg(test)]
@@ -1244,8 +1526,7 @@ impl EvidenceSelector {
         constraint_work: &mut InterfaceConstraintBudget,
     ) -> Result<(), SelectionFailure> {
         self.push_owned_obligation(
-            interface,
-            argument,
+            InterfaceApplication::new(interface, Box::new([argument])),
             SelectionSite::plain(slot, span),
             constraint_work,
         )
@@ -1253,23 +1534,31 @@ impl EvidenceSelector {
 
     pub(crate) fn push_owned_obligation(
         &mut self,
-        interface: InterfaceId,
-        argument: Type,
+        application: InterfaceApplication,
         site: SelectionSite,
         constraint_work: &mut InterfaceConstraintBudget,
     ) -> Result<(), SelectionFailure> {
-        let argument = IterativeTypeOwner::new(argument);
+        let pending_determined_count = if self.interface_is_determined(application.interface()) {
+            self.pending_determined_count
+                .checked_add(1)
+                .ok_or(SelectionFailure::ConstraintResource)?
+        } else {
+            self.pending_determined_count
+        };
         constraint_work
             .charge(1)
-            .and_then(|()| constraint_work.charge_type(&argument))
             .map_err(|()| SelectionFailure::ConstraintResource)?;
+        for argument in application.arguments() {
+            constraint_work
+                .charge_type(argument)
+                .map_err(|()| SelectionFailure::ConstraintResource)?;
+        }
         self.pending
             .try_reserve(1)
             .map_err(|_| SelectionFailure::ConstraintResource)?;
         self.pending.push(PendingObligation {
-            interface,
             checked_method: None,
-            argument: argument.into_inner(),
+            application,
             method_arguments: Box::new([]),
             checked_value_type: None,
             method_rigidity: None,
@@ -1278,13 +1567,13 @@ impl EvidenceSelector {
             declaration_span: site.declaration_span,
             import_span: site.import_span,
         });
+        self.pending_determined_count = pending_determined_count;
         Ok(())
     }
 
     pub(crate) fn push_cloned_obligation(
         &mut self,
-        interface: InterfaceId,
-        argument: &Type,
+        application: &InterfaceApplication,
         metadata: MethodObligationMetadata,
         site: SelectionSite,
         constraint_work: &mut InterfaceConstraintBudget,
@@ -1301,6 +1590,13 @@ impl EvidenceSelector {
                 .ok_or(SelectionFailure::ConstraintResource)?
         } else {
             self.pending_method_rigidity_count
+        };
+        let pending_determined_count = if self.interface_is_determined(application.interface()) {
+            self.pending_determined_count
+                .checked_add(1)
+                .ok_or(SelectionFailure::ConstraintResource)?
+        } else {
+            self.pending_determined_count
         };
         let rigidity_work = match &metadata.method_rigidity {
             Some(rigidity) => rigidity
@@ -1319,8 +1615,12 @@ impl EvidenceSelector {
             .ok_or(SelectionFailure::ConstraintResource)?;
         constraint_work
             .charge(retained_work)
-            .and_then(|()| constraint_work.charge_type(argument))
             .map_err(|()| SelectionFailure::ConstraintResource)?;
+        for argument in application.arguments() {
+            constraint_work
+                .charge_type(argument)
+                .map_err(|()| SelectionFailure::ConstraintResource)?;
+        }
         for method_argument in &metadata.method_arguments {
             constraint_work
                 .charge_type(method_argument)
@@ -1331,19 +1631,17 @@ impl EvidenceSelector {
                 .charge_type(checked_value_type)
                 .map_err(|()| SelectionFailure::ConstraintResource)?;
         }
-        let argument = IterativeTypeOwner::new(
-            clone_type_with_budget(argument, type_work)
-                .map_err(|()| SelectionFailure::TypeResource)?,
-        );
+        let application = application
+            .clone_with_budget(type_work)
+            .map_err(|()| SelectionFailure::TypeResource)?;
         self.pending
             .try_reserve(1)
             .map_err(|_| SelectionFailure::ConstraintResource)?;
         let (checked_method, method_arguments, checked_value_type, method_rigidity) =
             metadata.into_parts();
         self.pending.push(PendingObligation {
-            interface,
             checked_method: Some(checked_method),
-            argument: argument.into_inner(),
+            application,
             method_arguments,
             checked_value_type,
             method_rigidity,
@@ -1352,14 +1650,328 @@ impl EvidenceSelector {
             declaration_span: site.declaration_span,
             import_span: site.import_span,
         });
+        self.pending_determined_count = pending_determined_count;
         self.pending_method_rigidity_count = pending_method_rigidity_count;
         Ok(())
     }
 
-    pub(crate) fn close_with_registry<F>(
+    pub(crate) fn prepare_determination_snapshot<F>(
+        &self,
+        registry: &ResolvedRegistry,
+        marker: PendingObligationMarker,
+        mut zonk: F,
+        constraint_work: &mut InterfaceConstraintBudget,
+        type_work: &mut TypeWorkBudget,
+    ) -> Result<DeterminationSnapshot, SelectionFailure>
+    where
+        F: FnMut(Type, &mut TypeWorkBudget) -> Result<Type, SelectionFailure>,
+    {
+        let (pending_count, determined_count) = self.pending_suffix_counts(marker)?;
+        if determined_count == 0 {
+            return Ok(DeterminationSnapshot {
+                marker,
+                eligible: Box::new([]),
+                tasks: Vec::new(),
+            });
+        }
+        constraint_work
+            .charge(
+                pending_count
+                    .checked_mul(2)
+                    .ok_or(SelectionFailure::ConstraintResource)?,
+            )
+            .map_err(|()| SelectionFailure::ConstraintResource)?;
+        let mut eligible = Vec::new();
+        let mut tasks = Vec::new();
+        eligible
+            .try_reserve_exact(pending_count)
+            .map_err(|_| SelectionFailure::ConstraintResource)?;
+        tasks
+            .try_reserve(pending_count)
+            .map_err(|_| SelectionFailure::ConstraintResource)?;
+
+        for obligation in &self.pending[marker.pending_len..] {
+            constraint_work
+                .charge(1)
+                .map_err(|()| SelectionFailure::ConstraintResource)?;
+            let interface = self.interface_entry(obligation.application.interface())?;
+            if interface.determination.is_none() {
+                eligible.push(true);
+                continue;
+            }
+            let (key_is_complete, task) = self.prepare_obligation_improvement(
+                registry,
+                interface,
+                obligation,
+                &mut zonk,
+                constraint_work,
+                type_work,
+            )?;
+            eligible.push(key_is_complete);
+            if let Some(task) = task {
+                tasks.push(task);
+            }
+        }
+        Ok(DeterminationSnapshot {
+            marker,
+            eligible: eligible.into_boxed_slice(),
+            tasks,
+        })
+    }
+
+    pub(crate) fn prepare_method_rigidity_determination<F>(
+        &self,
+        registry: &ResolvedRegistry,
+        target: MethodRigidityTarget,
+        mut zonk: F,
+        constraint_work: &mut InterfaceConstraintBudget,
+        type_work: &mut TypeWorkBudget,
+    ) -> Result<MethodRigidityDeterminationSnapshot, SelectionFailure>
+    where
+        F: FnMut(Type, &mut TypeWorkBudget) -> Result<Type, SelectionFailure>,
+    {
+        let (pending_count, _) = self.pending_suffix_counts(target.marker)?;
+        if !self.method_rigidities.is_empty() {
+            return Err(SelectionFailure::InvalidState);
+        }
+        if self.pending_method_rigidity_count == 0 {
+            return Ok(MethodRigidityDeterminationSnapshot {
+                target,
+                matching_index: None,
+                determined: false,
+                eligible: true,
+                task: None,
+            });
+        }
+        constraint_work
+            .charge(pending_count)
+            .map_err(|()| SelectionFailure::ConstraintResource)?;
+        let matching_index = self.matching_method_rigidity_index(target)?;
+        let Some(matching_index) = matching_index else {
+            return Ok(MethodRigidityDeterminationSnapshot {
+                target,
+                matching_index: None,
+                determined: false,
+                eligible: true,
+                task: None,
+            });
+        };
+        let obligation = self
+            .pending
+            .get(matching_index)
+            .ok_or(SelectionFailure::InvalidState)?;
+        let interface = self.interface_entry(obligation.application.interface())?;
+        if interface.determination.is_none() {
+            return Ok(MethodRigidityDeterminationSnapshot {
+                target,
+                matching_index: Some(matching_index),
+                determined: false,
+                eligible: true,
+                task: None,
+            });
+        }
+        let (eligible, task) = self.prepare_obligation_improvement(
+            registry,
+            interface,
+            obligation,
+            &mut zonk,
+            constraint_work,
+            type_work,
+        )?;
+        Ok(MethodRigidityDeterminationSnapshot {
+            target,
+            matching_index: Some(matching_index),
+            determined: true,
+            eligible,
+            task,
+        })
+    }
+
+    fn prepare_obligation_improvement<F>(
+        &self,
+        registry: &ResolvedRegistry,
+        interface: &InterfaceEntry,
+        obligation: &PendingObligation,
+        zonk: &mut F,
+        constraint_work: &mut InterfaceConstraintBudget,
+        type_work: &mut TypeWorkBudget,
+    ) -> Result<(bool, Option<ImprovementTask>), SelectionFailure>
+    where
+        F: FnMut(Type, &mut TypeWorkBudget) -> Result<Type, SelectionFailure>,
+    {
+        let determination = interface
+            .determination
+            .as_ref()
+            .ok_or(SelectionFailure::InvalidState)?;
+        authenticate_determination_positions(
+            determination.positions(),
+            obligation.application.arguments().len(),
+            constraint_work,
+        )?;
+        let key = clone_zonked_positions(
+            obligation.application.arguments(),
+            determination.positions(),
+            zonk,
+            constraint_work,
+            type_work,
+        )?;
+        let key_is_complete = key.0.iter().try_fold(true, |complete, ty| {
+            if !complete {
+                return Ok(false);
+            }
+            type_is_inference_free(ty, constraint_work)
+        })?;
+        if !key_is_complete {
+            return Ok((false, None));
+        }
+        let Some((expected_dependents, source_span)) =
+            self.improvement_source(registry, interface, &key.0, constraint_work, type_work)?
+        else {
+            return Ok((true, None));
+        };
+        let actual_dependents = clone_dependent_positions(
+            obligation.application.arguments(),
+            determination.positions(),
+            type_work,
+        )?;
+        if expected_dependents.0.len() != actual_dependents.0.len()
+            || expected_dependents.0.is_empty()
+        {
+            return Err(SelectionFailure::InvalidState);
+        }
+        constraint_work
+            .charge(1)
+            .map_err(|()| SelectionFailure::ConstraintResource)?;
+        Ok((
+            true,
+            Some(ImprovementTask {
+                key: key.into_boxed_slice(),
+                expected_dependents: expected_dependents.into_boxed_slice(),
+                actual_dependents: actual_dependents.into_boxed_slice(),
+                obligation_span: obligation.span,
+                source_span,
+            }),
+        ))
+    }
+
+    fn improvement_source(
+        &self,
+        registry: &ResolvedRegistry,
+        interface: &InterfaceEntry,
+        key: &[Type],
+        constraint_work: &mut InterfaceConstraintBudget,
+        type_work: &mut TypeWorkBudget,
+    ) -> Result<Option<(EvidenceTypeBuffer, Span)>, SelectionFailure> {
+        let determination = interface
+            .determination
+            .as_ref()
+            .ok_or(SelectionFailure::InvalidState)?;
+        for requirement in &self.abstracts {
+            constraint_work
+                .charge(1)
+                .map_err(|()| SelectionFailure::ConstraintResource)?;
+            if requirement.application.interface() != interface.id {
+                continue;
+            }
+            let requirement_key = position_references(
+                requirement.application.arguments(),
+                determination.positions(),
+                constraint_work,
+            )?;
+            if same_type_slices(&requirement_key, key, constraint_work)? {
+                return clone_dependent_positions(
+                    requirement.application.arguments(),
+                    determination.positions(),
+                    type_work,
+                )
+                .map(|dependents| Some((dependents, requirement.span)));
+            }
+        }
+
+        if let Some(current) = self.current {
+            constraint_work
+                .charge(1)
+                .map_err(|()| SelectionFailure::ConstraintResource)?;
+            let implementation = self
+                .implementation_indices
+                .get(&current)
+                .and_then(|index| self.implementations.get(*index))
+                .ok_or(SelectionFailure::InvalidState)?;
+            if implementation.application.interface() == interface.id {
+                let current_key = position_references(
+                    implementation.application.arguments(),
+                    determination.positions(),
+                    constraint_work,
+                )?;
+                if same_type_slices(&current_key, key, constraint_work)? {
+                    return clone_dependent_positions(
+                        implementation.application.arguments(),
+                        determination.positions(),
+                        type_work,
+                    )
+                    .map(|dependents| Some((dependents, implementation.span)));
+                }
+            }
+        }
+
+        let key_references = type_references(key, constraint_work)?;
+        let canonical_goal = authenticate_implementation_application_goal(
+            registry,
+            InterfaceOperationWork::new(interface.span, constraint_work, type_work),
+            &key_references,
+        )
+        .map_err(map_head_failure)?;
+        let mut matched = None;
+        let candidates = self
+            .implementation_candidates
+            .get(&interface.id)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        for &candidate_index in candidates {
+            charge_candidate_inspection(constraint_work)?;
+            let implementation = self
+                .implementations
+                .get(candidate_index)
+                .ok_or(SelectionFailure::InvalidState)?;
+            if Some(implementation.id) == self.current {
+                continue;
+            }
+            let candidate_key = position_references(
+                implementation.application.arguments(),
+                determination.positions(),
+                constraint_work,
+            )?;
+            let Some(substitution) = match_implementation_application_head_against_canonical_goal(
+                registry,
+                InterfaceOperationWork::new(implementation.span, constraint_work, type_work),
+                &implementation.parameters,
+                &candidate_key,
+                &canonical_goal,
+            )
+            .map_err(map_head_failure)?
+            else {
+                continue;
+            };
+            if matched.is_some() {
+                return Err(SelectionFailure::InvalidState);
+            }
+            let replacements = replacement_map(&substitution, type_work)?;
+            let dependents = substitute_dependent_positions(
+                implementation.application.arguments(),
+                determination.positions(),
+                replacements.as_map(),
+                type_work,
+            )?;
+            matched = Some((dependents, implementation.span));
+        }
+        Ok(matched)
+    }
+
+    pub(crate) fn close_with_snapshot_and_registry<F>(
         &mut self,
         registry: &ResolvedRegistry,
-        marker: usize,
+        marker: PendingObligationMarker,
+        snapshot: &DeterminationSnapshot,
         zonk: F,
         constraint_work: &mut InterfaceConstraintBudget,
         type_work: &mut TypeWorkBudget,
@@ -1367,13 +1979,108 @@ impl EvidenceSelector {
     where
         F: FnMut(Type, &mut TypeWorkBudget) -> Result<Type, SelectionFailure>,
     {
-        self.close_with_authority(registry, marker, zonk, constraint_work, type_work)
+        self.close_with_authority(
+            registry,
+            marker,
+            Some(snapshot),
+            zonk,
+            constraint_work,
+            type_work,
+        )
     }
 
+    #[cfg(test)]
+    pub(crate) fn close_with_registry<F>(
+        &mut self,
+        registry: &ResolvedRegistry,
+        marker: PendingObligationMarker,
+        mut zonk: F,
+        constraint_work: &mut InterfaceConstraintBudget,
+        type_work: &mut TypeWorkBudget,
+    ) -> Result<(), SelectionError>
+    where
+        F: FnMut(Type, &mut TypeWorkBudget) -> Result<Type, SelectionFailure>,
+    {
+        let mut snapshot = self
+            .prepare_determination_snapshot(registry, marker, &mut zonk, constraint_work, type_work)
+            .map_err(|failure| SelectionError {
+                failure,
+                span: None,
+                declaration_span: None,
+                import_span: None,
+                causes: Vec::new(),
+            })?;
+        if !snapshot.tasks.is_empty() {
+            return Err(SelectionError {
+                failure: SelectionFailure::InvalidState,
+                span: None,
+                declaration_span: None,
+                import_span: None,
+                causes: Vec::new(),
+            });
+        }
+        snapshot.tasks.clear();
+        self.close_with_authority(
+            registry,
+            marker,
+            Some(&snapshot),
+            &mut zonk,
+            constraint_work,
+            type_work,
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) fn close_method_rigidity_with_registry<F>(
         &mut self,
         registry: &ResolvedRegistry,
         target: MethodRigidityTarget,
+        mut zonk: F,
+        constraint_work: &mut InterfaceConstraintBudget,
+        type_work: &mut TypeWorkBudget,
+    ) -> Result<bool, SelectionError>
+    where
+        F: FnMut(Type, &mut TypeWorkBudget) -> Result<Type, SelectionFailure>,
+    {
+        let mut snapshot = self
+            .prepare_method_rigidity_determination(
+                registry,
+                target,
+                &mut zonk,
+                constraint_work,
+                type_work,
+            )
+            .map_err(|failure| SelectionError {
+                failure,
+                span: None,
+                declaration_span: None,
+                import_span: None,
+                causes: Vec::new(),
+            })?;
+        if snapshot.take_task().is_some() {
+            return Err(SelectionError {
+                failure: SelectionFailure::InvalidState,
+                span: None,
+                declaration_span: None,
+                import_span: None,
+                causes: Vec::new(),
+            });
+        }
+        self.close_method_rigidity_with_snapshot_and_registry(
+            registry,
+            target,
+            &snapshot,
+            zonk,
+            constraint_work,
+            type_work,
+        )
+    }
+
+    pub(crate) fn close_method_rigidity_with_snapshot_and_registry<F>(
+        &mut self,
+        registry: &ResolvedRegistry,
+        target: MethodRigidityTarget,
+        snapshot: &MethodRigidityDeterminationSnapshot,
         mut zonk: F,
         constraint_work: &mut InterfaceConstraintBudget,
         type_work: &mut TypeWorkBudget,
@@ -1388,29 +2095,33 @@ impl EvidenceSelector {
             import_span: None,
             causes: Vec::new(),
         };
-        if target.marker > self.pending.len() || !self.method_rigidities.is_empty() {
+        if self.pending_suffix_counts(target.marker).is_err()
+            || !self.method_rigidities.is_empty()
+            || snapshot.target != target
+        {
             return Err(invalid());
         }
         if self.pending_method_rigidity_count == 0 {
-            return Ok(false);
+            return if snapshot.matching_index.is_none() {
+                Ok(false)
+            } else {
+                Err(invalid())
+            };
         }
-        let pending_count = self.pending.len() - target.marker;
-        constraint_work
-            .charge(pending_count)
-            .map_err(|()| SelectionError {
-                failure: SelectionFailure::ConstraintResource,
-                span: None,
-                declaration_span: None,
-                import_span: None,
-                causes: Vec::new(),
-            })?;
-        let matching_index = self
-            .matching_method_rigidity_index(target)
-            .map_err(|_| invalid())?;
-        let Some(matching_index) = matching_index else {
+        let Some(matching_index) = snapshot.matching_index else {
             return Ok(false);
         };
         let obligation = self.pending.get(matching_index).ok_or_else(invalid)?;
+        let obligation_interface = obligation.application.interface();
+        if snapshot.determined && !snapshot.eligible {
+            return Err(SelectionError {
+                failure: SelectionFailure::Reason(InterfaceReason::Ambiguous),
+                span: Some(obligation.span),
+                declaration_span: obligation.declaration_span,
+                import_span: obligation.import_span,
+                causes: Vec::new(),
+            });
+        }
         let condition = obligation.method_rigidity.as_ref().ok_or_else(invalid)?;
         if condition.rigid_arguments.len() != obligation.method_arguments.len() {
             return Err(invalid());
@@ -1453,31 +2164,33 @@ impl EvidenceSelector {
                 import_span: None,
                 causes: Vec::new(),
             })?;
-        let interface = obligation.interface;
         let span = obligation.span;
         let declaration_span = obligation.declaration_span;
         let import_span = obligation.import_span;
-        let argument = clone_type_with_budget(&obligation.argument, type_work).map_err(|()| {
-            SelectionError {
+        let application = obligation
+            .application
+            .clone_with_budget(type_work)
+            .map_err(|()| SelectionError {
                 failure: SelectionFailure::TypeResource,
                 span: Some(span),
                 declaration_span,
                 import_span,
                 causes: Vec::new(),
-            }
-        })?;
-        let argument = zonk(argument, type_work).map_err(|failure| SelectionError {
-            failure,
-            span: Some(span),
-            declaration_span,
-            import_span,
-            causes: Vec::new(),
-        })?;
+            })?;
+        let application =
+            zonk_application(application, &mut zonk, type_work).map_err(|failure| {
+                SelectionError {
+                    failure,
+                    span: Some(span),
+                    declaration_span,
+                    import_span,
+                    causes: Vec::new(),
+                }
+            })?;
         let mut causes = Vec::new();
-        let (checked_argument, selection) = match self.select_owned(
+        let (checked_application, selection) = match self.select_owned(
             registry,
-            interface,
-            argument,
+            application,
             &mut causes,
             constraint_work,
             type_work,
@@ -1510,6 +2223,13 @@ impl EvidenceSelector {
             .pending_method_rigidity_count
             .checked_sub(1)
             .ok_or_else(invalid)?;
+        let pending_determined_count = if self.interface_is_determined(obligation_interface) {
+            self.pending_determined_count
+                .checked_sub(1)
+                .ok_or_else(invalid)?
+        } else {
+            self.pending_determined_count
+        };
         let selected_condition = if exact_current {
             Some(
                 self.pending
@@ -1521,6 +2241,7 @@ impl EvidenceSelector {
             None
         };
         let mut obligation = self.pending.remove(matching_index);
+        self.pending_determined_count = pending_determined_count;
         self.pending_method_rigidity_count = pending_method_rigidity_count;
         if let Some(condition) = selected_condition {
             self.method_rigidities.push(SelectedMethodRigidity {
@@ -1530,7 +2251,7 @@ impl EvidenceSelector {
         }
         self.selected.push(SelectedOccurrence {
             checked_method: obligation.checked_method,
-            checked_argument,
+            checked_application,
             method_arguments: std::mem::take(&mut obligation.method_arguments),
             checked_value_type: obligation.checked_value_type.take(),
             selection: Some(selection),
@@ -1543,12 +2264,10 @@ impl EvidenceSelector {
         &self,
         target: MethodRigidityTarget,
     ) -> Result<Option<usize>, SelectionFailure> {
-        if target.marker > self.pending.len() {
-            return Err(SelectionFailure::InvalidState);
-        }
+        self.pending_suffix_counts(target.marker)?;
         let mut best = None;
         let mut duplicate = false;
-        for (offset, obligation) in self.pending[target.marker..].iter().enumerate() {
+        for (offset, obligation) in self.pending[target.marker.pending_len..].iter().enumerate() {
             let Some(rank) = obligation
                 .method_rigidity
                 .as_ref()
@@ -1556,7 +2275,11 @@ impl EvidenceSelector {
             else {
                 continue;
             };
-            let index = target.marker + offset;
+            let index = target
+                .marker
+                .pending_len
+                .checked_add(offset)
+                .ok_or(SelectionFailure::ConstraintResource)?;
             match best {
                 None => {
                     best = Some((rank, index));
@@ -1580,7 +2303,7 @@ impl EvidenceSelector {
     #[cfg(test)]
     pub(crate) fn close<F>(
         &mut self,
-        marker: usize,
+        marker: PendingObligationMarker,
         mut zonk: F,
         constraint_work: &mut InterfaceConstraintBudget,
         type_work: &mut TypeWorkBudget,
@@ -1589,7 +2312,14 @@ impl EvidenceSelector {
         F: FnMut(Type, &mut TypeWorkBudget) -> Result<Type, SelectionFailure>,
     {
         let registry = self.canonical_registry_for_test();
-        self.close_with_authority(&registry, marker, &mut zonk, constraint_work, type_work)?;
+        self.close_with_authority(
+            &registry,
+            marker,
+            None,
+            &mut zonk,
+            constraint_work,
+            type_work,
+        )?;
         let publication = self
             .prepare_publication(&mut zonk, constraint_work, type_work)
             .map_err(|failure| SelectionError {
@@ -1611,7 +2341,8 @@ impl EvidenceSelector {
     fn close_with_authority<F>(
         &mut self,
         registry: &ResolvedRegistry,
-        marker: usize,
+        marker: PendingObligationMarker,
+        snapshot: Option<&DeterminationSnapshot>,
         mut zonk: F,
         constraint_work: &mut InterfaceConstraintBudget,
         type_work: &mut TypeWorkBudget,
@@ -1619,15 +2350,6 @@ impl EvidenceSelector {
     where
         F: FnMut(Type, &mut TypeWorkBudget) -> Result<Type, SelectionFailure>,
     {
-        if marker > self.pending.len() {
-            return Err(SelectionError {
-                failure: SelectionFailure::InvalidState,
-                span: None,
-                declaration_span: None,
-                import_span: None,
-                causes: Vec::new(),
-            });
-        }
         if !self.method_rigidities.is_empty() {
             return Err(SelectionError {
                 failure: SelectionFailure::InvalidState,
@@ -1637,8 +2359,28 @@ impl EvidenceSelector {
                 causes: Vec::new(),
             });
         }
-        let pending_count = self.pending.len() - marker;
-        let conditional_count = self.pending[marker..]
+        let (pending_count, _) =
+            self.pending_suffix_counts(marker)
+                .map_err(|failure| SelectionError {
+                    failure,
+                    span: None,
+                    declaration_span: None,
+                    import_span: None,
+                    causes: Vec::new(),
+                })?;
+        if let Some(snapshot) = snapshot
+            && (snapshot.marker != marker
+                || !snapshot.eligible.is_empty() && snapshot.eligible.len() != pending_count)
+        {
+            return Err(SelectionError {
+                failure: SelectionFailure::InvalidState,
+                span: None,
+                declaration_span: None,
+                import_span: None,
+                causes: Vec::new(),
+            });
+        }
+        let conditional_count = self.pending[marker.pending_len..]
             .iter()
             .filter(|obligation| obligation.method_rigidity.is_some())
             .count();
@@ -1681,8 +2423,24 @@ impl EvidenceSelector {
                 import_span: None,
                 causes: Vec::new(),
             })?;
-        self.pending[marker..].reverse();
-        while self.pending.len() > marker {
+        self.pending[marker.pending_len..].reverse();
+        let mut source_offset = 0usize;
+        while self.pending.len() > marker.pending_len {
+            let pending_determined_count = if self.pending.last().is_some_and(|obligation| {
+                self.interface_is_determined(obligation.application.interface())
+            }) {
+                self.pending_determined_count
+                    .checked_sub(1)
+                    .ok_or(SelectionError {
+                        failure: SelectionFailure::InvalidState,
+                        span: None,
+                        declaration_span: None,
+                        import_span: None,
+                        causes: Vec::new(),
+                    })?
+            } else {
+                self.pending_determined_count
+            };
             let mut obligation = self.pending.pop().ok_or(SelectionError {
                 failure: SelectionFailure::InvalidState,
                 span: None,
@@ -1690,6 +2448,7 @@ impl EvidenceSelector {
                 import_span: None,
                 causes: Vec::new(),
             })?;
+            self.pending_determined_count = pending_determined_count;
             if obligation.method_rigidity.is_some() {
                 self.pending_method_rigidity_count = self
                     .pending_method_rigidity_count
@@ -1702,19 +2461,72 @@ impl EvidenceSelector {
                         causes: Vec::new(),
                     })?;
             }
-            let argument = std::mem::replace(&mut obligation.argument, Type::Unit);
-            let argument = zonk(argument, type_work).map_err(|failure| SelectionError {
-                failure,
+            let interface = obligation.application.interface();
+            if snapshot.is_some_and(|snapshot| !snapshot.eligible.is_empty()) {
+                let interface_entry =
+                    self.interface_entry(interface)
+                        .map_err(|failure| SelectionError {
+                            failure,
+                            span: Some(obligation.span),
+                            declaration_span: obligation.declaration_span,
+                            import_span: obligation.import_span,
+                            causes: Vec::new(),
+                        })?;
+                if interface_entry.determination.is_some() {
+                    let eligible = snapshot
+                        .and_then(|snapshot| snapshot.eligible.get(source_offset))
+                        .copied()
+                        .unwrap_or(false);
+                    if !eligible {
+                        let mut causes = Vec::new();
+                        retain_selection_cause(
+                            &mut causes,
+                            SelectionCauseKind::Interface,
+                            interface_entry.span,
+                            constraint_work,
+                        )
+                        .map_err(|failure| SelectionError {
+                            failure,
+                            span: Some(obligation.span),
+                            declaration_span: obligation.declaration_span,
+                            import_span: obligation.import_span,
+                            causes: Vec::new(),
+                        })?;
+                        return Err(SelectionError {
+                            failure: SelectionFailure::Reason(InterfaceReason::Ambiguous),
+                            span: Some(obligation.span),
+                            declaration_span: obligation.declaration_span,
+                            import_span: obligation.import_span,
+                            causes,
+                        });
+                    }
+                }
+            }
+            source_offset = source_offset.checked_add(1).ok_or(SelectionError {
+                failure: SelectionFailure::ConstraintResource,
                 span: Some(obligation.span),
                 declaration_span: obligation.declaration_span,
                 import_span: obligation.import_span,
                 causes: Vec::new(),
             })?;
+            let application = std::mem::replace(
+                &mut obligation.application,
+                InterfaceApplication::new(interface, Box::new([])),
+            );
+            let application =
+                zonk_application(application, &mut zonk, type_work).map_err(|failure| {
+                    SelectionError {
+                        failure,
+                        span: Some(obligation.span),
+                        declaration_span: obligation.declaration_span,
+                        import_span: obligation.import_span,
+                        causes: Vec::new(),
+                    }
+                })?;
             let mut causes = Vec::new();
-            let (checked_argument, selection) = match self.select_owned(
+            let (checked_application, selection) = match self.select_owned(
                 registry,
-                obligation.interface,
-                argument,
+                application,
                 &mut causes,
                 constraint_work,
                 type_work,
@@ -1760,11 +2572,22 @@ impl EvidenceSelector {
             }
             self.selected.push(SelectedOccurrence {
                 checked_method: obligation.checked_method,
-                checked_argument,
+                checked_application,
                 method_arguments: std::mem::take(&mut obligation.method_arguments),
                 checked_value_type: obligation.checked_value_type.take(),
                 selection: Some(selection),
                 slot: Some(obligation.slot.clone()),
+            });
+        }
+        if source_offset != pending_count
+            || self.pending_determined_count != marker.determined_count
+        {
+            return Err(SelectionError {
+                failure: SelectionFailure::InvalidState,
+                span: None,
+                declaration_span: None,
+                import_span: None,
+                causes: Vec::new(),
             });
         }
         Ok(())
@@ -1780,6 +2603,7 @@ impl EvidenceSelector {
         F: FnMut(Type, &mut TypeWorkBudget) -> Result<Type, SelectionFailure>,
     {
         if !self.pending.is_empty()
+            || self.pending_determined_count != 0
             || self.pending_method_rigidity_count != 0
             || !self.method_rigidities.is_empty()
         {
@@ -1820,20 +2644,29 @@ impl EvidenceSelector {
             .try_reserve(self.selected.len())
             .map_err(|_| SelectionFailure::ConstraintResource)?;
         for mut selected in self.selected.drain(..) {
-            let checked_argument = IterativeTypeOwner::new(zonk(
-                std::mem::replace(&mut selected.checked_argument, Type::Unit),
-                type_work,
-            )?);
-            if !same_type_with_constraint_budget(
-                &checked_argument,
-                selected
-                    .selection
-                    .as_ref()
-                    .ok_or(SelectionFailure::InvalidState)?
-                    .argument(),
-                constraint_work,
-            )
-            .map_err(|()| SelectionFailure::ConstraintResource)?
+            let interface = selected.checked_application.interface();
+            let application = std::mem::replace(
+                &mut selected.checked_application,
+                InterfaceApplication::new(interface, Box::new([])),
+            );
+            let checked_application = zonk_application(application, &mut zonk, type_work)?;
+            let selection = selected
+                .selection
+                .as_ref()
+                .ok_or(SelectionFailure::InvalidState)?;
+            if selection.interface() != checked_application.interface()
+                || selection.arguments().len() != checked_application.arguments().len()
+                || !selection
+                    .arguments()
+                    .iter()
+                    .zip(checked_application.arguments())
+                    .try_fold(true, |same, (left, right)| {
+                        if !same {
+                            return Ok(false);
+                        }
+                        same_type_with_constraint_budget(left, right, constraint_work)
+                    })
+                    .map_err(|()| SelectionFailure::ConstraintResource)?
             {
                 return Err(SelectionFailure::InvalidState);
             }
@@ -1888,7 +2721,7 @@ impl EvidenceSelector {
             }
             occurrences.push(SelectedOccurrence {
                 checked_method: selected.checked_method,
-                checked_argument: checked_argument.into_inner(),
+                checked_application,
                 method_arguments: method_arguments.into_boxed_slice(),
                 checked_value_type,
                 selection: selected.selection.take(),
@@ -1913,15 +2746,14 @@ impl EvidenceSelector {
             .map_err(|()| SelectionFailure::TypeResource)?;
         let registry = self.canonical_registry_for_test();
         let mut causes = Vec::new();
-        let (checked_argument, selection) = self.select_owned(
+        let (checked_application, selection) = self.select_owned(
             &registry,
-            interface,
-            argument,
+            InterfaceApplication::new(interface, Box::new([argument])),
             &mut causes,
             constraint_work,
             type_work,
         )?;
-        discard_type_iteratively(checked_argument);
+        drop(checked_application);
         Ok(selection)
     }
 
@@ -1935,29 +2767,42 @@ impl EvidenceSelector {
         type_work: &mut TypeWorkBudget,
     ) -> Result<(Type, EvidenceSelection), SelectionFailure> {
         let registry = self.canonical_registry_for_test();
-        self.select_owned(
+        let (application, selection) = self.select_owned(
             &registry,
-            interface,
-            argument,
+            InterfaceApplication::new(interface, Box::new([argument])),
             causes,
             constraint_work,
             type_work,
-        )
+        )?;
+        let (_, arguments) = application.into_parts();
+        let mut arguments = arguments.into_vec();
+        if arguments.len() != 1 {
+            for argument in arguments {
+                discard_type_iteratively(argument);
+            }
+            return Err(SelectionFailure::InvalidState);
+        }
+        Ok((
+            arguments.pop().ok_or(SelectionFailure::InvalidState)?,
+            selection,
+        ))
     }
 
     fn select_owned(
         &self,
         registry: &ResolvedRegistry,
-        interface: InterfaceId,
-        argument: Type,
+        application: InterfaceApplication,
         causes: &mut Vec<SelectionCause>,
         constraint_work: &mut InterfaceConstraintBudget,
         type_work: &mut TypeWorkBudget,
-    ) -> Result<(Type, EvidenceSelection), SelectionFailure> {
+    ) -> Result<(InterfaceApplication, EvidenceSelection), SelectionFailure> {
         causes.clear();
-        let argument = IterativeTypeOwner::new(argument);
-        if matches!(&*argument, Type::Inference(_)) {
-            let interface_entry = self.interface_entry(interface)?;
+        if application
+            .arguments()
+            .iter()
+            .any(|argument| matches!(argument, Type::Inference(_)))
+        {
+            let interface_entry = self.interface_entry(application.interface())?;
             retain_selection_cause(
                 causes,
                 SelectionCauseKind::Interface,
@@ -1966,20 +2811,21 @@ impl EvidenceSelector {
             )?;
             return Err(SelectionFailure::Reason(InterfaceReason::Ambiguous));
         }
-        if matches!(&*argument, Type::Forall(_, _)) {
+        if application
+            .arguments()
+            .iter()
+            .any(|argument| matches!(argument, Type::Forall(_, _)))
+        {
             return Err(SelectionFailure::InvalidState);
         }
         let mut builder = EvidenceSelectionBuilder::new();
-        let mut checked_goal = Goal {
-            interface,
-            argument: argument.into_inner(),
-        };
-        let work_argument = clone_type_with_budget(&checked_goal.argument, type_work)
+        let checked_application = application;
+        let work_application = checked_application
+            .clone_with_budget(type_work)
             .map_err(|()| SelectionFailure::TypeResource)?;
         let mut work = SelectionWork::new(
             Goal {
-                interface,
-                argument: work_argument,
+                application: work_application,
             },
             0,
             constraint_work,
@@ -1988,26 +2834,32 @@ impl EvidenceSelector {
         let mut active = std::collections::HashSet::new();
         while let Some(task) = work.pop() {
             match task {
-                SelectionTask::Select {
-                    mut goal,
-                    cause_marker,
-                } => {
+                SelectionTask::Select { goal, cause_marker } => {
                     if cause_marker > causes.len() {
                         return Err(SelectionFailure::InvalidState);
                     }
                     causes.truncate(cause_marker);
-                    let interface_entry = self.interface_entry(goal.interface)?;
+                    let interface = goal.application.interface();
+                    let interface_entry = self.interface_entry(interface)?;
                     retain_selection_cause(
                         causes,
                         SelectionCauseKind::Interface,
                         interface_entry.span,
                         constraint_work,
                     )?;
-                    let key = goal_key(goal.interface, &goal.argument, constraint_work)?;
+                    let key = goal_key(&goal.application, constraint_work)?;
+                    constraint_work
+                        .charge(goal.application.arguments().len())
+                        .map_err(|()| SelectionFailure::ConstraintResource)?;
+                    let mut goal_roots = Vec::new();
+                    goal_roots
+                        .try_reserve_exact(goal.application.arguments().len())
+                        .map_err(|_| SelectionFailure::ConstraintResource)?;
+                    goal_roots.extend(goal.application.arguments());
                     let goal_environments = canonical_body_free_environments(
                         registry,
                         &[],
-                        &[&goal.argument],
+                        &goal_roots,
                         interface_entry.span,
                         constraint_work,
                         type_work,
@@ -2019,14 +2871,11 @@ impl EvidenceSelector {
                         constraint_work
                             .charge(1)
                             .map_err(|()| SelectionFailure::ConstraintResource)?;
-                        if requirement.interface == goal.interface
-                            && same_type_with_constraint_budget(
-                                &requirement.argument,
-                                &goal.argument,
-                                constraint_work,
-                            )
-                            .map_err(|()| SelectionFailure::ConstraintResource)?
-                        {
+                        if same_applications_with_constraint_budget(
+                            &requirement.application,
+                            &goal.application,
+                            constraint_work,
+                        )? {
                             abstract_match = Some(requirement.id);
                             break;
                         }
@@ -2052,21 +2901,18 @@ impl EvidenceSelector {
                             .implementations
                             .get(implementation_index)
                             .ok_or(SelectionFailure::InvalidState)?;
-                        if implementation.interface == goal.interface
-                            && same_type_with_constraint_budget(
-                                &implementation.argument,
-                                &goal.argument,
-                                constraint_work,
-                            )
-                            .map_err(|()| SelectionFailure::ConstraintResource)?
-                        {
+                        if same_applications_with_constraint_budget(
+                            &implementation.application,
+                            &goal.application,
+                            constraint_work,
+                        )? {
                             reserve_selection_result(&mut results, constraint_work)?;
                             let substitution = self
                                 .match_head(
                                     registry,
                                     &goal_environments,
                                     implementation,
-                                    &goal.argument,
+                                    &goal.application,
                                     constraint_work,
                                     type_work,
                                 )
@@ -2087,7 +2933,9 @@ impl EvidenceSelector {
                                     builder
                                         .push_abstract(
                                             prerequisite.id,
-                                            self.interface_methods(prerequisite.interface)?,
+                                            self.interface_methods(
+                                                prerequisite.application.interface(),
+                                            )?,
                                             constraint_work,
                                         )
                                         .map_err(|()| SelectionFailure::ConstraintResource)?,
@@ -2121,7 +2969,7 @@ impl EvidenceSelector {
                     let mut selected = None;
                     let candidates = self
                         .implementation_candidates
-                        .get(&goal.interface)
+                        .get(&interface)
                         .map(Vec::as_slice)
                         .unwrap_or_default();
                     for &candidate_index in candidates {
@@ -2138,7 +2986,7 @@ impl EvidenceSelector {
                                 registry,
                                 &goal_environments,
                                 implementation,
-                                &goal.argument,
+                                &goal.application,
                                 constraint_work,
                                 type_work,
                             )
@@ -2191,17 +3039,31 @@ impl EvidenceSelector {
                         constraint_work,
                     )?;
                     for prerequisite in implementation.prerequisites.iter().rev() {
-                        let argument = substitute_type_variables_with(
-                            &prerequisite.argument,
-                            replacements.as_map(),
-                            |cells| type_work.charge(cells),
-                        )
-                        .map_err(|()| SelectionFailure::TypeResource)?;
+                        type_work
+                            .charge(prerequisite.application.arguments().len())
+                            .map_err(|()| SelectionFailure::TypeResource)?;
+                        let mut arguments = EvidenceTypeBuffer(Vec::new());
+                        arguments
+                            .0
+                            .try_reserve_exact(prerequisite.application.arguments().len())
+                            .map_err(|_| SelectionFailure::TypeResource)?;
+                        for argument in prerequisite.application.arguments() {
+                            arguments.0.push(
+                                substitute_type_variables_with(
+                                    argument,
+                                    replacements.as_map(),
+                                    |cells| type_work.charge(cells),
+                                )
+                                .map_err(|()| SelectionFailure::TypeResource)?,
+                            );
+                        }
                         let goal = Goal {
-                            interface: prerequisite.interface,
-                            argument,
+                            application: InterfaceApplication::new(
+                                prerequisite.application.interface(),
+                                arguments.into_boxed_slice(),
+                            ),
                         };
-                        charge_prerequisite_goal(&goal.argument, constraint_work)?;
+                        charge_prerequisite_goal(&goal.application, constraint_work)?;
                         work.push(
                             SelectionTask::Select {
                                 goal,
@@ -2210,7 +3072,7 @@ impl EvidenceSelector {
                             constraint_work,
                         )?;
                     }
-                    discard_type_iteratively(std::mem::replace(&mut goal.argument, Type::Unit));
+                    drop(goal);
                 }
                 SelectionTask::Finish {
                     key,
@@ -2249,24 +3111,22 @@ impl EvidenceSelector {
         if !active.is_empty() || results.len() != 1 {
             return Err(SelectionFailure::InvalidState);
         }
-        let checked_argument =
-            IterativeTypeOwner::new(std::mem::replace(&mut checked_goal.argument, Type::Unit));
-        if constraint_work
+        constraint_work
             .charge(1)
-            .and_then(|()| constraint_work.charge_type(&checked_argument))
-            .is_err()
-        {
-            return Err(SelectionFailure::ConstraintResource);
+            .map_err(|()| SelectionFailure::ConstraintResource)?;
+        for argument in checked_application.arguments() {
+            constraint_work
+                .charge_type(argument)
+                .map_err(|()| SelectionFailure::ConstraintResource)?;
         }
-        let selection_argument = match clone_type_with_budget(&checked_argument, type_work) {
-            Ok(argument) => argument,
-            Err(()) => return Err(SelectionFailure::TypeResource),
-        };
-        let selection = match builder.finish(results[0], interface, selection_argument) {
+        let selection_application = checked_application
+            .clone_with_budget(type_work)
+            .map_err(|()| SelectionFailure::TypeResource)?;
+        let selection = match builder.finish(results[0], selection_application) {
             Ok(selection) => selection,
             Err(()) => return Err(SelectionFailure::InvalidState),
         };
-        Ok((checked_argument.into_inner(), selection))
+        Ok((checked_application, selection))
     }
 
     fn interface_entry(&self, interface: InterfaceId) -> Result<&InterfaceEntry, SelectionFailure> {
@@ -2281,38 +3141,66 @@ impl EvidenceSelector {
         registry: &ResolvedRegistry,
         goal_environments: &KindEnvironments<'_>,
         implementation: &ImplementationEntry,
-        goal: &Type,
+        goal: &InterfaceApplication,
         constraint_work: &mut InterfaceConstraintBudget,
         type_work: &mut TypeWorkBudget,
     ) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
-        match_implementation_head_in_environment(
+        if implementation.application.interface() != goal.interface()
+            || implementation.application.arguments().len() != goal.arguments().len()
+        {
+            return Ok(None);
+        }
+        constraint_work
+            .charge(
+                implementation
+                    .application
+                    .arguments()
+                    .len()
+                    .checked_add(goal.arguments().len())
+                    .ok_or(HeadMatchFailure::ConstraintResource)?,
+            )
+            .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+        let mut candidate_arguments = Vec::new();
+        let mut goal_arguments = Vec::new();
+        candidate_arguments
+            .try_reserve_exact(implementation.application.arguments().len())
+            .map_err(|_| HeadMatchFailure::ConstraintResource)?;
+        goal_arguments
+            .try_reserve_exact(goal.arguments().len())
+            .map_err(|_| HeadMatchFailure::ConstraintResource)?;
+        candidate_arguments.extend(implementation.application.arguments());
+        goal_arguments.extend(goal.arguments());
+        match_implementation_application_head_in_environment(
             registry,
             InterfaceOperationWork::new(implementation.span, constraint_work, type_work),
             goal_environments,
             &implementation.parameters,
-            &implementation.argument,
-            goal,
+            &candidate_arguments,
+            &goal_arguments,
         )
     }
 
-    fn authenticate_implementation_candidate<'a, P>(
+    fn authenticate_implementation_candidate<'a>(
         &self,
         registry: &'a ResolvedRegistry,
-        candidate: ImplementationCandidateAuthentication<'a, P>,
+        candidate: ImplementationCandidateAuthentication<'a>,
         constraint_work: &mut InterfaceConstraintBudget,
-    ) -> Result<Vec<TypeVariableId>, SelectionFailure>
-    where
-        P: ExactSizeIterator<Item = (InterfaceId, &'a Type)>,
-    {
+    ) -> Result<Vec<TypeVariableId>, SelectionFailure> {
         let ImplementationCandidateAuthentication {
             parameter_records,
-            interface,
-            argument,
-            prerequisites,
+            interfaces,
+            argument_counts,
+            arguments,
             span,
         } = candidate;
+        let authentication_parameter_records = parameter_records
+            .len()
+            .checked_mul(2)
+            .ok_or(SelectionFailure::ConstraintResource)?;
+        // The returned parameter row and the temporary duplicate index are
+        // separate owners and coexist throughout candidate authentication.
         constraint_work
-            .charge(parameter_records.len())
+            .charge(authentication_parameter_records)
             .map_err(|()| SelectionFailure::ConstraintResource)?;
         let mut parameters = Vec::new();
         let mut parameter_set = HashSet::new();
@@ -2334,30 +3222,29 @@ impl EvidenceSelector {
             parameters.push(parameter.id);
         }
 
-        let relation_count = prerequisites
-            .len()
-            .checked_add(1)
+        if interfaces.is_empty() || interfaces.len() != argument_counts.len() {
+            return Err(SelectionFailure::InvalidState);
+        }
+        let total_argument_count = argument_counts
+            .iter()
+            .copied()
+            .try_fold(0usize, |sum, count| sum.checked_add(count))
             .ok_or(SelectionFailure::ConstraintResource)?;
+        if total_argument_count != arguments.len() {
+            return Err(SelectionFailure::InvalidState);
+        }
         constraint_work
-            .charge(relation_count)
+            .charge(interfaces.len())
             .map_err(|()| SelectionFailure::ConstraintResource)?;
-        let mut roots = Vec::new();
-        roots
-            .try_reserve(relation_count)
-            .map_err(|_| SelectionFailure::ConstraintResource)?;
-        constraint_work
-            .charge(1)
-            .map_err(|()| SelectionFailure::ConstraintResource)?;
-        self.interface_entry(interface)?;
-        roots.push(argument);
-        for (relation_interface, relation_argument) in prerequisites {
+        for (interface, argument_count) in interfaces.iter().zip(argument_counts) {
             constraint_work
                 .charge(1)
                 .map_err(|()| SelectionFailure::ConstraintResource)?;
-            self.interface_entry(relation_interface)?;
-            roots.push(relation_argument);
+            if self.interface_entry(*interface)?.parameters.len() != *argument_count {
+                return Err(SelectionFailure::InvalidState);
+            }
         }
-        validate_candidate_scope(&parameter_set, &roots, constraint_work)?;
+        validate_candidate_scope(&parameter_set, arguments, constraint_work)?;
         Ok(parameters)
     }
 
@@ -2371,6 +3258,27 @@ impl EvidenceSelector {
         &mut self,
         id: InterfaceId,
         parameter: TypeVariableId,
+        methods: Vec<(MethodId, Type)>,
+    ) {
+        self.add_interface_parameters_raw(id, vec![parameter], methods);
+    }
+
+    #[cfg(test)]
+    fn add_interface_parameters_raw(
+        &mut self,
+        id: InterfaceId,
+        parameters: Vec<TypeVariableId>,
+        methods: Vec<(MethodId, Type)>,
+    ) {
+        self.add_interface_parameters_with_determination_raw(id, parameters, None, methods);
+    }
+
+    #[cfg(test)]
+    fn add_interface_parameters_with_determination_raw(
+        &mut self,
+        id: InterfaceId,
+        parameters: Vec<TypeVariableId>,
+        determination: Option<DeterminationKey>,
         methods: Vec<(MethodId, Type)>,
     ) {
         let file = crate::source::SourceFile::new("selection-fixture.ash", "x")
@@ -2399,8 +3307,12 @@ impl EvidenceSelector {
         assert!(self.interface_indices.insert(id, interface_index).is_none());
         self.interfaces.push(InterfaceEntry {
             id,
-            parameter,
-            parameter_kind: Kind::Type,
+            parameters: parameters
+                .into_iter()
+                .map(|parameter| (parameter, Kind::Type))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+            determination,
             methods: methods.into_boxed_slice(),
             method_ids,
             span,
@@ -2413,12 +3325,14 @@ impl EvidenceSelector {
         let mut nominal_arities = HashMap::new();
         let mut roots = Vec::new();
         for interface in &self.interfaces {
-            binders
-                .entry(interface.parameter)
-                .or_insert_with(|| (interface.parameter_kind.clone(), interface.span));
+            for (parameter, kind) in &interface.parameters {
+                binders
+                    .entry(*parameter)
+                    .or_insert_with(|| (kind.clone(), interface.span));
+            }
         }
         for implementation in &self.implementations {
-            roots.push(&implementation.argument);
+            roots.extend(implementation.application.arguments());
             for parameter in &implementation.parameters {
                 binders
                     .entry(*parameter)
@@ -2428,11 +3342,19 @@ impl EvidenceSelector {
                 implementation
                     .prerequisites
                     .iter()
-                    .map(|prerequisite| &prerequisite.argument),
+                    .flat_map(|prerequisite| prerequisite.application.arguments()),
             );
         }
-        roots.extend(self.abstracts.iter().map(|abstract_| &abstract_.argument));
-        roots.extend(self.pending.iter().map(|obligation| &obligation.argument));
+        roots.extend(
+            self.abstracts
+                .iter()
+                .flat_map(|abstract_| abstract_.application.arguments()),
+        );
+        roots.extend(
+            self.pending
+                .iter()
+                .flat_map(|obligation| obligation.application.arguments()),
+        );
         let mut pending = roots;
         while let Some(ty) = pending.pop() {
             let mut function = ty;
@@ -2532,7 +3454,7 @@ impl EvidenceSelector {
                 .is_none()
         );
         self.implementation_candidates
-            .entry(implementation.interface)
+            .entry(implementation.application.interface())
             .or_default()
             .push(index);
         self.implementations.push(implementation);
@@ -2621,6 +3543,311 @@ struct ReplacementMap {
     values: HashMap<TypeVariableId, Type>,
 }
 
+struct EvidenceTypeBuffer(Vec<Type>);
+
+impl EvidenceTypeBuffer {
+    fn into_boxed_slice(mut self) -> Box<[Type]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+}
+
+impl Drop for EvidenceTypeBuffer {
+    fn drop(&mut self) {
+        while let Some(ty) = self.0.pop() {
+            discard_type_iteratively(ty);
+        }
+    }
+}
+
+fn clone_local_prerequisite_arguments(
+    arguments: &[crate::resolved::ResolvedType],
+    type_work: &mut TypeWorkBudget,
+) -> Result<EvidenceTypeBuffer, SelectionFailure> {
+    type_work
+        .charge(arguments.len())
+        .map_err(|()| SelectionFailure::TypeResource)?;
+    let mut cloned = EvidenceTypeBuffer(Vec::new());
+    cloned
+        .0
+        .try_reserve_exact(arguments.len())
+        .map_err(|_| SelectionFailure::TypeResource)?;
+    for argument in arguments {
+        cloned.0.push(
+            clone_type_with_budget(&argument.ty, type_work)
+                .map_err(|()| SelectionFailure::TypeResource)?,
+        );
+    }
+    Ok(cloned)
+}
+
+fn zonk_application<F>(
+    application: InterfaceApplication,
+    zonk: &mut F,
+    type_work: &mut TypeWorkBudget,
+) -> Result<InterfaceApplication, SelectionFailure>
+where
+    F: FnMut(Type, &mut TypeWorkBudget) -> Result<Type, SelectionFailure>,
+{
+    let (interface, arguments) = application.into_parts();
+    type_work
+        .charge(arguments.len())
+        .map_err(|()| SelectionFailure::TypeResource)?;
+    let mut pending = EvidenceTypeBuffer(arguments.into_vec());
+    let mut checked = EvidenceTypeBuffer(Vec::new());
+    checked
+        .0
+        .try_reserve(pending.0.len())
+        .map_err(|_| SelectionFailure::TypeResource)?;
+    pending.0.reverse();
+    while let Some(argument) = pending.0.pop() {
+        checked.0.push(zonk(argument, type_work)?);
+    }
+    Ok(InterfaceApplication::new(
+        interface,
+        checked.into_boxed_slice(),
+    ))
+}
+
+fn authenticate_determination_positions(
+    positions: &[usize],
+    argument_count: usize,
+    constraint_work: &mut InterfaceConstraintBudget,
+) -> Result<(), SelectionFailure> {
+    if positions.is_empty() || positions.len() >= argument_count {
+        return Err(SelectionFailure::InvalidState);
+    }
+    let mut previous = None;
+    for &position in positions {
+        constraint_work
+            .charge(1)
+            .map_err(|()| SelectionFailure::ConstraintResource)?;
+        if position >= argument_count || previous.is_some_and(|previous| previous >= position) {
+            return Err(SelectionFailure::InvalidState);
+        }
+        previous = Some(position);
+    }
+    Ok(())
+}
+
+fn clone_zonked_positions<F>(
+    arguments: &[Type],
+    positions: &[usize],
+    zonk: &mut F,
+    constraint_work: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+) -> Result<EvidenceTypeBuffer, SelectionFailure>
+where
+    F: FnMut(Type, &mut TypeWorkBudget) -> Result<Type, SelectionFailure>,
+{
+    type_work
+        .charge(positions.len())
+        .map_err(|()| SelectionFailure::TypeResource)?;
+    let mut key = EvidenceTypeBuffer(Vec::new());
+    key.0
+        .try_reserve_exact(positions.len())
+        .map_err(|_| SelectionFailure::TypeResource)?;
+    for &position in positions {
+        constraint_work
+            .charge(1)
+            .map_err(|()| SelectionFailure::ConstraintResource)?;
+        let argument = arguments
+            .get(position)
+            .ok_or(SelectionFailure::InvalidState)?;
+        let cloned = clone_type_with_budget(argument, type_work)
+            .map_err(|()| SelectionFailure::TypeResource)?;
+        key.0.push(zonk(cloned, type_work)?);
+    }
+    Ok(key)
+}
+
+fn position_references<'a>(
+    arguments: &'a [Type],
+    positions: &[usize],
+    constraint_work: &mut InterfaceConstraintBudget,
+) -> Result<Vec<&'a Type>, SelectionFailure> {
+    constraint_work
+        .charge(positions.len())
+        .map_err(|()| SelectionFailure::ConstraintResource)?;
+    let mut selected = Vec::new();
+    selected
+        .try_reserve_exact(positions.len())
+        .map_err(|_| SelectionFailure::ConstraintResource)?;
+    for &position in positions {
+        selected.push(
+            arguments
+                .get(position)
+                .ok_or(SelectionFailure::InvalidState)?,
+        );
+    }
+    Ok(selected)
+}
+
+fn type_references<'a>(
+    types: &'a [Type],
+    constraint_work: &mut InterfaceConstraintBudget,
+) -> Result<Vec<&'a Type>, SelectionFailure> {
+    constraint_work
+        .charge(types.len())
+        .map_err(|()| SelectionFailure::ConstraintResource)?;
+    let mut references = Vec::new();
+    references
+        .try_reserve_exact(types.len())
+        .map_err(|_| SelectionFailure::ConstraintResource)?;
+    references.extend(types);
+    Ok(references)
+}
+
+fn clone_dependent_positions(
+    arguments: &[Type],
+    key_positions: &[usize],
+    type_work: &mut TypeWorkBudget,
+) -> Result<EvidenceTypeBuffer, SelectionFailure> {
+    let dependent_count = arguments
+        .len()
+        .checked_sub(key_positions.len())
+        .ok_or(SelectionFailure::InvalidState)?;
+    type_work
+        .charge(dependent_count)
+        .map_err(|()| SelectionFailure::TypeResource)?;
+    let mut dependents = EvidenceTypeBuffer(Vec::new());
+    dependents
+        .0
+        .try_reserve_exact(dependent_count)
+        .map_err(|_| SelectionFailure::TypeResource)?;
+    let mut key_index = 0;
+    for (position, argument) in arguments.iter().enumerate() {
+        if key_positions.get(key_index) == Some(&position) {
+            key_index += 1;
+        } else {
+            dependents.0.push(
+                clone_type_with_budget(argument, type_work)
+                    .map_err(|()| SelectionFailure::TypeResource)?,
+            );
+        }
+    }
+    if key_index != key_positions.len() || dependents.0.len() != dependent_count {
+        return Err(SelectionFailure::InvalidState);
+    }
+    Ok(dependents)
+}
+
+fn substitute_dependent_positions(
+    arguments: &[Type],
+    key_positions: &[usize],
+    replacements: &HashMap<TypeVariableId, Type>,
+    type_work: &mut TypeWorkBudget,
+) -> Result<EvidenceTypeBuffer, SelectionFailure> {
+    let dependent_count = arguments
+        .len()
+        .checked_sub(key_positions.len())
+        .ok_or(SelectionFailure::InvalidState)?;
+    type_work
+        .charge(dependent_count)
+        .map_err(|()| SelectionFailure::TypeResource)?;
+    let mut dependents = EvidenceTypeBuffer(Vec::new());
+    dependents
+        .0
+        .try_reserve_exact(dependent_count)
+        .map_err(|_| SelectionFailure::TypeResource)?;
+    let mut key_index = 0;
+    for (position, argument) in arguments.iter().enumerate() {
+        if key_positions.get(key_index) == Some(&position) {
+            key_index += 1;
+        } else {
+            dependents.0.push(
+                substitute_type_variables_with(argument, replacements, |cells| {
+                    type_work.charge(cells)
+                })
+                .map_err(|()| SelectionFailure::TypeResource)?,
+            );
+        }
+    }
+    if key_index != key_positions.len() || dependents.0.len() != dependent_count {
+        return Err(SelectionFailure::InvalidState);
+    }
+    Ok(dependents)
+}
+
+fn same_type_slices(
+    left: &[&Type],
+    right: &[Type],
+    constraint_work: &mut InterfaceConstraintBudget,
+) -> Result<bool, SelectionFailure> {
+    if left.len() != right.len() {
+        return Ok(false);
+    }
+    for (left, right) in left.iter().zip(right) {
+        if !same_type_with_constraint_budget(left, right, constraint_work)
+            .map_err(|()| SelectionFailure::ConstraintResource)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn type_is_inference_free(
+    root: &Type,
+    constraint_work: &mut InterfaceConstraintBudget,
+) -> Result<bool, SelectionFailure> {
+    constraint_work
+        .charge(1)
+        .map_err(|()| SelectionFailure::ConstraintResource)?;
+    let mut pending = Vec::new();
+    pending
+        .try_reserve(1)
+        .map_err(|_| SelectionFailure::ConstraintResource)?;
+    pending.push(root);
+    while let Some(ty) = pending.pop() {
+        constraint_work
+            .charge(1)
+            .map_err(|()| SelectionFailure::ConstraintResource)?;
+        match ty {
+            Type::Inference(_) => return Ok(false),
+            Type::Tuple(elements) => {
+                constraint_work
+                    .charge(elements.len())
+                    .map_err(|()| SelectionFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(elements.len())
+                    .map_err(|_| SelectionFailure::ConstraintResource)?;
+                pending.extend(elements.iter().rev());
+            }
+            Type::Application(function, argument) | Type::Function(function, argument) => {
+                constraint_work
+                    .charge(2)
+                    .map_err(|()| SelectionFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(2)
+                    .map_err(|_| SelectionFailure::ConstraintResource)?;
+                pending.push(argument);
+                pending.push(function);
+            }
+            Type::Forall(_, _) => return Err(SelectionFailure::InvalidState),
+            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_) => {}
+        }
+    }
+    Ok(true)
+}
+
+fn same_applications_with_constraint_budget(
+    left: &InterfaceApplication,
+    right: &InterfaceApplication,
+    constraint_work: &mut InterfaceConstraintBudget,
+) -> Result<bool, SelectionFailure> {
+    if left.interface() != right.interface() || left.arguments().len() != right.arguments().len() {
+        return Ok(false);
+    }
+    for (left, right) in left.arguments().iter().zip(right.arguments()) {
+        if !same_type_with_constraint_budget(left, right, constraint_work)
+            .map_err(|()| SelectionFailure::ConstraintResource)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 impl Drop for ReplacementMap {
     fn drop(&mut self) {
         for (_, value) in self.values.drain() {
@@ -2680,14 +3907,7 @@ fn replacement_map(
 
 #[derive(Debug)]
 struct Goal {
-    interface: InterfaceId,
-    argument: Type,
-}
-
-impl Drop for Goal {
-    fn drop(&mut self) {
-        discard_type_iteratively(std::mem::replace(&mut self.argument, Type::Unit));
-    }
+    application: InterfaceApplication,
 }
 
 #[derive(Debug)]
@@ -2764,6 +3984,7 @@ struct GoalKey {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum GoalCell {
+    Argument(usize),
     Int,
     Bool,
     Unit,
@@ -2775,75 +3996,80 @@ enum GoalCell {
 }
 
 fn goal_key(
-    interface: InterfaceId,
-    argument: &Type,
+    application: &InterfaceApplication,
     constraint_work: &mut InterfaceConstraintBudget,
 ) -> Result<GoalKey, SelectionFailure> {
-    if matches!(argument, Type::Inference(_)) {
-        return Err(SelectionFailure::Reason(InterfaceReason::Ambiguous));
-    }
     let mut pending = Vec::new();
     let mut cells = Vec::new();
     constraint_work
-        .charge(1)
+        .charge(application.arguments().len())
         .map_err(|()| SelectionFailure::ConstraintResource)?;
     pending
         .try_reserve(1)
         .map_err(|_| SelectionFailure::ConstraintResource)?;
-    pending.push(argument);
-    while let Some(ty) = pending.pop() {
-        constraint_work
-            .charge(1)
-            .map_err(|()| SelectionFailure::ConstraintResource)?;
+    cells
+        .try_reserve(application.arguments().len())
+        .map_err(|_| SelectionFailure::ConstraintResource)?;
+    for (position, argument) in application.arguments().iter().enumerate() {
         cells
             .try_reserve(1)
             .map_err(|_| SelectionFailure::ConstraintResource)?;
-        match ty {
-            Type::Int => cells.push(GoalCell::Int),
-            Type::Bool => cells.push(GoalCell::Bool),
-            Type::Unit => cells.push(GoalCell::Unit),
-            Type::Nominal(id) => cells.push(GoalCell::Nominal(*id)),
-            Type::Application(function, argument) => {
-                cells.push(GoalCell::Application);
-                constraint_work
-                    .charge(2)
-                    .map_err(|()| SelectionFailure::ConstraintResource)?;
-                pending
-                    .try_reserve(2)
-                    .map_err(|_| SelectionFailure::ConstraintResource)?;
-                pending.push(argument);
-                pending.push(function);
+        cells.push(GoalCell::Argument(position));
+        pending.push(argument);
+        while let Some(ty) = pending.pop() {
+            constraint_work
+                .charge(1)
+                .map_err(|()| SelectionFailure::ConstraintResource)?;
+            cells
+                .try_reserve(1)
+                .map_err(|_| SelectionFailure::ConstraintResource)?;
+            match ty {
+                Type::Int => cells.push(GoalCell::Int),
+                Type::Bool => cells.push(GoalCell::Bool),
+                Type::Unit => cells.push(GoalCell::Unit),
+                Type::Nominal(id) => cells.push(GoalCell::Nominal(*id)),
+                Type::Application(function, argument) => {
+                    cells.push(GoalCell::Application);
+                    constraint_work
+                        .charge(2)
+                        .map_err(|()| SelectionFailure::ConstraintResource)?;
+                    pending
+                        .try_reserve(2)
+                        .map_err(|_| SelectionFailure::ConstraintResource)?;
+                    pending.push(argument);
+                    pending.push(function);
+                }
+                Type::Tuple(elements) => {
+                    cells.push(GoalCell::Tuple(elements.len()));
+                    constraint_work
+                        .charge(elements.len())
+                        .map_err(|()| SelectionFailure::ConstraintResource)?;
+                    pending
+                        .try_reserve(elements.len())
+                        .map_err(|_| SelectionFailure::ConstraintResource)?;
+                    pending.extend(elements.iter().rev());
+                }
+                Type::Function(domain, codomain) => {
+                    cells.push(GoalCell::Function);
+                    constraint_work
+                        .charge(2)
+                        .map_err(|()| SelectionFailure::ConstraintResource)?;
+                    pending
+                        .try_reserve(2)
+                        .map_err(|_| SelectionFailure::ConstraintResource)?;
+                    pending.push(codomain);
+                    pending.push(domain);
+                }
+                Type::Variable(id) => cells.push(GoalCell::Variable(*id)),
+                Type::Inference(_) => {
+                    return Err(SelectionFailure::Reason(InterfaceReason::Ambiguous));
+                }
+                Type::Forall(_, _) => return Err(SelectionFailure::InvalidState),
             }
-            Type::Tuple(elements) => {
-                cells.push(GoalCell::Tuple(elements.len()));
-                constraint_work
-                    .charge(elements.len())
-                    .map_err(|()| SelectionFailure::ConstraintResource)?;
-                pending
-                    .try_reserve(elements.len())
-                    .map_err(|_| SelectionFailure::ConstraintResource)?;
-                pending.extend(elements.iter().rev());
-            }
-            Type::Function(domain, codomain) => {
-                cells.push(GoalCell::Function);
-                constraint_work
-                    .charge(2)
-                    .map_err(|()| SelectionFailure::ConstraintResource)?;
-                pending
-                    .try_reserve(2)
-                    .map_err(|_| SelectionFailure::ConstraintResource)?;
-                pending.push(codomain);
-                pending.push(domain);
-            }
-            Type::Variable(id) => cells.push(GoalCell::Variable(*id)),
-            Type::Inference(_) => {
-                return Err(SelectionFailure::Reason(InterfaceReason::Ambiguous));
-            }
-            Type::Forall(_, _) => return Err(SelectionFailure::InvalidState),
         }
     }
     Ok(GoalKey {
-        interface,
+        interface: application.interface(),
         cells: cells.into_boxed_slice(),
     })
 }
@@ -2866,13 +4092,18 @@ fn charge_candidate_inspection(
 }
 
 fn charge_prerequisite_goal(
-    argument: &Type,
+    application: &InterfaceApplication,
     constraint_work: &mut InterfaceConstraintBudget,
 ) -> Result<(), SelectionFailure> {
     constraint_work
         .charge(1)
-        .and_then(|()| constraint_work.charge_type(argument))
-        .map_err(|()| SelectionFailure::ConstraintResource)
+        .map_err(|()| SelectionFailure::ConstraintResource)?;
+    for argument in application.arguments() {
+        constraint_work
+            .charge_type(argument)
+            .map_err(|()| SelectionFailure::ConstraintResource)?;
+    }
+    Ok(())
 }
 
 fn retain_selection_cause(
@@ -2960,8 +4191,9 @@ mod tests {
             Binder, BinderId, CheckedImplementationFact, CheckedImplementationMethodFact,
             CheckedInterfaceFact, CheckedInterfaceMethodFact, ImplementationAuthorization,
             ImplementationRouteHop, ResolvedImplementation, ResolvedImplementationMethodGroup,
-            ResolvedInterfaceOccurrence, ResolvedNominalType, ResolvedRequirement, ResolvedType,
-            ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResolvedTypeVariable,
+            ResolvedInterfaceApplication, ResolvedInterfaceOccurrence, ResolvedNominalType,
+            ResolvedRequirement, ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
+            ResolvedTypeVariable,
         },
         source::{ByteRange, Origin, SourceFile},
     };
@@ -2975,6 +4207,24 @@ mod tests {
         (interface, method, requirement)
     }
 
+    fn unary_application(interface: InterfaceId, argument: Type) -> InterfaceApplication {
+        InterfaceApplication::new(interface, Box::new([argument]))
+    }
+
+    fn unary_argument(application: &InterfaceApplication) -> &Type {
+        let [argument] = application.arguments() else {
+            panic!("the unary fixture should retain exactly one interface argument");
+        };
+        argument
+    }
+
+    fn unary_parameter(fact: &CheckedInterfaceFact) -> &ResolvedTypeVariable {
+        let [parameter] = fact.parameters.as_ref() else {
+            panic!("the unary fixture should retain exactly one interface parameter");
+        };
+        parameter
+    }
+
     fn interface_fact_with_kind(kind: Kind) -> CheckedInterfaceFact {
         let file = SourceFile::new("selection-kind-fixture.ash", "Interface")
             .expect("interface fixture source");
@@ -2985,24 +4235,19 @@ mod tests {
         CheckedInterfaceFact::without_methods_for_test(
             interface,
             "Interface".to_owned(),
-            ResolvedTypeVariable {
+            Box::new([ResolvedTypeVariable {
                 id: TypeVariableId::resolved(ModuleId::from(file.id()), 0),
                 spelling: "F".to_owned(),
                 kind,
                 origin: Origin::Source(span),
-            },
+            }]),
             Origin::Source(span),
             span,
         )
     }
 
     fn registry_for_interface_fact(fact: &CheckedInterfaceFact) -> ResolvedRegistry {
-        let mut variables = vec![ResolvedTypeVariable {
-            id: fact.parameter.id,
-            spelling: fact.parameter.spelling.clone(),
-            kind: fact.parameter.kind.clone(),
-            origin: fact.parameter.origin.clone(),
-        }];
+        let mut variables = fact.parameters.to_vec();
         for method in &fact.methods {
             variables.extend(
                 method
@@ -3082,8 +4327,7 @@ mod tests {
         let missing_slot = EvidenceSlot::empty();
         selector
             .push_owned_obligation(
-                missing_interface,
-                Type::Int,
+                InterfaceApplication::new(missing_interface, Box::new([Type::Int])),
                 SelectionSite::plain(missing_slot.handle(), missing_span),
                 &mut InterfaceConstraintBudget::default(),
             )
@@ -3091,8 +4335,7 @@ mod tests {
         let repeat_slot = EvidenceSlot::empty();
         selector
             .push_cloned_obligation(
-                repeat_interface,
-                &Type::Int,
+                &InterfaceApplication::new(repeat_interface, Box::new([Type::Int])),
                 MethodObligationMetadata::new(
                     MethodId::new(repeat_interface, 0),
                     Box::new([Type::Bool]),
@@ -3152,8 +4395,7 @@ mod tests {
             for site in sites {
                 selector
                     .push_cloned_obligation(
-                        interface,
-                        &Type::Int,
+                        &unary_application(interface, Type::Int),
                         MethodObligationMetadata::new(
                             MethodId::new(interface, 0),
                             Box::new([Type::Bool]),
@@ -3170,7 +4412,7 @@ mod tests {
             }
             selector
         };
-        let target = MethodRigidityTarget::new(0, failure);
+        let target = MethodRigidityTarget::new(PendingObligationMarker::for_test(0, 0), failure);
 
         assert_eq!(
             selector_for(&[nonmatching]).matching_method_rigidity_index(target),
@@ -3209,11 +4451,11 @@ mod tests {
     fn assert_isolated_rigidity_fixture_unmodified(fixture: &IsolatedRigidityFixture) {
         assert_eq!(fixture.selector.pending.len(), 2);
         assert_eq!(
-            fixture.selector.pending[0].interface,
+            fixture.selector.pending[0].application.interface(),
             fixture.missing_interface
         );
         assert_eq!(
-            fixture.selector.pending[1].interface,
+            fixture.selector.pending[1].application.interface(),
             fixture.repeat_interface
         );
         assert_eq!(fixture.selector.pending_method_rigidity_count, 1);
@@ -3249,7 +4491,10 @@ mod tests {
         );
 
         assert_eq!(selector.pending.len(), 1);
-        assert_eq!(selector.pending[0].interface, missing_interface);
+        assert_eq!(
+            selector.pending[0].application.interface(),
+            missing_interface
+        );
         assert_eq!(selector.pending_method_rigidity_count, 0);
         assert_eq!(selector.selected.len(), 1);
         assert_eq!(selector.method_rigidity_count(), 1);
@@ -3283,8 +4528,11 @@ mod tests {
 
     #[test]
     fn isolated_method_rigidity_close_has_exact_atomic_retry_boundaries() {
-        const EXACT_CONSTRAINT_WORK: usize = 25;
-        const EXACT_TYPE_WORK: usize = 3;
+        // Complete-application matching adds three aligned carrier cells to
+        // the prior scalar constraint path. Three application clones and one
+        // zonk vector add four Type-work cells to the three Type nodes.
+        const EXACT_CONSTRAINT_WORK: usize = 25 + 3;
+        const EXACT_TYPE_WORK: usize = 3 + 4;
 
         let mut measured = isolated_rigidity_fixture();
         let mut no_condition = EvidenceSelector::new();
@@ -3292,7 +4540,10 @@ mod tests {
             !no_condition
                 .close_method_rigidity_with_registry(
                     &measured.registry,
-                    MethodRigidityTarget::new(0, measured.target.failure_span()),
+                    MethodRigidityTarget::new(
+                        no_condition.pending_marker(),
+                        measured.target.failure_span(),
+                    ),
                     |ty, _| Ok(ty),
                     &mut InterfaceConstraintBudget::with_limit(0),
                     &mut TypeWorkBudget::with_limit(0),
@@ -3380,7 +4631,10 @@ mod tests {
 
         let mut invalid = isolated_rigidity_fixture();
         let invalid_target = MethodRigidityTarget::new(
-            invalid.selector.pending.len() + 1,
+            PendingObligationMarker::for_test(
+                invalid.selector.pending.len() + 1,
+                invalid.selector.pending_determined_count,
+            ),
             invalid.target.failure_span(),
         );
         let error = invalid
@@ -3406,8 +4660,7 @@ mod tests {
         duplicate
             .selector
             .push_cloned_obligation(
-                duplicate.repeat_interface,
-                &Type::Int,
+                &unary_application(duplicate.repeat_interface, Type::Int),
                 MethodObligationMetadata::new(
                     MethodId::new(duplicate.repeat_interface, 0),
                     Box::new([Type::Bool]),
@@ -3443,16 +4696,15 @@ mod tests {
 
     #[test]
     fn isolated_method_rigidity_close_charges_the_exact_removal_shift() {
-        const EXACT_CONSTRAINT_WORK: usize = 27;
-        const EXACT_TYPE_WORK: usize = 3;
+        const EXACT_CONSTRAINT_WORK: usize = 27 + 3;
+        const EXACT_TYPE_WORK: usize = 3 + 4;
 
         let mut fixture = isolated_rigidity_fixture();
         let trailing_slot = EvidenceSlot::empty();
         fixture
             .selector
             .push_owned_obligation(
-                fixture.missing_interface,
-                Type::Bool,
+                unary_application(fixture.missing_interface, Type::Bool),
                 SelectionSite::plain(trailing_slot.handle(), fixture.target.failure_span()),
                 &mut InterfaceConstraintBudget::default(),
             )
@@ -3470,9 +4722,18 @@ mod tests {
             .expect_err("one-short shifted removal should reject without selector mutation");
         assert_eq!(error.failure(), SelectionFailure::ConstraintResource);
         assert_eq!(fixture.selector.pending.len(), 3);
-        assert_eq!(fixture.selector.pending[0].argument, Type::Int);
-        assert_eq!(fixture.selector.pending[1].argument, Type::Int);
-        assert_eq!(fixture.selector.pending[2].argument, Type::Bool);
+        assert_eq!(
+            unary_argument(&fixture.selector.pending[0].application),
+            &Type::Int
+        );
+        assert_eq!(
+            unary_argument(&fixture.selector.pending[1].application),
+            &Type::Int
+        );
+        assert_eq!(
+            unary_argument(&fixture.selector.pending[2].application),
+            &Type::Bool
+        );
         assert_eq!(fixture.selector.pending_method_rigidity_count, 1);
         assert!(fixture.selector.selected.is_empty());
         assert_eq!(fixture.selector.method_rigidity_count(), 0);
@@ -3497,8 +4758,14 @@ mod tests {
         assert_eq!(exact_constraints.used(), EXACT_CONSTRAINT_WORK);
         assert_eq!(exact_types.used(), EXACT_TYPE_WORK);
         assert_eq!(fixture.selector.pending.len(), 2);
-        assert_eq!(fixture.selector.pending[0].argument, Type::Int);
-        assert_eq!(fixture.selector.pending[1].argument, Type::Bool);
+        assert_eq!(
+            unary_argument(&fixture.selector.pending[0].application),
+            &Type::Int
+        );
+        assert_eq!(
+            unary_argument(&fixture.selector.pending[1].application),
+            &Type::Bool
+        );
         assert_eq!(fixture.selector.pending_method_rigidity_count, 0);
         assert_eq!(fixture.selector.selected.len(), 1);
         assert_eq!(fixture.selector.method_rigidity_count(), 1);
@@ -3525,10 +4792,10 @@ mod tests {
                         origin: Origin::Source(fact.span),
                     }]),
                     Type::Function(
-                        Box::new(Type::Variable(fact.parameter.id)),
+                        Box::new(Type::Variable(unary_parameter(&fact).id)),
                         Box::new(Type::Application(
                             Box::new(Type::Variable(method_parameter)),
-                            Box::new(Type::Variable(fact.parameter.id)),
+                            Box::new(Type::Variable(unary_parameter(&fact).id)),
                         )),
                     ),
                     Origin::Source(fact.span),
@@ -3624,7 +4891,7 @@ mod tests {
                     "wide".to_owned(),
                     parameters.into_boxed_slice(),
                     Type::Function(
-                        Box::new(Type::Variable(fact.parameter.id)),
+                        Box::new(Type::Variable(unary_parameter(&fact).id)),
                         Box::new(Type::Tuple(values)),
                     ),
                     Origin::Source(fact.span),
@@ -3671,14 +4938,20 @@ mod tests {
             .push_abstract(requirement, &[], &mut budget)
             .expect("one abstract evidence node should fit");
         let selection = builder
-            .finish(root, interface, Type::Int)
+            .finish(root, unary_application(interface, Type::Int))
             .expect("the abstract selection should have one valid root");
         let first = EvidenceSlot::empty();
         let second = EvidenceSlot::empty();
         let first_handle = first.handle();
         let second_handle = second.handle();
         second_handle
-            .fill(None, Type::Int, Box::new([]), None, selection.clone())
+            .fill(
+                None,
+                unary_application(interface, Type::Int),
+                Box::new([]),
+                None,
+                selection.clone(),
+            )
             .expect("the second slot should begin filled for the invalid fixture");
         let mut slot_ids = HashMap::new();
         slot_ids
@@ -3690,7 +4963,7 @@ mod tests {
             occurrences: vec![
                 SelectedOccurrence {
                     checked_method: Some(method),
-                    checked_argument: Type::Int,
+                    checked_application: unary_application(interface, Type::Int),
                     method_arguments: Box::new([Type::Bool]),
                     checked_value_type: Some(Type::Unit),
                     selection: Some(selection.clone()),
@@ -3698,7 +4971,7 @@ mod tests {
                 },
                 SelectedOccurrence {
                     checked_method: None,
-                    checked_argument: Type::Int,
+                    checked_application: unary_application(interface, Type::Int),
                     method_arguments: Box::new([]),
                     checked_value_type: None,
                     selection: Some(selection),
@@ -3720,9 +4993,10 @@ mod tests {
         // two occurrence/slot records, then the exact two-unit comparison of
         // the checked and selected Int goal.
         const EXACT_CONSTRAINT_WORK: usize = 2 + 1 + 1 + 2 + 2;
-        // The ordered method-argument vector owns two retained Type carriers;
-        // the identity zonk fixture performs no additional Type cloning.
-        const EXACT_TYPE_WORK: usize = 2;
+        // The checked application owns one aligned zonk-vector cell, and the
+        // ordered method-argument vector owns two retained Type carriers. The
+        // identity zonk fixture performs no additional Type cloning.
+        const EXACT_TYPE_WORK: usize = 1 + 2;
 
         let run = |constraint_limit, type_limit| {
             let (interface, method, requirement) = ids();
@@ -3731,13 +5005,13 @@ mod tests {
                 .push_abstract(requirement, &[], &mut InterfaceConstraintBudget::default())
                 .expect("one abstract evidence node should fit");
             let selection = builder
-                .finish(root, interface, Type::Int)
+                .finish(root, unary_application(interface, Type::Int))
                 .expect("the pending selection should have one valid root");
             let slot = EvidenceSlot::empty();
             let mut selector = EvidenceSelector::new();
             selector.selected.push(SelectedOccurrence {
                 checked_method: Some(method),
-                checked_argument: Type::Int,
+                checked_application: unary_application(interface, Type::Int),
                 method_arguments: Box::new([Type::Bool, Type::Int]),
                 checked_value_type: Some(Type::Bool),
                 selection: Some(selection),
@@ -3774,7 +5048,8 @@ mod tests {
         assert_eq!(slot.method_arguments(), &[Type::Bool, Type::Int]);
         assert!(matches!(
             slot.filled_method(),
-            Some((_, Type::Int, [Type::Bool, Type::Int], Type::Bool, _))
+            Some((_, application, [Type::Bool, Type::Int], Type::Bool, _))
+                if unary_argument(application) == &Type::Int
         ));
         assert!(slot.selection().is_some());
     }
@@ -3786,8 +5061,9 @@ mod tests {
         // interface Int and fresh method Bool arguments. The checked Unit
         // value type owns one carrier plus the two-cell retained type walk.
         const EXACT_CONSTRAINT_WORK: usize = 8 + 3 + 1;
-        // Only the interface argument is cloned at this ownership boundary.
-        const EXACT_TYPE_WORK: usize = 1;
+        // The complete application clone owns one vector cell and its one
+        // primitive argument.
+        const EXACT_TYPE_WORK: usize = 1 + 1;
         let (interface, _, _) = ids();
         let source = SourceFile::new("method-rigidity-ingress.ash", "use")
             .expect("the ingress source should fit");
@@ -3801,8 +5077,7 @@ mod tests {
             InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK - 1);
         assert_eq!(
             selector.push_cloned_obligation(
-                interface,
-                &Type::Int,
+                &unary_application(interface, Type::Int),
                 MethodObligationMetadata::new(
                     MethodId::new(interface, 0),
                     Box::new([Type::Bool]),
@@ -3824,8 +5099,7 @@ mod tests {
 
         assert_eq!(
             selector.push_cloned_obligation(
-                interface,
-                &Type::Int,
+                &unary_application(interface, Type::Int),
                 MethodObligationMetadata::new(
                     MethodId::new(interface, 0),
                     Box::new([Type::Bool]),
@@ -3849,8 +5123,7 @@ mod tests {
         let mut exact_types = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
         selector
             .push_cloned_obligation(
-                interface,
-                &Type::Int,
+                &unary_application(interface, Type::Int),
                 MethodObligationMetadata::new(
                     MethodId::new(interface, 0),
                     Box::new([Type::Bool]),
@@ -3878,7 +5151,7 @@ mod tests {
         // Four cells per method/rigidity argument, five fixed ingress facts,
         // and the checked-value carrier plus its Unit traversal.
         const EXACT_CONSTRAINT_WORK: usize = WIDTH * 4 + 8;
-        const EXACT_TYPE_WORK: usize = 1;
+        const EXACT_TYPE_WORK: usize = 1 + 1;
         let (interface, _, _) = ids();
         let source = SourceFile::new("wide-method-rigidity-ingress.ash", "use")
             .expect("the wide ingress source should fit");
@@ -3891,8 +5164,7 @@ mod tests {
         let mut short = EvidenceSelector::new();
         assert_eq!(
             short.push_cloned_obligation(
-                interface,
-                &Type::Int,
+                &unary_application(interface, Type::Int),
                 MethodObligationMetadata::new(
                     MethodId::new(interface, 0),
                     make_arguments(),
@@ -3915,8 +5187,7 @@ mod tests {
         let mut exact_constraints = InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK);
         exact
             .push_cloned_obligation(
-                interface,
-                &Type::Int,
+                &unary_application(interface, Type::Int),
                 MethodObligationMetadata::new(
                     MethodId::new(interface, 0),
                     make_arguments(),
@@ -3955,8 +5226,7 @@ mod tests {
                 let mut selector = EvidenceSelector::new();
                 assert_eq!(
                     selector.push_cloned_obligation(
-                        interface,
-                        &Type::Int,
+                        &unary_application(interface, Type::Int),
                         MethodObligationMetadata::new(
                             MethodId::new(interface, 0),
                             Box::new([Type::Bool]),
@@ -3995,7 +5265,10 @@ mod tests {
                 let mut selector = EvidenceSelector::new();
                 selector.selected.push(SelectedOccurrence {
                     checked_method: Some(MethodId::new(InterfaceId::new(ModuleId::new(0), 0), 0)),
-                    checked_argument: Type::Int,
+                    checked_application: unary_application(
+                        InterfaceId::new(ModuleId::new(0), 0),
+                        Type::Int,
+                    ),
                     method_arguments: Box::new([Type::Bool]),
                     checked_value_type: Some(Type::Unit),
                     selection: None,
@@ -4053,8 +5326,7 @@ mod tests {
         let abstract_slot = EvidenceSlot::empty();
         abstract_selector
             .push_cloned_obligation(
-                interface,
-                &Type::Int,
+                &unary_application(interface, Type::Int),
                 MethodObligationMetadata::new(
                     MethodId::new(interface, 0),
                     Box::new([Type::Bool]),
@@ -4129,8 +5401,7 @@ mod tests {
         let current_slot = EvidenceSlot::empty();
         current_selector
             .push_cloned_obligation(
-                interface,
-                &Type::Int,
+                &unary_application(interface, Type::Int),
                 MethodObligationMetadata::new(
                     MethodId::new(interface, 0),
                     Box::new([Type::Bool]),
@@ -4190,13 +5461,13 @@ mod tests {
                     .push_abstract(requirement, &[], &mut InterfaceConstraintBudget::default())
                     .expect("one abstract evidence node should fit");
                 let selection = builder
-                    .finish(root, interface, Type::Int)
+                    .finish(root, unary_application(interface, Type::Int))
                     .expect("the pending selection should have one valid root");
                 let slot = EvidenceSlot::empty();
                 let mut selector = EvidenceSelector::new();
                 selector.selected.push(SelectedOccurrence {
                     checked_method: Some(method),
-                    checked_argument: Type::Int,
+                    checked_application: unary_application(interface, Type::Int),
                     method_arguments: Box::new([deep_value_type(DEPTH), Type::Bool]),
                     checked_value_type: Some(Type::Unit),
                     selection: Some(selection),
@@ -4228,8 +5499,8 @@ mod tests {
     #[test]
     fn interface_selector_retains_kinds_at_exact_atomic_boundaries() {
         fn exercise(imported: bool) {
-            // One canonical binder lookup, three Kind-pair cells, and one
-            // retained interface carrier record.
+            // One retained parameter record, one canonical binder lookup,
+            // and three Kind-pair cells.
             const EXACT_CONSTRAINT_WORK: usize = 5;
             // One retained binder record plus the three nodes in Type -> Type.
             const EXACT_TYPE_WORK: usize = 4;
@@ -4325,13 +5596,210 @@ mod tests {
                 )
             };
             assert_eq!(exact, Ok(()));
-            assert_eq!(exact_selector.interfaces[0].parameter_kind, kind);
+            let [parameter] = exact_selector.interfaces[0].parameters.as_ref() else {
+                panic!("the unary fixture should retain one parameter");
+            };
+            assert_eq!(parameter.1, kind);
             assert_eq!(exact_constraints.used(), EXACT_CONSTRAINT_WORK);
             assert_eq!(exact_type.charge(1), Err(()));
         }
 
         exercise(false);
         exercise(true);
+    }
+
+    #[test]
+    fn wide_interface_parameter_and_application_ingress_have_exact_retryable_boundaries() {
+        const WIDTH: usize = 32_768;
+        // Retained parameter ownership, canonical kind authentication, and
+        // the canonical Kind mirror each own one unit per parameter.
+        const INTERFACE_CONSTRAINT_WORK: usize = 3 * WIDTH;
+        const INTERFACE_TYPE_WORK: usize = 2 * WIDTH;
+        // One header record, two cells per resolved/checked leaf pair, the
+        // complete candidate-vector records, interface authentication, scope
+        // roots and visits, then one complete pre-retention type traversal.
+        const APPLICATION_CONSTRAINT_WORK: usize = 7 * WIDTH + 5;
+        const APPLICATION_TYPE_WORK: usize = 2 * WIDTH;
+
+        let file = SourceFile::new("wide-relational-ingress.ash", "interface implementation")
+            .expect("the wide ingress source should fit");
+        let span = file
+            .span(ByteRange::new(0, 9).expect("the wide ingress range should be ordered"))
+            .expect("the wide ingress span should fit");
+        let module = ModuleId::from(file.id());
+        let interface = InterfaceId::new(module, 0);
+        let implementation = ImplId::new(module, 0);
+        let parameters = (0..WIDTH)
+            .map(|index| ResolvedTypeVariable {
+                id: TypeVariableId::resolved(
+                    module,
+                    u32::try_from(index).expect("the parameter identity should fit"),
+                ),
+                spelling: format!("P{index}"),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let fact = CheckedInterfaceFact::without_methods_for_test(
+            interface,
+            "Wide".into(),
+            parameters,
+            Origin::Source(span),
+            span,
+        );
+        let registry = registry_for_interface_fact(&fact);
+        let assert_no_interface = |selector: &EvidenceSelector| {
+            assert!(selector.interfaces.is_empty());
+            assert!(selector.interface_indices.is_empty());
+            assert!(selector.method_indices.is_empty());
+        };
+
+        let mut constraint_retry = EvidenceSelector::new();
+        assert_eq!(
+            constraint_retry.add_interface_fact(
+                &registry,
+                &fact,
+                &mut InterfaceConstraintBudget::with_limit(INTERFACE_CONSTRAINT_WORK - 1),
+                &mut TypeWorkBudget::with_limit(INTERFACE_TYPE_WORK),
+            ),
+            Err(SelectionFailure::ConstraintResource),
+        );
+        assert_no_interface(&constraint_retry);
+        constraint_retry
+            .add_interface_fact(
+                &registry,
+                &fact,
+                &mut InterfaceConstraintBudget::with_limit(INTERFACE_CONSTRAINT_WORK),
+                &mut TypeWorkBudget::with_limit(INTERFACE_TYPE_WORK),
+            )
+            .expect("a fresh exact budget should retry the unpublished interface");
+        assert_eq!(constraint_retry.interfaces[0].parameters.len(), WIDTH);
+
+        let mut type_retry = EvidenceSelector::new();
+        assert_eq!(
+            type_retry.add_interface_fact(
+                &registry,
+                &fact,
+                &mut InterfaceConstraintBudget::with_limit(INTERFACE_CONSTRAINT_WORK),
+                &mut TypeWorkBudget::with_limit(INTERFACE_TYPE_WORK - 1),
+            ),
+            Err(SelectionFailure::TypeResource),
+        );
+        assert_no_interface(&type_retry);
+        type_retry
+            .add_interface_fact(
+                &registry,
+                &fact,
+                &mut InterfaceConstraintBudget::with_limit(INTERFACE_CONSTRAINT_WORK),
+                &mut TypeWorkBudget::with_limit(INTERFACE_TYPE_WORK),
+            )
+            .expect("a fresh exact type budget should retry the unpublished interface");
+
+        let provenance =
+            ResolvedTypeProvenance::new(vec![ResolvedTypeProvenanceNode::Fact(span)], 0);
+        let resolved_arguments = (0..WIDTH)
+            .map(|_| ResolvedType {
+                ty: Type::Int,
+                provenance: provenance.clone(),
+                origin: Origin::Source(span),
+                span,
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let checked_arguments = vec![Type::Int; WIDTH].into_boxed_slice();
+        let resolved = ResolvedImplementation {
+            id: implementation,
+            public: false,
+            head: ResolvedInterfaceApplication {
+                interface: ResolvedInterfaceOccurrence {
+                    id: interface,
+                    spelling: "Wide".into(),
+                    origin: Origin::Source(span),
+                },
+                arguments: resolved_arguments,
+                span,
+            },
+            head_parameters: Box::new([]),
+            prerequisite_only_parameters: Box::new([]),
+            prerequisites: Box::new([]),
+            method_groups: Box::new([]),
+            span,
+        };
+        let checked = CheckedImplementation::new(
+            0,
+            implementation,
+            InterfaceApplication::new(interface, checked_arguments),
+            Box::new([]),
+        );
+        let selector = || {
+            let mut selector = EvidenceSelector::new();
+            selector.add_interface_parameters_raw(
+                interface,
+                fact.parameters
+                    .iter()
+                    .map(|parameter| parameter.id)
+                    .collect(),
+                Vec::new(),
+            );
+            selector
+        };
+        let assert_no_implementation = |selector: &EvidenceSelector| {
+            assert!(selector.implementations.is_empty());
+            assert!(selector.implementation_indices.is_empty());
+            assert!(selector.implementation_candidates.is_empty());
+        };
+
+        let mut application_constraint_retry = selector();
+        assert_eq!(
+            application_constraint_retry.add_local_implementation(
+                &registry,
+                &resolved,
+                &checked,
+                &mut InterfaceConstraintBudget::with_limit(APPLICATION_CONSTRAINT_WORK - 1),
+                &mut TypeWorkBudget::with_limit(APPLICATION_TYPE_WORK),
+            ),
+            Err(SelectionFailure::ConstraintResource),
+        );
+        assert_no_implementation(&application_constraint_retry);
+        application_constraint_retry
+            .add_local_implementation(
+                &registry,
+                &resolved,
+                &checked,
+                &mut InterfaceConstraintBudget::with_limit(APPLICATION_CONSTRAINT_WORK),
+                &mut TypeWorkBudget::with_limit(APPLICATION_TYPE_WORK),
+            )
+            .expect("a fresh exact budget should retry the unpublished application");
+        assert_eq!(
+            application_constraint_retry.implementations[0]
+                .application
+                .arguments()
+                .len(),
+            WIDTH,
+        );
+
+        let mut application_type_retry = selector();
+        assert_eq!(
+            application_type_retry.add_local_implementation(
+                &registry,
+                &resolved,
+                &checked,
+                &mut InterfaceConstraintBudget::with_limit(APPLICATION_CONSTRAINT_WORK),
+                &mut TypeWorkBudget::with_limit(APPLICATION_TYPE_WORK - 1),
+            ),
+            Err(SelectionFailure::TypeResource),
+        );
+        assert_no_implementation(&application_type_retry);
+        application_type_retry
+            .add_local_implementation(
+                &registry,
+                &resolved,
+                &checked,
+                &mut InterfaceConstraintBudget::with_limit(APPLICATION_CONSTRAINT_WORK),
+                &mut TypeWorkBudget::with_limit(APPLICATION_TYPE_WORK),
+            )
+            .expect("a fresh exact type budget should retry the unpublished application");
     }
 
     #[test]
@@ -4370,13 +5838,65 @@ mod tests {
     }
 
     #[test]
+    fn interface_parameter_identity_order_rejects_noncanonical_rows_atomically() {
+        let file = SourceFile::new("interface-parameter-identities.ash", "interface")
+            .expect("the identity fixture source should fit");
+        let span = file
+            .span(ByteRange::new(0, 9).expect("the identity fixture range is ordered"))
+            .expect("the identity fixture span should fit");
+        let module = ModuleId::from(file.id());
+        let interface = InterfaceId::new(module, 0);
+        let first = TypeVariableId::resolved(module, 0);
+        let second = TypeVariableId::resolved(module, 1);
+        let parameter = |id| ResolvedTypeVariable {
+            id,
+            spelling: "A".into(),
+            kind: Kind::Type,
+            origin: Origin::Source(span),
+        };
+        let rows: [Box<[ResolvedTypeVariable]>; 4] = [
+            Box::new([parameter(first), parameter(first)]),
+            Box::new([parameter(second), parameter(first)]),
+            Box::new([parameter(TypeVariableId::generated(0))]),
+            Box::new([parameter(TypeVariableId::resolved(
+                ModuleId::new(u32::MAX),
+                0,
+            ))]),
+        ];
+
+        for parameters in rows {
+            let fact = CheckedInterfaceFact::without_methods_for_test(
+                interface,
+                "Invalid".into(),
+                parameters,
+                Origin::Source(span),
+                span,
+            );
+            let registry = registry_for_interface_fact(&fact);
+            let mut selector = EvidenceSelector::new();
+            assert_eq!(
+                selector.add_interface_fact(
+                    &registry,
+                    &fact,
+                    &mut InterfaceConstraintBudget::default(),
+                    &mut TypeWorkBudget::default(),
+                ),
+                Err(SelectionFailure::InvalidState),
+            );
+            assert!(selector.interfaces.is_empty());
+            assert!(selector.interface_indices.is_empty());
+            assert!(selector.method_indices.is_empty());
+        }
+    }
+
+    #[test]
     fn local_and_imported_implementation_ingress_have_exact_atomic_boundaries() {
-        // Both paths authenticate the head interface and structural scope,
-        // retain one carrier record, and clone one primitive head. Imported
-        // ingress additionally retains one authorization hop.
-        const LOCAL_CONSTRAINT_WORK: usize = 7;
-        const IMPORTED_CONSTRAINT_WORK: usize = LOCAL_CONSTRAINT_WORK + 1;
-        const TYPE_WORK: usize = 1;
+        // Both paths authenticate the complete head application and structural
+        // scope. Local ingress additionally compares the resolved and checked
+        // head mirror; imported ingress instead retains one authorization hop.
+        const LOCAL_CONSTRAINT_WORK: usize = 12;
+        const IMPORTED_CONSTRAINT_WORK: usize = 11;
+        const TYPE_WORK: usize = 1 + 1;
 
         let source = SourceFile::new("atomic-implementation-ingress.ash", "impl")
             .expect("the ingress fixture source should fit");
@@ -4395,9 +5915,8 @@ mod tests {
         let imported = ImportedImplementationFact {
             fact: CheckedImplementationFact {
                 id: implementation,
-                interface,
+                application: unary_application(interface, Type::Int),
                 head_parameters: Box::new([]),
-                argument: Type::Int,
                 prerequisites: Box::new([]),
                 methods: Box::new([]),
                 origin: Origin::Source(span),
@@ -4413,18 +5932,22 @@ mod tests {
         let resolved = ResolvedImplementation {
             id: implementation,
             public: false,
-            interface: ResolvedInterfaceOccurrence {
-                id: interface,
-                spelling: "I".into(),
-                origin: Origin::Source(span),
-            },
-            argument: ResolvedType {
-                ty: Type::Int,
-                provenance: ResolvedTypeProvenance::new(
-                    vec![ResolvedTypeProvenanceNode::Fact(span)],
-                    0,
-                ),
-                origin: Origin::Source(span),
+            head: ResolvedInterfaceApplication {
+                interface: ResolvedInterfaceOccurrence {
+                    id: interface,
+                    spelling: "I".into(),
+                    origin: Origin::Source(span),
+                },
+                arguments: vec![ResolvedType {
+                    ty: Type::Int,
+                    provenance: ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                }]
+                .into_boxed_slice(),
                 span,
             },
             head_parameters: Box::new([]),
@@ -4433,12 +5956,12 @@ mod tests {
             method_groups: Box::new([]),
             span,
         };
-        let checked = CheckedImplementation {
-            source_index: 0,
-            id: implementation,
-            interface,
-            methods: Box::new([]),
-        };
+        let checked = CheckedImplementation::new(
+            0,
+            implementation,
+            unary_application(interface, Type::Int),
+            Box::new([]),
+        );
 
         let assert_empty = |selector: &EvidenceSelector| {
             assert!(selector.implementations.is_empty());
@@ -4560,25 +6083,634 @@ mod tests {
     }
 
     #[test]
+    fn generic_implementation_parameter_ingress_has_exact_retryable_boundaries() {
+        // Relative to a concrete unary head, the rigid parameter adds two
+        // simultaneous parameter-index owners, binder authentication, scope
+        // authentication, and retained-parameter ownership.
+        const IMPORTED_CONSTRAINT_WORK: usize = 17;
+        const LOCAL_CONSTRAINT_WORK: usize = 18;
+        const TYPE_WORK: usize = 2;
+
+        let source = SourceFile::new("generic-implementation-ingress.ash", "implementation")
+            .expect("the ingress fixture source should fit");
+        let span = source
+            .span(ByteRange::new(0, 14).expect("the ingress fixture range is ordered"))
+            .expect("the ingress fixture span should fit");
+        let module = ModuleId::from(source.id());
+        let interface = InterfaceId::new(module, 0);
+        let interface_parameter = TypeVariableId::resolved(module, 0);
+        let implementation_parameter = TypeVariableId::resolved(module, 1);
+        let implementation = ImplId::new(module, 0);
+        let parameter = ResolvedTypeVariable {
+            id: implementation_parameter,
+            spelling: "T".into(),
+            kind: Kind::Type,
+            origin: Origin::Source(span),
+        };
+        let argument = Type::Variable(implementation_parameter);
+        let mut authority_selector = EvidenceSelector::new();
+        authority_selector.add_interface_raw(interface, interface_parameter, Vec::new());
+        let registry = authority_selector
+            .canonical_registry_for_test()
+            .with_additional_type_variables([parameter.clone()]);
+        let imported = ImportedImplementationFact {
+            fact: CheckedImplementationFact {
+                id: implementation,
+                application: unary_application(interface, argument.clone()),
+                head_parameters: Box::new([parameter.clone()]),
+                prerequisites: Box::new([]),
+                methods: Box::new([]),
+                origin: Origin::Source(span),
+                span,
+            },
+            authorization: ImplementationAuthorization::from_hops(vec![ImplementationRouteHop {
+                from: ModuleId::new(1),
+                to: module,
+                import_span: span,
+            }]),
+            public_authorization: None,
+        };
+        let resolved = ResolvedImplementation {
+            id: implementation,
+            public: false,
+            head: ResolvedInterfaceApplication {
+                interface: ResolvedInterfaceOccurrence {
+                    id: interface,
+                    spelling: "I".into(),
+                    origin: Origin::Source(span),
+                },
+                arguments: Box::new([ResolvedType {
+                    ty: argument.clone(),
+                    provenance: ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                }]),
+                span,
+            },
+            head_parameters: Box::new([parameter]),
+            prerequisite_only_parameters: Box::new([]),
+            prerequisites: Box::new([]),
+            method_groups: Box::new([]),
+            span,
+        };
+        let checked = CheckedImplementation::new(
+            0,
+            implementation,
+            unary_application(interface, argument),
+            Box::new([]),
+        );
+        let selector = || {
+            let mut selector = EvidenceSelector::new();
+            selector.add_interface_raw(interface, interface_parameter, Vec::new());
+            selector
+        };
+        let assert_empty = |selector: &EvidenceSelector| {
+            assert!(selector.implementations.is_empty());
+            assert!(selector.implementation_indices.is_empty());
+            assert!(selector.implementation_candidates.is_empty());
+        };
+
+        let mut imported_retry = selector();
+        assert_eq!(
+            imported_retry.add_implementation_fact(
+                &registry,
+                &imported,
+                &mut InterfaceConstraintBudget::with_limit(IMPORTED_CONSTRAINT_WORK - 1),
+                &mut TypeWorkBudget::with_limit(TYPE_WORK),
+            ),
+            Err(SelectionFailure::ConstraintResource),
+        );
+        assert_empty(&imported_retry);
+        let mut imported_exact_constraints =
+            InterfaceConstraintBudget::with_limit(IMPORTED_CONSTRAINT_WORK);
+        let mut imported_exact_types = TypeWorkBudget::with_limit(TYPE_WORK);
+        imported_retry
+            .add_implementation_fact(
+                &registry,
+                &imported,
+                &mut imported_exact_constraints,
+                &mut imported_exact_types,
+            )
+            .expect("an exact fresh budget should retry the unpublished imported implementation");
+        assert_eq!(imported_exact_constraints.used(), IMPORTED_CONSTRAINT_WORK);
+        assert_eq!(imported_exact_types.used(), TYPE_WORK);
+
+        let mut local_retry = selector();
+        assert_eq!(
+            local_retry.add_local_implementation(
+                &registry,
+                &resolved,
+                &checked,
+                &mut InterfaceConstraintBudget::with_limit(LOCAL_CONSTRAINT_WORK - 1),
+                &mut TypeWorkBudget::with_limit(TYPE_WORK),
+            ),
+            Err(SelectionFailure::ConstraintResource),
+        );
+        assert_empty(&local_retry);
+        let mut local_exact_constraints =
+            InterfaceConstraintBudget::with_limit(LOCAL_CONSTRAINT_WORK);
+        let mut local_exact_types = TypeWorkBudget::with_limit(TYPE_WORK);
+        local_retry
+            .add_local_implementation(
+                &registry,
+                &resolved,
+                &checked,
+                &mut local_exact_constraints,
+                &mut local_exact_types,
+            )
+            .expect("an exact fresh budget should retry the unpublished local implementation");
+        assert_eq!(local_exact_constraints.used(), LOCAL_CONSTRAINT_WORK);
+        assert_eq!(local_exact_types.used(), TYPE_WORK);
+    }
+
+    #[test]
+    fn wide_local_and_imported_implementation_closures_have_exact_retryable_boundaries() {
+        const LOCAL_WIDTH: usize = 8_192;
+        const IMPORTED_WIDTH: usize = 8_192;
+        const TOTAL_WIDTH: usize = LOCAL_WIDTH + IMPORTED_WIDTH;
+        const EXACT_CONSTRAINT_WORK: usize = 12 * LOCAL_WIDTH + 11 * IMPORTED_WIDTH;
+        const EXACT_TYPE_WORK: usize = 2 * TOTAL_WIDTH;
+
+        let source = SourceFile::new("wide-implementation-closure.ash", "implementation")
+            .expect("the wide closure source should fit");
+        let span = source
+            .span(ByteRange::new(0, 14).expect("the wide closure range should be ordered"))
+            .expect("the wide closure span should fit");
+        let module = ModuleId::from(source.id());
+        let imported_module = ModuleId::new(u32::MAX - 1);
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new());
+        let selector = || {
+            let mut selector = EvidenceSelector::new();
+            for index in 0..TOTAL_WIDTH {
+                let index = u32::try_from(index).expect("the interface index should fit");
+                selector.add_interface_raw(
+                    InterfaceId::new(module, index),
+                    TypeVariableId::resolved(module, index),
+                    Vec::new(),
+                );
+            }
+            selector
+        };
+        let add = |selector: &mut EvidenceSelector,
+                   index: usize,
+                   constraints: &mut InterfaceConstraintBudget,
+                   types: &mut TypeWorkBudget| {
+            let index = u32::try_from(index).expect("the implementation index should fit");
+            let interface = InterfaceId::new(module, index);
+            let implementation = ImplId::new(module, index);
+            if usize::try_from(index).expect("the index should fit") < LOCAL_WIDTH {
+                let resolved_type = ResolvedType {
+                    ty: Type::Int,
+                    provenance: ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                };
+                let resolved = ResolvedImplementation {
+                    id: implementation,
+                    public: false,
+                    head: ResolvedInterfaceApplication {
+                        interface: ResolvedInterfaceOccurrence {
+                            id: interface,
+                            spelling: format!("Local{index}"),
+                            origin: Origin::Source(span),
+                        },
+                        arguments: Box::new([resolved_type]),
+                        span,
+                    },
+                    head_parameters: Box::new([]),
+                    prerequisite_only_parameters: Box::new([]),
+                    prerequisites: Box::new([]),
+                    method_groups: Box::new([]),
+                    span,
+                };
+                let checked = CheckedImplementation::new(
+                    0,
+                    implementation,
+                    unary_application(interface, Type::Int),
+                    Box::new([]),
+                );
+                selector.add_local_implementation(
+                    &registry,
+                    &resolved,
+                    &checked,
+                    constraints,
+                    types,
+                )
+            } else {
+                let imported = ImportedImplementationFact {
+                    fact: CheckedImplementationFact {
+                        id: implementation,
+                        application: unary_application(interface, Type::Int),
+                        head_parameters: Box::new([]),
+                        prerequisites: Box::new([]),
+                        methods: Box::new([]),
+                        origin: Origin::Source(span),
+                        span,
+                    },
+                    authorization: ImplementationAuthorization::from_hops(vec![
+                        ImplementationRouteHop {
+                            from: module,
+                            to: imported_module,
+                            import_span: span,
+                        },
+                    ]),
+                    public_authorization: None,
+                };
+                selector.add_implementation_fact(&registry, &imported, constraints, types)
+            }
+        };
+
+        let mut exact_selector = selector();
+        let mut exact_constraints = InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK);
+        let mut exact_types = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
+        for index in 0..TOTAL_WIDTH {
+            add(
+                &mut exact_selector,
+                index,
+                &mut exact_constraints,
+                &mut exact_types,
+            )
+            .expect("the exact graph-wide implementation closure should publish");
+        }
+        assert_eq!(exact_selector.implementations.len(), TOTAL_WIDTH);
+        assert_eq!(exact_constraints.used(), EXACT_CONSTRAINT_WORK);
+        assert_eq!(exact_types.used(), EXACT_TYPE_WORK);
+
+        let mut constraint_retry = selector();
+        let mut short_constraints =
+            InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK - 1);
+        let mut exact_types = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
+        for index in 0..TOTAL_WIDTH - 1 {
+            add(
+                &mut constraint_retry,
+                index,
+                &mut short_constraints,
+                &mut exact_types,
+            )
+            .expect("every affordable closure row should publish");
+        }
+        assert_eq!(
+            add(
+                &mut constraint_retry,
+                TOTAL_WIDTH - 1,
+                &mut short_constraints,
+                &mut exact_types,
+            ),
+            Err(SelectionFailure::ConstraintResource),
+        );
+        assert_eq!(constraint_retry.implementations.len(), TOTAL_WIDTH - 1);
+        add(
+            &mut constraint_retry,
+            TOTAL_WIDTH - 1,
+            &mut InterfaceConstraintBudget::with_limit(11),
+            &mut TypeWorkBudget::with_limit(2),
+        )
+        .expect("a fresh exact budget should retry the unpublished imported row");
+        assert_eq!(constraint_retry.implementations.len(), TOTAL_WIDTH);
+
+        let mut type_retry = selector();
+        let mut exact_constraints = InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK);
+        let mut short_types = TypeWorkBudget::with_limit(EXACT_TYPE_WORK - 1);
+        for index in 0..TOTAL_WIDTH - 1 {
+            add(
+                &mut type_retry,
+                index,
+                &mut exact_constraints,
+                &mut short_types,
+            )
+            .expect("every completely retained closure row should publish");
+        }
+        assert_eq!(
+            add(
+                &mut type_retry,
+                TOTAL_WIDTH - 1,
+                &mut exact_constraints,
+                &mut short_types,
+            ),
+            Err(SelectionFailure::TypeResource),
+        );
+        assert_eq!(type_retry.implementations.len(), TOTAL_WIDTH - 1);
+        add(
+            &mut type_retry,
+            TOTAL_WIDTH - 1,
+            &mut InterfaceConstraintBudget::with_limit(11),
+            &mut TypeWorkBudget::with_limit(2),
+        )
+        .expect("a fresh exact type budget should retry the unpublished imported row");
+        assert_eq!(type_retry.implementations.len(), TOTAL_WIDTH);
+    }
+
+    #[test]
+    fn relational_local_implementation_is_admitted_as_one_complete_application() {
+        let source = SourceFile::new("relational-evidence-ingress.ash", "impl")
+            .expect("the ingress fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the ingress range is ordered"))
+            .expect("the ingress span should fit");
+        let module = ModuleId::new(54);
+        let interface = InterfaceId::new(module, 0);
+        let left_parameter = TypeVariableId::resolved(module, 0);
+        let right_parameter = TypeVariableId::resolved(module, 1);
+        let implementation = ImplId::new(module, 0);
+        let mut authority = EvidenceSelector::new();
+        authority.add_interface_parameters_raw(
+            interface,
+            vec![left_parameter, right_parameter],
+            Vec::new(),
+        );
+        let registry = authority.canonical_registry_for_test();
+        let resolved_type = |ty| ResolvedType {
+            ty,
+            provenance: ResolvedTypeProvenance::new(
+                vec![ResolvedTypeProvenanceNode::Fact(span)],
+                0,
+            ),
+            origin: Origin::Source(span),
+            span,
+        };
+        let resolved = ResolvedImplementation {
+            id: implementation,
+            public: false,
+            head: ResolvedInterfaceApplication {
+                interface: ResolvedInterfaceOccurrence {
+                    id: interface,
+                    spelling: "Relation".into(),
+                    origin: Origin::Source(span),
+                },
+                arguments: vec![resolved_type(Type::Int), resolved_type(Type::Bool)]
+                    .into_boxed_slice(),
+                span,
+            },
+            head_parameters: Box::new([]),
+            prerequisite_only_parameters: Box::new([]),
+            prerequisites: Box::new([]),
+            method_groups: Box::new([]),
+            span,
+        };
+        let checked = CheckedImplementation::new(
+            0,
+            implementation,
+            InterfaceApplication::new(interface, Box::new([Type::Int, Type::Bool])),
+            Box::new([]),
+        );
+        const EXACT_CONSTRAINT_WORK: usize = 1 + (2 * 2) + (2 + 2) + (1 + 1 + 2 + 2) + (2 * 2);
+        const EXACT_TYPE_WORK: usize = 2 + 2;
+        let add_authority = |selector: &mut EvidenceSelector| {
+            selector.add_interface_parameters_raw(
+                interface,
+                vec![left_parameter, right_parameter],
+                Vec::new(),
+            );
+        };
+        let mut short_selector = EvidenceSelector::new();
+        add_authority(&mut short_selector);
+        assert_eq!(
+            short_selector.add_local_implementation(
+                &registry,
+                &resolved,
+                &checked,
+                &mut InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK - 1),
+                &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
+            ),
+            Err(SelectionFailure::ConstraintResource),
+        );
+        assert!(short_selector.implementations.is_empty());
+        assert!(short_selector.implementation_indices.is_empty());
+        assert!(short_selector.implementation_candidates.is_empty());
+
+        let mut type_short_selector = EvidenceSelector::new();
+        add_authority(&mut type_short_selector);
+        assert_eq!(
+            type_short_selector.add_local_implementation(
+                &registry,
+                &resolved,
+                &checked,
+                &mut InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK),
+                &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK - 1),
+            ),
+            Err(SelectionFailure::TypeResource),
+        );
+        assert!(type_short_selector.implementations.is_empty());
+
+        let mut exact_selector = EvidenceSelector::new();
+        add_authority(&mut exact_selector);
+        let mut exact_constraints = InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK);
+        let mut exact_types = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
+        exact_selector
+            .add_local_implementation(
+                &registry,
+                &resolved,
+                &checked,
+                &mut exact_constraints,
+                &mut exact_types,
+            )
+            .expect("the complete two-argument application should publish atomically");
+        assert_eq!(exact_constraints.used(), EXACT_CONSTRAINT_WORK);
+        assert_eq!(exact_types.used(), EXACT_TYPE_WORK);
+        assert_eq!(
+            exact_selector.implementations[0].application.arguments(),
+            &[Type::Int, Type::Bool],
+        );
+    }
+
+    #[test]
+    fn local_prerequisite_clone_discards_a_deep_first_argument_on_second_failure() {
+        const DEPTH: usize = 16_384;
+        const DEEP_ARGUMENT_CELLS: usize = 1 + 2 * DEPTH;
+        // Two vector records precede the two retained prerequisite arguments.
+        const FIRST_ARGUMENT_PREFIX: usize = 2 + DEEP_ARGUMENT_CELLS;
+        const EXACT_TYPE_WORK: usize = FIRST_ARGUMENT_PREFIX + 1;
+
+        std::thread::Builder::new()
+            .name("local-prerequisite-partial-clone-owner".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("local-prerequisite-clone.ash", "Pair")
+                    .expect("the prerequisite fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 4).expect("the fixture range is ordered"))
+                    .expect("the fixture span should fit");
+                let resolved_type = |ty| ResolvedType {
+                    ty,
+                    provenance: ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                };
+                let mut deep = Type::Int;
+                for _ in 0..DEPTH {
+                    deep = Type::Application(Box::new(deep), Box::new(Type::Unit));
+                }
+                let arguments = vec![resolved_type(deep), resolved_type(Type::Bool)];
+
+                let mut one_short = TypeWorkBudget::with_limit(FIRST_ARGUMENT_PREFIX);
+                assert!(matches!(
+                    clone_local_prerequisite_arguments(&arguments, &mut one_short),
+                    Err(SelectionFailure::TypeResource),
+                ));
+                assert_eq!(one_short.used(), FIRST_ARGUMENT_PREFIX);
+
+                let mut exact = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
+                let cloned = clone_local_prerequisite_arguments(&arguments, &mut exact)
+                    .expect("a fresh exact prerequisite clone should retain both arguments");
+                assert_eq!(cloned.0.len(), 2);
+                assert_eq!(exact.used(), EXACT_TYPE_WORK);
+                drop(cloned);
+                for argument in arguments {
+                    argument.discard_iteratively();
+                }
+            })
+            .expect("the small-stack prerequisite worker should start")
+            .join()
+            .expect("partial and complete prerequisite clones must dismantle iteratively");
+    }
+
+    #[test]
+    fn late_relational_local_prerequisite_has_an_exact_ingress_guard_boundary() {
+        const WIDTH: usize = 32;
+        // Initial relation enumeration, the unary head mirror, complete-vector
+        // staging, and interface/count authentication all reach the final
+        // extra prerequisite argument before rejecting it.
+        const EXACT_WORK: usize = (WIDTH + 1) + 2 + (3 * WIDTH + 4) + (2 * WIDTH + 2);
+
+        let source = SourceFile::new("late-relational-evidence-ingress.ash", "impl")
+            .expect("the ingress fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the ingress range is ordered"))
+            .expect("the ingress span should fit");
+        let module = ModuleId::new(55);
+        let interface = InterfaceId::new(module, 0);
+        let interface_parameter = TypeVariableId::resolved(module, 0);
+        let implementation = ImplId::new(module, 0);
+        let mut authority = EvidenceSelector::new();
+        authority.add_interface_raw(interface, interface_parameter, Vec::new());
+        let registry = authority.canonical_registry_for_test();
+        let resolved_type = |ty| ResolvedType {
+            ty,
+            provenance: ResolvedTypeProvenance::new(
+                vec![ResolvedTypeProvenanceNode::Fact(span)],
+                0,
+            ),
+            origin: Origin::Source(span),
+            span,
+        };
+        let prerequisites = (0..WIDTH)
+            .map(|index| ResolvedRequirement {
+                id: RequirementId::new(
+                    RequirementOwner::Impl(implementation),
+                    u32::try_from(index).expect("the fixture width should fit"),
+                ),
+                application: ResolvedInterfaceApplication {
+                    interface: ResolvedInterfaceOccurrence {
+                        id: interface,
+                        spelling: "Relation".into(),
+                        origin: Origin::Source(span),
+                    },
+                    arguments: if index + 1 == WIDTH {
+                        vec![resolved_type(Type::Int), resolved_type(Type::Bool)].into_boxed_slice()
+                    } else {
+                        vec![resolved_type(Type::Int)].into_boxed_slice()
+                    },
+                    span,
+                },
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let resolved = ResolvedImplementation {
+            id: implementation,
+            public: false,
+            head: ResolvedInterfaceApplication {
+                interface: ResolvedInterfaceOccurrence {
+                    id: interface,
+                    spelling: "Relation".into(),
+                    origin: Origin::Source(span),
+                },
+                arguments: vec![resolved_type(Type::Int)].into_boxed_slice(),
+                span,
+            },
+            head_parameters: Box::new([]),
+            prerequisite_only_parameters: Box::new([]),
+            prerequisites,
+            method_groups: Box::new([]),
+            span,
+        };
+        let checked = CheckedImplementation::new(
+            0,
+            implementation,
+            unary_application(interface, Type::Int),
+            Box::new([]),
+        );
+
+        let mut short_selector = EvidenceSelector::new();
+        short_selector.add_interface_raw(interface, interface_parameter, Vec::new());
+        assert_eq!(
+            short_selector.add_local_implementation(
+                &registry,
+                &resolved,
+                &checked,
+                &mut InterfaceConstraintBudget::with_limit(EXACT_WORK - 1),
+                &mut TypeWorkBudget::default(),
+            ),
+            Err(SelectionFailure::ConstraintResource),
+        );
+        assert!(short_selector.implementations.is_empty());
+        assert!(short_selector.implementation_indices.is_empty());
+        assert!(short_selector.implementation_candidates.is_empty());
+
+        let mut exact_selector = EvidenceSelector::new();
+        exact_selector.add_interface_raw(interface, interface_parameter, Vec::new());
+        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        assert_eq!(
+            exact_selector.add_local_implementation(
+                &registry,
+                &resolved,
+                &checked,
+                &mut exact,
+                &mut TypeWorkBudget::default(),
+            ),
+            Err(SelectionFailure::InvalidState),
+        );
+        assert_eq!(exact.used(), EXACT_WORK);
+        assert!(exact_selector.implementations.is_empty());
+        assert!(exact_selector.implementation_indices.is_empty());
+        assert!(exact_selector.implementation_candidates.is_empty());
+    }
+
+    #[test]
     fn higher_kinded_implementation_ingress_has_exact_atomic_and_scope_boundaries() {
         // Candidate authentication is:
-        //   1 parameter slot + 1 parameter scan + 1 canonical lookup
+        //   2 parameter slots + 1 parameter scan + 1 canonical lookup
         //   + 2 relation slots + 2 interface lookups
         //   + 2 root slots + 2 * 6 application/child scope cells = 21.
         // Imported carrier retention adds 6 flat records (including one
         // method ID/span pair) and two 6-cell constraint traversals; local
         // retention adds 5 flat records and the same traversals. Retention
         // clones the two 3-node Types.
-        const AUTHENTICATION_WORK: usize = 21;
+        const RELATION_VECTOR_WORK: usize = 2 * 2 + 2;
+        const AUTHENTICATION_WORK: usize = 22;
         const RELATION_CONSTRAINT_WORK: usize = 6 + 6;
         const RELATION_TYPE_CELLS: usize = 3 + 3;
         const IMPORTED_CARRIER_WORK: usize = 6;
         const LOCAL_CARRIER_WORK: usize = 5;
-        const IMPORTED_CONSTRAINT_WORK: usize =
-            AUTHENTICATION_WORK + IMPORTED_CARRIER_WORK + RELATION_CONSTRAINT_WORK;
-        const LOCAL_CONSTRAINT_WORK: usize =
-            AUTHENTICATION_WORK + LOCAL_CARRIER_WORK + RELATION_CONSTRAINT_WORK;
-        const RETAINED_TYPE_WORK: usize = RELATION_TYPE_CELLS;
+        const LOCAL_RESOLVED_CHECKED_MIRROR_WORK: usize = 2 + 4;
+        const IMPORTED_CONSTRAINT_WORK: usize = RELATION_VECTOR_WORK
+            + AUTHENTICATION_WORK
+            + IMPORTED_CARRIER_WORK
+            + RELATION_CONSTRAINT_WORK;
+        const LOCAL_CONSTRAINT_WORK: usize = RELATION_VECTOR_WORK
+            + LOCAL_RESOLVED_CHECKED_MIRROR_WORK
+            + AUTHENTICATION_WORK
+            + LOCAL_CARRIER_WORK
+            + RELATION_CONSTRAINT_WORK;
+        const RETAINED_TYPE_WORK: usize = 2 + RELATION_TYPE_CELLS;
         const LATE_TYPE_SHORT_WORK: usize = RETAINED_TYPE_WORK - 1;
 
         let source = SourceFile::new("higher-kinded-ingress.ash", "implementation")
@@ -4639,13 +6771,11 @@ mod tests {
             ImportedImplementationFact {
                 fact: CheckedImplementationFact {
                     id: implementation,
-                    interface,
+                    application: unary_application(interface, application(function, Type::Int)),
                     head_parameters: parameters.into_boxed_slice(),
-                    argument: application(function, Type::Int),
                     prerequisites: vec![CheckedRequirement {
                         id: prerequisite,
-                        interface,
-                        argument: prerequisite_argument,
+                        application: unary_application(interface, prerequisite_argument),
                         origin: Origin::Source(span),
                         span,
                     }]
@@ -4681,23 +6811,29 @@ mod tests {
             |parameters: Vec<ResolvedTypeVariable>, prerequisite_argument| ResolvedImplementation {
                 id: implementation,
                 public: false,
-                interface: ResolvedInterfaceOccurrence {
-                    id: interface,
-                    spelling: "Construct".into(),
-                    origin: Origin::Source(span),
-                },
-                argument: resolved_type(application(function, Type::Int)),
-                head_parameters: parameters.into_boxed_slice(),
-                prerequisite_only_parameters: Box::new([]),
-                prerequisites: vec![ResolvedRequirement {
-                    id: prerequisite,
+                head: ResolvedInterfaceApplication {
                     interface: ResolvedInterfaceOccurrence {
                         id: interface,
                         spelling: "Construct".into(),
                         origin: Origin::Source(span),
                     },
-                    argument: resolved_type(prerequisite_argument),
+                    arguments: vec![resolved_type(application(function, Type::Int))]
+                        .into_boxed_slice(),
                     span,
+                },
+                head_parameters: parameters.into_boxed_slice(),
+                prerequisite_only_parameters: Box::new([]),
+                prerequisites: vec![ResolvedRequirement {
+                    id: prerequisite,
+                    application: ResolvedInterfaceApplication {
+                        interface: ResolvedInterfaceOccurrence {
+                            id: interface,
+                            spelling: "Construct".into(),
+                            origin: Origin::Source(span),
+                        },
+                        arguments: vec![resolved_type(prerequisite_argument)].into_boxed_slice(),
+                        span,
+                    },
                 }]
                 .into_boxed_slice(),
                 method_groups: vec![ResolvedImplementationMethodGroup {
@@ -4714,18 +6850,18 @@ mod tests {
                 .into_boxed_slice(),
                 span,
             };
-        let checked = CheckedImplementation {
-            source_index: 0,
-            id: implementation,
-            interface,
-            methods: vec![CheckedImplMethod {
+        let checked = CheckedImplementation::new(
+            0,
+            implementation,
+            unary_application(interface, application(function, Type::Int)),
+            vec![CheckedImplMethod {
                 source_group: 0,
                 id: implementation_method,
                 method,
                 binder: method_binder,
             }]
             .into_boxed_slice(),
-        };
+        );
         let valid_imported =
             || imported(vec![parameter(function)], application(function, Type::Bool));
         let valid_resolved =
@@ -4955,15 +7091,14 @@ mod tests {
         let method_spans = vec![span; methods.len()];
         ImplementationEntry {
             id,
-            interface,
+            application: unary_application(interface, argument),
             parameters: parameters.into_boxed_slice(),
-            argument,
             prerequisites: prerequisites
                 .into_iter()
                 .map(|(id, interface, argument)| RequirementEntry {
                     id,
-                    interface,
-                    argument,
+                    application: unary_application(interface, argument),
+                    span,
                 })
                 .collect(),
             methods: methods.into_boxed_slice(),
@@ -5141,9 +7276,11 @@ mod tests {
         // and prerequisite scheduling, two Finish/result nodes, and checked
         // argument publication.
         const CLOSE_AND_INITIAL_TASK_WORK: usize = 2;
-        const GOAL_ENVIRONMENT_WORK: usize = 2 * 8;
-        const HEAD_MATCH_WORK: usize = 18 + 32 + 18;
-        const GOAL_CONTROL_AND_SCHEDULING_WORK: usize = 28 + 19;
+        const GOAL_ENVIRONMENT_WORK: usize = 2 * (1 + 8);
+        const HEAD_MATCH_WORK: usize = (18 + 2) + (32 + 2) + (18 + 2);
+        // Each goal key now carries one argument-position sentinel, observed
+        // by the two active-set charges and the Finish charge for both goals.
+        const GOAL_CONTROL_AND_SCHEDULING_WORK: usize = 28 + 19 + (2 * 3);
         const FINISH_AND_RESULT_WORK: usize = 7 + 9;
         const CHECKED_ARGUMENT_PUBLICATION_WORK: usize = 7;
         // Two retained pending-publication carrier records plus the six-cell
@@ -5161,18 +7298,22 @@ mod tests {
         // environments, the authenticated F -> Option substitution, its
         // replacement index/value, the instantiated prerequisite, and the
         // final selection argument.
-        const INITIAL_GOAL_CLONE_WORK: usize = 3;
+        const INITIAL_GOAL_CLONE_WORK: usize = 1 + 3;
         const GOAL_ENVIRONMENT_TYPE_WORK: usize = 2 * 4;
         const MATCHED_SUBSTITUTION_TYPE_WORK: usize = 1;
         const REPLACEMENT_INDEX_AND_VALUE_WORK: usize = 2;
-        const PREREQUISITE_SUBSTITUTION_WORK: usize = 3;
-        const SELECTION_ARGUMENT_WORK: usize = 3;
+        const PREREQUISITE_SUBSTITUTION_WORK: usize = 1 + 3;
+        const SELECTION_ARGUMENT_WORK: usize = 1 + 3;
+        // Closing and publication each move one complete application through
+        // an aligned zonk buffer before either result is visible.
+        const APPLICATION_ZONK_VECTOR_WORK: usize = 2;
         const EXACT_TYPE_WORK: usize = INITIAL_GOAL_CLONE_WORK
             + GOAL_ENVIRONMENT_TYPE_WORK
             + MATCHED_SUBSTITUTION_TYPE_WORK
             + REPLACEMENT_INDEX_AND_VALUE_WORK
             + PREREQUISITE_SUBSTITUTION_WORK
-            + SELECTION_ARGUMENT_WORK;
+            + SELECTION_ARGUMENT_WORK
+            + APPLICATION_ZONK_VECTOR_WORK;
 
         let source = SourceFile::new("higher-kinded-selection-budget.ash", "selection")
             .expect("the higher-kinded selection source should fit");
@@ -5337,7 +7478,7 @@ mod tests {
             type_short,
             Err(SelectionError {
                 failure: SelectionFailure::TypeResource,
-                span: Some(span),
+                span: None,
                 declaration_span: None,
                 import_span: None,
                 causes: Vec::new(),
@@ -5566,28 +7707,646 @@ mod tests {
     }
 
     #[test]
+    fn determination_snapshot_has_exact_independent_retryable_boundaries() {
+        // Snapshot/output storage (3), one key-position authentication and
+        // clone (2), inference-free key traversal (1), the concrete candidate
+        // route and first-order key match (8), dependent transaction output
+        // (2), and task publication (1) total 17 constraint units. The goal
+        // key traversal is owned once by its canonical environment rather than
+        // repeated for each candidate. Cloning
+        // the one key, source dependent, and goal dependent costs six type
+        // units including their precharged output slots.
+        const CONSTRAINT_WORK: usize = 17;
+        const TYPE_WORK: usize = 6;
+        let module = ModuleId::new(12_001);
+        let interface = InterfaceId::new(module, 0);
+        let method = MethodId::new(interface, 0);
+        let implementation = ImplId::new(module, 0);
+        let mut selector = EvidenceSelector::new();
+        selector.add_interface_parameters_with_determination_raw(
+            interface,
+            vec![
+                TypeVariableId::resolved(module, 0),
+                TypeVariableId::resolved(module, 1),
+            ],
+            Some(DeterminationKey::new(Box::new([0]))),
+            vec![(
+                method,
+                Type::Function(Box::new(Type::Int), Box::new(Type::Bool)),
+            )],
+        );
+        let span = selector
+            .interface_entry(interface)
+            .expect("the determined interface should remain indexed")
+            .span;
+        selector.add_implementation_raw(ImplementationEntry {
+            id: implementation,
+            application: InterfaceApplication::new(interface, Box::new([Type::Int, Type::Bool])),
+            parameters: Box::new([]),
+            prerequisites: Box::new([]),
+            methods: Box::new([ImplMethodId::new(implementation, method)]),
+            span,
+            method_spans: vec![span],
+            import_spans: Box::new([]),
+        });
+        let registry = selector.canonical_registry_for_test();
+        let slot = EvidenceSlot::empty();
+        selector
+            .push_owned_obligation(
+                InterfaceApplication::new(
+                    interface,
+                    Box::new([
+                        Type::Int,
+                        Type::Inference(crate::types::InferenceVariableId::new(0)),
+                    ]),
+                ),
+                SelectionSite::plain(slot.handle(), span),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the determined obligation should stage");
+
+        let prepare = |constraint_work: &mut InterfaceConstraintBudget,
+                       type_work: &mut TypeWorkBudget| {
+            selector.prepare_determination_snapshot(
+                &registry,
+                PendingObligationMarker::for_test(0, 0),
+                |ty, _| Ok(ty),
+                constraint_work,
+                type_work,
+            )
+        };
+        let mut measured_constraint = InterfaceConstraintBudget::default();
+        let mut measured_type = TypeWorkBudget::default();
+        let measured = prepare(&mut measured_constraint, &mut measured_type)
+            .expect("the measured snapshot should fit");
+        assert_eq!(measured.eligible.as_ref(), [true]);
+        assert_eq!(measured.tasks.len(), 1);
+        let constraint_limit = measured_constraint.used();
+        let type_limit = measured_type.used();
+        assert_eq!(constraint_limit, CONSTRAINT_WORK);
+        assert_eq!(type_limit, TYPE_WORK);
+
+        let mut constraint_short = InterfaceConstraintBudget::with_limit(constraint_limit - 1);
+        assert!(matches!(
+            prepare(
+                &mut constraint_short,
+                &mut TypeWorkBudget::with_limit(type_limit)
+            ),
+            Err(SelectionFailure::ConstraintResource),
+        ));
+        assert_eq!(constraint_short.used(), constraint_limit - 1);
+        let mut type_short = TypeWorkBudget::with_limit(type_limit - 1);
+        assert!(matches!(
+            prepare(
+                &mut InterfaceConstraintBudget::with_limit(constraint_limit),
+                &mut type_short,
+            ),
+            Err(SelectionFailure::TypeResource),
+        ));
+        assert_eq!(type_short.used(), type_limit - 1);
+        for _ in 0..2 {
+            let mut exact_constraint = InterfaceConstraintBudget::with_limit(constraint_limit);
+            let mut exact_type = TypeWorkBudget::with_limit(type_limit);
+            let snapshot = prepare(&mut exact_constraint, &mut exact_type)
+                .expect("the exact snapshot boundary should be reusable");
+            assert_eq!(snapshot.eligible.as_ref(), [true]);
+            assert_eq!(snapshot.tasks.len(), 1);
+            assert_eq!(exact_constraint.used(), constraint_limit);
+            assert_eq!(exact_type.used(), type_limit);
+        }
+    }
+
+    #[test]
+    fn wide_no_edge_snapshot_keeps_the_predecessor_zero_work_fast_path() {
+        const WIDTH: usize = 8_192;
+        let module = ModuleId::new(12_004);
+        let interface = InterfaceId::new(module, 0);
+        let method = MethodId::new(interface, 0);
+        let mut selector = EvidenceSelector::new();
+        selector.add_interface_raw(
+            interface,
+            TypeVariableId::resolved(module, 0),
+            vec![(method, Type::Unit)],
+        );
+        let registry = selector.canonical_registry_for_test();
+        let span = selector
+            .interface_entry(interface)
+            .expect("the ordinary interface should remain indexed")
+            .span;
+        let marker = selector.pending_marker();
+        for _ in 0..WIDTH {
+            selector
+                .push_owned_obligation(
+                    unary_application(interface, Type::Int),
+                    SelectionSite::plain(EvidenceSlot::empty().handle(), span),
+                    &mut InterfaceConstraintBudget::default(),
+                )
+                .expect("the ordinary obligation suffix should stage");
+        }
+
+        let mut constraints = InterfaceConstraintBudget::with_limit(0);
+        let mut types = TypeWorkBudget::with_limit(0);
+        let snapshot = selector
+            .prepare_determination_snapshot(
+                &registry,
+                marker,
+                |ty, _| Ok(ty),
+                &mut constraints,
+                &mut types,
+            )
+            .expect("an all-no-edge suffix should retain the predecessor fast path");
+        assert!(snapshot.eligible.is_empty());
+        assert!(snapshot.tasks.is_empty());
+        assert_eq!(constraints.used(), 0);
+        assert_eq!(types.used(), 0);
+    }
+
+    #[test]
+    fn late_determined_obligation_snapshot_has_exact_linear_retry_boundaries() {
+        const WIDTH: usize = 1_024;
+        // The fixed suffix is the same 17-unit determined row above, minus the
+        // one snapshot header already accounted for by the width term.
+        const CONSTRAINT_WORK: usize = 3 * WIDTH + 14;
+        const TYPE_WORK: usize = 6;
+        let module = ModuleId::new(12_005);
+        let ordinary = InterfaceId::new(module, 0);
+        let ordinary_method = MethodId::new(ordinary, 0);
+        let determined = InterfaceId::new(module, 1);
+        let determined_method = MethodId::new(determined, 0);
+        let implementation = ImplId::new(module, 0);
+        let mut selector = EvidenceSelector::new();
+        selector.add_interface_raw(
+            ordinary,
+            TypeVariableId::resolved(module, 0),
+            vec![(ordinary_method, Type::Unit)],
+        );
+        selector.add_interface_parameters_with_determination_raw(
+            determined,
+            vec![
+                TypeVariableId::resolved(module, 1),
+                TypeVariableId::resolved(module, 2),
+            ],
+            Some(DeterminationKey::new(Box::new([0]))),
+            vec![(determined_method, Type::Unit)],
+        );
+        let span = selector
+            .interface_entry(determined)
+            .expect("the determined interface should remain indexed")
+            .span;
+        selector.add_implementation_raw(ImplementationEntry {
+            id: implementation,
+            application: InterfaceApplication::new(determined, Box::new([Type::Int, Type::Bool])),
+            parameters: Box::new([]),
+            prerequisites: Box::new([]),
+            methods: Box::new([ImplMethodId::new(implementation, determined_method)]),
+            span,
+            method_spans: vec![span],
+            import_spans: Box::new([]),
+        });
+        let registry = selector.canonical_registry_for_test();
+        let marker = selector.pending_marker();
+        for _ in 1..WIDTH {
+            selector
+                .push_owned_obligation(
+                    unary_application(ordinary, Type::Int),
+                    SelectionSite::plain(EvidenceSlot::empty().handle(), span),
+                    &mut InterfaceConstraintBudget::default(),
+                )
+                .expect("the no-edge prefix should stage");
+        }
+        selector
+            .push_owned_obligation(
+                InterfaceApplication::new(
+                    determined,
+                    Box::new([
+                        Type::Int,
+                        Type::Inference(crate::types::InferenceVariableId::new(0)),
+                    ]),
+                ),
+                SelectionSite::plain(EvidenceSlot::empty().handle(), span),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the late determined obligation should stage");
+        let prepare = |constraint_work: &mut InterfaceConstraintBudget,
+                       type_work: &mut TypeWorkBudget| {
+            selector.prepare_determination_snapshot(
+                &registry,
+                marker,
+                |ty, _| Ok(ty),
+                constraint_work,
+                type_work,
+            )
+        };
+
+        let mut one_short = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK - 1);
+        assert!(matches!(
+            prepare(&mut one_short, &mut TypeWorkBudget::with_limit(TYPE_WORK)),
+            Err(SelectionFailure::ConstraintResource),
+        ));
+        assert_eq!(one_short.used(), CONSTRAINT_WORK - 1);
+        for _ in 0..2 {
+            let mut exact_constraints = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
+            let mut exact_types = TypeWorkBudget::with_limit(TYPE_WORK);
+            let snapshot = prepare(&mut exact_constraints, &mut exact_types)
+                .expect("the exact late-determined snapshot should remain retryable");
+            assert_eq!(snapshot.eligible.len(), WIDTH);
+            assert!(snapshot.eligible.iter().all(|eligible| *eligible));
+            assert_eq!(snapshot.tasks.len(), 1);
+            assert_eq!(exact_constraints.used(), CONSTRAINT_WORK);
+            assert_eq!(exact_types.used(), TYPE_WORK);
+        }
+    }
+
+    #[test]
+    fn determined_pending_counter_is_atomic_across_push_failures() {
+        let module = ModuleId::new(12_006);
+        let interface = InterfaceId::new(module, 0);
+        let method = MethodId::new(interface, 0);
+        let mut selector = EvidenceSelector::new();
+        selector.add_interface_parameters_with_determination_raw(
+            interface,
+            vec![
+                TypeVariableId::resolved(module, 0),
+                TypeVariableId::resolved(module, 1),
+            ],
+            Some(DeterminationKey::new(Box::new([0]))),
+            vec![(method, Type::Unit)],
+        );
+        let span = selector
+            .interface_entry(interface)
+            .expect("the determined interface should remain indexed")
+            .span;
+        let marker = selector.pending_marker();
+
+        assert_eq!(
+            selector.push_owned_obligation(
+                InterfaceApplication::new(interface, Box::new([Type::Int, Type::Bool])),
+                SelectionSite::plain(EvidenceSlot::empty().handle(), span),
+                &mut InterfaceConstraintBudget::with_limit(0),
+            ),
+            Err(SelectionFailure::ConstraintResource),
+        );
+        assert!(selector.pending.is_empty());
+        assert_eq!(selector.pending_determined_count, marker.determined_count);
+
+        assert_eq!(
+            selector.push_cloned_obligation(
+                &InterfaceApplication::new(interface, Box::new([Type::Int, Type::Bool])),
+                MethodObligationMetadata::new(method, Box::new([]), None),
+                SelectionSite::plain(EvidenceSlot::empty().handle(), span),
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::with_limit(0),
+            ),
+            Err(SelectionFailure::TypeResource),
+        );
+        assert!(selector.pending.is_empty());
+        assert_eq!(selector.pending_determined_count, marker.determined_count);
+
+        selector
+            .push_owned_obligation(
+                InterfaceApplication::new(interface, Box::new([Type::Int, Type::Bool])),
+                SelectionSite::plain(EvidenceSlot::empty().handle(), span),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("a successful determined push should publish one counted record");
+        assert_eq!(selector.pending.len(), marker.pending_len + 1);
+        assert_eq!(
+            selector.pending_determined_count,
+            marker.determined_count + 1
+        );
+    }
+
+    #[test]
+    fn successful_normal_close_restores_the_captured_determined_count() {
+        let module = ModuleId::new(12_007);
+        let interface = InterfaceId::new(module, 0);
+        let method = MethodId::new(interface, 0);
+        let implementation = ImplId::new(module, 0);
+        let mut selector = EvidenceSelector::new();
+        selector.add_interface_parameters_with_determination_raw(
+            interface,
+            vec![
+                TypeVariableId::resolved(module, 0),
+                TypeVariableId::resolved(module, 1),
+            ],
+            Some(DeterminationKey::new(Box::new([0]))),
+            vec![(method, Type::Unit)],
+        );
+        let span = selector
+            .interface_entry(interface)
+            .expect("the determined interface should remain indexed")
+            .span;
+        selector.add_implementation_raw(ImplementationEntry {
+            id: implementation,
+            application: InterfaceApplication::new(interface, Box::new([Type::Int, Type::Bool])),
+            parameters: Box::new([]),
+            prerequisites: Box::new([]),
+            methods: Box::new([ImplMethodId::new(implementation, method)]),
+            span,
+            method_spans: vec![span],
+            import_spans: Box::new([]),
+        });
+        let marker = selector.pending_marker();
+        let slot = EvidenceSlot::empty();
+        selector
+            .push_owned_obligation(
+                InterfaceApplication::new(interface, Box::new([Type::Int, Type::Bool])),
+                SelectionSite::plain(slot.handle(), span),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the determined close fixture should stage");
+        assert_eq!(
+            selector.pending_determined_count,
+            marker.determined_count + 1
+        );
+
+        selector
+            .close(
+                marker,
+                |ty, _| Ok(ty),
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the determined obligation should select and publish");
+        assert_eq!(selector.pending.len(), marker.pending_len);
+        assert_eq!(selector.pending_determined_count, marker.determined_count);
+        assert!(slot.selection().is_some());
+    }
+
+    #[test]
+    fn partial_normal_close_keeps_the_remaining_determined_count_exact() {
+        let module = ModuleId::new(12_008);
+        let determined = InterfaceId::new(module, 0);
+        let determined_method = MethodId::new(determined, 0);
+        let ordinary = InterfaceId::new(module, 1);
+        let ordinary_method = MethodId::new(ordinary, 0);
+        let mut selector = EvidenceSelector::new();
+        selector.add_interface_parameters_with_determination_raw(
+            determined,
+            vec![
+                TypeVariableId::resolved(module, 0),
+                TypeVariableId::resolved(module, 1),
+            ],
+            Some(DeterminationKey::new(Box::new([0]))),
+            vec![(determined_method, Type::Unit)],
+        );
+        selector.add_interface_raw(
+            ordinary,
+            TypeVariableId::resolved(module, 2),
+            vec![(ordinary_method, Type::Unit)],
+        );
+        let registry = selector.canonical_registry_for_test();
+        let span = selector
+            .interface_entry(determined)
+            .expect("the determined interface should remain indexed")
+            .span;
+        let marker = selector.pending_marker();
+        selector
+            .push_owned_obligation(
+                InterfaceApplication::new(determined, Box::new([Type::Int, Type::Bool])),
+                SelectionSite::plain(EvidenceSlot::empty().handle(), span),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the determined obligation should stage first");
+        selector
+            .push_owned_obligation(
+                unary_application(ordinary, Type::Int),
+                SelectionSite::plain(EvidenceSlot::empty().handle(), span),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the ordinary obligation should remain after the first failure");
+
+        let failure = selector
+            .close_with_registry(
+                &registry,
+                marker,
+                |ty, _| Ok(ty),
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect_err("the first source-order obligation has no selection source");
+        assert_eq!(
+            failure.failure(),
+            SelectionFailure::Reason(InterfaceReason::Unsatisfied)
+        );
+        assert_eq!(selector.pending.len(), marker.pending_len + 1);
+        assert_eq!(selector.pending_determined_count, marker.determined_count);
+        assert_eq!(
+            selector.pending[marker.pending_len].application.interface(),
+            ordinary
+        );
+    }
+
+    #[test]
+    fn determined_failed_body_removal_preserves_failure_and_retry_counts() {
+        let module = ModuleId::new(12_009);
+        let interface = InterfaceId::new(module, 0);
+        let method = MethodId::new(interface, 0);
+        let current = ImplId::new(module, 0);
+        let mut selector = EvidenceSelector::new();
+        selector.add_interface_parameters_with_determination_raw(
+            interface,
+            vec![
+                TypeVariableId::resolved(module, 0),
+                TypeVariableId::resolved(module, 1),
+            ],
+            Some(DeterminationKey::new(Box::new([0]))),
+            vec![(method, Type::Unit)],
+        );
+        let span = selector
+            .interface_entry(interface)
+            .expect("the determined interface should remain indexed")
+            .span;
+        selector.add_implementation_raw(ImplementationEntry {
+            id: current,
+            application: InterfaceApplication::new(interface, Box::new([Type::Int, Type::Bool])),
+            parameters: Box::new([]),
+            prerequisites: Box::new([]),
+            methods: Box::new([ImplMethodId::new(current, method)]),
+            span,
+            method_spans: vec![span],
+            import_spans: Box::new([]),
+        });
+        let registry = selector.canonical_registry_for_test();
+        selector
+            .enter_implementation_scope(
+                current,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the exact-current scope should fit");
+        let marker = selector.pending_marker();
+        selector
+            .push_cloned_obligation(
+                &InterfaceApplication::new(interface, Box::new([Type::Int, Type::Bool])),
+                MethodObligationMetadata::new(
+                    method,
+                    Box::new([Type::Bool]),
+                    Some(MethodRigidityCondition::new(
+                        Box::new([Type::Int]),
+                        MethodRigiditySite::application(span, span, span),
+                    )),
+                ),
+                SelectionSite::plain(EvidenceSlot::empty().handle(), span),
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the determined failed-body obligation should stage");
+        let target = MethodRigidityTarget::new(marker, span);
+        let mut snapshot = selector
+            .prepare_method_rigidity_determination(
+                &registry,
+                target,
+                |ty, _| Ok(ty),
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the matching failed-body snapshot should prepare");
+        assert!(snapshot.take_task().is_some());
+
+        let failure = selector
+            .close_method_rigidity_with_snapshot_and_registry(
+                &registry,
+                target,
+                &snapshot,
+                |ty, _| Ok(ty),
+                &mut InterfaceConstraintBudget::with_limit(0),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect_err("one missing close unit should preserve the pending obligation");
+        assert_eq!(failure.failure(), SelectionFailure::ConstraintResource);
+        assert_eq!(selector.pending.len(), marker.pending_len + 1);
+        assert_eq!(
+            selector.pending_determined_count,
+            marker.determined_count + 1
+        );
+        assert_eq!(selector.pending_method_rigidity_count, 1);
+
+        assert!(
+            selector
+                .close_method_rigidity_with_snapshot_and_registry(
+                    &registry,
+                    target,
+                    &snapshot,
+                    |ty, _| Ok(ty),
+                    &mut InterfaceConstraintBudget::default(),
+                    &mut TypeWorkBudget::default(),
+                )
+                .expect("the fresh retry should remove only the matching obligation")
+        );
+        assert_eq!(selector.pending.len(), marker.pending_len);
+        assert_eq!(selector.pending_determined_count, marker.determined_count);
+        assert_eq!(selector.pending_method_rigidity_count, 0);
+        assert_eq!(selector.method_rigidity_count(), 1);
+    }
+
+    #[test]
     fn goal_key_and_exact_type_matching_have_exact_deep_constraint_boundaries() {
         let interface = InterfaceId::new(ModuleId::new(10), 0);
+        let ordered_application =
+            InterfaceApplication::new(interface, Box::new([Type::Int, Type::Bool]));
+        let reordered_application =
+            InterfaceApplication::new(interface, Box::new([Type::Bool, Type::Int]));
+        let ordered_key = goal_key(
+            &ordered_application,
+            &mut InterfaceConstraintBudget::default(),
+        )
+        .expect("ordered relational goal key");
+        let reordered_key = goal_key(
+            &reordered_application,
+            &mut InterfaceConstraintBudget::default(),
+        )
+        .expect("reordered relational goal key");
+        assert_eq!(
+            ordered_key.cells.as_ref(),
+            [
+                GoalCell::Argument(0),
+                GoalCell::Int,
+                GoalCell::Argument(1),
+                GoalCell::Bool,
+            ]
+        );
+        assert_ne!(ordered_key, reordered_key);
+
+        let left_associated = InterfaceApplication::new(
+            interface,
+            Box::new([
+                Type::Function(
+                    Box::new(Type::Function(Box::new(Type::Int), Box::new(Type::Bool))),
+                    Box::new(Type::Unit),
+                ),
+                Type::Bool,
+            ]),
+        );
+        let right_associated = InterfaceApplication::new(
+            interface,
+            Box::new([
+                Type::Function(
+                    Box::new(Type::Int),
+                    Box::new(Type::Function(Box::new(Type::Bool), Box::new(Type::Unit))),
+                ),
+                Type::Bool,
+            ]),
+        );
+        assert_ne!(
+            goal_key(&left_associated, &mut InterfaceConstraintBudget::default(),)
+                .expect("left-associated deep goal key"),
+            goal_key(&right_associated, &mut InterfaceConstraintBudget::default(),)
+                .expect("right-associated deep goal key"),
+        );
+
+        let cross_argument_boundary_left = InterfaceApplication::new(
+            interface,
+            Box::new([
+                Type::Function(
+                    Box::new(Type::Tuple(vec![Type::Int, Type::Bool].into_boxed_slice())),
+                    Box::new(Type::Unit),
+                ),
+                Type::Bool,
+            ]),
+        );
+        let cross_argument_boundary_right = InterfaceApplication::new(
+            interface,
+            Box::new([
+                Type::Function(
+                    Box::new(Type::Tuple(vec![Type::Int, Type::Bool].into_boxed_slice())),
+                    Box::new(Type::Bool),
+                ),
+                Type::Unit,
+            ]),
+        );
+        assert_ne!(
+            goal_key(
+                &cross_argument_boundary_left,
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("left cross-argument-boundary goal key"),
+            goal_key(
+                &cross_argument_boundary_right,
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("right cross-argument-boundary goal key"),
+        );
+
         let argument = Type::Function(
             Box::new(Type::Tuple(vec![Type::Int, Type::Bool].into_boxed_slice())),
             Box::new(Type::Unit),
         );
+        let application = unary_application(interface, argument.clone());
 
         let mut key_budget = InterfaceConstraintBudget::default();
-        let key = goal_key(interface, &argument, &mut key_budget).expect("measured goal key");
+        let key = goal_key(&application, &mut key_budget).expect("measured goal key");
         let key_limit = key_budget.used();
-        assert_eq!(key.cells.len(), 5);
+        assert_eq!(key.cells.len(), 6);
         assert_eq!(
             goal_key(
-                interface,
-                &argument,
+                &application,
                 &mut InterfaceConstraintBudget::with_limit(key_limit - 1),
             ),
             Err(SelectionFailure::ConstraintResource)
         );
         goal_key(
-            interface,
-            &argument,
+            &application,
             &mut InterfaceConstraintBudget::with_limit(key_limit),
         )
         .expect("exact goal-key budget");
@@ -5632,12 +8391,18 @@ mod tests {
         charge_candidate_inspection(&mut InterfaceConstraintBudget::with_limit(1))
             .expect("one candidate-inspection unit");
         assert_eq!(
-            charge_prerequisite_goal(&Type::Int, &mut InterfaceConstraintBudget::with_limit(2),),
+            charge_prerequisite_goal(
+                &unary_application(interface, Type::Int),
+                &mut InterfaceConstraintBudget::with_limit(2),
+            ),
             Err(SelectionFailure::ConstraintResource)
         );
         let mut exact_prerequisite = InterfaceConstraintBudget::with_limit(3);
-        charge_prerequisite_goal(&Type::Int, &mut exact_prerequisite)
-            .expect("one edge plus the retained prerequisite argument");
+        charge_prerequisite_goal(
+            &unary_application(interface, Type::Int),
+            &mut exact_prerequisite,
+        )
+        .expect("one edge plus the retained prerequisite argument");
         assert_eq!(exact_prerequisite.used(), 3);
     }
 
@@ -5684,9 +8449,10 @@ mod tests {
     fn every_same_interface_candidate_inspection_is_constraint_bounded() {
         const REJECTED: u32 = 128;
         // The rigid goal environment is discovered once per selection task.
-        // Each rejected ground candidate owns one ordered inspection and six
-        // first-order structural preflight/mismatch cells.
-        const REJECTED_CANDIDATE_WORK: usize = 1 + 6;
+        // Each rejected ground candidate owns one ordered inspection, two
+        // aligned application-root cells, and six first-order structural
+        // preflight/mismatch cells.
+        const REJECTED_CANDIDATE_WORK: usize = 1 + 2 + 6;
         let (interface, method, _) = ids();
         let matching = ImplId::new(ModuleId::new(1), 1);
         let mut baseline = EvidenceSelector::new();
@@ -5968,9 +8734,8 @@ mod tests {
         let imported = |hops| ImportedImplementationFact {
             fact: CheckedImplementationFact {
                 id: implementation_id,
-                interface,
+                application: unary_application(interface, Type::Int),
                 head_parameters: Box::new([]),
-                argument: Type::Int,
                 prerequisites: Box::new([]),
                 methods: Box::new([]),
                 origin: Origin::Source(definition),
@@ -6155,7 +8920,7 @@ mod tests {
 
         let short = selector
             .close(
-                0,
+                PendingObligationMarker::for_test(0, 0),
                 |argument, _| Ok(argument),
                 &mut InterfaceConstraintBudget::with_limit(WIDTH - 1),
                 &mut TypeWorkBudget::default(),
@@ -6168,7 +8933,7 @@ mod tests {
 
         let task_short = selector
             .close(
-                0,
+                PendingObligationMarker::for_test(0, 0),
                 |argument, _| Ok(argument),
                 &mut InterfaceConstraintBudget::with_limit(WIDTH),
                 &mut TypeWorkBudget::default(),
@@ -6181,7 +8946,7 @@ mod tests {
 
         let reached_first = selector
             .close(
-                0,
+                PendingObligationMarker::for_test(0, 0),
                 |argument, _| Ok(argument),
                 &mut InterfaceConstraintBudget::with_limit(WIDTH),
                 &mut TypeWorkBudget::default(),
@@ -6216,7 +8981,7 @@ mod tests {
         let error = failing
             .close_with_registry(
                 &ResolvedRegistry::new(Vec::new(), Vec::new()),
-                0,
+                PendingObligationMarker::for_test(0, 0),
                 |argument, _| Ok(argument),
                 &mut InterfaceConstraintBudget::default(),
                 &mut TypeWorkBudget::default(),
@@ -6259,8 +9024,7 @@ mod tests {
             if conditional {
                 ordered
                     .push_cloned_obligation(
-                        interface,
-                        &Type::Int,
+                        &unary_application(interface, Type::Int),
                         MethodObligationMetadata::new(
                             MethodId::new(interface, 0),
                             Box::new([Type::Bool]),
@@ -6277,8 +9041,7 @@ mod tests {
             } else {
                 ordered
                     .push_owned_obligation(
-                        interface,
-                        Type::Int,
+                        unary_application(interface, Type::Int),
                         SelectionSite::plain(slot.handle(), span),
                         &mut InterfaceConstraintBudget::default(),
                     )
@@ -6342,7 +9105,7 @@ mod tests {
         let close_constraint_start = constraints.used();
         selector
             .close(
-                0,
+                PendingObligationMarker::for_test(0, 0),
                 |argument, _type_work| {
                     discard_type_iteratively(argument);
                     Ok(Type::Int)
@@ -6354,9 +9117,9 @@ mod tests {
         let exact_constraint_work = constraints.used() - close_constraint_start;
         let exact_type_work = type_work.used();
 
-        let (checked_argument, selection) = slot.filled().expect("filled exact slot");
-        assert_eq!(checked_argument, &Type::Int);
-        assert_eq!(selection.argument(), &Type::Int);
+        let (checked_application, selection) = slot.filled().expect("filled exact slot");
+        assert_eq!(unary_argument(checked_application), &Type::Int);
+        assert_eq!(selection.arguments(), &[Type::Int]);
         assert!(matches!(
             selection.node(selection.root()),
             Some(EvidenceNode::Implementation { implementation, .. })
@@ -6376,7 +9139,7 @@ mod tests {
         assert_eq!(
             selector
                 .close(
-                    0,
+                    PendingObligationMarker::for_test(0, 0),
                     |argument, _type_work| {
                         discard_type_iteratively(argument);
                         Ok(Type::Int)
@@ -6403,7 +9166,7 @@ mod tests {
         assert_eq!(
             selector
                 .close(
-                    0,
+                    PendingObligationMarker::for_test(0, 0),
                     |argument, _type_work| {
                         discard_type_iteratively(argument);
                         Ok(Type::Int)
@@ -6431,7 +9194,7 @@ mod tests {
         let mut exact = TypeWorkBudget::with_limit(exact_type_work);
         selector
             .close(
-                0,
+                PendingObligationMarker::for_test(0, 0),
                 |argument, _type_work| {
                     discard_type_iteratively(argument);
                     Ok(Type::Int)
@@ -6444,7 +9207,9 @@ mod tests {
         assert_eq!(exact_constraints.used(), exact_constraint_work);
         assert!(matches!(
             exact_slot.filled(),
-            Some((Type::Int, selected)) if selected.argument() == &Type::Int
+            Some((application, selected))
+                if unary_argument(application) == &Type::Int
+                    && selected.arguments() == [Type::Int]
         ));
     }
 
@@ -6509,6 +9274,236 @@ mod tests {
     }
 
     #[test]
+    fn source_free_deep_improvement_key_is_disposed_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("deep-improvement-key-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let module = ModuleId::new(12_002);
+                let interface = InterfaceId::new(module, 0);
+                let method = MethodId::new(interface, 0);
+                let mut selector = EvidenceSelector::new();
+                selector.add_interface_parameters_with_determination_raw(
+                    interface,
+                    vec![
+                        TypeVariableId::resolved(module, 0),
+                        TypeVariableId::resolved(module, 1),
+                    ],
+                    Some(DeterminationKey::new(Box::new([0]))),
+                    vec![(method, Type::Unit)],
+                );
+                let span = selector
+                    .interface_entry(interface)
+                    .expect("the determined interface should remain indexed")
+                    .span;
+                let registry = selector.canonical_registry_for_test();
+                let slot = EvidenceSlot::empty();
+                selector
+                    .push_owned_obligation(
+                        InterfaceApplication::new(
+                            interface,
+                            Box::new([
+                                deep_value_type(DEPTH),
+                                Type::Inference(crate::types::InferenceVariableId::new(0)),
+                            ]),
+                        ),
+                        SelectionSite::plain(slot.handle(), span),
+                        &mut InterfaceConstraintBudget::default(),
+                    )
+                    .expect("the deep determined obligation should stage");
+
+                let snapshot = selector
+                    .prepare_determination_snapshot(
+                        &registry,
+                        PendingObligationMarker::for_test(0, 0),
+                        |ty, _| Ok(ty),
+                        &mut InterfaceConstraintBudget::default(),
+                        &mut TypeWorkBudget::default(),
+                    )
+                    .expect("the complete deep key should remain source-free");
+                assert_eq!(snapshot.eligible.as_ref(), [true]);
+                assert!(snapshot.tasks.is_empty());
+            })
+            .expect("the deep improvement worker should start")
+            .join()
+            .expect("source-free deep keys must be dismantled iteratively");
+    }
+
+    #[test]
+    fn late_improvement_output_failure_disposes_the_deep_source_tuple_iteratively() {
+        const DEPTH: usize = 32_768;
+        const DEEP_CELLS: usize = 2 * DEPTH + 1;
+        // Key output and clone (2), then dependent output and clone
+        // (`1 + DEEP_CELLS`). The next actual-output slot is one short.
+        const ONE_SHORT_TYPE_WORK: usize = 2 + 1 + DEEP_CELLS;
+
+        std::thread::Builder::new()
+            .name("deep-improvement-output-failure".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let module = ModuleId::new(12_003);
+                let interface = InterfaceId::new(module, 0);
+                let method = MethodId::new(interface, 0);
+                let implementation = ImplId::new(module, 0);
+                let mut selector = EvidenceSelector::new();
+                selector.add_interface_parameters_with_determination_raw(
+                    interface,
+                    vec![
+                        TypeVariableId::resolved(module, 0),
+                        TypeVariableId::resolved(module, 1),
+                    ],
+                    Some(DeterminationKey::new(Box::new([0]))),
+                    vec![(method, Type::Unit)],
+                );
+                let span = selector
+                    .interface_entry(interface)
+                    .expect("the determined interface should remain indexed")
+                    .span;
+                selector.abstracts.push(RequirementEntry {
+                    id: RequirementId::new(RequirementOwner::Impl(implementation), 0),
+                    application: InterfaceApplication::new(
+                        interface,
+                        Box::new([Type::Int, deep_value_type(DEPTH)]),
+                    ),
+                    span,
+                });
+                let registry = selector.canonical_registry_for_test();
+                let slot = EvidenceSlot::empty();
+                selector
+                    .push_owned_obligation(
+                        InterfaceApplication::new(interface, Box::new([Type::Int, Type::Bool])),
+                        SelectionSite::plain(slot.handle(), span),
+                        &mut InterfaceConstraintBudget::default(),
+                    )
+                    .expect("the determined obligation should stage");
+
+                assert!(matches!(
+                    selector.prepare_determination_snapshot(
+                        &registry,
+                        PendingObligationMarker::for_test(0, 0),
+                        |ty, _| Ok(ty),
+                        &mut InterfaceConstraintBudget::default(),
+                        &mut TypeWorkBudget::with_limit(ONE_SHORT_TYPE_WORK),
+                    ),
+                    Err(SelectionFailure::TypeResource),
+                ));
+            })
+            .expect("the late improvement failure worker should start")
+            .join()
+            .expect("late improvement output failure must dispose the source tuple iteratively");
+    }
+
+    #[test]
+    fn wide_improvement_candidate_scan_has_an_exact_retryable_boundary() {
+        const WIDTH: usize = 32_768;
+        const EXACT_CONSTRAINT_WORK: usize = 6 * WIDTH + 11;
+        const EXACT_TYPE_WORK: usize = 6;
+
+        let source = SourceFile::new("wide-improvement-candidates.ash", "improvement")
+            .expect("the wide improvement source should fit");
+        let span = source
+            .span(ByteRange::new(0, 11).expect("the improvement range should be ordered"))
+            .expect("the improvement span should fit");
+        let module = ModuleId::from(source.id());
+        let interface = InterfaceId::new(module, 0);
+        let method = MethodId::new(interface, 0);
+        let key_parameter = TypeVariableId::resolved(module, 0);
+        let dependent_parameter = TypeVariableId::resolved(module, 1);
+        let nominals = (0..WIDTH - 1)
+            .map(|index| ResolvedNominalType {
+                id: NominalTypeId::new(
+                    module,
+                    u32::try_from(index).expect("the nominal index should fit"),
+                ),
+                spelling: format!("Key{index}"),
+                constructors: Box::new([]),
+                origin: Origin::Source(span),
+            })
+            .collect::<Vec<_>>();
+        let registry = ResolvedRegistry::new(nominals, Vec::new());
+        let mut selector = EvidenceSelector::new();
+        selector.add_interface_parameters_with_determination_raw(
+            interface,
+            vec![key_parameter, dependent_parameter],
+            Some(DeterminationKey::new(Box::new([0]))),
+            vec![(method, Type::Unit)],
+        );
+        for index in 0..WIDTH {
+            let index = u32::try_from(index).expect("the implementation index should fit");
+            let implementation = ImplId::new(module, index);
+            let key =
+                if usize::try_from(index).expect("the candidate index should fit") + 1 == WIDTH {
+                    Type::Int
+                } else {
+                    Type::Nominal(NominalTypeId::new(module, index))
+                };
+            selector.add_implementation_raw(ImplementationEntry {
+                id: implementation,
+                application: InterfaceApplication::new(interface, Box::new([key, Type::Bool])),
+                parameters: Box::new([]),
+                prerequisites: Box::new([]),
+                methods: Box::new([ImplMethodId::new(implementation, method)]),
+                span,
+                method_spans: vec![span],
+                import_spans: Box::new([]),
+            });
+        }
+        let slot = EvidenceSlot::empty();
+        selector
+            .push_owned_obligation(
+                InterfaceApplication::new(
+                    interface,
+                    Box::new([
+                        Type::Int,
+                        Type::Inference(crate::types::InferenceVariableId::new(0)),
+                    ]),
+                ),
+                SelectionSite::plain(slot.handle(), span),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the wide improvement obligation should stage");
+        let marker = PendingObligationMarker::for_test(0, 0);
+
+        assert!(matches!(
+            selector.prepare_determination_snapshot(
+                &registry,
+                marker,
+                |ty, _| Ok(ty),
+                &mut InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK - 1),
+                &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
+            ),
+            Err(SelectionFailure::ConstraintResource),
+        ));
+        assert_eq!(selector.pending.len(), 1);
+        assert!(selector.selected.is_empty());
+        assert!(slot.selection().is_none());
+
+        let mut exact_constraints = InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK);
+        let mut exact_types = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
+        let snapshot = selector
+            .prepare_determination_snapshot(
+                &registry,
+                marker,
+                |ty, _| Ok(ty),
+                &mut exact_constraints,
+                &mut exact_types,
+            )
+            .expect("a fresh exact budget should retry the unpublished improvement task");
+        assert_eq!(snapshot.eligible.as_ref(), [true]);
+        assert_eq!(snapshot.tasks.len(), 1);
+        assert_eq!(snapshot.tasks[0].key.as_ref(), [Type::Int]);
+        assert_eq!(snapshot.tasks[0].expected_dependents.as_ref(), [Type::Bool]);
+        assert!(matches!(
+            snapshot.tasks[0].actual_dependents.as_ref(),
+            [Type::Inference(_)]
+        ));
+        assert_eq!(exact_types.used(), EXACT_TYPE_WORK);
+        assert_eq!(exact_constraints.used(), EXACT_CONSTRAINT_WORK);
+    }
+
+    #[test]
     fn owned_evidence_inputs_fail_without_recursive_drop_on_a_small_stack() {
         const DEPTH: usize = 32_768;
 
@@ -6535,8 +9530,7 @@ mod tests {
                 let slot = EvidenceSlot::empty();
                 assert_eq!(
                     selector.push_owned_obligation(
-                        interface,
-                        deep_value_type(DEPTH),
+                        unary_application(interface, deep_value_type(DEPTH)),
                         SelectionSite::plain(slot.handle(), span),
                         &mut InterfaceConstraintBudget::with_limit(0),
                     ),

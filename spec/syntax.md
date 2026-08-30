@@ -50,11 +50,17 @@ constructor_declaration ::=
   upper_identifier [ "(" type { "," type } ")" ] ;
 
 interface_declaration ::=
-  [ "pub" ] "interface" upper_identifier interface_parameter
+  [ "pub" ] "interface" upper_identifier interface_parameters
+  [ interface_determination ]
   "{" line_end
   interface_method { line_end interface_method } [ line_end ]
   "}" ;
-interface_parameter ::= "<" type_parameter ">" ;
+interface_parameters ::= "<" type_parameter { "," type_parameter } ">" ;
+interface_determination ::=
+  "where" determination_side "->" determination_side ;
+determination_side ::=
+  upper_identifier
+  | "(" upper_identifier { "," upper_identifier } ")" ;
 interface_method ::= identifier [ type_parameters ] ":" type ;
 
 implementation_declaration ::=
@@ -78,7 +84,8 @@ inline_operational_global ::=
 
 where_clause ::= "where" constraint { "," constraint } ;
 constraint ::= interface_application ;
-interface_application ::= interface_reference "<" type ">" ;
+interface_application ::=
+  interface_reference "<" type { "," type } ">" ;
 interface_reference ::=
   upper_identifier | upper_identifier "." upper_identifier ;
 
@@ -202,15 +209,18 @@ without exporting its constructors. `opaque` is valid only between `pub` and
 writes `pub` once before its global signature, not on its equation heads. An
 inline operational global writes `pub` before `fn`.
 
-An interface declaration has exactly one parameter and a nonempty body of
-method signatures. A method may place one `type_parameters` list between its
-name and colon. It has no visibility modifier, requirement, or body. An
+An interface declaration has one or more ordered parameters, an optional
+determination edge, and a nonempty body of method signatures. Each side of an
+edge is nonempty. Parentheses are optional for a one-name side and required for
+a multiple-name side. A method may place one `type_parameters` list between
+its name and colon. It has no visibility modifier, requirement, or body. An
 implementation has no source name. Its body contains only equations; an
 equation has no separate visibility modifier, signature, type-parameter list,
 or requirement. Implementation equations use the same pattern and expression
 grammar as equational-global clauses, and the body may be empty. The grammar
-provides no associated declaration, default method, named implementation, or
-runtime dictionary form.
+provides no associated declaration, associated-output projection, default
+method, named implementation, general determination graph, or runtime
+dictionary form.
 
 A present method `type_parameters` list is nonempty by the existing production
 and uses the same optionally kinded `type_parameter` entries as other
@@ -232,19 +242,20 @@ main () = Type
 ```
 
 Nominal declarations always write a parameter list when they have parameters.
-An interface always writes its one parameter. Either global presentation may
+An interface always writes its nonempty parameter list. Either global presentation may
 place an optional parameter list after the global name, and an implementation
 may place one after `impl`. [Name
 resolution](name-resolution.md#type-binder-identity-and-scope) defines the
 explicit and omitted-list binder policies.
 
-A `where` clause contains one or more comma-separated interface applications
+A declaration `where` clause contains one or more comma-separated interface applications
 and has no trailing comma. It remains on its declaration header's logical line.
 It follows the complete value type in either global presentation and the
 complete interface application in an implementation head. A constraint is
-therefore not part of a global's result type. Each interface application has
-one type argument and may use an unqualified interface name or one qualified by
-a module alias.
+therefore not part of a global's result type. The `where` immediately after an
+interface parameter list instead introduces that interface's determination
+edge. Each interface application has a nonempty ordered type-argument list and
+may use an unqualified interface name or one qualified by a module alias.
 
 Braces delimit blocks, and parentheses group expressions and types. A block
 contains ordered local declarations and one result expression. An ordinary

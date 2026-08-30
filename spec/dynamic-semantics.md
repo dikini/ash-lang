@@ -64,6 +64,11 @@ Method-local type arguments erase through `E-Type-Application`.
 
 Linking preserves each checked interface selection. Linked interface-evidence
 validation authenticates it, and Core synthesis lowers it before evaluation.
+Determination metadata erases before Core synthesis. Complete interface
+applications may survive through transforms and independent validation only in
+inert static authentication relationships. Their ordered arguments have
+already been substituted into authenticated method types, and the evaluator
+does not inspect those relationships or make them control or state.
 An abstract evidence method becomes an ordinary function parameter. A
 polymorphic occurrence type-applies that parameter to its retained method-local
 arguments; entering the Core application uses `E-Type-Application`. A
@@ -105,6 +110,8 @@ reason, or runtime interface state. Evidence construction uses only type
 erasure, recursive binding, ordinary binder lookup and closure materialization,
 and the strict application transitions below. It adds no Core node and requires
 no new evaluation rule.
+Improvement is a static inference operation and does not become a lookup,
+transition, proof witness, effect handler, or existential package.
 
 The executable test
 `generic_prerequisite_evidence_has_a_bounded_unspecialized_evaluation_trace`

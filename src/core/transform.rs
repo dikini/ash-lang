@@ -267,13 +267,13 @@ fn rebuild_with_initial_type_work(
             }
             role => role,
         };
-        let interface_argument = builder.clone_type_for_rebuild(&anchor.interface_argument)?;
+        let application = builder.clone_interface_application_for_rebuild(&anchor.application)?;
         builder.authenticate_method_evidence(
             node,
             anchor.owner,
             anchor.requirement,
             anchor.method,
-            interface_argument,
+            application,
             role,
             anchor.occurrence,
         )?;
@@ -865,14 +865,23 @@ mod tests {
 
     #[test]
     fn linked_method_transforms_have_exact_anchor_remap_and_arc_lifecycle_boundaries() {
-        // This one-edge fixture consumes 673 fixed node-reconstruction,
-        // anchor Type-clone/Builder-replay, and finish units. Reading the
-        // immutable sidecar costs X=4, and remapping the exact prerequisite
-        // producer costs G=1 before the embedded NodeId lookup.
+        // This one-edge fixture consumes 673 predecessor node-reconstruction,
+        // anchor Type-clone/Builder-replay, and finish units. Its four complete
+        // applications add four vector-copy slots, four retained argument
+        // slots, three non-edge application envelopes, and five aligned edge
+        // authentication units. Admitting all methods adds eight catalog
+        // lookup cells across the four replays. Reading the immutable sidecar
+        // costs X=4, and remapping the exact prerequisite producer costs G=1
+        // before the embedded NodeId lookup.
         // The edge-local concrete-source catalog adds S=1 lookup cell to each
         // of the four method-filtered expectation matches replayed here.
         const CONCRETE_SOURCE_LOOKUP_WORK: usize = 4;
-        const CORE_WORK: usize = 673 + CONCRETE_SOURCE_LOOKUP_WORK;
+        const COMPLETE_APPLICATION_WORK: usize = 4 + 4 + 3 + 5;
+        const ALL_METHOD_CATALOG_LOOKUP_WORK: usize = 8;
+        const CORE_WORK: usize = 673
+            + COMPLETE_APPLICATION_WORK
+            + ALL_METHOD_CATALOG_LOOKUP_WORK
+            + CONCRETE_SOURCE_LOOKUP_WORK;
         const ANCHOR_REPLAY_WORK: usize = 4;
         const PRODUCER_REMAP_WORK: usize = 1;
         // Constructor admission reserves both the E=4 consumed bitmap and

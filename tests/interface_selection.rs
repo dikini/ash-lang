@@ -298,7 +298,7 @@ fn assert_abstract_selection(
 ) {
     let selection = selection_for_occurrence(occurrence);
     assert_eq!(selection.interface(), methods[0].interface());
-    assert_eq!(selection.argument(), argument);
+    assert_eq!(selection.arguments(), std::slice::from_ref(argument));
     assert_eq!(selection.node_count(), 1);
     assert_eq!(
         selection.node(selection.root()),
@@ -377,12 +377,10 @@ fn higher_kinded_abstract_requirement_wins_before_a_matching_concrete_candidate(
         !checked.available_implementations().is_empty(),
         "the concrete Construct<Option> candidate must be available"
     );
-    assert_abstract_selection(
-        occurrence,
-        requirement.id,
-        &[method],
-        requirement.argument(),
-    );
+    let [requirement_argument] = requirement.arguments() else {
+        panic!("the unary requirement should retain one argument");
+    };
+    assert_abstract_selection(occurrence, requirement.id, &[method], requirement_argument);
 }
 
 #[test]
@@ -612,9 +610,12 @@ fn higher_kinded_concrete_candidate_retains_ordered_substitution_and_evidence() 
         panic!("the generic implementation should retain F then A substitutions");
     };
     assert_eq!(function_substitution.parameter(), function_parameter.id);
+    let [implementation_argument] = checked.implementation_facts()[0].arguments() else {
+        panic!("the unary implementation should retain one head argument");
+    };
     assert_eq!(
         function_substitution.argument(),
-        checked.implementation_facts()[0].argument(),
+        implementation_argument,
         "F should match the bare Option constructor"
     );
     assert_eq!(argument_substitution.parameter(), argument_parameter.id);
@@ -695,7 +696,7 @@ fn polymorphic_implementation_method_selects_exact_current_impl_and_retains_orde
         panic!("the recursive method occurrence should select its current implementation");
     };
     assert_eq!(actual_implementation, implementation);
-    assert_eq!(selection.argument(), &Type::Int);
+    assert_eq!(selection.arguments(), &[Type::Int]);
     assert_eq!(
         occurrence.evidence[0].method_arguments(),
         &[Type::Variable(method_parameter.id)]
@@ -833,6 +834,380 @@ fn undetermined_obligation_reports_constraint_ambiguous_without_type_guessing() 
         "probe () = {\nlet use = fn(value) {\nrender value\n}\n()\n}\n",
     ))
     .expect_err("an undetermined local obligation should not choose an implementation by guessing");
+
+    assert_eq!(interface_reason(error), "constraint.ambiguous");
+}
+
+#[test]
+fn known_key_improves_the_complete_goal_before_selection() {
+    let checked = check(concat!(
+        "interface Convert<From, To> where From -> To {\n",
+        "convert : From -> To\n",
+        "}\n\n",
+        "impl Convert<Int, Bool> {\n",
+        "convert value = true\n",
+        "}\n\n",
+        "main : Unit -> Unit\n",
+        "main () = {\n",
+        "let ignored = convert(1)\n",
+        "()\n",
+        "}\n",
+    ))
+    .expect("the known Int key should improve the dependent Bool before selection");
+
+    let interface = InterfaceId::new(checked.module(), 0);
+    let method = MethodId::new(interface, 0);
+    let implementation = checked.implementation_facts()[0].id;
+    let occurrences = occurrence_selections(
+        checked_definition(&checked, "main"),
+        ResolvedTermName::Method(method),
+    );
+    let [occurrence] = occurrences.as_slice() else {
+        panic!("main should retain one determined method occurrence");
+    };
+    let selection = selection_for_occurrence(occurrence);
+
+    assert_eq!(selection.arguments(), &[Type::Int, Type::Bool]);
+    assert!(matches!(
+        selection.node(selection.root()),
+        Some(EvidenceNode::Implementation {
+            implementation: selected,
+            ..
+        }) if selected == implementation
+    ));
+}
+
+#[test]
+fn known_key_without_an_improvement_source_remains_ambiguous() {
+    let error = check(concat!(
+        "interface Convert<From, To> where From -> To {\n",
+        "convert : From -> To\n",
+        "}\n\n",
+        "main : Unit -> Unit\n",
+        "main () = {\n",
+        "let ignored = convert(1)\n",
+        "()\n",
+        "}\n",
+    ))
+    .expect_err("a complete key without any source must not invent its dependent");
+
+    assert_eq!(interface_reason(error), "constraint.ambiguous");
+}
+
+#[test]
+fn complete_determined_goal_without_a_source_is_unsatisfied() {
+    let error = check(concat!(
+        "interface Convert<From, To> where From -> To {\n",
+        "convert : From -> To\n",
+        "}\n\n",
+        "main : Unit -> Bool\n",
+        "main () = convert(1)\n",
+    ))
+    .expect_err("a complete determined goal without any source must remain unsatisfied");
+
+    assert_eq!(interface_reason(error), "constraint.unsatisfied");
+}
+
+#[test]
+fn snapshot_ineligibility_survives_an_earlier_source_order_improvement() {
+    let error = check(concat!(
+        "interface Produce<Key, Value> where Key -> Value {\n",
+        "produce : Key -> Value\n",
+        "}\n\n",
+        "interface Consume<Key, Value> where Key -> Value {\n",
+        "consume : (Key, Value) -> Int\n",
+        "}\n\n",
+        "impl Produce<Int, Bool> {\n",
+        "produce value = true\n",
+        "}\n\n",
+        "impl Consume<Bool, Unit> {\n",
+        "consume value = 0\n",
+        "}\n\n",
+        "probe : Unit -> Unit\n",
+        "probe () = {\n",
+        "let ignored = consume((produce(1), ()))\n",
+        "()\n",
+        "}\n",
+    ))
+    .expect_err("an obligation whose key was incomplete in the one pre-pass must remain ambiguous");
+
+    assert_eq!(interface_reason(error), "constraint.ambiguous");
+}
+
+#[test]
+fn complete_composite_key_improves_only_its_dependent_tuple() {
+    let checked = check(concat!(
+        "interface Convert<From, Mode, To> where (From, Mode) -> To {\n",
+        "convert : (From, Mode) -> To\n",
+        "}\n\n",
+        "impl Convert<Int, Bool, Unit> {\n",
+        "convert value = ()\n",
+        "}\n\n",
+        "main : Unit -> Unit\n",
+        "main () = {\n",
+        "let ignored = convert((1, true))\n",
+        "()\n",
+        "}\n",
+    ))
+    .expect("the complete composite key should improve its sole dependent");
+
+    let method = MethodId::new(InterfaceId::new(checked.module(), 0), 0);
+    let occurrences = occurrence_selections(
+        checked_definition(&checked, "main"),
+        ResolvedTermName::Method(method),
+    );
+    let [occurrence] = occurrences.as_slice() else {
+        panic!("main should retain one composite-key occurrence");
+    };
+
+    assert_eq!(
+        selection_for_occurrence(occurrence).arguments(),
+        &[Type::Int, Type::Bool, Type::Unit]
+    );
+}
+
+#[test]
+fn generic_first_order_key_match_supplies_the_instantiated_dependent() {
+    let checked = check(concat!(
+        "type List<A> =\n",
+        "Nil\n",
+        "| Cons(A, List<A>)\n\n",
+        "interface ItemOf<Collection, Item> where Collection -> Item {\n",
+        "touch : Collection -> Int\n",
+        "}\n\n",
+        "impl<A> ItemOf<List<A>, A> {\n",
+        "touch value = 0\n",
+        "}\n\n",
+        "main : Unit -> Int\n",
+        "main () = touch(Cons((1, Nil)))\n",
+    ))
+    .expect("a first-order generic key should instantiate and improve its dependent");
+
+    let method = MethodId::new(InterfaceId::new(checked.module(), 0), 0);
+    let occurrences = occurrence_selections(
+        checked_definition(&checked, "main"),
+        ResolvedTermName::Method(method),
+    );
+    let [occurrence] = occurrences.as_slice() else {
+        panic!("main should retain one generic-key occurrence");
+    };
+    let selection = selection_for_occurrence(occurrence);
+
+    assert_eq!(selection.arguments().len(), 2);
+    assert_eq!(selection.arguments()[1], Type::Int);
+    assert!(matches!(
+        selection.node(selection.root()),
+        Some(EvidenceNode::Implementation { .. })
+    ));
+}
+
+#[test]
+fn expected_dependent_agrees_with_mandatory_improvement() {
+    let checked = check(concat!(
+        "interface Convert<From, To> where From -> To {\n",
+        "convert : From -> To\n",
+        "}\n\n",
+        "impl Convert<Int, Bool> {\n",
+        "convert value = true\n",
+        "}\n\n",
+        "main : Unit -> Bool\n",
+        "main () = convert(1)\n",
+    ))
+    .expect("an already known agreeing dependent should still pass mandatory improvement");
+
+    let method = MethodId::new(InterfaceId::new(checked.module(), 0), 0);
+    let occurrences = occurrence_selections(
+        checked_definition(&checked, "main"),
+        ResolvedTermName::Method(method),
+    );
+    let [occurrence] = occurrences.as_slice() else {
+        panic!("main should retain one mandatory-consistency occurrence");
+    };
+    assert_eq!(
+        selection_for_occurrence(occurrence).arguments(),
+        &[Type::Int, Type::Bool]
+    );
+}
+
+#[test]
+fn expected_dependent_conflict_is_owned_by_determination() {
+    let TypeError::Interface(diagnostic) = check(concat!(
+        "interface Convert<From, To> where From -> To {\n",
+        "convert : From -> To\n",
+        "}\n\n",
+        "impl Convert<Int, Bool> {\n",
+        "convert value = true\n",
+        "}\n\n",
+        "main : Unit -> Int\n",
+        "main () = convert(1)\n",
+    ))
+    .expect_err("a known Int dependent must conflict with the Bool fixed by the Int key") else {
+        panic!("determination conflict should retain an interface diagnostic");
+    };
+
+    assert_eq!(
+        diagnostic.reason.to_string(),
+        "constraint.determination-conflict"
+    );
+    assert_eq!(diagnostic.expected.as_deref(), Some("(Bool)"));
+    assert_eq!(diagnostic.found.as_deref(), Some("(Int)"));
+    assert_eq!(diagnostic.related.len(), 1);
+    assert_eq!(
+        diagnostic.related[0].message(),
+        "this source determines the expected dependent tuple"
+    );
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("the known determinant key is (Int)")
+    );
+}
+
+#[test]
+fn incomplete_determined_keys_remain_ambiguous_without_reverse_inference() {
+    let cases = [
+        concat!(
+            "interface Convert<From, To> where From -> To {\n",
+            "convert : (From, To) -> Int\n",
+            "}\n\n",
+            "impl Convert<Int, Bool> {\nconvert value = 0\n}\n\n",
+            "probe : Unit -> Unit\n",
+            "probe () = {\nlet use = fn(value) {\nconvert((value, true))\n}\n()\n}\n",
+        ),
+        concat!(
+            "interface Convert<From, Mode, To> where (From, Mode) -> To {\n",
+            "convert : (From, Mode, To) -> Int\n",
+            "}\n\n",
+            "impl Convert<Int, Bool, Unit> {\nconvert value = 0\n}\n\n",
+            "probe : Unit -> Unit\n",
+            "probe () = {\nlet use = fn(value) {\nconvert((value, true, ()))\n}\n()\n}\n",
+        ),
+    ];
+
+    for source in cases {
+        let error = check(source).expect_err("an incomplete key must remain ambiguous");
+        assert_eq!(interface_reason(error), "constraint.ambiguous");
+    }
+}
+
+#[test]
+fn abstract_key_source_precedes_a_conflicting_visible_concrete_source() {
+    let checked = check(concat!(
+        "interface Convert<From, To> where From -> To {\n",
+        "convert : From -> To\n",
+        "}\n\n",
+        "impl Convert<Int, Unit> {\n",
+        "convert value = ()\n",
+        "}\n\n",
+        "use_abstract : Int -> Bool where Convert<Int, Bool>\n",
+        "use_abstract value = convert value\n",
+    ))
+    .expect("the identity-equal abstract key should determine and select Bool first");
+
+    let method = MethodId::new(InterfaceId::new(checked.module(), 0), 0);
+    let scheme = checked
+        .schemes()
+        .iter()
+        .find(|scheme| scheme.spelling == "use_abstract")
+        .expect("the constrained global should retain its scheme");
+    let [requirement] = scheme.scheme.requirements.as_ref() else {
+        panic!("the constrained global should retain one abstract requirement");
+    };
+    let occurrences = occurrence_selections(
+        checked_definition(&checked, "use_abstract"),
+        ResolvedTermName::Method(method),
+    );
+    let [occurrence] = occurrences.as_slice() else {
+        panic!("the constrained body should retain one method occurrence");
+    };
+    let selection = selection_for_occurrence(occurrence);
+
+    assert_eq!(selection.arguments(), &[Type::Int, Type::Bool]);
+    assert!(matches!(
+        selection.node(selection.root()),
+        Some(EvidenceNode::Abstract {
+            requirement: selected,
+            ..
+        }) if selected == requirement.id
+    ));
+}
+
+#[test]
+fn exact_current_key_improves_recursive_determined_dispatch() {
+    let checked = check(concat!(
+        "interface Touch<Key, Value> where Key -> Value {\n",
+        "touch : Key -> Int\n",
+        "}\n\n",
+        "impl Touch<Int, Bool> {\n",
+        "touch value = touch value\n",
+        "}\n",
+    ))
+    .expect("exact-current evidence should improve the recursive dependent before selection");
+
+    let method = MethodId::new(InterfaceId::new(checked.module(), 0), 0);
+    let occurrences = implementation_occurrence_selections(
+        &checked.implementations()[0],
+        ResolvedTermName::Method(method),
+    );
+    let [occurrence] = occurrences.as_slice() else {
+        panic!("the implementation should retain one recursive occurrence");
+    };
+    let selection = selection_for_occurrence(occurrence);
+
+    assert_eq!(selection.arguments(), &[Type::Int, Type::Bool]);
+    assert!(matches!(
+        selection.node(selection.root()),
+        Some(EvidenceNode::Implementation { implementation, .. })
+            if implementation == checked.implementation_facts()[0].id
+    ));
+}
+
+#[test]
+fn method_local_argument_never_participates_in_determined_key_matching() {
+    let checked = check(concat!(
+        "interface Touch<Key, Value> where Key -> Value {\n",
+        "touch<A> : (Key, A) -> Int\n",
+        "}\n\n",
+        "impl Touch<Int, Bool> {\n",
+        "touch value = 0\n",
+        "}\n\n",
+        "main : Unit -> Int\n",
+        "main () = touch((1, true))\n",
+    ))
+    .expect("the method-local Bool should not affect Int-key improvement");
+
+    let method = MethodId::new(InterfaceId::new(checked.module(), 0), 0);
+    let occurrences = occurrence_selections(
+        checked_definition(&checked, "main"),
+        ResolvedTermName::Method(method),
+    );
+    let [occurrence] = occurrences.as_slice() else {
+        panic!("main should retain one polymorphic determined occurrence");
+    };
+    let [slot] = occurrence.evidence.as_ref() else {
+        panic!("the occurrence should retain one evidence slot");
+    };
+
+    assert_eq!(slot.method_arguments(), &[Type::Bool]);
+    assert_eq!(
+        selection_for_occurrence(occurrence).arguments(),
+        &[Type::Int, Type::Bool]
+    );
+}
+
+#[test]
+fn improvement_does_not_add_higher_order_key_matching() {
+    let error = check(concat!(
+        "type Option<A> =\nNone\n| Some(A)\n\n",
+        "interface Touch<Key, Value> where Key -> Value {\n",
+        "touch : Key -> Int\n",
+        "}\n\n",
+        "impl<F : Type -> Type> Touch<F<Int>, Bool> {\n",
+        "touch value = 0\n",
+        "}\n\n",
+        "main : Unit -> Int\n",
+        "main () = touch(Some(true))\n",
+    ))
+    .expect_err("matching F<Int> to Option<Bool> would require higher-order inference");
 
     assert_eq!(interface_reason(error), "constraint.ambiguous");
 }
@@ -983,6 +1358,42 @@ fn exact_current_polymorphic_recursion_retains_the_method_local_diagnostic() {
             label.message() == "this recursive function is checked monomorphically"
         })
     );
+}
+
+#[test]
+fn determined_failed_body_rigidity_improves_only_its_matching_recursive_root() {
+    let text = concat!(
+        "interface Repeat<I, Value> where I -> Value {\n",
+        "repeat<A> : (I, A) -> A\n",
+        "}\n\n",
+        "impl Repeat<Int, Bool> {\n",
+        "repeat (owner, value) = repeat((owner, (value, value)))\n",
+        "}\n",
+    );
+    let TypeError::Source(diagnostic) =
+        check(text).expect_err("determined exact-current recursion should retain method rigidity")
+    else {
+        panic!("determined polymorphic recursion should retain a source diagnostic");
+    };
+
+    assert_eq!(diagnostic.reason.to_string(), "type.polymorphic-recursion");
+    assert_eq!(diagnostic.expected.as_deref(), Some("A"));
+    assert_eq!(diagnostic.found.as_deref(), Some("(A, A)"));
+}
+
+#[test]
+fn failed_body_keeps_its_error_when_matching_determination_conflicts() {
+    let error = check(concat!(
+        "interface Repeat<I, Value> where I -> Value {\n",
+        "repeat<A> : (I, Value, A) -> A\n",
+        "}\n\n",
+        "impl Repeat<Int, Bool> {\n",
+        "repeat (owner, expected, value) = repeat((owner, (), (value, value)))\n",
+        "}\n",
+    ))
+    .expect_err("a new determination conflict must not displace the established body error");
+
+    assert_eq!(diagnostic_reason(error), "type.definition-result");
 }
 
 #[test]

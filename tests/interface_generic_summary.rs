@@ -171,13 +171,16 @@ fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
     assert_eq!(defining_interface.id, expected_interface);
     assert_eq!(defining_implementation.id, expected_impl);
     assert_eq!(imported.id, defining_implementation.id);
-    assert_eq!(imported.interface, expected_interface);
+    assert_eq!(imported.interface(), expected_interface);
 
     let [head_parameter] = imported.head_parameters.as_ref() else {
         panic!("the generic implementation should bind one head parameter");
     };
     let parameter = head_parameter.id;
-    assert_option_of_parameter(imported.argument(), expected_option, parameter);
+    let [imported_argument] = imported.arguments() else {
+        panic!("the unary implementation should retain one head argument");
+    };
+    assert_option_of_parameter(imported_argument, expected_option, parameter);
 
     let [prerequisite] = imported.prerequisites.as_ref() else {
         panic!("the implementation should retain one prerequisite");
@@ -187,8 +190,8 @@ fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
         RequirementOwner::Impl(expected_impl)
     );
     assert_eq!(prerequisite.id.declaration(), 0);
-    assert_eq!(prerequisite.interface, expected_interface);
-    assert_eq!(prerequisite.argument(), &Type::Variable(parameter));
+    assert_eq!(prerequisite.interface(), expected_interface);
+    assert_eq!(prerequisite.arguments(), &[Type::Variable(parameter)]);
 
     let [method] = imported.methods.as_ref() else {
         panic!("the implementation should retain one checked method scheme");
@@ -206,8 +209,8 @@ fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
         panic!("the implementation method scheme should retain its prerequisite");
     };
     assert_eq!(method_requirement.id, prerequisite.id);
-    assert_eq!(method_requirement.interface, prerequisite.interface);
-    assert_eq!(method_requirement.argument(), &Type::Variable(parameter));
+    assert_eq!(method_requirement.interface(), prerequisite.interface());
+    assert_eq!(method_requirement.arguments(), &[Type::Variable(parameter)]);
 
     let Type::Function(domain, codomain) = method.scheme.value_type() else {
         panic!("the retained implementation method should have a function type");
@@ -221,4 +224,83 @@ fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
     assert_option_of_parameter(left, expected_option, parameter);
     assert_option_of_parameter(right, expected_option, parameter);
     assert_eq!(codomain.as_ref(), &Type::Bool);
+}
+
+#[test]
+fn determined_generic_implementation_crosses_an_honest_body_free_summary() {
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        "import dependency (impl Relation)\n",
+        concat!(
+            "pub type Wrap<A> = Wrap(A)\n",
+            "pub interface Relation<A, B> where A -> B {\n",
+            "relate : A -> Int\n",
+            "}\n",
+            "pub impl<A> Relation<Wrap<A>, A> {\n",
+            "relate value = 0\n",
+            "}\n",
+        ),
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let dependency_checked =
+        check_module(resolve_module(dependency, &[]).expect("the dependency should resolve first"))
+            .expect("the determined generic implementation should check");
+    assert_eq!(dependency_checked.interface_facts().len(), 1);
+    let [implementation] = dependency_checked.implementation_facts() else {
+        panic!("the dependency should retain one implementation fact");
+    };
+
+    let entry = module_named(&graph, "entry.ash");
+    let dependencies = entry
+        .dependencies()
+        .iter()
+        .map(|edge| {
+            DependencyExports::new(edge, dependency_checked.exports())
+                .expect("the honest determined summary should authenticate its edge")
+        })
+        .collect::<Vec<_>>();
+    let resolved = resolve_module(entry, &dependencies)
+        .expect("the selector should resolve from the body-free summary");
+    let imported = resolved
+        .imported_facts()
+        .implementation(implementation.id)
+        .expect("the selected implementation should retain its stable identity");
+    assert_eq!(imported.arguments().len(), 2);
+    check_module(resolved).expect("the honest determined summary should remain coherent");
+}
+
+#[test]
+fn determined_key_decrease_with_dependent_growth_crosses_an_honest_summary() {
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        "import dependency (impl Relation)\n",
+        concat!(
+            "pub type List<A> =\nNil\n| Cons(A, List<A>)\n",
+            "pub interface Relation<A, B> where A -> B {\n",
+            "relate : A -> Int\n",
+            "}\n",
+            "pub impl<A> Relation<List<A>, A> where Relation<A, List<A>> {\n",
+            "relate value = 0\n",
+            "}\n",
+        ),
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let dependency_checked =
+        check_module(resolve_module(dependency, &[]).expect("the dependency should resolve first"))
+            .expect("the determinant key strictly decreases despite dependent growth");
+    let entry = module_named(&graph, "entry.ash");
+    let dependencies = entry
+        .dependencies()
+        .iter()
+        .map(|edge| {
+            DependencyExports::new(edge, dependency_checked.exports())
+                .expect("the honest key-decreasing summary should authenticate")
+        })
+        .collect::<Vec<_>>();
+    let resolved = resolve_module(entry, &dependencies)
+        .expect("the selected key-decreasing implementation should resolve");
+
+    check_module(resolved).expect("the selected honest summary should remain coherent");
 }

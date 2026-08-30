@@ -622,6 +622,448 @@ fn exhaustive_public_and_hidden_summary_carriers_fail_before_local_checking() {
 }
 
 #[test]
+fn relational_summary_rejects_complete_parameter_and_application_tampering_matrix() {
+    const SOURCE: &str = concat!(
+        "pub type Option<A> =\nNone\n| Some(A)\n\n",
+        "pub interface Relation<Left, Right> {\n",
+        "relation : (Left, Right) -> Bool\n",
+        "}\n\n",
+        "pub impl Relation<Int, Bool> {\n",
+        "relation pair = true\n",
+        "}\n",
+    );
+    let mutations = [
+        SummaryCarrierMutationForTest::RelationalInterfaceParameterMissing,
+        SummaryCarrierMutationForTest::RelationalInterfaceParameterExtra,
+        SummaryCarrierMutationForTest::RelationalInterfaceParameterReordered,
+        SummaryCarrierMutationForTest::RelationalInterfaceParameterIdentity,
+        SummaryCarrierMutationForTest::RelationalInterfaceParameterWrongKind,
+        SummaryCarrierMutationForTest::RelationalImplementationArgumentMissing,
+        SummaryCarrierMutationForTest::RelationalImplementationArgumentExtra,
+        SummaryCarrierMutationForTest::RelationalImplementationArgumentReordered,
+        SummaryCarrierMutationForTest::RelationalImplementationArgumentWrongKind,
+        SummaryCarrierMutationForTest::RelationalImplementationInterfaceIdentity,
+    ];
+
+    for mutation in mutations {
+        let tree = TempTree::create();
+        let graph = load(
+            &tree,
+            "import dependency as Dependency\nmain : Unit -> Unit\nmain value = value\n",
+            &[("dependency.ash", SOURCE)],
+        );
+        let dependency = module_named(&graph, "dependency.ash");
+        let mut summary = check_module(
+            resolve_module(dependency, &[]).expect("the relational dependency should resolve"),
+        )
+        .expect("the relational dependency should check")
+        .into_exports();
+        assert!(
+            summary.corrupt_carrier_for_test(mutation),
+            "the relational carrier {mutation:?} should exist",
+        );
+        assert_eq!(
+            summary.authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState),
+            "the raw summary boundary must reject {mutation:?}",
+        );
+        let importer = module_named(&graph, "entry.ash");
+        let error = resolve_with(importer, &[&summary])
+            .expect_err("the forged relational summary must fail before local checking");
+        assert_eq!(error.reason, ResolveReason::InternalState, "{mutation:?}");
+    }
+}
+
+#[test]
+fn determined_summary_method_seed_has_exact_admission_boundaries() {
+    // Each of the two methods adds one determinant-subset comparison and one
+    // required-key coverage lookup to the predecessor body-free kind work.
+    const TYPE_WORK: usize = 38;
+    const CONSTRAINT_WORK: usize = 11;
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency as Dependency\n",
+        &[(
+            "dependency.ash",
+            concat!(
+                "pub interface Collection<I, Item> where I -> Item {\n",
+                "size : I -> Int\n",
+                "keep : (I, Item) -> Item\n",
+                "}\n",
+            ),
+        )],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let summary = check_module(
+        resolve_module(dependency, &[]).expect("the determined dependency should resolve"),
+    )
+    .expect("the determined dependency should check locally")
+    .into_exports();
+
+    let mut measured_type = TypeWorkBudget::unbounded();
+    let mut measured_constraint = crate::interface::InterfaceConstraintBudget::default();
+    summary
+        .authenticate(&mut measured_type, &mut measured_constraint)
+        .expect("the honest determined summary should authenticate");
+    assert_eq!(measured_type.used(), TYPE_WORK);
+    assert_eq!(measured_constraint.used(), CONSTRAINT_WORK);
+
+    let mut type_short = TypeWorkBudget::with_limit(TYPE_WORK - 1);
+    assert_eq!(
+        summary.authenticate(
+            &mut type_short,
+            &mut crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK),
+        ),
+        Err(ResolvedBuildFailure::TypeResource),
+    );
+    assert_eq!(type_short.used(), TYPE_WORK - 1);
+
+    let mut constraint_short =
+        crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK - 1);
+    assert_eq!(
+        summary.authenticate(
+            &mut TypeWorkBudget::with_limit(TYPE_WORK),
+            &mut constraint_short,
+        ),
+        Err(ResolvedBuildFailure::ConstraintResource),
+    );
+    assert_eq!(constraint_short.used(), CONSTRAINT_WORK - 1);
+
+    for _ in 0..2 {
+        let mut exact_type_budget = TypeWorkBudget::with_limit(TYPE_WORK);
+        let mut exact_constraint_budget =
+            crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
+        summary
+            .authenticate(&mut exact_type_budget, &mut exact_constraint_budget)
+            .expect("the exact immutable determined summary should remain reusable");
+        assert_eq!(exact_type_budget.used(), TYPE_WORK);
+        assert_eq!(exact_constraint_budget.used(), CONSTRAINT_WORK);
+    }
+}
+
+#[test]
+fn summary_admission_rejects_every_malformed_private_determination_key() {
+    const SOURCE: &str = concat!(
+        "pub interface Relation<A, B, C> {\n",
+        "relation : (A, B, C) -> Bool\n",
+        "}\n",
+    );
+    for mutation in [
+        SummaryCarrierMutationForTest::DeterminationPositionsEmpty,
+        SummaryCarrierMutationForTest::DeterminationPositionsFull,
+        SummaryCarrierMutationForTest::DeterminationPositionsRepeated,
+        SummaryCarrierMutationForTest::DeterminationPositionsReordered,
+        SummaryCarrierMutationForTest::DeterminationPositionsOutOfRange,
+    ] {
+        let tree = TempTree::create();
+        let graph = load(
+            &tree,
+            "import dependency as Dependency\n",
+            &[("dependency.ash", SOURCE)],
+        );
+        let dependency = module_named(&graph, "dependency.ash");
+        let mut summary = check_module(
+            resolve_module(dependency, &[]).expect("the no-edge dependency should resolve"),
+        )
+        .expect("the no-edge dependency should check")
+        .into_exports();
+        assert!(summary.corrupt_carrier_for_test(mutation));
+
+        assert_eq!(
+            summary.authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState),
+            "the private determinant positions must reject {mutation:?}",
+        );
+    }
+}
+
+#[test]
+fn detached_summary_rechecks_variable_head_against_an_alternate_key() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "pub type List<A> = List(A)\n\n",
+            "pub interface Relation<A, B> where A -> B {\n",
+            "relation : (A, B) -> Unit\n",
+            "}\n\n",
+            "pub impl<X> Relation<List<X>, X> {\n",
+            "relation value = ()\n",
+            "}\n",
+        ),
+        &[],
+    );
+    let module = module_named(&graph, "entry.ash");
+    let mut summary = check_module(
+        resolve_module(module, &[]).expect("the honest determined module should resolve"),
+    )
+    .expect("the honest structured selection key should check")
+    .into_exports();
+    summary
+        .authenticate(
+            &mut TypeWorkBudget::default(),
+            &mut crate::interface::InterfaceConstraintBudget::default(),
+        )
+        .expect("the honest determined summary should authenticate");
+    assert!(summary.corrupt_carrier_for_test(
+        SummaryCarrierMutationForTest::DeterminationPositionsAlternateKey,
+    ));
+
+    assert_eq!(
+        summary.authenticate(
+            &mut TypeWorkBudget::default(),
+            &mut crate::interface::InterfaceConstraintBudget::default(),
+        ),
+        Err(ResolvedBuildFailure::InvalidState),
+        "the alternate key makes the implementation selection key a bare variable",
+    );
+}
+
+#[test]
+fn detached_summary_rechecks_dependent_coverage_against_an_alternate_key() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "pub type List<A> = List(A)\n\n",
+            "pub interface Relation<A, B, C> where (A, B) -> C {\n",
+            "relation : (A, B, C) -> Unit\n",
+            "}\n\n",
+            "pub impl<X> Relation<List<X>, Int, X> {\n",
+            "relation value = ()\n",
+            "}\n",
+        ),
+        &[],
+    );
+    let module = module_named(&graph, "entry.ash");
+    let mut summary = check_module(
+        resolve_module(module, &[]).expect("the honestly covered module should resolve"),
+    )
+    .expect("the honest determinant key should cover its dependent variable")
+    .into_exports();
+    summary
+        .authenticate(
+            &mut TypeWorkBudget::default(),
+            &mut crate::interface::InterfaceConstraintBudget::default(),
+        )
+        .expect("the honest covered summary should authenticate");
+    assert!(summary.corrupt_carrier_for_test(
+        SummaryCarrierMutationForTest::DeterminationPositionsAlternateKey,
+    ));
+
+    assert_eq!(
+        summary.authenticate(
+            &mut TypeWorkBudget::default(),
+            &mut crate::interface::InterfaceConstraintBudget::default(),
+        ),
+        Err(ResolvedBuildFailure::InvalidState),
+        "the alternate key no longer covers the dependent head variable",
+    );
+}
+
+#[test]
+fn detached_summary_rechecks_orphan_ownership_against_an_alternate_key() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import dependency (Relation, relation)\n",
+            "pub type Local = Local\n\n",
+            "pub impl Relation<Local, Int, Bool> {\n",
+            "relation value = ()\n",
+            "}\n",
+        ),
+        &[(
+            "dependency.ash",
+            concat!(
+                "pub interface Relation<A, B, C> where (A, B) -> C {\n",
+                "relation : (A, B, C) -> Unit\n",
+                "}\n",
+            ),
+        )],
+    );
+    let dependency = module_named(&graph, "dependency.ash");
+    let dependency_summary = check_module(
+        resolve_module(dependency, &[]).expect("the foreign interface should resolve"),
+    )
+    .expect("the foreign interface should check")
+    .into_exports();
+    let entry = module_named(&graph, "entry.ash");
+    let mut summary = check_module(
+        resolve_with(entry, &[&dependency_summary])
+            .expect("the honestly authorized foreign implementation should resolve"),
+    )
+    .expect("the local outer nominal in the honest key should authorize the implementation")
+    .into_exports();
+    summary
+        .authenticate(
+            &mut TypeWorkBudget::default(),
+            &mut crate::interface::InterfaceConstraintBudget::default(),
+        )
+        .expect("the honest orphan-authorized summary should authenticate");
+    assert!(summary.corrupt_carrier_for_test(
+        SummaryCarrierMutationForTest::DeterminationPositionsAlternateKey,
+    ));
+
+    assert_eq!(
+        summary.authenticate(
+            &mut TypeWorkBudget::default(),
+            &mut crate::interface::InterfaceConstraintBudget::default(),
+        ),
+        Err(ResolvedBuildFailure::InvalidState),
+        "the alternate key leaves the local nominal dependent-only",
+    );
+}
+
+#[test]
+fn determined_summary_relationship_authentication_has_an_exact_retry_boundary() {
+    let build_summary = || {
+        let tree = TempTree::create();
+        let graph = load(
+            &tree,
+            concat!(
+                "pub type List<A> = List(A)\n\n",
+                "pub interface Relation<A, B> where A -> B {\n",
+                "relation : (A, B) -> Unit\n",
+                "}\n\n",
+                "pub impl<X> Relation<List<X>, X> {\n",
+                "relation value = ()\n",
+                "}\n",
+            ),
+            &[],
+        );
+        let module = module_named(&graph, "entry.ash");
+        check_module(
+            resolve_module(module, &[]).expect("the exact relationship fixture should resolve"),
+        )
+        .expect("the exact relationship fixture should check")
+        .into_exports()
+    };
+
+    let summary = build_summary();
+    let mut measured_type = TypeWorkBudget::default();
+    let mut measured_constraint = crate::interface::InterfaceConstraintBudget::default();
+    summary
+        .authenticate(&mut measured_type, &mut measured_constraint)
+        .expect("the exact relationship fixture should authenticate");
+    const PARAMETER_COUNT: usize = 2;
+    const DETERMINANT_COUNT: usize = 1;
+    const PARTITION_WORK: usize = DETERMINANT_COUNT + PARAMETER_COUNT + PARAMETER_COUNT;
+    const VARIABLE_HEAD_WORK: usize = 1;
+    const KEY_FREE_VARIABLE_WORK: usize = 7;
+    const DEPENDENT_FREE_VARIABLE_WORK: usize = 3;
+    const COVERAGE_SUBSET_WORK: usize = 1;
+    const RELATIONSHIP_WORK: usize = PARTITION_WORK
+        + VARIABLE_HEAD_WORK
+        + KEY_FREE_VARIABLE_WORK
+        + DEPENDENT_FREE_VARIABLE_WORK
+        + COVERAGE_SUBSET_WORK;
+    const PREDECESSOR_CONSTRAINT_WORK: usize = 60;
+    const EXACT_CONSTRAINT_WORK: usize = PREDECESSOR_CONSTRAINT_WORK + RELATIONSHIP_WORK;
+    const EXACT_TYPE_WORK: usize = 105;
+    assert_eq!(
+        (measured_constraint.used(), measured_type.used()),
+        (EXACT_CONSTRAINT_WORK, EXACT_TYPE_WORK),
+    );
+
+    let mut short =
+        crate::interface::InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK - 1);
+    assert_eq!(
+        summary.authenticate(&mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK), &mut short,),
+        Err(ResolvedBuildFailure::ConstraintResource),
+    );
+    assert_eq!(short.used(), EXACT_CONSTRAINT_WORK - 2);
+
+    let mut type_short = TypeWorkBudget::with_limit(EXACT_TYPE_WORK - 1);
+    assert_eq!(
+        summary.authenticate(
+            &mut type_short,
+            &mut crate::interface::InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK,),
+        ),
+        Err(ResolvedBuildFailure::TypeResource),
+    );
+    assert_eq!(type_short.used(), EXACT_TYPE_WORK - 1);
+
+    for _ in 0..2 {
+        let mut exact_type = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
+        let mut exact_constraint =
+            crate::interface::InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK);
+        summary
+            .authenticate(&mut exact_type, &mut exact_constraint)
+            .expect("the exact immutable relationship summary should remain reusable");
+        assert_eq!(exact_constraint.used(), EXACT_CONSTRAINT_WORK);
+        assert_eq!(exact_type.used(), EXACT_TYPE_WORK);
+    }
+    assert_eq!(
+        summary
+            .interface("Relation")
+            .and_then(|interface| interface.determinant_positions()),
+        Some(&[0][..]),
+    );
+    let implementation = summary
+        .implementations()
+        .next()
+        .expect("the exact fixture should retain one implementation");
+    assert!(matches!(
+        implementation.fact().arguments(),
+        [Type::Application(_, _), Type::Variable(_)]
+    ));
+}
+
+#[test]
+fn relational_summary_application_arity_precedes_a_late_wrong_kind() {
+    const SOURCE: &str = concat!(
+        "pub type Option<A> =\nNone\n| Some(A)\n\n",
+        "pub interface Relation<Left, Right> {\n",
+        "relation : (Left, Right) -> Bool\n",
+        "}\n\n",
+        "pub impl Relation<Int, Bool> {\n",
+        "relation pair = true\n",
+        "}\n",
+    );
+    let measure = |mutation| {
+        let tree = TempTree::create();
+        let graph = load(
+            &tree,
+            "import dependency as Dependency\nmain : Unit -> Unit\nmain value = value\n",
+            &[("dependency.ash", SOURCE)],
+        );
+        let dependency = module_named(&graph, "dependency.ash");
+        let mut summary = check_module(
+            resolve_module(dependency, &[]).expect("the relational dependency should resolve"),
+        )
+        .expect("the relational dependency should check")
+        .into_exports();
+        assert!(summary.corrupt_carrier_for_test(mutation));
+        let mut type_work = TypeWorkBudget::default();
+        assert_eq!(
+            summary.authenticate(
+                &mut type_work,
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState),
+        );
+        type_work.used()
+    };
+
+    let extra = measure(SummaryCarrierMutationForTest::RelationalImplementationArgumentExtra);
+    let extra_with_late_wrong_kind = measure(
+        SummaryCarrierMutationForTest::RelationalImplementationArgumentExtraWithLateWrongKind,
+    );
+    assert_eq!(
+        extra_with_late_wrong_kind, extra,
+        "argument-count rejection must stop before positional kind authentication",
+    );
+}
+
+#[test]
 fn fused_constructor_scheme_authentication_rejects_every_independent_type_obligation() {
     let mutations = [
         SummaryConstructorFusionMutationForTest::UnboundPayloadVariable,

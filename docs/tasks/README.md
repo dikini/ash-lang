@@ -6,4 +6,4 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-No implementation task is currently active.
+No task is currently active.

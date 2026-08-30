@@ -8,9 +8,12 @@ language. Git history retains the accepted semantic transition, implementation
 task, and execution plan; those temporary artifacts no longer occupy the
 current tree after the reviewed product checkpoint.
 
-This report does not close the complete `lib-ash` milestone. The retained
-[milestone note](../DN-0025-library-and-package-milestones.md) keeps later type,
-interface, library, package, and artifact pressure separate.
+This report alone did not close the complete `lib-ash` milestone. At the first-
+increment checkpoint, the retained
+[milestone note](../DN-0025-library-and-package-milestones.md) kept later type,
+interface, library, package, and artifact pressure separate. Later integrated
+increments close the revised milestone without changing this report's evidence
+scope.
 
 ## Scope and checkpoints
 
@@ -278,11 +281,11 @@ It does not add packages, manifests, caches, persistent summaries or artifacts,
 separate compilation or linking, runtime implementation lookup, or new Core and
 evaluator forms.
 
-Later `lib-ash` increments may consume the effective/public closure distinction,
-stable identities, body-free summaries, and authenticated route model, but they
-require separate semantic authority and evidence. The complete `lib-ash`
-milestone still requires its later comparison corpus, combined identity and
+Later `lib-ash` increments consumed the effective/public closure distinction,
+stable identities, body-free summaries, and authenticated route model under
+separate semantic authority and evidence. At this checkpoint, the complete
+milestone still required its later comparison corpus, combined identity and
 summary audit, Core-versus-library simplification analysis, retained linked
-program, and closure review. The retained first-increment checkpoint receives
-no `lib-ash` tag. Git retains the removed transition artifacts and their
-history.
+program, and closure review. The later integrated relational increment supplies
+those closure facts. The retained first-increment checkpoint received no
+`lib-ash` tag. Git retains the removed transition artifacts and their history.

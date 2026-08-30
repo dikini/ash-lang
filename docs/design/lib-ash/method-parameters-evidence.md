@@ -7,10 +7,12 @@ polymorphic method evidence. It is informative, not normative. The
 language. Git history retains the accepted proposal, implementation task, and
 execution plan after those transition-only artifacts leave the current tree.
 
-This report does not close the complete `lib-ash` milestone. Multi-parameter
-interfaces, determination, associated outputs, defaults, the combined library
-corpus, and the final library simplification audit remain separate work. This
-increment receives no `lib-ash` tag.
+This report alone did not close the complete `lib-ash` milestone. At the third-
+increment checkpoint, multi-parameter interfaces, determination, associated
+outputs, defaults, the combined library corpus, and the final library
+simplification audit remained separate work. The later integrated relational
+increment closes the revised milestone without changing this report's evidence
+scope. This increment received no `lib-ash` tag.
 
 ## Scope and checkpoints
 
@@ -524,12 +526,12 @@ Post-cleanup Markdown lint passes across 82 retained Markdown files, and all
 696 retained relative links resolve. `cargo xtask verify` passes again,
 including all 1,537 tests and documentation generation. Independent lifecycle
 review approves the actual cleanup with no finding: it matches the authorized
-set, changes no semantic authority, leaves no stale link, and does not claim
-integration or full milestone completion.
+set, changes no semantic authority, leaves no stale link, and makes no
+integration or full-milestone claim for that checkpoint.
 
 Cumulative reserved use remains 78/80, with two units unreserved. This retained
 evidence does not claim integration or completion of the full `lib-ash`
-milestone.
+milestone for its checkpoint; later retained evidence supplies those facts.
 
 ## Intentional exclusions and remaining pressure
 
@@ -545,5 +547,7 @@ authentication representation.
 
 Later work may consume canonical method schemes, authenticated summaries,
 occurrence arguments, and generated adapter evidence. It requires separate
-semantic authority and cannot reinterpret this report as language truth. The
-complete `lib-ash` milestone remains open and untagged.
+semantic authority and cannot reinterpret this report as language truth. At
+this checkpoint, the complete `lib-ash` milestone remained open and untagged;
+the later integrated relational increment closes the revised milestone without
+claiming a tag.

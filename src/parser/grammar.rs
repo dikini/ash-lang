@@ -689,13 +689,21 @@ fn interface_declaration(parser: &mut Parser<'_>) -> TypeParametersOutcome {
     let parameter_recovery_start = parser.pending_recovery_count();
     if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
         let _ = parser.bump();
-        let outcome = interface_parameter(parser);
+        let outcome = if parser.at(&TokenKind::Less) {
+            type_parameters(parser, TypeParameterOwnerBoundary::Interface)
+        } else {
+            report_pending_expected(parser, ExpectedForm::InterfaceParameter);
+            TypeParametersOutcome::Complete
+        };
         if outcome.stops_declaration() {
             parser.finish();
             return outcome;
         }
     } else {
         report_pending_expected(parser, ExpectedForm::Identifier);
+    }
+    if parser.at(&TokenKind::Where) {
+        interface_determination(parser);
     }
     recover_pending_header(
         parser,
@@ -761,59 +769,49 @@ fn recover_interface_method(parser: &mut Parser<'_>) {
     parser.finish();
 }
 
-fn interface_parameter(parser: &mut Parser<'_>) -> TypeParametersOutcome {
-    if !parser.at(&TokenKind::Less) {
-        report_pending_expected(parser, ExpectedForm::InterfaceParameter);
-        return TypeParametersOutcome::Complete;
+fn interface_determination(parser: &mut Parser<'_>) {
+    let _ = parser.bump();
+    if !determination_side(parser) {
+        return;
+    }
+    if !parser.at(&TokenKind::Arrow) {
+        report_pending_expected(parser, ExpectedForm::Arrow);
+        return;
     }
     let _ = parser.bump();
-    let recovery_start = parser.pending_recovery_count();
-    let parameter_present = if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
-        let _ = type_parameter(parser, TypeParameterOwnerBoundary::Interface);
-        resolve_type_parameter_recovery_at_delimiter(parser, recovery_start);
-        true
-    } else {
-        report_pending_expected(parser, ExpectedForm::InterfaceParameter);
-        resolve_type_parameter_recovery_at_delimiter(parser, recovery_start);
-        false
-    };
-    if parser.at(&TokenKind::Greater) {
+    let _ = determination_side(parser);
+}
+
+fn determination_side(parser: &mut Parser<'_>) -> bool {
+    if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
         let _ = parser.bump();
-        return TypeParametersOutcome::Complete;
+        return true;
     }
-    if parameter_present && parser.at(&TokenKind::Comma) {
-        report_pending_expected(parser, ExpectedForm::InterfaceParameter);
-        resolve_type_parameter_recovery_at_delimiter(parser, recovery_start);
-    } else if parameter_present {
-        report_pending_expected(parser, ExpectedForm::Greater);
+    if !parser.at(&TokenKind::LeftParen) {
+        report_pending_expected(parser, ExpectedForm::Identifier);
+        return false;
     }
-    while !matches!(
-        parser.current(),
-        Some(TokenKind::Greater | TokenKind::LeftBrace | TokenKind::LineEnd | TokenKind::EndOfFile)
-            | None
-    ) {
+
+    let _ = parser.bump();
+    if !matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+        report_pending_expected(parser, ExpectedForm::Identifier);
+        return false;
+    }
+    let _ = parser.bump();
+    while parser.at(&TokenKind::Comma) {
+        let _ = parser.bump();
+        if !matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+            report_pending_expected(parser, ExpectedForm::Identifier);
+            return false;
+        }
         let _ = parser.bump();
     }
-    if parser.at(&TokenKind::Greater) {
-        parser.resolve_pending_at_current(
-            recovery_start,
-            SynchronizationBoundary::TypeParameterListClosing,
-        );
-        let _ = parser.bump();
-        TypeParametersOutcome::RecoveredToOwnerOrCloser
-    } else if parser.at(&TokenKind::LeftBrace) {
-        parser.resolve_pending_at_current(
-            recovery_start,
-            SynchronizationBoundary::InterfaceBodyOpeningBrace,
-        );
-        TypeParametersOutcome::RecoveredToOwnerOrCloser
-    } else if parser.at(&TokenKind::LineEnd) {
-        parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::LogicalLineEnd);
-        TypeParametersOutcome::RecoveredToLineEnd
-    } else {
-        parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::EndOfFile);
-        TypeParametersOutcome::RecoveredToEndOfFile
+    if !parser.at(&TokenKind::RightParen) {
+        report_pending_expected(parser, ExpectedForm::RightParen);
+        return false;
     }
+    let _ = parser.bump();
+    true
 }
 
 fn interface_method(parser: &mut Parser<'_>) {
@@ -935,17 +933,27 @@ fn interface_application(parser: &mut Parser<'_>) -> bool {
             return false;
         }
         let _ = parser.bump();
-        let argument_valid = if starts_type(parser) {
+        let mut arguments_valid = if starts_type(parser) {
             type_expression(parser);
             true
         } else {
             report_pending_expected(parser, ExpectedForm::InterfaceApplication);
             false
         };
+        while parser.at(&TokenKind::Comma) {
+            let _ = parser.bump();
+            if starts_type(parser) {
+                type_expression(parser);
+            } else {
+                report_pending_expected(parser, ExpectedForm::InterfaceApplication);
+                arguments_valid = false;
+                break;
+            }
+        }
         if parser.at(&TokenKind::Greater) {
             let _ = parser.bump();
         } else {
-            if argument_valid {
+            if arguments_valid {
                 report_pending_expected(parser, ExpectedForm::InterfaceApplication);
             }
             while !matches!(

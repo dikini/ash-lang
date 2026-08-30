@@ -133,6 +133,136 @@ fn assert_no_label_overlaps(labels: &[SourceLabel], source: &SourceFile, needle:
 }
 
 #[test]
+fn determined_global_requirement_conflict_relates_the_causal_source_pair() {
+    let tree = ModuleTree::create();
+    let entry_text = concat!(
+        "interface Relation<Key, Value> where Key -> Value {\n",
+        "relate : Key -> Int\n",
+        "}\n\n",
+        "probe<Key, Left, Right> : Key -> Int where Relation<Key, Left>, Relation<Key, Right>\n",
+        "probe value = 0\n",
+    );
+    let entry = tree.write("entry.ash", entry_text);
+    let graph = load_module_graph(&entry, &ModuleRoots::empty())
+        .expect("the determined requirement-pair fixture should load");
+
+    let diagnostic = interface_diagnostic(
+        check_graph(&graph)
+            .expect_err("identity-equal keys with different dependents must conflict"),
+    );
+    let entry = module_named(&graph, "entry.ash").source();
+
+    assert_eq!(diagnostic.reason, InterfaceReason::DeterminationConflict);
+    assert!(span_matches_last(
+        diagnostic.primary.span(),
+        entry,
+        "Relation<Key, Right>"
+    ));
+    assert_eq!(
+        diagnostic.primary.message(),
+        "this requirement conflicts with the dependent tuple fixed for the same determinant key"
+    );
+    assert_eq!(diagnostic.related.len(), 1);
+    assert!(span_matches(
+        diagnostic.related[0].span(),
+        entry,
+        "Relation<Key, Left>"
+    ));
+    assert_eq!(
+        diagnostic.related[0].message(),
+        "this earlier requirement fixes a different dependent tuple for that key"
+    );
+    assert!(diagnostic.expected.is_none());
+    assert!(diagnostic.found.is_none());
+    assert!(diagnostic.help.is_none());
+}
+
+#[test]
+fn determined_implementation_prerequisite_conflict_relates_the_causal_source_pair() {
+    let tree = ModuleTree::create();
+    let entry_text = concat!(
+        "interface Relation<Key, Value> where Key -> Value {\n",
+        "relate : Key -> Int\n",
+        "}\n\n",
+        "interface Target<A> {\n",
+        "target : A -> A\n",
+        "}\n\n",
+        "impl Target<Int> where Relation<Int, Bool>, Relation<Int, Unit> {\n",
+        "target value = value\n",
+        "}\n",
+    );
+    let entry = tree.write("entry.ash", entry_text);
+    let graph = load_module_graph(&entry, &ModuleRoots::empty())
+        .expect("the determined implementation-prerequisite fixture should load");
+
+    let diagnostic = interface_diagnostic(
+        check_graph(&graph)
+            .expect_err("identity-equal prerequisite keys with distinct dependents must conflict"),
+    );
+    let entry = module_named(&graph, "entry.ash").source();
+
+    assert_eq!(diagnostic.reason, InterfaceReason::DeterminationConflict);
+    assert!(span_matches(
+        diagnostic.primary.span(),
+        entry,
+        "Relation<Int, Unit>"
+    ));
+    assert_eq!(
+        diagnostic.primary.message(),
+        "this prerequisite conflicts with the dependent tuple fixed for the same determinant key"
+    );
+    assert_eq!(diagnostic.related.len(), 1);
+    assert!(span_matches(
+        diagnostic.related[0].span(),
+        entry,
+        "Relation<Int, Bool>"
+    ));
+    assert_eq!(
+        diagnostic.related[0].message(),
+        "this earlier prerequisite fixes a different dependent tuple for that key"
+    );
+    assert!(diagnostic.expected.is_none());
+    assert!(diagnostic.found.is_none());
+    assert!(diagnostic.help.is_none());
+}
+
+#[test]
+fn implementation_prerequisite_source_order_owns_the_first_classified_pair() {
+    let tree = ModuleTree::create();
+    let entry_text = concat!(
+        "interface First<A> {\nfirst : A -> Int\n}\n\n",
+        "interface Second<A> {\nsecond : A -> Int\n}\n\n",
+        "interface Target<A> {\ntarget : A -> A\n}\n\n",
+        "impl Target<Int> where ",
+        "First<Int>, Second<Bool>, Second<Bool>, First<Int> {\n",
+        "target value = value\n",
+        "}\n",
+    );
+    let entry = tree.write("entry.ash", entry_text);
+    let graph = load_module_graph(&entry, &ModuleRoots::empty())
+        .expect("the competing implementation-prerequisite fixture should load");
+
+    let diagnostic = interface_diagnostic(
+        check_graph(&graph).expect_err("the earliest duplicate pair must own the failure"),
+    );
+    let entry = module_named(&graph, "entry.ash").source();
+
+    assert_eq!(diagnostic.reason, InterfaceReason::DuplicateRequirement);
+    assert!(span_matches_last(
+        diagnostic.primary.span(),
+        entry,
+        "Second<Bool>"
+    ));
+    assert_eq!(diagnostic.related.len(), 1);
+    assert!(span_matches(
+        diagnostic.related[0].span(),
+        entry,
+        "Second<Bool>"
+    ));
+    assert_no_label_overlaps(&diagnostic.related, entry, "First<Int>");
+}
+
+#[test]
 fn imported_method_failure_relates_public_cause_without_leaking_private_impl() {
     let tree = ModuleTree::create();
     let entry_text = concat!(

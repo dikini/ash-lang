@@ -163,7 +163,7 @@ fn one_constraint_budget_persists_from_dependency_admission_through_validation()
     // production constraint limit while cumulative validation exceeds it. It
     // also keeps the complete resolved-kind pass below its independent
     // type-work limit.
-    const WIDTH: usize = 5_000;
+    const WIDTH: usize = 4_500;
     let fixture = ResourceFixture::create(concat!(
         "import dependency as Dependency\n",
         "main : Unit -> Int\n",
@@ -261,7 +261,7 @@ fn monomorphic_interface_capacity_preserves_predecessor_default_acceptance() {
 fn cycle_precedes_constraint_resource_exhaustion_after_import_admission() {
     // Keep dependency kind authentication below its unchanged production
     // limits so this witness reaches the intended constraint-owner collision.
-    const WIDTH: usize = 5_000;
+    const WIDTH: usize = 4_500;
     let fixture = ResourceFixture::create(concat!(
         "import dependency as Dependency\n\n",
         "interface First<A> {\nfirst : A -> A\n}\n\n",

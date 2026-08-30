@@ -11,12 +11,13 @@ use crate::{
     integer::Integer,
     interface::{
         CheckedImplementation, CheckedInterface, CheckedRequirement, ConstrainedScheme,
-        EvidenceSlot, ImplId, ImplMethodId, InterfaceId, MatchedNominalIdentities, MethodId,
-        OverlapFailure, RequirementId, implementation_heads_overlap_structurally,
-        implementation_prerequisite_terminates, same_type_with_constraint_budget,
+        DeterminationKey, EvidenceSlot, ImplId, ImplMethodId, InterfaceApplication, InterfaceId,
+        MatchedNominalIdentities, MethodId, OverlapFailure, RequirementId,
+        implementation_application_heads_overlap_structurally,
+        implementation_prerequisite_selection_key_terminates, same_type_with_constraint_budget,
         same_type_with_constraint_budget_observing_nominals,
     },
-    kind::{KindEnvironments, KindFailure},
+    kind::{BodyFreeInterfaceMethodSeed, KindEnvironments, KindFailure},
     module::ModuleId,
     source::{Origin, Span, discard_origin_iteratively},
     types::{
@@ -29,6 +30,37 @@ use crate::{
 
 #[cfg(test)]
 use crate::interface::EvidenceSelection;
+
+#[cfg(test)]
+fn replace_unary_interface_application(application: &mut InterfaceApplication, argument: Type) {
+    let replacement = InterfaceApplication::new(application.interface(), Box::new([argument]));
+    drop(std::mem::replace(application, replacement));
+}
+
+#[cfg(test)]
+fn replace_interface_application_identity(
+    application: &mut InterfaceApplication,
+    interface: InterfaceId,
+) {
+    let previous = std::mem::replace(
+        application,
+        InterfaceApplication::new(interface, Box::new([])),
+    );
+    let (_, arguments) = previous.into_parts();
+    *application = InterfaceApplication::new(interface, arguments);
+}
+
+#[cfg(test)]
+fn mutate_interface_application_arguments(
+    application: &mut InterfaceApplication,
+    mutate: impl FnOnce(&mut Vec<Type>) -> bool,
+) -> bool {
+    let arguments = application.arguments_mut_for_summary_test();
+    let mut arguments = std::mem::take(arguments).into_vec();
+    let result = mutate(&mut arguments);
+    *application.arguments_mut_for_summary_test() = arguments.into_boxed_slice();
+    result
+}
 
 /// Stable identity of one resolved or compiler-generated term binder.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -1077,6 +1109,9 @@ pub(crate) enum LinkedCarrierMutationForTest {
     GlobalSourceType,
     InterfaceTokenIdentity,
     InterfaceTokenSourceIndex,
+    InterfaceSourceParametersEmpty,
+    InterfaceSourceParametersExtra,
+    InterfaceSourceDetermination,
     InterfaceSourceParameterIdentity,
     InterfaceSourceParameterSpelling,
     InterfaceSourceMethodIdentity,
@@ -1091,6 +1126,18 @@ pub(crate) enum LinkedCarrierMutationForTest {
     InterfaceFactParameterOrigin,
     InterfaceMethodType,
     InterfaceMethodOrigin,
+    RelationalInterfaceParameterMissing,
+    RelationalInterfaceParameterExtra,
+    RelationalInterfaceParameterReordered,
+    RelationalInterfaceParameterWrongKind,
+    RelationalInterfaceParameterWrongIdentity,
+    RelationalApplicationArgumentMissing,
+    RelationalApplicationArgumentExtra,
+    RelationalApplicationArgumentReordered,
+    RelationalApplicationArgumentWrongKind,
+    RelationalApplicationArgumentWrongIdentity,
+    RelationalApplicationKeyMismatch,
+    RelationalApplicationDependentMismatch,
     ImplementationRegistryKind,
     ImplementationSourceParameterIdentity,
     ImplementationSourceParameterSpelling,
@@ -1102,10 +1149,35 @@ pub(crate) enum LinkedCarrierMutationForTest {
     ImplementationTokenInterface,
     ImplementationTokenSourceIndex,
     ImplementationTokenMethod,
+    ImplementationSourceArgumentsEmpty,
+    ImplementationSourceArgumentsExtra,
+    ImplementationSourceWideLatePrerequisiteArgumentsExtra,
     ImplementationPrerequisite,
     ImplementationMethodRequirement,
     ImplementationMethodIdentity,
     ImplementationMethodBinder,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum LinkedDeterminationCarrierForTest {
+    Source,
+    Token,
+    Fact,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum LinkedDeterminationMutationForTest {
+    Missing,
+    Extra,
+    Duplicate,
+    Reordered,
+    OutOfRange,
+    WrongInterface,
+    MismatchedPositions,
+    WrongSourceSpelling,
+    WrongSourceOrigin,
 }
 
 #[cfg(test)]
@@ -1420,6 +1492,269 @@ impl ResolvedModuleProgram {
     }
 
     #[cfg(test)]
+    pub(crate) fn corrupt_linked_determination_for_test(
+        &mut self,
+        module: ModuleId,
+        carrier: LinkedDeterminationCarrierForTest,
+        mutation: LinkedDeterminationMutationForTest,
+    ) -> bool {
+        let Some(group) = self.groups.iter_mut().find(|group| group.module == module) else {
+            return false;
+        };
+        let target_index = if matches!(mutation, LinkedDeterminationMutationForTest::Extra) {
+            group
+                .interfaces
+                .iter()
+                .position(|interface| interface.determination.is_none())
+        } else {
+            group
+                .interfaces
+                .iter()
+                .position(|interface| interface.determination.is_some())
+        };
+        let Some(target_index) = target_index else {
+            return false;
+        };
+
+        if matches!(carrier, LinkedDeterminationCarrierForTest::Source) {
+            if matches!(mutation, LinkedDeterminationMutationForTest::Missing) {
+                return group.interfaces[target_index]
+                    .determination
+                    .take()
+                    .is_some();
+            }
+            if matches!(mutation, LinkedDeterminationMutationForTest::WrongInterface) {
+                let Some(other) = group
+                    .interfaces
+                    .iter()
+                    .enumerate()
+                    .find(|(index, interface)| {
+                        *index != target_index && interface.determination.is_some()
+                    })
+                    .and_then(|(_, interface)| interface.determination.clone())
+                else {
+                    return false;
+                };
+                group.interfaces[target_index].determination = Some(other);
+                return true;
+            }
+            if matches!(mutation, LinkedDeterminationMutationForTest::Extra) {
+                let interface = &mut group.interfaces[target_index];
+                if interface.parameters.len() < 2 {
+                    return false;
+                }
+                let occurrence = |position: usize| ResolvedDeterminationParameter {
+                    id: interface.parameters[position].id,
+                    spelling: interface.parameters[position].spelling.clone(),
+                    origin: Origin::Source(interface.span),
+                };
+                interface.determination = Some(ResolvedInterfaceDetermination {
+                    determinant: ResolvedDeterminationSide {
+                        parameters: Box::new([occurrence(0)]),
+                        span: interface.span,
+                    },
+                    dependent: ResolvedDeterminationSide {
+                        parameters: (1..interface.parameters.len())
+                            .map(occurrence)
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
+                        span: interface.span,
+                    },
+                    span: interface.span,
+                });
+                return true;
+            }
+
+            let interface = &mut group.interfaces[target_index];
+            if matches!(
+                mutation,
+                LinkedDeterminationMutationForTest::MismatchedPositions
+            ) {
+                if interface.parameters.len() < 3 {
+                    return false;
+                }
+                let occurrence = |position: usize| ResolvedDeterminationParameter {
+                    id: interface.parameters[position].id,
+                    spelling: interface.parameters[position].spelling.clone(),
+                    origin: Origin::Source(interface.span),
+                };
+                let determinant = Box::new([occurrence(1)]);
+                let dependent = Box::new([occurrence(0), occurrence(2)]);
+                let Some(determination) = interface.determination.as_mut() else {
+                    return false;
+                };
+                determination.determinant.parameters = determinant;
+                determination.dependent.parameters = dependent;
+                return true;
+            }
+            let Some(determination) = interface.determination.as_mut() else {
+                return false;
+            };
+            match mutation {
+                LinkedDeterminationMutationForTest::Duplicate => {
+                    let Some(first) = determination.determinant.parameters.first().cloned() else {
+                        return false;
+                    };
+                    determination.determinant.parameters = Box::new([first.clone(), first]);
+                }
+                LinkedDeterminationMutationForTest::Reordered => {
+                    if determination.determinant.parameters.len() < 2 {
+                        return false;
+                    }
+                    determination.determinant.parameters.swap(0, 1);
+                }
+                LinkedDeterminationMutationForTest::OutOfRange => {
+                    let Some(first) = determination.determinant.parameters.first_mut() else {
+                        return false;
+                    };
+                    first.id = TypeVariableId::resolved(module, u32::MAX);
+                }
+                LinkedDeterminationMutationForTest::WrongSourceSpelling => {
+                    let Some(first) = determination.determinant.parameters.first_mut() else {
+                        return false;
+                    };
+                    first.spelling.push_str("-forged");
+                }
+                LinkedDeterminationMutationForTest::WrongSourceOrigin => {
+                    let Some(first) = determination.determinant.parameters.first_mut() else {
+                        return false;
+                    };
+                    let cause =
+                        std::mem::replace(&mut first.origin, Origin::Source(interface.span));
+                    first.origin = Origin::Generated {
+                        cause: Box::new(cause),
+                        reason: crate::source::GeneratedReason::ConstantFolding,
+                    };
+                }
+                LinkedDeterminationMutationForTest::Missing
+                | LinkedDeterminationMutationForTest::Extra
+                | LinkedDeterminationMutationForTest::WrongInterface
+                | LinkedDeterminationMutationForTest::MismatchedPositions => return false,
+            }
+            return true;
+        }
+
+        let parameter_count = group.interfaces[target_index].parameters.len();
+        let replacement = match mutation {
+            LinkedDeterminationMutationForTest::Missing => None,
+            LinkedDeterminationMutationForTest::Extra => Some(DeterminationKey::new(Box::new([0]))),
+            LinkedDeterminationMutationForTest::Duplicate => {
+                Some(DeterminationKey::new(Box::new([0, 0])))
+            }
+            LinkedDeterminationMutationForTest::Reordered => {
+                Some(DeterminationKey::new(Box::new([1, 0])))
+            }
+            LinkedDeterminationMutationForTest::OutOfRange => {
+                Some(DeterminationKey::new(Box::new([parameter_count])))
+            }
+            LinkedDeterminationMutationForTest::WrongInterface => return false,
+            LinkedDeterminationMutationForTest::MismatchedPositions => {
+                Some(DeterminationKey::new(Box::new([1])))
+            }
+            LinkedDeterminationMutationForTest::WrongSourceSpelling
+            | LinkedDeterminationMutationForTest::WrongSourceOrigin => return false,
+        };
+        match carrier {
+            LinkedDeterminationCarrierForTest::Token => {
+                group.checked_interfaces[target_index].replace_determination_for_test(replacement);
+            }
+            LinkedDeterminationCarrierForTest::Fact => {
+                group.interface_facts[target_index].determination = replacement;
+            }
+            LinkedDeterminationCarrierForTest::Source => return false,
+        }
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn coherently_remove_first_interface_determination_for_test(
+        &mut self,
+        module: ModuleId,
+    ) -> bool {
+        let Some(group) = self.groups.iter_mut().find(|group| group.module == module) else {
+            return false;
+        };
+        let Some(index) = group
+            .interfaces
+            .iter()
+            .position(|interface| interface.determination.is_some())
+        else {
+            return false;
+        };
+        if index >= group.checked_interfaces.len() || index >= group.interface_facts.len() {
+            return false;
+        }
+        group.interfaces[index].determination = None;
+        group.checked_interfaces[index].replace_determination_for_test(None);
+        group.interface_facts[index].determination = None;
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn coherently_make_first_determined_global_key_only_unused_for_test(
+        &mut self,
+        module: ModuleId,
+    ) -> bool {
+        let Some(group) = self.groups.iter_mut().find(|group| group.module == module) else {
+            return false;
+        };
+        let Some((scheme_index, scheme)) = group
+            .schemes
+            .iter_mut()
+            .enumerate()
+            .find(|(_, scheme)| !scheme.scheme.requirements.is_empty())
+        else {
+            return false;
+        };
+        let Some(requirement) = scheme.scheme.requirements.first() else {
+            return false;
+        };
+        let Some(interface) = group
+            .interface_facts
+            .iter()
+            .find(|interface| interface.id == requirement.interface())
+        else {
+            return false;
+        };
+        let Some(determination) = interface.determination() else {
+            return false;
+        };
+        let Some((dependent_position, _)) = requirement
+            .arguments()
+            .iter()
+            .enumerate()
+            .find(|(position, _)| !determination.positions().contains(position))
+        else {
+            return false;
+        };
+        let Some(Type::Variable(dependent)) = requirement.arguments().get(dependent_position)
+        else {
+            return false;
+        };
+        let dependent = *dependent;
+        let replacement =
+            || Type::Function(Box::new(Type::Variable(dependent)), Box::new(Type::Int));
+        discard_type_iteratively(std::mem::replace(
+            &mut scheme.scheme.value_type,
+            replacement(),
+        ));
+        let Some(definition) = group.definitions.get_mut(scheme_index) else {
+            return false;
+        };
+        let Some(source) = definition.source.as_mut() else {
+            return false;
+        };
+        let ResolvedDefinitionKind::Equational(global) = &mut source.kind else {
+            return false;
+        };
+        discard_type_iteratively(std::mem::replace(
+            &mut global.interface.annotation.ty,
+            replacement(),
+        ));
+        true
+    }
+
+    #[cfg(test)]
     pub(crate) fn corrupt_linked_carrier_for_test(
         &mut self,
         module: ModuleId,
@@ -1594,6 +1929,9 @@ impl ResolvedModuleProgram {
             }
             LinkedCarrierMutationForTest::InterfaceTokenIdentity
             | LinkedCarrierMutationForTest::InterfaceTokenSourceIndex
+            | LinkedCarrierMutationForTest::InterfaceSourceParametersEmpty
+            | LinkedCarrierMutationForTest::InterfaceSourceParametersExtra
+            | LinkedCarrierMutationForTest::InterfaceSourceDetermination
             | LinkedCarrierMutationForTest::InterfaceSourceParameterIdentity
             | LinkedCarrierMutationForTest::InterfaceSourceParameterSpelling
             | LinkedCarrierMutationForTest::InterfaceSourceMethodIdentity
@@ -1623,19 +1961,69 @@ impl ResolvedModuleProgram {
                         };
                         token.source_index = usize::MAX;
                     }
+                    LinkedCarrierMutationForTest::InterfaceSourceParametersEmpty => {
+                        let Some(interface) = self.groups[group_index].interfaces.first_mut()
+                        else {
+                            return false;
+                        };
+                        discard_resolved_type_variables(std::mem::take(&mut interface.parameters));
+                    }
+                    LinkedCarrierMutationForTest::InterfaceSourceParametersExtra => {
+                        let Some(interface) = self.groups[group_index].interfaces.first_mut()
+                        else {
+                            return false;
+                        };
+                        let Some(parameter) = interface.parameters.first().cloned() else {
+                            return false;
+                        };
+                        let mut parameters = std::mem::take(&mut interface.parameters).into_vec();
+                        parameters.push(parameter);
+                        interface.parameters = parameters.into_boxed_slice();
+                    }
+                    LinkedCarrierMutationForTest::InterfaceSourceDetermination => {
+                        let Some(interface) = self.groups[group_index].interfaces.first_mut()
+                        else {
+                            return false;
+                        };
+                        let Some(parameter) = interface.parameters.first() else {
+                            return false;
+                        };
+                        let occurrence = || ResolvedDeterminationParameter {
+                            id: parameter.id,
+                            spelling: parameter.spelling.clone(),
+                            origin: Origin::Source(interface.span),
+                        };
+                        interface.determination = Some(ResolvedInterfaceDetermination {
+                            determinant: ResolvedDeterminationSide {
+                                parameters: Box::new([occurrence()]),
+                                span: interface.span,
+                            },
+                            dependent: ResolvedDeterminationSide {
+                                parameters: Box::new([occurrence()]),
+                                span: interface.span,
+                            },
+                            span: interface.span,
+                        });
+                    }
                     LinkedCarrierMutationForTest::InterfaceSourceParameterIdentity => {
                         let Some(interface) = self.groups[group_index].interfaces.first_mut()
                         else {
                             return false;
                         };
-                        interface.parameter.id = TypeVariableId::resolved(module, u32::MAX);
+                        let Some(parameter) = interface.parameters.first_mut() else {
+                            return false;
+                        };
+                        parameter.id = TypeVariableId::resolved(module, u32::MAX);
                     }
                     LinkedCarrierMutationForTest::InterfaceSourceParameterSpelling => {
                         let Some(interface) = self.groups[group_index].interfaces.first_mut()
                         else {
                             return false;
                         };
-                        interface.parameter.spelling.push_str("-forged");
+                        let Some(parameter) = interface.parameters.first_mut() else {
+                            return false;
+                        };
+                        parameter.spelling.push_str("-forged");
                     }
                     LinkedCarrierMutationForTest::InterfaceSourceMethodIdentity => {
                         let Some(interface) = self.groups[group_index].interfaces.first_mut()
@@ -1687,7 +2075,7 @@ impl ResolvedModuleProgram {
                         let Some(parameter) = self.groups[group_index]
                             .interface_facts
                             .first()
-                            .map(|fact| fact.parameter.id)
+                            .map(|fact| fact.parameters[0].id)
                         else {
                             return false;
                         };
@@ -1707,21 +2095,21 @@ impl ResolvedModuleProgram {
                         else {
                             return false;
                         };
-                        fact.parameter.id = TypeVariableId::resolved(module, u32::MAX);
+                        fact.parameters[0].id = TypeVariableId::resolved(module, u32::MAX);
                     }
                     LinkedCarrierMutationForTest::InterfaceFactParameterSpelling => {
                         let Some(fact) = self.groups[group_index].interface_facts.first_mut()
                         else {
                             return false;
                         };
-                        fact.parameter.spelling.push_str("-forged");
+                        fact.parameters[0].spelling.push_str("-forged");
                     }
                     LinkedCarrierMutationForTest::InterfaceFactParameterKind => {
                         let Some(fact) = self.groups[group_index].interface_facts.first_mut()
                         else {
                             return false;
                         };
-                        fact.parameter.kind =
+                        fact.parameters[0].kind =
                             Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
                     }
                     LinkedCarrierMutationForTest::InterfaceHiddenFactParameterKind => {
@@ -1732,7 +2120,7 @@ impl ResolvedModuleProgram {
                         else {
                             return false;
                         };
-                        fact.parameter.kind =
+                        fact.parameters[0].kind =
                             Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
                     }
                     LinkedCarrierMutationForTest::InterfaceFactParameterOrigin => {
@@ -1740,7 +2128,7 @@ impl ResolvedModuleProgram {
                         else {
                             return false;
                         };
-                        wrap_origin(&mut fact.parameter.origin);
+                        wrap_origin(&mut fact.parameters[0].origin);
                     }
                     LinkedCarrierMutationForTest::InterfaceMethodType => {
                         let Some(method) = self.groups[group_index]
@@ -1769,6 +2157,149 @@ impl ResolvedModuleProgram {
                 }
                 true
             }
+            LinkedCarrierMutationForTest::RelationalInterfaceParameterMissing
+            | LinkedCarrierMutationForTest::RelationalInterfaceParameterExtra
+            | LinkedCarrierMutationForTest::RelationalInterfaceParameterReordered
+            | LinkedCarrierMutationForTest::RelationalInterfaceParameterWrongKind
+            | LinkedCarrierMutationForTest::RelationalInterfaceParameterWrongIdentity => {
+                let Some(fact) = self.groups[group_index]
+                    .interface_facts
+                    .iter_mut()
+                    .find(|fact| fact.parameters.len() == 2)
+                else {
+                    return false;
+                };
+                match mutation {
+                    LinkedCarrierMutationForTest::RelationalInterfaceParameterMissing => {
+                        let mut parameters = std::mem::take(&mut fact.parameters).into_vec();
+                        let Some(removed) = parameters.pop() else {
+                            return false;
+                        };
+                        discard_resolved_type_variable(removed);
+                        fact.parameters = parameters.into_boxed_slice();
+                    }
+                    LinkedCarrierMutationForTest::RelationalInterfaceParameterExtra => {
+                        let Some(mut extra) = fact.parameters.last().cloned() else {
+                            return false;
+                        };
+                        extra.id = TypeVariableId::resolved(module, u32::MAX - 1);
+                        extra.spelling = "Extra".to_owned();
+                        let mut parameters = std::mem::take(&mut fact.parameters).into_vec();
+                        parameters.push(extra);
+                        fact.parameters = parameters.into_boxed_slice();
+                    }
+                    LinkedCarrierMutationForTest::RelationalInterfaceParameterReordered => {
+                        fact.parameters.swap(0, 1);
+                    }
+                    LinkedCarrierMutationForTest::RelationalInterfaceParameterWrongKind => {
+                        drop(std::mem::replace(
+                            &mut fact.parameters[1].kind,
+                            Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                        ));
+                    }
+                    LinkedCarrierMutationForTest::RelationalInterfaceParameterWrongIdentity => {
+                        fact.parameters[1].id = TypeVariableId::resolved(module, u32::MAX);
+                    }
+                    _ => unreachable!(),
+                }
+                true
+            }
+            LinkedCarrierMutationForTest::RelationalApplicationArgumentMissing
+            | LinkedCarrierMutationForTest::RelationalApplicationArgumentExtra
+            | LinkedCarrierMutationForTest::RelationalApplicationArgumentReordered
+            | LinkedCarrierMutationForTest::RelationalApplicationArgumentWrongKind
+            | LinkedCarrierMutationForTest::RelationalApplicationArgumentWrongIdentity
+            | LinkedCarrierMutationForTest::RelationalApplicationKeyMismatch
+            | LinkedCarrierMutationForTest::RelationalApplicationDependentMismatch => {
+                let higher_kinded = self
+                    .registry
+                    .nominals
+                    .iter()
+                    .find(|nominal| {
+                        self.registry
+                            .nominal_parameters
+                            .get(&nominal.id)
+                            .is_some_and(|parameters| parameters.len() == 1)
+                    })
+                    .map(|nominal| nominal.id);
+                let Some(token) = self.groups[group_index]
+                    .checked_implementations
+                    .iter_mut()
+                    .find(|token| {
+                        token.arguments().len()
+                            == if matches!(
+                                mutation,
+                                LinkedCarrierMutationForTest::RelationalApplicationKeyMismatch
+                                    | LinkedCarrierMutationForTest::RelationalApplicationDependentMismatch
+                            ) {
+                                3
+                            } else {
+                                2
+                            }
+                    })
+                else {
+                    return false;
+                };
+                let mut application = token.application().clone();
+                let changed = mutate_interface_application_arguments(
+                    &mut application,
+                    |arguments| match mutation {
+                        LinkedCarrierMutationForTest::RelationalApplicationArgumentMissing => {
+                            let Some(removed) = arguments.pop() else {
+                                return false;
+                            };
+                            discard_type_iteratively(removed);
+                            true
+                        }
+                        LinkedCarrierMutationForTest::RelationalApplicationArgumentExtra => {
+                            arguments.push(Type::Unit);
+                            true
+                        }
+                        LinkedCarrierMutationForTest::RelationalApplicationArgumentReordered => {
+                            arguments.swap(0, 1);
+                            true
+                        }
+                        LinkedCarrierMutationForTest::RelationalApplicationArgumentWrongKind => {
+                            let Some(higher_kinded) = higher_kinded else {
+                                return false;
+                            };
+                            discard_type_iteratively(std::mem::replace(
+                                &mut arguments[1],
+                                Type::Nominal(higher_kinded),
+                            ));
+                            true
+                        }
+                        LinkedCarrierMutationForTest::RelationalApplicationArgumentWrongIdentity => {
+                            discard_type_iteratively(std::mem::replace(
+                                &mut arguments[1],
+                                Type::Nominal(NominalTypeId::new(module, u32::MAX)),
+                            ));
+                            true
+                        }
+                        LinkedCarrierMutationForTest::RelationalApplicationKeyMismatch => {
+                            discard_type_iteratively(std::mem::replace(
+                                &mut arguments[1],
+                                Type::Bool,
+                            ));
+                            true
+                        }
+                        LinkedCarrierMutationForTest::RelationalApplicationDependentMismatch => {
+                            discard_type_iteratively(std::mem::replace(
+                                &mut arguments[2],
+                                Type::Int,
+                            ));
+                            true
+                        }
+                        _ => unreachable!(),
+                    },
+                );
+                if !changed {
+                    return false;
+                }
+                let methods = std::mem::take(&mut token.methods);
+                *token = CheckedImplementation::new(token.source_index, token.id, application, methods);
+                true
+            }
             LinkedCarrierMutationForTest::ImplementationRegistryKind
             | LinkedCarrierMutationForTest::ImplementationSourceParameterIdentity
             | LinkedCarrierMutationForTest::ImplementationSourceParameterSpelling
@@ -1780,6 +2311,9 @@ impl ResolvedModuleProgram {
             | LinkedCarrierMutationForTest::ImplementationTokenInterface
             | LinkedCarrierMutationForTest::ImplementationTokenSourceIndex
             | LinkedCarrierMutationForTest::ImplementationTokenMethod
+            | LinkedCarrierMutationForTest::ImplementationSourceArgumentsEmpty
+            | LinkedCarrierMutationForTest::ImplementationSourceArgumentsExtra
+            | LinkedCarrierMutationForTest::ImplementationSourceWideLatePrerequisiteArgumentsExtra
             | LinkedCarrierMutationForTest::ImplementationPrerequisite
             | LinkedCarrierMutationForTest::ImplementationMethodRequirement
             | LinkedCarrierMutationForTest::ImplementationMethodIdentity
@@ -1864,8 +2398,14 @@ impl ResolvedModuleProgram {
                             ImplId::new(module, u32::MAX);
                     }
                     LinkedCarrierMutationForTest::ImplementationTokenInterface => {
-                        self.groups[group_index].checked_implementations[implementation_index]
-                            .interface = InterfaceId::new(module, u32::MAX);
+                        let token = &mut self.groups[group_index].checked_implementations
+                            [implementation_index];
+                        let application = InterfaceApplication::new(
+                            InterfaceId::new(module, u32::MAX),
+                            token.application().clone().into_parts().1,
+                        );
+                        let methods = std::mem::take(&mut token.methods);
+                        *token = CheckedImplementation::new(token.source_index, token.id, application, methods);
                     }
                     LinkedCarrierMutationForTest::ImplementationTokenSourceIndex => {
                         self.groups[group_index].checked_implementations[implementation_index]
@@ -1881,6 +2421,61 @@ impl ResolvedModuleProgram {
                         };
                         method.method = MethodId::new(method.method.interface(), u32::MAX);
                     }
+                    LinkedCarrierMutationForTest::ImplementationSourceArgumentsEmpty => {
+                        let Some(source) = self.groups[group_index].implementations
+                            [implementation_index]
+                            .source
+                            .as_mut()
+                        else {
+                            return false;
+                        };
+                        for argument in std::mem::take(&mut source.head.arguments) {
+                            discard_resolved_type(argument);
+                        }
+                    }
+                    LinkedCarrierMutationForTest::ImplementationSourceArgumentsExtra => {
+                        let Some(source) = self.groups[group_index].implementations
+                            [implementation_index]
+                            .source
+                            .as_mut()
+                        else {
+                            return false;
+                        };
+                        let Some(argument) = source.head.arguments.first().cloned() else {
+                            return false;
+                        };
+                        let mut arguments = std::mem::take(&mut source.head.arguments).into_vec();
+                        arguments.push(argument);
+                        source.head.arguments = arguments.into_boxed_slice();
+                    }
+                    LinkedCarrierMutationForTest::ImplementationSourceWideLatePrerequisiteArgumentsExtra => {
+                        const WIDTH: usize = 32;
+                        let Some(source) = self.groups[group_index].implementations
+                            [implementation_index]
+                            .source
+                            .as_mut()
+                        else {
+                            return false;
+                        };
+                        let Some(first) = source.prerequisites.first().cloned() else {
+                            return false;
+                        };
+                        let mut prerequisites = Vec::new();
+                        if prerequisites.try_reserve_exact(WIDTH).is_err() {
+                            return false;
+                        }
+                        prerequisites.resize(WIDTH, first);
+                        let Some(last) = prerequisites.last_mut() else {
+                            return false;
+                        };
+                        let Some(argument) = last.application.arguments.first().cloned() else {
+                            return false;
+                        };
+                        let mut arguments = std::mem::take(&mut last.application.arguments).into_vec();
+                        arguments.push(argument);
+                        last.application.arguments = arguments.into_boxed_slice();
+                        source.prerequisites = prerequisites.into_boxed_slice();
+                    }
                     LinkedCarrierMutationForTest::ImplementationPrerequisite => {
                         let Some(prerequisite) = self.groups[group_index].implementation_facts
                             [implementation_index]
@@ -1889,10 +2484,10 @@ impl ResolvedModuleProgram {
                         else {
                             return false;
                         };
-                        discard_type_iteratively(std::mem::replace(
-                            &mut prerequisite.argument,
+                        replace_unary_interface_application(
+                            &mut prerequisite.application,
                             Type::Int,
-                        ));
+                        );
                     }
                     LinkedCarrierMutationForTest::ImplementationMethodRequirement => {
                         let Some(requirement) = self.groups[group_index].implementation_facts
@@ -1903,19 +2498,19 @@ impl ResolvedModuleProgram {
                         else {
                             return false;
                         };
-                        discard_type_iteratively(std::mem::replace(
-                            &mut requirement.argument,
-                            Type::Int,
-                        ));
+                        replace_unary_interface_application(&mut requirement.application, Type::Int);
                     }
                     LinkedCarrierMutationForTest::ImplementationMethodIdentity => {
                         let fact = &mut self.groups[group_index].implementation_facts
                             [implementation_index];
+                        let interface = fact.interface();
                         let Some(method) = fact.methods.first_mut() else {
                             return false;
                         };
-                        method.id =
-                            ImplMethodId::new(fact.id, MethodId::new(fact.interface, u32::MAX));
+                        method.id = ImplMethodId::new(
+                            fact.id,
+                            MethodId::new(interface, u32::MAX),
+                        );
                     }
                     LinkedCarrierMutationForTest::ImplementationMethodBinder => {
                         let Some(method) = self.groups[group_index].implementation_facts
@@ -2662,9 +3257,7 @@ impl ResolvedModuleProgram {
         else {
             return false;
         };
-        let argument = group.implementation_facts[implementation_index]
-            .argument
-            .clone();
+        let argument = group.implementation_facts[implementation_index].arguments()[0].clone();
         let Some(source) = group
             .implementations
             .get_mut(implementation_index)
@@ -2690,23 +3283,98 @@ impl ResolvedModuleProgram {
         }
 
         discard_type_iteratively(std::mem::replace(
-            &mut source_prerequisite.argument.ty,
+            &mut source_prerequisite.application.arguments[0].ty,
             argument.clone(),
         ));
-        discard_type_iteratively(std::mem::replace(
-            &mut fact_prerequisite.argument,
-            argument.clone(),
-        ));
+        replace_unary_interface_application(&mut fact_prerequisite.application, argument.clone());
         for method in &mut fact.methods {
             let requirement = method
                 .scheme
                 .requirements
                 .get_mut(prerequisite_index)
                 .expect("the complete implementation method scheme was checked above");
-            discard_type_iteratively(std::mem::replace(
-                &mut requirement.argument,
-                argument.clone(),
-            ));
+            replace_unary_interface_application(&mut requirement.application, argument.clone());
+        }
+        discard_type_iteratively(argument);
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_implementation_prerequisite_argument_with_head_for_test(
+        &mut self,
+        implementation: ImplId,
+        prerequisite_index: usize,
+        argument_index: usize,
+    ) -> bool {
+        let Some(group_index) = self
+            .groups
+            .iter()
+            .position(|group| group.module == implementation.module())
+        else {
+            return false;
+        };
+        let Some(implementation_index) = self.groups[group_index]
+            .implementation_facts
+            .iter()
+            .position(|fact| fact.id == implementation)
+        else {
+            return false;
+        };
+        let Some(argument) = self.groups[group_index].implementation_facts[implementation_index]
+            .arguments()
+            .get(argument_index)
+            .cloned()
+        else {
+            return false;
+        };
+        let can_mutate = self.groups[group_index]
+            .implementations
+            .get(implementation_index)
+            .and_then(|body| body.source.as_ref())
+            .and_then(|source| source.prerequisites.get(prerequisite_index))
+            .and_then(|prerequisite| prerequisite.application.arguments.get(argument_index))
+            .is_some()
+            && self.groups[group_index].implementation_facts[implementation_index]
+                .prerequisites
+                .get(prerequisite_index)
+                .and_then(|prerequisite| prerequisite.arguments().get(argument_index))
+                .is_some()
+            && self.groups[group_index].implementation_facts[implementation_index]
+                .methods
+                .iter()
+                .all(|method| {
+                    method
+                        .scheme
+                        .requirements
+                        .get(prerequisite_index)
+                        .and_then(|requirement| requirement.arguments().get(argument_index))
+                        .is_some()
+                });
+        if !can_mutate {
+            discard_type_iteratively(argument);
+            return false;
+        }
+
+        let group = &mut self.groups[group_index];
+        let source = group.implementations[implementation_index]
+            .source
+            .as_mut()
+            .expect("the complete mutation preflight authenticated the source body");
+        let source_argument = &mut source.prerequisites[prerequisite_index]
+            .application
+            .arguments[argument_index]
+            .ty;
+        discard_type_iteratively(std::mem::replace(source_argument, argument.clone()));
+        let fact = &mut group.implementation_facts[implementation_index];
+        let fact_argument = &mut fact.prerequisites[prerequisite_index]
+            .application
+            .arguments_mut_for_summary_test()[argument_index];
+        discard_type_iteratively(std::mem::replace(fact_argument, argument.clone()));
+        for method in &mut fact.methods {
+            let method_argument = &mut method.scheme.requirements[prerequisite_index]
+                .application
+                .arguments_mut_for_summary_test()[argument_index];
+            discard_type_iteratively(std::mem::replace(method_argument, argument.clone()));
         }
         discard_type_iteratively(argument);
         true
@@ -2855,7 +3523,7 @@ impl ResolvedModuleProgram {
         else {
             return false;
         };
-        discard_type_iteratively(std::mem::replace(&mut fact.argument, argument));
+        replace_unary_interface_application(&mut fact.application, argument);
         true
     }
 
@@ -3626,8 +4294,10 @@ pub struct CheckedInterfaceFact {
     pub id: InterfaceId,
     /// Exact defining source spelling.
     pub spelling: String,
-    /// The interface's single parameter with its defining identity.
-    pub parameter: ResolvedTypeVariable,
+    /// Ordered interface parameters with their defining identities.
+    pub parameters: Box<[ResolvedTypeVariable]>,
+    /// Optional total determinant key in interface declaration coordinates.
+    determination: Option<DeterminationKey>,
     /// Checked methods in semantic declaration order.
     pub methods: Box<[CheckedInterfaceMethodFact]>,
     /// Causal declaration provenance.
@@ -3656,24 +4326,55 @@ impl ImportedInterfaceFact {
 }
 
 impl CheckedInterfaceFact {
-    /// Looks up one checked method within its owning interface.
-    #[must_use]
-    pub fn method(&self, id: MethodId) -> Option<&CheckedInterfaceMethodFact> {
-        self.methods.iter().find(|method| method.id == id)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn without_methods_for_test(
+    pub(crate) fn new(
         id: InterfaceId,
         spelling: String,
-        parameter: ResolvedTypeVariable,
+        parameters: Box<[ResolvedTypeVariable]>,
+        determination: Option<DeterminationKey>,
+        methods: Box<[CheckedInterfaceMethodFact]>,
         origin: Origin,
         span: Span,
     ) -> Self {
         Self {
             id,
             spelling,
-            parameter,
+            parameters,
+            determination,
+            methods,
+            origin,
+            span,
+        }
+    }
+
+    /// Looks up one checked method within its owning interface.
+    #[must_use]
+    pub fn method(&self, id: MethodId) -> Option<&CheckedInterfaceMethodFact> {
+        self.methods.iter().find(|method| method.id == id)
+    }
+
+    /// Returns the determinant declaration positions when this interface has a key.
+    #[must_use]
+    pub(crate) fn determinant_positions(&self) -> Option<&[usize]> {
+        self.determination.as_ref().map(DeterminationKey::positions)
+    }
+
+    pub(crate) const fn determination(&self) -> Option<&DeterminationKey> {
+        self.determination.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn without_methods_for_test(
+        id: InterfaceId,
+        spelling: String,
+        parameters: Box<[ResolvedTypeVariable]>,
+        origin: Origin,
+        span: Span,
+    ) -> Self {
+        Self {
+            id,
+            spelling,
+            parameters,
+            determination: None,
             methods: Box::new([]),
             origin,
             span,
@@ -3683,10 +4384,9 @@ impl CheckedInterfaceFact {
 
 impl Drop for CheckedInterfaceFact {
     fn drop(&mut self) {
-        discard_origin_iteratively(std::mem::replace(
-            &mut self.parameter.origin,
-            Origin::Source(self.span),
-        ));
+        for parameter in std::mem::take(&mut self.parameters).into_vec() {
+            discard_resolved_type_variable(parameter);
+        }
         for method in std::mem::take(&mut self.methods).into_vec() {
             drop(method);
         }
@@ -3850,12 +4550,10 @@ impl CheckedInterfaceMethodFact {
 pub struct CheckedImplementationFact {
     /// Stable anonymous implementation identity.
     pub id: ImplId,
-    /// Stable implemented interface identity.
-    pub interface: InterfaceId,
+    /// Complete checked implementation head.
+    pub(crate) application: crate::interface::InterfaceApplication,
     /// Ordered rigid head parameters with defining identities.
     pub head_parameters: Box<[ResolvedTypeVariable]>,
-    /// Checked implementation head argument.
-    pub(crate) argument: Type,
     /// Ordered checked prerequisites.
     pub prerequisites: Box<[CheckedRequirement]>,
     /// Method mappings in interface declaration order.
@@ -3876,10 +4574,20 @@ pub struct ImportedImplementationFact {
 }
 
 impl CheckedImplementationFact {
-    /// Borrows the checked implementation head argument.
+    /// Returns the stable implemented interface identity.
     #[must_use]
-    pub const fn argument(&self) -> &Type {
-        &self.argument
+    pub const fn interface(&self) -> InterfaceId {
+        self.application.interface()
+    }
+
+    /// Borrows the checked implementation head arguments in declaration order.
+    #[must_use]
+    pub const fn arguments(&self) -> &[Type] {
+        self.application.arguments()
+    }
+
+    pub(crate) const fn application(&self) -> &crate::interface::InterfaceApplication {
+        &self.application
     }
 }
 
@@ -3902,7 +4610,6 @@ impl Drop for CheckedImplementationFact {
         for parameter in std::mem::take(&mut self.head_parameters).into_vec() {
             discard_origin_iteratively(parameter.origin);
         }
-        discard_type_iteratively(std::mem::replace(&mut self.argument, Type::Unit));
         for prerequisite in std::mem::take(&mut self.prerequisites).into_vec() {
             drop(prerequisite);
         }
@@ -3966,12 +4673,18 @@ fn clone_checked_requirement(
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<CheckedRequirement, ResolvedBuildFailure> {
     constraint_work
-        .charge_type(&requirement.argument)
+        .charge(requirement.arguments().len())
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    for argument in requirement.arguments() {
+        constraint_work
+            .charge_type(argument)
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    }
     Ok(CheckedRequirement {
         id: requirement.id,
-        interface: requirement.interface,
-        argument: clone_type_with_budget(&requirement.argument, type_work)
+        application: requirement
+            .application()
+            .clone_with_budget(type_work)
             .map_err(|()| ResolvedBuildFailure::TypeResource)?,
         origin: requirement.origin.clone(),
         span: requirement.span,
@@ -3989,6 +4702,17 @@ fn clone_checked_interface_fact(
             || source.spelling != fact.spelling
             || source.methods.len() != fact.methods.len()
     }) {
+        return Err(ResolvedBuildFailure::InvalidState);
+    }
+    if let Some(source) = source
+        && !resolved_determination_positions_match(
+            &source.parameters,
+            source.determination.as_ref(),
+            &[fact.determinant_positions()],
+            |work| constraint_work.charge(work),
+        )
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+    {
         return Err(ResolvedBuildFailure::InvalidState);
     }
     // Each method slot reserves the retained method relation. For a local
@@ -4045,11 +4769,19 @@ fn clone_checked_interface_fact(
             constraint_work,
         )?);
     }
+    let parameters = clone_resolved_type_variable_buffer_with_budget(&fact.parameters, type_work)
+        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+    let determination = fact
+        .determination
+        .as_ref()
+        .map(|key| key.clone_with_budget(constraint_work))
+        .transpose()
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
     Ok(CheckedInterfaceFact {
         id: fact.id,
         spelling: fact.spelling.clone(),
-        parameter: clone_resolved_type_variable_with_budget(&fact.parameter, type_work)
-            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+        parameters: parameters.into_vec().into_boxed_slice(),
+        determination,
         methods: methods.into_boxed_slice(),
         origin: fact.origin.clone(),
         span: fact.span,
@@ -4071,8 +4803,13 @@ fn clone_checked_implementation_fact(
         )
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
     constraint_work
-        .charge_type(&fact.argument)
+        .charge(fact.arguments().len())
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    for argument in fact.arguments() {
+        constraint_work
+            .charge_type(argument)
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    }
 
     let mut head_parameters = ResolvedTypeVariableBuffer(Vec::new());
     head_parameters
@@ -4117,8 +4854,13 @@ fn clone_checked_implementation_fact(
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
         for requirement in &method.scheme.requirements {
             constraint_work
-                .charge_type(&requirement.argument)
+                .charge(requirement.arguments().len())
                 .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+            for argument in requirement.arguments() {
+                constraint_work
+                    .charge_type(argument)
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+            }
         }
         methods.push(CheckedImplementationMethodFact {
             id: method.id,
@@ -4134,15 +4876,13 @@ fn clone_checked_implementation_fact(
         });
     }
 
-    let argument = IterativeTypeOwner::new(
-        clone_type_with_budget(&fact.argument, type_work)
-            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
-    );
     Ok(CheckedImplementationFact {
         id: fact.id,
-        interface: fact.interface,
+        application: fact
+            .application()
+            .clone_with_budget(type_work)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
         head_parameters: head_parameters.into_boxed_slice(),
-        argument: argument.into_inner(),
         prerequisites: prerequisites.into_boxed_slice(),
         methods: methods.into_boxed_slice(),
         origin: fact.origin.clone(),
@@ -5116,6 +5856,17 @@ pub(crate) enum SummaryCarrierMutationForTest {
     PublicInterfaceKind,
     PublicInterfaceParameterIdentity,
     PublicInterfaceParameterOwner,
+    RelationalInterfaceParameterMissing,
+    RelationalInterfaceParameterExtra,
+    RelationalInterfaceParameterReordered,
+    RelationalInterfaceParameterIdentity,
+    RelationalInterfaceParameterWrongKind,
+    DeterminationPositionsEmpty,
+    DeterminationPositionsFull,
+    DeterminationPositionsRepeated,
+    DeterminationPositionsReordered,
+    DeterminationPositionsOutOfRange,
+    DeterminationPositionsAlternateKey,
     HiddenInterfaceKind,
     HiddenInterfaceParameterIdentity,
     HiddenInterfaceParameterOwner,
@@ -5150,6 +5901,12 @@ pub(crate) enum SummaryCarrierMutationForTest {
     ImplementationArgument,
     ImplementationSemanticHead,
     ImplementationInterfaceIdentity,
+    RelationalImplementationArgumentMissing,
+    RelationalImplementationArgumentExtra,
+    RelationalImplementationArgumentReordered,
+    RelationalImplementationArgumentWrongKind,
+    RelationalImplementationArgumentExtraWithLateWrongKind,
+    RelationalImplementationInterfaceIdentity,
     ImplementationPrerequisiteIdentity,
     ImplementationPrerequisiteOrder,
     ImplementationPrerequisiteDuplicate,
@@ -5512,8 +6269,200 @@ fn summary_parameter_id_set(
     Ok(identities)
 }
 
+fn type_references_with_constraint_budget<'a>(
+    types: &'a [Type],
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<Vec<&'a Type>, ResolvedBuildFailure> {
+    constraint_work
+        .charge(types.len())
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    let mut references = Vec::new();
+    references
+        .try_reserve_exact(types.len())
+        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+    references.extend(types);
+    Ok(references)
+}
+
+fn summary_selection_key_types<'a>(
+    interface: &CheckedInterfaceFact,
+    arguments: &'a [Type],
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<Vec<&'a Type>, ResolvedBuildFailure> {
+    if arguments.len() != interface.parameters.len() {
+        return Err(ResolvedBuildFailure::InvalidState);
+    }
+    let selected_count = interface
+        .determination()
+        .map_or(arguments.len(), |determination| {
+            determination.positions().len()
+        });
+    let Some(determination) = interface.determination() else {
+        constraint_work
+            .charge(selected_count)
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        let mut selected = Vec::new();
+        selected
+            .try_reserve_exact(selected_count)
+            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+        selected.extend(arguments);
+        return Ok(selected);
+    };
+
+    let mut previous_position = None;
+    for &position in determination.positions() {
+        constraint_work
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        if position >= arguments.len()
+            || previous_position.is_some_and(|previous| previous >= position)
+        {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        previous_position = Some(position);
+    }
+    constraint_work
+        .charge(selected_count)
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    let mut selected = Vec::new();
+    selected
+        .try_reserve_exact(selected_count)
+        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+    for &position in determination.positions() {
+        selected.push(
+            arguments
+                .get(position)
+                .ok_or(ResolvedBuildFailure::InvalidState)?,
+        );
+    }
+    Ok(selected)
+}
+
+struct SummaryDeterminedApplicationSlices<'a> {
+    key: Vec<&'a Type>,
+    dependents: Vec<&'a Type>,
+}
+
+fn summary_determined_application_slices<'a>(
+    interface: &CheckedInterfaceFact,
+    arguments: &'a [Type],
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<Option<SummaryDeterminedApplicationSlices<'a>>, ResolvedBuildFailure> {
+    if arguments.len() != interface.parameters.len() {
+        return Err(ResolvedBuildFailure::InvalidState);
+    }
+    let Some(determination) = interface.determination() else {
+        return Ok(None);
+    };
+    let positions = determination.positions();
+    if positions.is_empty() || positions.len() >= arguments.len() {
+        return Err(ResolvedBuildFailure::InvalidState);
+    }
+    constraint_work
+        .charge(positions.len())
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    let mut previous = None;
+    for &position in positions {
+        if position >= arguments.len() || previous.is_some_and(|previous| previous >= position) {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        previous = Some(position);
+    }
+
+    constraint_work
+        .charge(arguments.len())
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    let dependent_count = arguments
+        .len()
+        .checked_sub(positions.len())
+        .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+    let mut key = Vec::new();
+    let mut dependents = Vec::new();
+    key.try_reserve_exact(positions.len())
+        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+    dependents
+        .try_reserve_exact(dependent_count)
+        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+
+    let mut key_position = 0;
+    for (position, argument) in arguments.iter().enumerate() {
+        constraint_work
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        if positions.get(key_position) == Some(&position) {
+            key.push(argument);
+            key_position += 1;
+        } else {
+            dependents.push(argument);
+        }
+    }
+    if key_position != positions.len()
+        || key.len() != positions.len()
+        || dependents.len() != dependent_count
+    {
+        return Err(ResolvedBuildFailure::InvalidState);
+    }
+    Ok(Some(SummaryDeterminedApplicationSlices { key, dependents }))
+}
+
+fn summary_types_are_all_bare_variables(
+    types: &[&Type],
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<bool, ResolvedBuildFailure> {
+    for ty in types {
+        constraint_work
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        if !matches!(ty, Type::Variable(_)) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn summary_dependents_are_covered_by_key(
+    key: &[&Type],
+    dependents: &[&Type],
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<bool, ResolvedBuildFailure> {
+    let mut key_variables = HashSet::new();
+    for ty in key {
+        collect_summary_constraint_variables(ty, &mut key_variables, constraint_work)?;
+    }
+    let mut dependent_variables = HashSet::new();
+    for ty in dependents {
+        collect_summary_constraint_variables(ty, &mut dependent_variables, constraint_work)?;
+    }
+    constraint_work
+        .charge(dependent_variables.len())
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    Ok(dependent_variables
+        .iter()
+        .all(|variable| key_variables.contains(variable)))
+}
+
+fn summary_key_has_local_outer_nominal(
+    key: &[&Type],
+    module: ModuleId,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<bool, ResolvedBuildFailure> {
+    for ty in key {
+        constraint_work
+            .charge(2)
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        if ty
+            .outer_nominal()
+            .is_some_and(|nominal| nominal.module() == module)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn authenticate_exact_global_scheme_binders(
     scheme: &ConstrainedScheme,
+    interface_facts: &HashMap<InterfaceId, &CheckedInterfaceFact>,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<(), ResolvedBuildFailure> {
     let parameters = summary_parameter_id_set(
@@ -5526,22 +6475,74 @@ fn authenticate_exact_global_scheme_binders(
         &mut value_variables,
         constraint_work,
     )?;
-    if value_variables != parameters {
-        return Err(ResolvedBuildFailure::InvalidState);
-    }
+    let mut required_variables = HashSet::new();
+    let mut dependent_variables = HashSet::new();
     for requirement in &scheme.requirements {
-        let mut requirement_variables = HashSet::new();
-        collect_summary_constraint_variables(
-            requirement.argument(),
-            &mut requirement_variables,
+        let interface = interface_facts
+            .get(&requirement.interface())
+            .ok_or(ResolvedBuildFailure::InvalidState)?;
+        let determined = summary_determined_application_slices(
+            interface,
+            requirement.arguments(),
             constraint_work,
         )?;
-        constraint_work
-            .charge(requirement_variables.len())
-            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-        if requirement_variables
-            .iter()
-            .any(|identity| !value_variables.contains(identity))
+        if let Some(determined) = determined {
+            for argument in determined.key {
+                collect_summary_constraint_variables(
+                    argument,
+                    &mut required_variables,
+                    constraint_work,
+                )?;
+            }
+            for argument in determined.dependents {
+                collect_summary_constraint_variables(
+                    argument,
+                    &mut dependent_variables,
+                    constraint_work,
+                )?;
+            }
+        } else {
+            for argument in requirement.arguments() {
+                collect_summary_constraint_variables(
+                    argument,
+                    &mut required_variables,
+                    constraint_work,
+                )?;
+            }
+        }
+    }
+    constraint_work
+        .charge(required_variables.len())
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    if required_variables
+        .iter()
+        .any(|identity| !value_variables.contains(identity))
+    {
+        return Err(ResolvedBuildFailure::InvalidState);
+    }
+    constraint_work
+        .charge(dependent_variables.len())
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    let expected_count = value_variables
+        .len()
+        .checked_add(
+            dependent_variables
+                .iter()
+                .filter(|identity| {
+                    !required_variables.contains(identity) && !value_variables.contains(identity)
+                })
+                .count(),
+        )
+        .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+    if parameters.len() != expected_count {
+        return Err(ResolvedBuildFailure::InvalidState);
+    }
+    constraint_work
+        .charge(parameters.len())
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    for identity in &parameters {
+        if !value_variables.contains(identity)
+            && (!dependent_variables.contains(identity) || required_variables.contains(identity))
         {
             return Err(ResolvedBuildFailure::InvalidState);
         }
@@ -5549,7 +6550,7 @@ fn authenticate_exact_global_scheme_binders(
     Ok(())
 }
 
-fn authenticate_exact_implementation_binders(
+fn authenticate_exact_implementation_head_binders(
     fact: &CheckedImplementationFact,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<(), ResolvedBuildFailure> {
@@ -5558,25 +6559,39 @@ fn authenticate_exact_implementation_binders(
         constraint_work,
     )?;
     let mut head_variables = HashSet::new();
-    collect_summary_constraint_variables(fact.argument(), &mut head_variables, constraint_work)?;
+    for argument in fact.arguments() {
+        collect_summary_constraint_variables(argument, &mut head_variables, constraint_work)?;
+    }
     if head_variables != parameters {
         return Err(ResolvedBuildFailure::InvalidState);
     }
+    Ok(())
+}
+
+fn authenticate_implementation_prerequisite_binders(
+    fact: &CheckedImplementationFact,
+    canonical_variables: &HashMap<TypeVariableId, (&Kind, Span, SummaryBinderOwner)>,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<(), ResolvedBuildFailure> {
     for prerequisite in &fact.prerequisites {
         let mut prerequisite_variables = HashSet::new();
-        collect_summary_constraint_variables(
-            prerequisite.argument(),
-            &mut prerequisite_variables,
-            constraint_work,
-        )?;
+        for argument in prerequisite.arguments() {
+            collect_summary_constraint_variables(
+                argument,
+                &mut prerequisite_variables,
+                constraint_work,
+            )?;
+        }
         constraint_work
             .charge(prerequisite_variables.len())
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-        if prerequisite_variables
-            .iter()
-            .any(|identity| !head_variables.contains(identity))
-        {
-            return Err(ResolvedBuildFailure::InvalidState);
+        for identity in &prerequisite_variables {
+            if !matches!(
+                canonical_variables.get(identity),
+                Some((_, _, SummaryBinderOwner::Implementation(owner))) if *owner == fact.id
+            ) {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
         }
     }
     Ok(())
@@ -5846,17 +6861,61 @@ fn same_constrained_schemes_with_constraint_budget(
             .charge(1)
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
         if left.id != right.id
-            || left.interface != right.interface
             || left.span != right.span
             || !same_origin_with_constraint_budget(&left.origin, &right.origin, constraint_work)?
-            || !same_type_with_constraint_budget(left.argument(), right.argument(), constraint_work)
-                .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+            || !same_interface_application_with_constraint_budget(
+                left.application(),
+                right.application(),
+                constraint_work,
+            )?
         {
             return Ok(false);
         }
     }
     same_type_with_constraint_budget(left.value_type(), right.value_type(), constraint_work)
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)
+}
+
+fn same_interface_application_with_constraint_budget(
+    left: &InterfaceApplication,
+    right: &InterfaceApplication,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<bool, ResolvedBuildFailure> {
+    if left.interface() != right.interface() || left.arguments().len() != right.arguments().len() {
+        return Ok(false);
+    }
+    for (left, right) in left.arguments().iter().zip(right.arguments()) {
+        if !same_type_with_constraint_budget(left, right, constraint_work)
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn same_interface_application_with_constraint_budget_observing_nominals(
+    left: &InterfaceApplication,
+    right: &InterfaceApplication,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+    nominal_identities: &mut MatchedNominalIdentities,
+) -> Result<bool, ResolvedBuildFailure> {
+    if left.interface() != right.interface() || left.arguments().len() != right.arguments().len() {
+        return Ok(false);
+    }
+    for (left, right) in left.arguments().iter().zip(right.arguments()) {
+        if !same_type_with_constraint_budget_observing_nominals(
+            left,
+            right,
+            constraint_work,
+            nominal_identities,
+        )
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn same_constrained_schemes_with_constraint_budget_observing_nominals(
@@ -5889,16 +6948,14 @@ fn same_constrained_schemes_with_constraint_budget_observing_nominals(
             .charge(1)
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
         if left.id != right.id
-            || left.interface != right.interface
             || left.span != right.span
             || !same_origin_with_constraint_budget(&left.origin, &right.origin, constraint_work)?
-            || !same_type_with_constraint_budget_observing_nominals(
-                left.argument(),
-                right.argument(),
+            || !same_interface_application_with_constraint_budget_observing_nominals(
+                left.application(),
+                right.application(),
                 constraint_work,
                 nominal_identities,
-            )
-            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+            )?
         {
             return Ok(false);
         }
@@ -6159,9 +7216,24 @@ fn same_checked_interface_fact_with_optional_nominal_observer(
     constraint_work
         .charge(metadata_work)
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    match (&left.determination, &right.determination) {
+        (None, None) => {}
+        (Some(left), Some(right)) => {
+            if left.positions().len() != right.positions().len() {
+                return Ok(false);
+            }
+            constraint_work
+                .charge(right.positions().len())
+                .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+            if left.positions() != right.positions() {
+                return Ok(false);
+            }
+        }
+        (None, Some(_)) | (Some(_), None) => return Ok(false),
+    }
     if !same_summary_resolved_type_variables_with_constraint_budget(
-        std::slice::from_ref(&left.parameter),
-        std::slice::from_ref(&right.parameter),
+        &left.parameters,
+        &right.parameters,
         constraint_work,
     )? || !same_origin_with_constraint_budget(&left.origin, &right.origin, constraint_work)?
     {
@@ -6241,7 +7313,8 @@ fn same_checked_implementation_fact_with_optional_nominal_observer(
     mut nominal_identities: Option<&mut MatchedNominalIdentities>,
 ) -> Result<bool, ResolvedBuildFailure> {
     if left.id != right.id
-        || left.interface != right.interface
+        || left.interface() != right.interface()
+        || left.arguments().len() != right.arguments().len()
         || left.span != right.span
         || left.prerequisites.len() != right.prerequisites.len()
         || left.methods.len() != right.methods.len()
@@ -6258,47 +7331,57 @@ fn same_checked_implementation_fact_with_optional_nominal_observer(
     constraint_work
         .charge(metadata_work)
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    let applications_match = left
+        .arguments()
+        .iter()
+        .zip(right.arguments())
+        .try_fold(true, |matches, (left, right)| {
+            if !matches {
+                return Ok(false);
+            }
+            match nominal_identities.as_deref_mut() {
+                Some(nominal_identities) => same_type_with_constraint_budget_observing_nominals(
+                    left,
+                    right,
+                    constraint_work,
+                    nominal_identities,
+                ),
+                None => same_type_with_constraint_budget(left, right, constraint_work),
+            }
+        })
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
     if !same_summary_resolved_type_variables_with_constraint_budget(
         &left.head_parameters,
         &right.head_parameters,
         constraint_work,
-    )? || !match nominal_identities.as_deref_mut() {
-        Some(nominal_identities) => same_type_with_constraint_budget_observing_nominals(
-            left.argument(),
-            right.argument(),
-            constraint_work,
-            nominal_identities,
-        ),
-        None => {
-            same_type_with_constraint_budget(left.argument(), right.argument(), constraint_work)
-        }
-    }
-    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+    )? || !applications_match
         || !same_origin_with_constraint_budget(&left.origin, &right.origin, constraint_work)?
     {
         return Ok(false);
     }
     for (left, right) in left.prerequisites.iter().zip(&right.prerequisites) {
         if left.id != right.id
-            || left.interface != right.interface
+            || left.interface() != right.interface()
+            || left.arguments().len() != right.arguments().len()
             || left.span != right.span
             || !same_origin_with_constraint_budget(&left.origin, &right.origin, constraint_work)?
-            || !match nominal_identities.as_deref_mut() {
+        {
+            return Ok(false);
+        }
+        for (left, right) in left.arguments().iter().zip(right.arguments()) {
+            let same = match nominal_identities.as_deref_mut() {
                 Some(nominal_identities) => same_type_with_constraint_budget_observing_nominals(
-                    left.argument(),
-                    right.argument(),
+                    left,
+                    right,
                     constraint_work,
                     nominal_identities,
                 ),
-                None => same_type_with_constraint_budget(
-                    left.argument(),
-                    right.argument(),
-                    constraint_work,
-                ),
+                None => same_type_with_constraint_budget(left, right, constraint_work),
             }
-            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
-        {
-            return Ok(false);
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+            if !same {
+                return Ok(false);
+            }
         }
     }
     for (left, right) in left.methods.iter().zip(&right.methods) {
@@ -6329,13 +7412,16 @@ fn same_checked_implementation_fact_with_optional_nominal_observer(
     Ok(true)
 }
 
-fn same_summary_type_after_single_substitution(
+fn same_summary_type_after_substitutions(
     source: &Type,
-    parameter: TypeVariableId,
-    argument: &Type,
+    parameters: &[ResolvedTypeVariable],
+    arguments: &[Type],
     actual: &Type,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<bool, ResolvedBuildFailure> {
+    if parameters.len() != arguments.len() {
+        return Err(ResolvedBuildFailure::InvalidState);
+    }
     constraint_work
         .charge(1)
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
@@ -6348,13 +7434,31 @@ fn same_summary_type_after_single_substitution(
         constraint_work
             .charge(1)
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-        if matches!(source, Type::Variable(identity) if *identity == parameter) {
-            if !same_type_with_constraint_budget(argument, actual, constraint_work)
-                .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
-            {
-                return Ok(false);
+        if let Type::Variable(identity) = source {
+            let mut replacement = None;
+            if let ([parameter], [argument]) = (parameters, arguments) {
+                if parameter.id == *identity {
+                    replacement = Some(argument);
+                }
+            } else {
+                for (parameter, argument) in parameters.iter().zip(arguments) {
+                    constraint_work
+                        .charge(1)
+                        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                    if parameter.id == *identity {
+                        replacement = Some(argument);
+                        break;
+                    }
+                }
             }
-            continue;
+            if let Some(argument) = replacement {
+                if !same_type_with_constraint_budget(argument, actual, constraint_work)
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+                {
+                    return Ok(false);
+                }
+                continue;
+            }
         }
         match (source, actual) {
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
@@ -6405,19 +7509,17 @@ fn authenticate_method_requirement_mirror(
         .charge(1)
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
     if method_requirement.id != prerequisite.id
-        || method_requirement.interface != prerequisite.interface
         || method_requirement.span != prerequisite.span
         || !same_origin_with_constraint_budget(
             &method_requirement.origin,
             &prerequisite.origin,
             constraint_work,
         )?
-        || !same_type_with_constraint_budget(
-            method_requirement.argument(),
-            prerequisite.argument(),
+        || !same_interface_application_with_constraint_budget(
+            method_requirement.application(),
+            prerequisite.application(),
             constraint_work,
-        )
-        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+        )?
     {
         return Err(ResolvedBuildFailure::InvalidState);
     }
@@ -6470,16 +7572,25 @@ impl<'fact> SummaryRequirementIndex<'fact> {
     fn observe(
         &mut self,
         requirement: &'fact CheckedRequirement,
+        determination: Option<&DeterminationKey>,
         constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     ) -> Result<(), ResolvedBuildFailure> {
-        if let Some(previous) = self.by_interface.get_mut(&requirement.interface) {
+        if let Some(previous) = self.by_interface.get_mut(&requirement.interface()) {
             for previous in previous.iter() {
-                if same_type_with_constraint_budget(
-                    previous.argument(),
-                    requirement.argument(),
+                if same_interface_application_with_constraint_budget(
+                    previous.application(),
+                    requirement.application(),
                     constraint_work,
-                )
-                .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+                )? {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                if let Some(determination) = determination
+                    && same_summary_requirement_key(
+                        previous,
+                        requirement,
+                        determination,
+                        constraint_work,
+                    )?
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
@@ -6505,9 +7616,42 @@ impl<'fact> SummaryRequirementIndex<'fact> {
             .try_reserve_exact(1)
             .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
         first.push(requirement);
-        self.by_interface.insert(requirement.interface, first);
+        self.by_interface.insert(requirement.interface(), first);
         Ok(())
     }
+}
+
+fn same_summary_requirement_key(
+    left: &CheckedRequirement,
+    right: &CheckedRequirement,
+    determination: &DeterminationKey,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<bool, ResolvedBuildFailure> {
+    if left.interface() != right.interface() || left.arguments().len() != right.arguments().len() {
+        return Ok(false);
+    }
+    let mut previous = None;
+    for &position in determination.positions() {
+        constraint_work
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        if position >= left.arguments().len()
+            || previous.is_some_and(|previous| previous >= position)
+        {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        previous = Some(position);
+        if !same_type_with_constraint_budget(
+            &left.arguments()[position],
+            &right.arguments()[position],
+            constraint_work,
+        )
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -6517,36 +7661,135 @@ fn authenticate_unique_summary_requirements(
 ) -> Result<(), ResolvedBuildFailure> {
     let mut index = SummaryRequirementIndex::default();
     for requirement in requirements {
-        index.observe(requirement, constraint_work)?;
+        index.observe(requirement, None, constraint_work)?;
     }
     Ok(())
 }
 
-fn authenticate_nonoverlapping_summary_implementations<'fact>(
+fn authenticate_nonoverlapping_summary_implementations<'fact, 'key, F>(
     implementations: impl IntoIterator<Item = &'fact CheckedImplementationFact>,
+    mut determination_for: F,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
-) -> Result<(), ResolvedBuildFailure> {
+) -> Result<(), ResolvedBuildFailure>
+where
+    F: FnMut(InterfaceId) -> Result<Option<&'key DeterminationKey>, ResolvedBuildFailure>,
+{
     let mut by_interface: HashMap<InterfaceId, Vec<&CheckedImplementationFact>> = HashMap::new();
     for implementation in implementations {
         let fact = implementation;
-        if let Some(previous) = by_interface.get_mut(&fact.interface) {
+        if let Some(previous) = by_interface.get_mut(&fact.interface()) {
             for previous in previous.iter() {
-                let overlaps = implementation_heads_overlap_structurally(
-                    previous
-                        .head_parameters
-                        .iter()
-                        .map(|parameter| parameter.id),
-                    previous.argument(),
-                    fact.head_parameters.iter().map(|parameter| parameter.id),
-                    fact.argument(),
-                    constraint_work,
-                )
-                .map_err(|failure| match failure {
-                    OverlapFailure::InvalidState => ResolvedBuildFailure::InvalidState,
-                    OverlapFailure::Resource => ResolvedBuildFailure::ConstraintResource,
-                    OverlapFailure::TypeResource => ResolvedBuildFailure::TypeResource,
-                })?;
-                if overlaps {
+                constraint_work
+                    .charge(1)
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                constraint_work
+                    .charge(
+                        previous
+                            .arguments()
+                            .len()
+                            .checked_add(fact.arguments().len())
+                            .ok_or(ResolvedBuildFailure::ConstraintResource)?,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                let mut previous_arguments = Vec::new();
+                let mut fact_arguments = Vec::new();
+                previous_arguments
+                    .try_reserve_exact(previous.arguments().len())
+                    .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+                fact_arguments
+                    .try_reserve_exact(fact.arguments().len())
+                    .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+                previous_arguments.extend(previous.arguments());
+                fact_arguments.extend(fact.arguments());
+                let determination = determination_for(fact.interface())?;
+                let conflict = if let Some(determination) = determination {
+                    let positions = determination.positions();
+                    let mut previous_position = None;
+                    for &position in positions {
+                        constraint_work
+                            .charge(1)
+                            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                        if position >= previous_arguments.len()
+                            || previous_position.is_some_and(|previous| previous >= position)
+                        {
+                            return Err(ResolvedBuildFailure::InvalidState);
+                        }
+                        previous_position = Some(position);
+                    }
+                    let selected_work = positions
+                        .len()
+                        .checked_mul(2)
+                        .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+                    constraint_work
+                        .charge(selected_work)
+                        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                    let mut previous_key = Vec::new();
+                    let mut fact_key = Vec::new();
+                    previous_key
+                        .try_reserve_exact(positions.len())
+                        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+                    fact_key
+                        .try_reserve_exact(positions.len())
+                        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+                    for &position in positions {
+                        previous_key.push(
+                            *previous_arguments
+                                .get(position)
+                                .ok_or(ResolvedBuildFailure::InvalidState)?,
+                        );
+                        fact_key.push(
+                            *fact_arguments
+                                .get(position)
+                                .ok_or(ResolvedBuildFailure::InvalidState)?,
+                        );
+                    }
+                    constraint_work
+                        .charge(1)
+                        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                    let keys_overlap = map_summary_overlap_result(
+                        implementation_application_heads_overlap_structurally(
+                            previous
+                                .head_parameters
+                                .iter()
+                                .map(|parameter| parameter.id),
+                            &previous_key,
+                            fact.head_parameters.iter().map(|parameter| parameter.id),
+                            &fact_key,
+                            constraint_work,
+                        ),
+                    )?;
+                    if keys_overlap {
+                        // This independent call owns a fresh solution cache for
+                        // the complete-head comparison.
+                        let _complete_heads_overlap = map_summary_overlap_result(
+                            implementation_application_heads_overlap_structurally(
+                                previous
+                                    .head_parameters
+                                    .iter()
+                                    .map(|parameter| parameter.id),
+                                &previous_arguments,
+                                fact.head_parameters.iter().map(|parameter| parameter.id),
+                                &fact_arguments,
+                                constraint_work,
+                            ),
+                        )?;
+                    }
+                    keys_overlap
+                } else {
+                    map_summary_overlap_result(
+                        implementation_application_heads_overlap_structurally(
+                            previous
+                                .head_parameters
+                                .iter()
+                                .map(|parameter| parameter.id),
+                            &previous_arguments,
+                            fact.head_parameters.iter().map(|parameter| parameter.id),
+                            &fact_arguments,
+                            constraint_work,
+                        ),
+                    )?
+                };
+                if conflict {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
             }
@@ -6571,9 +7814,19 @@ fn authenticate_nonoverlapping_summary_implementations<'fact>(
             .try_reserve_exact(1)
             .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
         first.push(fact);
-        by_interface.insert(fact.interface, first);
+        by_interface.insert(fact.interface(), first);
     }
     Ok(())
+}
+
+fn map_summary_overlap_result(
+    result: Result<bool, OverlapFailure>,
+) -> Result<bool, ResolvedBuildFailure> {
+    result.map_err(|failure| match failure {
+        OverlapFailure::InvalidState => ResolvedBuildFailure::InvalidState,
+        OverlapFailure::Resource => ResolvedBuildFailure::ConstraintResource,
+        OverlapFailure::TypeResource => ResolvedBuildFailure::TypeResource,
+    })
 }
 
 fn retain_hidden_interface_reference(
@@ -6635,6 +7888,39 @@ fn authenticate_method_binder_authority(
         return Err(ResolvedBuildFailure::InvalidState);
     }
     Ok(())
+}
+
+fn authenticate_summary_determination_seed(
+    interface: &CheckedInterfaceFact,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<Option<Vec<TypeVariableId>>, ResolvedBuildFailure> {
+    let Some(key) = interface.determination() else {
+        return Ok(None);
+    };
+    let positions = key.positions();
+    if positions.is_empty() || positions.len() >= interface.parameters.len() {
+        return Err(ResolvedBuildFailure::InvalidState);
+    }
+    constraint_work
+        .charge(positions.len())
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    let mut required = Vec::new();
+    required
+        .try_reserve_exact(positions.len())
+        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+    let mut previous = None;
+    for position in positions {
+        if previous.is_some_and(|previous| previous >= *position) {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        let parameter = interface
+            .parameters
+            .get(*position)
+            .ok_or(ResolvedBuildFailure::InvalidState)?;
+        required.push(parameter.id);
+        previous = Some(*position);
+    }
+    Ok(Some(required))
 }
 
 impl ExportSummary {
@@ -6989,7 +8275,7 @@ impl ExportSummary {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
             register_summary_parameters(
-                std::slice::from_ref(&interface.parameter),
+                &interface.parameters,
                 SummaryBinderOwner::Interface(interface.id),
                 &mut canonical_variables,
                 &mut environments,
@@ -7008,8 +8294,8 @@ impl ExportSummary {
             environments
                 .insert_interface(
                     interface.id,
-                    &interface.parameter.kind,
-                    interface.parameter.origin.primary_span(),
+                    &interface.parameters,
+                    interface.span,
                     type_work,
                 )
                 .map_err(map_summary_kind_failure)?;
@@ -7021,7 +8307,7 @@ impl ExportSummary {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
             register_summary_parameters(
-                std::slice::from_ref(&interface.parameter),
+                &interface.parameters,
                 SummaryBinderOwner::Interface(interface.id),
                 &mut canonical_variables,
                 &mut environments,
@@ -7040,8 +8326,8 @@ impl ExportSummary {
             environments
                 .insert_interface(
                     interface.id,
-                    &interface.parameter.kind,
-                    interface.parameter.origin.primary_span(),
+                    &interface.parameters,
+                    interface.span,
                     type_work,
                 )
                 .map_err(map_summary_kind_failure)?;
@@ -7149,20 +8435,10 @@ impl ExportSummary {
                 .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
             if self.implementation_positions.get(&fact.id) != Some(&position)
                 || !authorization_is_well_formed
-                || !interface_facts.contains_key(&fact.interface)
-                || matches!(fact.argument(), Type::Variable(_))
-                || fact.methods.is_empty()
             {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
-            if fact.interface.module() != fact.id.module()
-                && fact
-                    .argument()
-                    .outer_nominal()
-                    .is_none_or(|nominal| nominal.module() != fact.id.module())
-            {
-                return Err(ResolvedBuildFailure::InvalidState);
-            }
+            authenticate_exact_implementation_head_binders(fact, constraint_work)?;
             for method in &fact.methods {
                 if !term_binders.insert(method.binder) {
                     return Err(ResolvedBuildFailure::InvalidState);
@@ -7184,7 +8460,11 @@ impl ExportSummary {
             {
                 continue;
             }
-            authenticate_exact_global_scheme_binders(&global.scheme, constraint_work)?;
+            authenticate_exact_global_scheme_binders(
+                &global.scheme,
+                &interface_facts,
+                constraint_work,
+            )?;
             let parameter_ids = global
                 .scheme
                 .type_parameters
@@ -7210,16 +8490,25 @@ impl ExportSummary {
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
-                requirement_index.observe(requirement, constraint_work)?;
-                authenticate_summary_type_variables(
-                    requirement.argument(),
-                    parameter_ids.clone(),
-                    type_work,
+                let interface = interface_facts
+                    .get(&requirement.interface())
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                requirement_index.observe(
+                    requirement,
+                    interface.determination(),
+                    constraint_work,
                 )?;
+                for argument in requirement.arguments() {
+                    authenticate_summary_type_variables(
+                        argument,
+                        parameter_ids.clone(),
+                        type_work,
+                    )?;
+                }
                 environments
                     .expect_body_free_interface_argument_with_ledger(
-                        requirement.interface,
-                        requirement.argument(),
+                        requirement.interface(),
+                        requirement.arguments(),
                         requirement.span,
                         type_work,
                     )
@@ -7231,6 +8520,20 @@ impl ExportSummary {
             if interface.methods.is_empty() {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
+            constraint_work
+                .charge(interface.parameters.len())
+                .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+            let mut interface_parameters = Vec::new();
+            interface_parameters
+                .try_reserve_exact(interface.parameters.len())
+                .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+            interface_parameters.extend(interface.parameters.iter().map(|parameter| parameter.id));
+            let required_interface_parameters =
+                authenticate_summary_determination_seed(interface, constraint_work)?;
+            let method_seed = required_interface_parameters.as_deref().map_or(
+                BodyFreeInterfaceMethodSeed::AllInterfaceParameters,
+                BodyFreeInterfaceMethodSeed::Determined,
+            );
             for (index, method) in interface.methods.iter().enumerate() {
                 if method.id.interface() != interface.id
                     || usize::try_from(method.id.declaration()) != Ok(index)
@@ -7253,7 +8556,8 @@ impl ExportSummary {
                 environments
                     .expect_body_free_interface_method_with_ledger(
                         method.value_type(),
-                        interface.parameter.id,
+                        &interface_parameters,
+                        method_seed,
                         &method_parameters,
                         method.span,
                         type_work,
@@ -7409,50 +8713,141 @@ impl ExportSummary {
         }
         for implementation in &self.implementations {
             let fact = &implementation.fact;
-            authenticate_exact_implementation_binders(fact, constraint_work)?;
             let parameter_ids = fact.head_parameters.iter().map(|parameter| parameter.id);
-            authenticate_summary_type_variables(fact.argument(), parameter_ids.clone(), type_work)?;
+            let head_interface = interface_facts
+                .get(&fact.interface())
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            if fact.arguments().len() != head_interface.parameters.len() {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            for argument in fact.arguments() {
+                authenticate_summary_type_variables(argument, parameter_ids.clone(), type_work)?;
+            }
             environments
                 .expect_body_free_interface_argument_with_ledger(
-                    fact.interface,
-                    fact.argument(),
+                    fact.interface(),
+                    fact.arguments(),
                     fact.span,
                     type_work,
                 )
                 .map_err(map_summary_kind_failure)?;
-            let mut prerequisite_index = SummaryRequirementIndex::default();
             for (index, prerequisite) in fact.prerequisites.iter().enumerate() {
                 if prerequisite.id.owner() != crate::interface::RequirementOwner::Impl(fact.id)
                     || usize::try_from(prerequisite.id.declaration()) != Ok(index)
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
-                if !implementation_prerequisite_terminates(
-                    prerequisite.argument(),
-                    fact.argument(),
+                let prerequisite_interface = interface_facts
+                    .get(&prerequisite.interface())
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                if prerequisite.arguments().len() != prerequisite_interface.parameters.len() {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                for argument in prerequisite.arguments() {
+                    authenticate_summary_type_variables(
+                        argument,
+                        parameter_ids.clone(),
+                        type_work,
+                    )?;
+                }
+                environments
+                    .expect_body_free_interface_argument_with_ledger(
+                        prerequisite.interface(),
+                        prerequisite.arguments(),
+                        prerequisite.span,
+                        type_work,
+                    )
+                    .map_err(map_summary_kind_failure)?;
+            }
+            let mut prerequisite_index = SummaryRequirementIndex::default();
+            for prerequisite in &fact.prerequisites {
+                let prerequisite_interface = interface_facts
+                    .get(&prerequisite.interface())
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                prerequisite_index.observe(
+                    prerequisite,
+                    prerequisite_interface.determination(),
+                    constraint_work,
+                )?;
+            }
+            let determined = summary_determined_application_slices(
+                head_interface,
+                fact.arguments(),
+                constraint_work,
+            )?;
+            let selection_key_is_all_bare = if let Some(determined) = &determined {
+                summary_types_are_all_bare_variables(&determined.key, constraint_work)?
+            } else {
+                fact.arguments()
+                    .iter()
+                    .all(|argument| matches!(argument, Type::Variable(_)))
+            };
+            if selection_key_is_all_bare || fact.methods.is_empty() {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            authenticate_implementation_prerequisite_binders(
+                fact,
+                &canonical_variables,
+                constraint_work,
+            )?;
+            if let Some(determined) = &determined
+                && !summary_dependents_are_covered_by_key(
+                    &determined.key,
+                    &determined.dependents,
+                    constraint_work,
+                )?
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            if fact.interface().module() != fact.id.module() {
+                let has_local_outer_nominal = if let Some(determined) = &determined {
+                    summary_key_has_local_outer_nominal(
+                        &determined.key,
+                        fact.id.module(),
+                        constraint_work,
+                    )?
+                } else {
+                    fact.arguments().iter().any(|argument| {
+                        argument
+                            .outer_nominal()
+                            .is_some_and(|nominal| nominal.module() == fact.id.module())
+                    })
+                };
+                if !has_local_outer_nominal {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+            }
+            let head_key = if fact.prerequisites.is_empty() {
+                Vec::new()
+            } else {
+                summary_selection_key_types(head_interface, fact.arguments(), constraint_work)?
+            };
+            for prerequisite in &fact.prerequisites {
+                let prerequisite_arguments = type_references_with_constraint_budget(
+                    prerequisite.arguments(),
+                    constraint_work,
+                )?;
+                let prerequisite_interface = interface_facts
+                    .get(&prerequisite.interface())
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                let prerequisite_key = summary_selection_key_types(
+                    prerequisite_interface,
+                    prerequisite.arguments(),
+                    constraint_work,
+                )?;
+                if !implementation_prerequisite_selection_key_terminates(
+                    &prerequisite_arguments,
+                    &prerequisite_key,
+                    &head_key,
                     constraint_work,
                 )
                 .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
-                prerequisite_index.observe(prerequisite, constraint_work)?;
-                authenticate_summary_type_variables(
-                    prerequisite.argument(),
-                    parameter_ids.clone(),
-                    type_work,
-                )?;
-                environments
-                    .expect_body_free_interface_argument_with_ledger(
-                        prerequisite.interface,
-                        prerequisite.argument(),
-                        prerequisite.span,
-                        type_work,
-                    )
-                    .map_err(map_summary_kind_failure)?;
             }
             let interface = interface_facts
-                .get(&fact.interface)
+                .get(&fact.interface())
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
             if fact.methods.len() != interface.methods.len() {
                 return Err(ResolvedBuildFailure::InvalidState);
@@ -7511,10 +8906,10 @@ impl ExportSummary {
                     method_parameter_ids.into_iter(),
                     type_work,
                 )?;
-                if !same_summary_type_after_single_substitution(
+                if !same_summary_type_after_substitutions(
                     interface_method.value_type(),
-                    interface.parameter.id,
-                    fact.argument(),
+                    &interface.parameters,
+                    fact.arguments(),
                     method.scheme.value_type(),
                     constraint_work,
                 )? {
@@ -7533,6 +8928,12 @@ impl ExportSummary {
             self.implementations
                 .iter()
                 .map(AuthorizedImplementationFact::fact),
+            |interface| {
+                let interface = interface_facts
+                    .get(&interface)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                Ok(interface.determination())
+            },
             constraint_work,
         )?;
         Ok(())
@@ -7939,9 +9340,10 @@ impl ExportSummary {
                 .get(admitted.source_index)
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
             if implementation.id != admitted.id
-                || implementation.interface.id != admitted.interface
+                || implementation.head.interface.id != admitted.interface()
                 || checked.id != admitted.id
-                || checked.interface != admitted.interface
+                || checked.interface() != admitted.interface()
+                || checked.arguments() != admitted.arguments()
                 || checked.methods.len() != admitted.methods.len()
             {
                 return Err(ResolvedBuildFailure::InvalidState);
@@ -8054,7 +9456,7 @@ impl ExportSummary {
                     .ok_or(ResolvedBuildFailure::InvalidState)?;
                 for requirement in &exported.scheme.requirements {
                     retain_hidden_interface_reference(
-                        requirement.interface,
+                        requirement.interface(),
                         &summary.interface_positions,
                         &mut referenced_interfaces,
                         &mut referenced_interface_order,
@@ -8077,7 +9479,7 @@ impl ExportSummary {
             }
             for implementation in &summary.implementations {
                 retain_hidden_interface_reference(
-                    implementation.fact.interface,
+                    implementation.fact.interface(),
                     &summary.interface_positions,
                     &mut referenced_interfaces,
                     &mut referenced_interface_order,
@@ -8085,7 +9487,7 @@ impl ExportSummary {
                 )?;
                 for prerequisite in &implementation.fact.prerequisites {
                     retain_hidden_interface_reference(
-                        prerequisite.interface,
+                        prerequisite.interface(),
                         &summary.interface_positions,
                         &mut referenced_interfaces,
                         &mut referenced_interface_order,
@@ -8535,19 +9937,15 @@ impl ExportSummary {
             }
         }
         for implementation in &summary.implementations {
-            collect_nominal_identities(
-                &implementation.fact.argument,
-                &mut referenced_nominals,
-                type_work,
-            )
-            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            for argument in implementation.fact.arguments() {
+                collect_nominal_identities(argument, &mut referenced_nominals, type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            }
             for prerequisite in &implementation.fact.prerequisites {
-                collect_nominal_identities(
-                    &prerequisite.argument,
-                    &mut referenced_nominals,
-                    type_work,
-                )
-                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                for argument in prerequisite.arguments() {
+                    collect_nominal_identities(argument, &mut referenced_nominals, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
             }
             for method in &implementation.fact.methods {
                 collect_scheme_nominal_identities(
@@ -9270,7 +10668,7 @@ impl ExportSummary {
                 let Some(interface) = self.interfaces.first_mut() else {
                     return false;
                 };
-                wrap_origin(&mut interface.parameter.origin);
+                wrap_origin(&mut interface.parameters[0].origin);
             }
             SummaryDuplicateFactForTest::InterfaceMethodSpan => {
                 let Some(interface) = self.interfaces.first_mut() else {
@@ -9286,7 +10684,7 @@ impl ExportSummary {
                 let implementation_interfaces = self
                     .implementations
                     .iter()
-                    .map(|implementation| implementation.fact.interface)
+                    .map(|implementation| implementation.fact.interface())
                     .collect::<HashSet<_>>();
                 let Some(interface) = self
                     .interfaces
@@ -9295,7 +10693,7 @@ impl ExportSummary {
                 else {
                     return false;
                 };
-                let parameter = interface.parameter.id;
+                let parameter = interface.parameters[0].id;
                 let Some(method) = interface.methods.first_mut() else {
                     return false;
                 };
@@ -9341,17 +10739,31 @@ impl ExportSummary {
             }
             SummaryDuplicateFactForTest::ImplementationHeadArgument => {
                 let Some(implementation) = self.implementations.iter_mut().find(|implementation| {
-                    matches!(implementation.fact.argument, Type::Application(_, _))
+                    matches!(implementation.fact.arguments()[0], Type::Application(_, _))
                         && implementation.fact.methods.first().is_some_and(|method| {
                             matches!(method.scheme.value_type, Type::Function(_, _))
                         })
                 }) else {
                     return false;
                 };
-                let Type::Application(_, argument) = &mut implementation.fact.argument else {
+                let application = &mut implementation.fact.application;
+                let interface = application.interface();
+                let original = std::mem::replace(
+                    application,
+                    InterfaceApplication::new(interface, Box::new([])),
+                );
+                let (_, arguments) = original.into_parts();
+                let arguments = arguments.into_vec();
+                let [Type::Application(head, _)] = arguments.as_slice() else {
                     return false;
                 };
-                discard_type_iteratively(std::mem::replace(argument.as_mut(), Type::Bool));
+                *application = InterfaceApplication::new(
+                    interface,
+                    Box::new([Type::Application(
+                        Box::new((**head).clone()),
+                        Box::new(Type::Bool),
+                    )]),
+                );
                 let Some(method) = implementation.fact.methods.first_mut() else {
                     return false;
                 };
@@ -9404,18 +10816,15 @@ impl ExportSummary {
                 else {
                     return false;
                 };
-                discard_type_iteratively(std::mem::replace(
-                    &mut implementation.fact.prerequisites[0].argument,
+                replace_unary_interface_application(
+                    &mut implementation.fact.prerequisites[0].application,
                     Type::Bool,
-                ));
+                );
                 for method in &mut implementation.fact.methods {
                     let Some(requirement) = method.scheme.requirements.first_mut() else {
                         return false;
                     };
-                    discard_type_iteratively(std::mem::replace(
-                        &mut requirement.argument,
-                        Type::Bool,
-                    ));
+                    replace_unary_interface_application(&mut requirement.application, Type::Bool);
                 }
             }
             SummaryDuplicateFactForTest::ImplementationMethodSpan => {
@@ -9450,7 +10859,7 @@ impl ExportSummary {
                 };
                 drop(std::mem::replace(&mut parameter.kind, Kind::Type));
                 let Some(implementation) = self.implementations.iter_mut().find(|implementation| {
-                    implementation.fact.argument.outer_nominal() == Some(nominal_id)
+                    implementation.fact.arguments()[0].outer_nominal() == Some(nominal_id)
                 }) else {
                     return false;
                 };
@@ -9987,35 +11396,143 @@ impl ExportSummary {
             }
             SummaryCarrierMutationForTest::PublicInterfaceKind => {
                 self.interfaces.first_mut().is_some_and(|interface| {
-                    replace_parameter_kind(&mut interface.parameter);
+                    replace_parameter_kind(&mut interface.parameters[0]);
                     true
                 })
             }
             SummaryCarrierMutationForTest::PublicInterfaceParameterIdentity => {
                 self.interfaces.first_mut().is_some_and(|interface| {
-                    interface.parameter.id = TypeVariableId::resolved(self.module, u32::MAX);
+                    interface.parameters[0].id = TypeVariableId::resolved(self.module, u32::MAX);
                     true
                 })
             }
             SummaryCarrierMutationForTest::PublicInterfaceParameterOwner => {
                 self.interfaces.first_mut().is_some_and(|interface| {
-                    interface.parameter.id = TypeVariableId::resolved(
+                    interface.parameters[0].id = TypeVariableId::resolved(
                         ModuleId::new(u32::MAX - 1),
-                        interface.parameter.id.local(),
+                        interface.parameters[0].id.local(),
                     );
                     true
                 })
             }
+            SummaryCarrierMutationForTest::RelationalInterfaceParameterMissing => self
+                .interfaces
+                .iter_mut()
+                .find(|interface| interface.parameters.len() >= 2)
+                .is_some_and(|interface| {
+                    let mut parameters = std::mem::take(&mut interface.parameters).into_vec();
+                    let Some(removed) = parameters.pop() else {
+                        return false;
+                    };
+                    discard_resolved_type_variable(removed);
+                    interface.parameters = parameters.into_boxed_slice();
+                    true
+                }),
+            SummaryCarrierMutationForTest::RelationalInterfaceParameterExtra => self
+                .interfaces
+                .iter_mut()
+                .find(|interface| interface.parameters.len() >= 2)
+                .is_some_and(|interface| {
+                    let Some(mut extra) = interface.parameters.last().cloned() else {
+                        return false;
+                    };
+                    extra.id = TypeVariableId::resolved(self.module, u32::MAX - 1);
+                    extra.spelling = "Extra".to_owned();
+                    let mut parameters = std::mem::take(&mut interface.parameters).into_vec();
+                    parameters.push(extra);
+                    interface.parameters = parameters.into_boxed_slice();
+                    true
+                }),
+            SummaryCarrierMutationForTest::RelationalInterfaceParameterReordered => self
+                .interfaces
+                .iter_mut()
+                .find(|interface| interface.parameters.len() >= 2)
+                .is_some_and(|interface| {
+                    interface.parameters.swap(0, 1);
+                    true
+                }),
+            SummaryCarrierMutationForTest::RelationalInterfaceParameterIdentity => self
+                .interfaces
+                .iter_mut()
+                .find(|interface| interface.parameters.len() >= 2)
+                .is_some_and(|interface| {
+                    let Some(parameter) = interface.parameters.last_mut() else {
+                        return false;
+                    };
+                    parameter.id = TypeVariableId::resolved(self.module, u32::MAX);
+                    true
+                }),
+            SummaryCarrierMutationForTest::RelationalInterfaceParameterWrongKind => self
+                .interfaces
+                .iter_mut()
+                .find(|interface| interface.parameters.len() >= 2)
+                .is_some_and(|interface| {
+                    let Some(parameter) = interface.parameters.get_mut(1) else {
+                        return false;
+                    };
+                    replace_parameter_kind(parameter);
+                    true
+                }),
+            mutation @ (SummaryCarrierMutationForTest::DeterminationPositionsEmpty
+            | SummaryCarrierMutationForTest::DeterminationPositionsFull
+            | SummaryCarrierMutationForTest::DeterminationPositionsRepeated
+            | SummaryCarrierMutationForTest::DeterminationPositionsReordered
+            | SummaryCarrierMutationForTest::DeterminationPositionsOutOfRange) => self
+                .interfaces
+                .iter_mut()
+                .find(|interface| interface.parameters.len() >= 3)
+                .is_some_and(|interface| {
+                    let positions = match mutation {
+                        SummaryCarrierMutationForTest::DeterminationPositionsEmpty => Vec::new(),
+                        SummaryCarrierMutationForTest::DeterminationPositionsFull => {
+                            (0..interface.parameters.len()).collect()
+                        }
+                        SummaryCarrierMutationForTest::DeterminationPositionsRepeated => {
+                            vec![0, 0]
+                        }
+                        SummaryCarrierMutationForTest::DeterminationPositionsReordered => {
+                            vec![1, 0]
+                        }
+                        SummaryCarrierMutationForTest::DeterminationPositionsOutOfRange => {
+                            vec![interface.parameters.len()]
+                        }
+                        _ => return false,
+                    };
+                    interface.determination =
+                        Some(DeterminationKey::new(positions.into_boxed_slice()));
+                    true
+                }),
+            SummaryCarrierMutationForTest::DeterminationPositionsAlternateKey => {
+                let Some(interface_id) = self
+                    .implementations
+                    .first()
+                    .map(|implementation| implementation.fact.interface())
+                else {
+                    return false;
+                };
+                self.interfaces
+                    .iter_mut()
+                    .chain(self.hidden_interfaces.iter_mut())
+                    .find(|interface| interface.id == interface_id)
+                    .is_some_and(|interface| {
+                        if interface.parameters.len() < 2 || interface.determination().is_none() {
+                            return false;
+                        }
+                        interface.determination =
+                            Some(DeterminationKey::new(Box::new([1])));
+                        true
+                    })
+            }
             SummaryCarrierMutationForTest::HiddenInterfaceKind => {
                 self.hidden_interfaces.first_mut().is_some_and(|interface| {
-                    replace_parameter_kind(&mut interface.parameter);
+                    replace_parameter_kind(&mut interface.parameters[0]);
                     true
                 })
             }
             SummaryCarrierMutationForTest::HiddenInterfaceParameterIdentity => {
                 self.hidden_interfaces.first_mut().is_some_and(|interface| {
-                    interface.parameter.id = TypeVariableId::resolved(
-                        interface.parameter.id.module().unwrap_or(self.module),
+                    interface.parameters[0].id = TypeVariableId::resolved(
+                        interface.parameters[0].id.module().unwrap_or(self.module),
                         u32::MAX,
                     );
                     true
@@ -10023,9 +11540,9 @@ impl ExportSummary {
             }
             SummaryCarrierMutationForTest::HiddenInterfaceParameterOwner => {
                 self.hidden_interfaces.first_mut().is_some_and(|interface| {
-                    interface.parameter.id = TypeVariableId::resolved(
+                    interface.parameters[0].id = TypeVariableId::resolved(
                         ModuleId::new(u32::MAX - 1),
-                        interface.parameter.id.local(),
+                        interface.parameters[0].id.local(),
                     );
                     true
                 })
@@ -10051,7 +11568,7 @@ impl ExportSummary {
                 let Some(interface) = self.interfaces.first_mut() else {
                     return false;
                 };
-                let parameter = interface.parameter.id;
+                let parameter = interface.parameters[0].id;
                 let Some(method) = interface.methods.first_mut() else {
                     return false;
                 };
@@ -10148,7 +11665,7 @@ impl ExportSummary {
                 let Some(interface) = interface else {
                     return false;
                 };
-                let parameter = interface.parameter.id;
+                let parameter = interface.parameters[0].id;
                 let Some(method) = interface.methods.first_mut() else {
                     return false;
                 };
@@ -10318,7 +11835,10 @@ impl ExportSummary {
                 else {
                     return false;
                 };
-                requirement.interface = InterfaceId::new(ModuleId::new(u32::MAX - 1), 0);
+                replace_interface_application_identity(
+                    &mut requirement.application,
+                    InterfaceId::new(ModuleId::new(u32::MAX - 1), 0),
+                );
                 true
             }
             SummaryCarrierMutationForTest::GlobalRequirementArgumentKind => {
@@ -10336,10 +11856,10 @@ impl ExportSummary {
                 let Some(requirement) = global.scheme.requirements.first_mut() else {
                     return false;
                 };
-                discard_type_iteratively(std::mem::replace(
-                    &mut requirement.argument,
+                replace_unary_interface_application(
+                    &mut requirement.application,
                     Type::Application(Box::new(Type::Variable(parameter)), Box::new(Type::Int)),
-                ));
+                );
                 true
             }
             SummaryCarrierMutationForTest::GlobalParameterOwner => {
@@ -10407,10 +11927,10 @@ impl ExportSummary {
                 .implementations
                 .first_mut()
                 .is_some_and(|implementation| {
-                    discard_type_iteratively(std::mem::replace(
-                        &mut implementation.fact.argument,
+                    replace_unary_interface_application(
+                        &mut implementation.fact.application,
                         Type::Unit,
-                    ));
+                    );
                     true
                 }),
             SummaryCarrierMutationForTest::ImplementationSemanticHead => {
@@ -10437,18 +11957,114 @@ impl ExportSummary {
                         Box::new(Type::Variable(parameter.id)),
                     );
                 }
-                discard_type_iteratively(std::mem::replace(
-                    &mut implementation.fact.argument,
-                    argument,
-                ));
+                replace_unary_interface_application(&mut implementation.fact.application, argument);
                 true
             }
             SummaryCarrierMutationForTest::ImplementationInterfaceIdentity => self
                 .implementations
                 .first_mut()
                 .is_some_and(|implementation| {
-                    implementation.fact.interface =
-                        InterfaceId::new(ModuleId::new(u32::MAX - 1), 0);
+                    replace_interface_application_identity(
+                        &mut implementation.fact.application,
+                        InterfaceId::new(ModuleId::new(u32::MAX - 1), 0),
+                    );
+                    true
+                }),
+            SummaryCarrierMutationForTest::RelationalImplementationArgumentMissing => self
+                .implementations
+                .iter_mut()
+                .find(|implementation| implementation.fact.arguments().len() >= 2)
+                .is_some_and(|implementation| {
+                    mutate_interface_application_arguments(
+                        &mut implementation.fact.application,
+                        |arguments| {
+                            let Some(removed) = arguments.pop() else {
+                                return false;
+                            };
+                            discard_type_iteratively(removed);
+                            true
+                        },
+                    )
+                }),
+            SummaryCarrierMutationForTest::RelationalImplementationArgumentExtra => self
+                .implementations
+                .iter_mut()
+                .find(|implementation| implementation.fact.arguments().len() >= 2)
+                .is_some_and(|implementation| {
+                    mutate_interface_application_arguments(
+                        &mut implementation.fact.application,
+                        |arguments| {
+                            if arguments.try_reserve(1).is_err() {
+                                return false;
+                            }
+                            arguments.push(Type::Unit);
+                            true
+                        },
+                    )
+                }),
+            SummaryCarrierMutationForTest::RelationalImplementationArgumentReordered => self
+                .implementations
+                .iter_mut()
+                .find(|implementation| implementation.fact.arguments().len() >= 2)
+                .is_some_and(|implementation| {
+                    mutate_interface_application_arguments(
+                        &mut implementation.fact.application,
+                        |arguments| {
+                            arguments.swap(0, 1);
+                            true
+                        },
+                    )
+                }),
+            SummaryCarrierMutationForTest::RelationalImplementationArgumentWrongKind
+            | SummaryCarrierMutationForTest::RelationalImplementationArgumentExtraWithLateWrongKind => {
+                let Some(higher_kinded) = self
+                    .nominals
+                    .values()
+                    .find(|nominal| nominal.parameters.len() == 1)
+                    .map(|nominal| nominal.id)
+                else {
+                    return false;
+                };
+                let Some(implementation) = self
+                    .implementations
+                    .iter_mut()
+                    .find(|implementation| implementation.fact.arguments().len() >= 2)
+                else {
+                    return false;
+                };
+                mutate_interface_application_arguments(
+                    &mut implementation.fact.application,
+                    |arguments| {
+                        let add_extra = matches!(
+                            mutation,
+                            SummaryCarrierMutationForTest::RelationalImplementationArgumentExtraWithLateWrongKind
+                        );
+                        if add_extra && arguments.try_reserve(1).is_err() {
+                            return false;
+                        }
+                        let Some(argument) = arguments.last_mut() else {
+                            return false;
+                        };
+                        discard_type_iteratively(std::mem::replace(
+                            argument,
+                            Type::Nominal(higher_kinded),
+                        ));
+                        if add_extra {
+                            arguments.push(Type::Unit);
+                        }
+                        true
+                    },
+                )
+            }
+            SummaryCarrierMutationForTest::RelationalImplementationInterfaceIdentity => self
+                .implementations
+                .iter_mut()
+                .find(|implementation| implementation.fact.arguments().len() >= 2)
+                .is_some_and(|implementation| {
+                    replace_interface_application_identity(
+                        &mut implementation.fact.application,
+                        InterfaceId::new(ModuleId::new(u32::MAX - 1), 0),
+                    );
                     true
                 }),
             SummaryCarrierMutationForTest::ImplementationPrerequisiteIdentity => self
@@ -10489,17 +12105,21 @@ impl ExportSummary {
                 };
                 let (first, rest) = implementation.fact.prerequisites.split_first_mut().unwrap();
                 let second = &mut rest[0];
-                second.interface = first.interface;
+                replace_interface_application_identity(&mut second.application, first.interface());
                 let mut type_work = TypeWorkBudget::unbounded();
-                let replacement = clone_type_with_budget(first.argument(), &mut type_work).unwrap();
-                discard_type_iteratively(std::mem::replace(&mut second.argument, replacement));
+                let replacement =
+                    clone_type_with_budget(&first.arguments()[0], &mut type_work).unwrap();
+                replace_unary_interface_application(&mut second.application, replacement);
                 for method in &mut implementation.fact.methods {
                     let (first, rest) = method.scheme.requirements.split_first_mut().unwrap();
                     let second = &mut rest[0];
-                    second.interface = first.interface;
+                    replace_interface_application_identity(
+                        &mut second.application,
+                        first.interface(),
+                    );
                     let replacement =
-                        clone_type_with_budget(first.argument(), &mut type_work).unwrap();
-                    discard_type_iteratively(std::mem::replace(&mut second.argument, replacement));
+                        clone_type_with_budget(&first.arguments()[0], &mut type_work).unwrap();
+                    replace_unary_interface_application(&mut second.application, replacement);
                 }
                 true
             }
@@ -10511,7 +12131,7 @@ impl ExportSummary {
                 else {
                     return false;
                 };
-                let Type::Application(partial_head, _) = implementation.fact.argument() else {
+                let Type::Application(partial_head, _) = &implementation.fact.arguments()[0] else {
                     return false;
                 };
                 let mut type_work = TypeWorkBudget::unbounded();
@@ -10523,16 +12143,17 @@ impl ExportSummary {
                     discard_type_iteratively(prerequisite);
                     return false;
                 };
-                discard_type_iteratively(std::mem::replace(
-                    &mut implementation.fact.prerequisites[0].argument,
+                replace_unary_interface_application(
+                    &mut implementation.fact.prerequisites[0].application,
                     prerequisite,
-                ));
+                );
                 for method in &mut implementation.fact.methods {
-                    discard_type_iteratively(std::mem::replace(
-                        &mut method.scheme.requirements[0].argument,
-                        clone_type_with_budget(&method_requirement, &mut type_work)
-                            .expect("an in-memory prerequisite mirror should fit"),
-                    ));
+                    let replacement = clone_type_with_budget(&method_requirement, &mut type_work)
+                        .expect("an in-memory prerequisite mirror should fit");
+                    replace_unary_interface_application(
+                        &mut method.scheme.requirements[0].application,
+                        replacement,
+                    );
                 }
                 discard_type_iteratively(method_requirement);
                 true
@@ -10542,7 +12163,10 @@ impl ExportSummary {
                 .iter_mut()
                 .find_map(|implementation| implementation.fact.prerequisites.first_mut())
                 .is_some_and(|prerequisite| {
-                    prerequisite.interface = InterfaceId::new(ModuleId::new(u32::MAX - 1), 0);
+                    replace_interface_application_identity(
+                        &mut prerequisite.application,
+                        InterfaceId::new(ModuleId::new(u32::MAX - 1), 0),
+                    );
                     true
                 }),
             SummaryCarrierMutationForTest::ImplementationPrerequisiteArgument => {
@@ -10553,10 +12177,10 @@ impl ExportSummary {
                 else {
                     return false;
                 };
-                discard_type_iteratively(std::mem::replace(
-                    &mut implementation.fact.prerequisites[0].argument,
+                replace_unary_interface_application(
+                    &mut implementation.fact.prerequisites[0].application,
                     Type::Int,
-                ));
+                );
                 true
             }
             SummaryCarrierMutationForTest::ImplementationPrerequisiteOriginMirror => {
@@ -10677,7 +12301,7 @@ impl ExportSummary {
                     return false;
                 }
                 let (first, rest) = self.implementations.split_first_mut().unwrap();
-                let first_outer = first.fact.argument().outer_nominal();
+                let first_outer = first.fact.arguments()[0].outer_nominal();
                 let Some(second) = rest.first_mut() else {
                     return false;
                 };
@@ -10696,7 +12320,7 @@ impl ExportSummary {
                 }
                 let method_type =
                     Type::Function(Box::new(argument.clone()), Box::new(argument.clone()));
-                discard_type_iteratively(std::mem::replace(&mut second.fact.argument, argument));
+                replace_unary_interface_application(&mut second.fact.application, argument);
                 let Some(method) = second.fact.methods.first_mut() else {
                     return false;
                 };
@@ -10719,7 +12343,7 @@ impl ExportSummary {
         let registered_foreign_parameter = self
             .interfaces
             .first()
-            .map(|interface| interface.parameter.id);
+            .map(|interface| interface.parameters[0].id);
         let Some(spelling) = self.constructor_order.first().cloned() else {
             return false;
         };
@@ -10791,8 +12415,7 @@ impl ExportSummary {
                         )),
                         0,
                     ),
-                    interface,
-                    argument: Type::Unit,
+                    application: InterfaceApplication::new(interface, Box::new([Type::Unit])),
                     origin: constructor.origin.clone(),
                     span: constructor.origin.primary_span(),
                 }]
@@ -10901,7 +12524,7 @@ impl ExportSummary {
             }
             SummaryHiddenDiamondMutationForTest::InterfaceParameterOrigin => {
                 self.hidden_interfaces.first_mut().is_some_and(|interface| {
-                    wrap_origin(&mut interface.parameter.origin);
+                    wrap_origin(&mut interface.parameters[0].origin);
                     true
                 })
             }
@@ -10928,7 +12551,7 @@ impl ExportSummary {
                 let implementation_interfaces = self
                     .implementations
                     .iter()
-                    .map(|implementation| implementation.fact.interface)
+                    .map(|implementation| implementation.fact.interface())
                     .collect::<HashSet<_>>();
                 let Some(interface) = self
                     .hidden_interfaces
@@ -10937,7 +12560,7 @@ impl ExportSummary {
                 else {
                     return false;
                 };
-                let parameter = interface.parameter.id;
+                let parameter = interface.parameters[0].id;
                 let Some(method) = interface.methods.first_mut() else {
                     return false;
                 };
@@ -11118,7 +12741,7 @@ impl ExportSummary {
         let Some(interface) = self.interfaces.first_mut() else {
             return false;
         };
-        interface.parameter.id = identity;
+        interface.parameters[0].id = identity;
         true
     }
 
@@ -11156,10 +12779,7 @@ impl ExportSummary {
             return false;
         };
         let parameter = fact.head_parameters[0].id;
-        discard_type_iteratively(std::mem::replace(
-            &mut fact.argument,
-            Type::Variable(parameter),
-        ));
+        replace_unary_interface_application(&mut fact.application, Type::Variable(parameter));
         let Some(method) = fact.methods.first_mut() else {
             return false;
         };
@@ -11178,7 +12798,7 @@ impl ExportSummary {
             .implementations
             .iter()
             .map(|implementation| &implementation.fact)
-            .find(|fact| fact.interface.module() != fact.id.module())
+            .find(|fact| fact.interface().module() != fact.id.module())
             .map(|fact| fact.id)
         else {
             return false;
@@ -11200,10 +12820,7 @@ impl ExportSummary {
         else {
             return false;
         };
-        discard_type_iteratively(std::mem::replace(
-            &mut fact.argument,
-            Type::Nominal(foreign),
-        ));
+        replace_unary_interface_application(&mut fact.application, Type::Nominal(foreign));
         let Some(method) = fact.methods.first_mut() else {
             return false;
         };
@@ -11252,26 +12869,27 @@ impl ExportSummary {
             return false;
         };
         let mut type_work = TypeWorkBudget::unbounded();
-        let Ok(argument) = clone_type_with_budget(implementation.fact.argument(), &mut type_work)
+        let Ok(argument) =
+            clone_type_with_budget(&implementation.fact.arguments()[0], &mut type_work)
         else {
             return false;
         };
         let argument = IterativeTypeOwner::new(argument);
         let method_argument = IterativeTypeOwner::new(
-            clone_type_with_budget(implementation.fact.argument(), &mut type_work)
+            clone_type_with_budget(&implementation.fact.arguments()[0], &mut type_work)
                 .expect("an in-memory test prerequisite clone should fit"),
         );
-        discard_type_iteratively(std::mem::replace(
-            &mut implementation.fact.prerequisites[0].argument,
+        replace_unary_interface_application(
+            &mut implementation.fact.prerequisites[0].application,
             argument.into_inner(),
-        ));
+        );
         for method in &mut implementation.fact.methods {
             let Some(requirement) = method.scheme.requirements.first_mut() else {
                 return false;
             };
             let replacement = clone_type_with_budget(&method_argument, &mut type_work)
                 .expect("an in-memory test prerequisite clone should fit");
-            discard_type_iteratively(std::mem::replace(&mut requirement.argument, replacement));
+            replace_unary_interface_application(&mut requirement.application, replacement);
         }
         true
     }
@@ -11450,7 +13068,9 @@ fn collect_scheme_nominal_identities(
 ) -> Result<(), ()> {
     collect_nominal_identities(&scheme.value_type, output, budget)?;
     for requirement in &scheme.requirements {
-        collect_nominal_identities(&requirement.argument, output, budget)?;
+        for argument in requirement.arguments() {
+            collect_nominal_identities(argument, output, budget)?;
+        }
     }
     Ok(())
 }
@@ -11676,6 +13296,7 @@ struct CombinedRegistryCounts {
     constructors: usize,
     nominal_parameters: usize,
     interfaces: usize,
+    interface_parameters: usize,
     method_parameters: usize,
     schemes: usize,
     global_rows: usize,
@@ -11897,6 +13518,9 @@ fn checked_registry_counts(
         checked_accumulate(&mut counts.nominals, registry.nominals.len())?;
         checked_accumulate(&mut counts.constructors, registry.constructors.len())?;
         checked_accumulate(&mut counts.interfaces, checked.interface_facts().len())?;
+        for interface in checked.interface_facts() {
+            checked_accumulate(&mut counts.interface_parameters, interface.parameters.len())?;
+        }
         checked_accumulate(&mut counts.schemes, checked.schemes().len())?;
         checked_accumulate(
             &mut counts.implementations,
@@ -11951,7 +13575,7 @@ fn checked_registry_counts(
     }
     let non_method_type_variables = counts
         .nominal_parameters
-        .checked_add(counts.interfaces)
+        .checked_add(counts.interface_parameters)
         .and_then(|count| count.checked_add(counts.global_parameters))
         .and_then(|count| count.checked_add(counts.implementation_parameters))
         .ok_or(ResolvedBuildFailure::ConstraintResource)?;
@@ -11993,7 +13617,7 @@ fn checked_registry_counts(
         )
         .and_then(|work| work.checked_add(counts.family_entries))
         .and_then(|work| work.checked_add(counts.constructors))
-        .and_then(|work| work.checked_add(counts.interfaces))
+        .and_then(|work| work.checked_add(counts.interface_parameters))
         .and_then(|work| work.checked_add(counts.schemes))
         .and_then(|work| work.checked_add(counts.implementations))
         .ok_or(ResolvedBuildFailure::ConstraintResource)?;
@@ -12195,18 +13819,19 @@ fn validate_checked_registries<'a>(
             }
         }
         for interface in checked.interface_facts() {
-            let parameter = &interface.parameter;
-            if parameter.id.module() != Some(checked.module())
-                || !type_variable_ids.insert(parameter.id)
-            {
-                return Err(ResolvedBuildFailure::InvalidState);
-            }
-            let canonical = registry
-                .type_variables
-                .get(&parameter.id)
-                .ok_or(ResolvedBuildFailure::InvalidState)?;
-            if canonical.id != parameter.id {
-                return Err(ResolvedBuildFailure::InvalidState);
+            for parameter in &interface.parameters {
+                if parameter.id.module() != Some(checked.module())
+                    || !type_variable_ids.insert(parameter.id)
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                let canonical = registry
+                    .type_variables
+                    .get(&parameter.id)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                if canonical.id != parameter.id {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
             }
             // The consuming linked-evidence validator authenticates the
             // interface carrier's complete spelling, Origin, and Kind mirror
@@ -12689,8 +14314,9 @@ impl ResolvedRegistry {
             registry.try_insert_checker_type_variable(parameter, budget)?;
         }
         for imported_interface in imported.interface_imports() {
-            registry
-                .try_insert_checker_type_variable(&imported_interface.fact.parameter, budget)?;
+            for parameter in &imported_interface.fact.parameters {
+                registry.try_insert_checker_type_variable(parameter, budget)?;
+            }
             for method in imported_interface.authority_methods() {
                 for parameter in method.authoritative_type_parameters() {
                     registry.try_insert_checker_type_variable(parameter, budget)?;
@@ -13238,10 +14864,11 @@ pub(crate) fn clone_resolved_type_variable_with_budget(
     budget: &mut TypeWorkBudget,
 ) -> Result<ResolvedTypeVariable, ()> {
     budget.charge(1)?;
+    let spelling = try_clone_string(&parameter.spelling).map_err(|_| ())?;
     let kind = clone_kind_with_budget(&parameter.kind, budget)?;
     Ok(ResolvedTypeVariable {
         id: parameter.id,
-        spelling: parameter.spelling.clone(),
+        spelling,
         kind,
         origin: parameter.origin.clone(),
     })
@@ -13547,14 +15174,172 @@ pub struct ResolvedInterfaceDeclaration {
     pub public: bool,
     /// Exact declared spelling.
     pub spelling: String,
-    /// The interface's single resolved type parameter.
-    pub parameter: ResolvedTypeVariable,
+    /// The interface's nonempty ordered resolved type parameters.
+    pub parameters: Box<[ResolvedTypeVariable]>,
+    /// The optional resolved source determination edge.
+    pub determination: Option<ResolvedInterfaceDetermination>,
     /// Nonempty methods in semantic declaration order.
     pub methods: Box<[ResolvedInterfaceMethod]>,
     /// Causal declaration provenance.
     pub origin: Origin,
     /// Complete declaration span.
     pub span: Span,
+}
+
+/// One resolved source determination edge owned by an interface declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedInterfaceDetermination {
+    /// The determinant side before `->`.
+    pub determinant: ResolvedDeterminationSide,
+    /// The dependent side after `->`.
+    pub dependent: ResolvedDeterminationSide,
+    /// The complete `where` determination span.
+    pub span: Span,
+}
+
+/// One nonempty source-ordered resolved determination side.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedDeterminationSide {
+    /// Owning interface-parameter occurrences in written order.
+    pub parameters: Box<[ResolvedDeterminationParameter]>,
+    /// The complete side span, including parentheses when present.
+    pub span: Span,
+}
+
+/// One source name in a resolved interface determination.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedDeterminationParameter {
+    /// Stable owning interface-parameter identity.
+    pub id: TypeVariableId,
+    /// Exact source spelling.
+    pub spelling: String,
+    /// Causal source provenance.
+    pub origin: Origin,
+}
+
+/// Checks whether one resolved edge is the exact total partition required by
+/// interface admission, without taking ownership of a source diagnostic.
+///
+/// The linear merge accepts each declaration position on exactly one side and
+/// therefore also rejects repeats, omissions, reordering, overlap, unknown
+/// identities, and an empty side. Kind checking uses this predicate only to
+/// decide whether it may inspect later method kinds; elaboration still owns
+/// the source-facing determination diagnostic and checked carrier.
+pub(crate) fn resolved_determination_is_total(
+    parameters: &[ResolvedTypeVariable],
+    determination: &ResolvedInterfaceDetermination,
+    mut charge: impl FnMut(usize) -> Result<(), ()>,
+) -> Result<bool, ()> {
+    if parameters.is_empty()
+        || determination.determinant.parameters.is_empty()
+        || determination.dependent.parameters.is_empty()
+        || !span_contains(determination.span, determination.determinant.span)
+        || !span_contains(determination.span, determination.dependent.span)
+    {
+        return Ok(false);
+    }
+
+    let mut determinant = 0;
+    let mut dependent = 0;
+    for parameter in parameters {
+        charge(1)?;
+        let in_determinant = determination
+            .determinant
+            .parameters
+            .get(determinant)
+            .is_some_and(|candidate| {
+                resolved_determination_occurrence_matches(
+                    candidate,
+                    parameter,
+                    determination.determinant.span,
+                )
+            });
+        let in_dependent = determination
+            .dependent
+            .parameters
+            .get(dependent)
+            .is_some_and(|candidate| {
+                resolved_determination_occurrence_matches(
+                    candidate,
+                    parameter,
+                    determination.dependent.span,
+                )
+            });
+        if in_determinant == in_dependent {
+            return Ok(false);
+        }
+        determinant += usize::from(in_determinant);
+        dependent += usize::from(in_dependent);
+    }
+
+    Ok(determinant == determination.determinant.parameters.len()
+        && dependent == determination.dependent.parameters.len())
+}
+
+fn span_contains(outer: Span, inner: Span) -> bool {
+    outer.source() == inner.source()
+        && outer.range().start() <= inner.range().start()
+        && inner.range().end() <= outer.range().end()
+}
+
+fn resolved_determination_occurrence_matches(
+    occurrence: &ResolvedDeterminationParameter,
+    parameter: &ResolvedTypeVariable,
+    side_span: Span,
+) -> bool {
+    occurrence.id == parameter.id
+        && occurrence.spelling == parameter.spelling
+        && matches!(
+            &occurrence.origin,
+            Origin::Source(origin) if span_contains(side_span, *origin)
+        )
+}
+
+/// Authenticates a checked declaration-position key against one resolved
+/// source edge without retaining another metadata vector.
+pub(crate) fn resolved_determination_positions_match(
+    parameters: &[ResolvedTypeVariable],
+    determination: Option<&ResolvedInterfaceDetermination>,
+    position_mirrors: &[Option<&[usize]>],
+    mut charge: impl FnMut(usize) -> Result<(), ()>,
+) -> Result<bool, ()> {
+    let Some(determination) = determination else {
+        return Ok(position_mirrors.iter().all(Option::is_none));
+    };
+    if position_mirrors.iter().any(|positions| {
+        positions
+            .is_none_or(|positions| positions.len() != determination.determinant.parameters.len())
+    }) || !resolved_determination_is_total(parameters, determination, &mut charge)?
+    {
+        return Ok(false);
+    }
+
+    let mut determinant_position = 0;
+    for (declaration_position, parameter) in parameters.iter().enumerate() {
+        charge(1)?;
+        let Some(occurrence) = determination
+            .determinant
+            .parameters
+            .get(determinant_position)
+        else {
+            continue;
+        };
+        if occurrence.id != parameter.id {
+            continue;
+        }
+        for positions in position_mirrors {
+            charge(1)?;
+            let Some(positions) = positions else {
+                return Ok(false);
+            };
+            if positions.get(determinant_position) != Some(&declaration_position) {
+                return Ok(false);
+            }
+        }
+        determinant_position += 1;
+    }
+
+    Ok(determinant_position == determination.determinant.parameters.len())
 }
 
 /// One resolved signature-only interface method.
@@ -13587,17 +15372,24 @@ pub struct ResolvedInterfaceOccurrence {
     pub origin: Origin,
 }
 
+/// One complete resolved interface application.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedInterfaceApplication {
+    /// Resolved interface occurrence.
+    pub interface: ResolvedInterfaceOccurrence,
+    /// Nonempty ordered resolved type arguments.
+    pub arguments: Box<[ResolvedType]>,
+    /// Complete interface application span.
+    pub span: Span,
+}
+
 /// One ordered resolved interface requirement outside the ordinary type algebra.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedRequirement {
     /// Owner-qualified occurrence identity.
     pub id: RequirementId,
-    /// Resolved interface occurrence.
-    pub interface: ResolvedInterfaceOccurrence,
-    /// Resolved single type argument.
-    pub argument: ResolvedType,
-    /// Complete requirement span.
-    pub span: Span,
+    /// Complete resolved interface application.
+    pub application: ResolvedInterfaceApplication,
 }
 
 /// One resolved implementation declaration retained for Task 4 checking.
@@ -13607,10 +15399,8 @@ pub struct ResolvedImplementation {
     pub id: ImplId,
     /// Whether the checked anonymous fact is eligible for publication.
     pub public: bool,
-    /// Implemented interface occurrence.
-    pub interface: ResolvedInterfaceOccurrence,
-    /// Resolved implementation head argument.
-    pub argument: ResolvedType,
+    /// Complete resolved implementation head application.
+    pub head: ResolvedInterfaceApplication,
     /// Rigid parameters discovered from the head in first-occurrence order.
     pub head_parameters: Box<[ResolvedTypeVariable]>,
     /// Candidate variables found only in prerequisites.
@@ -13941,8 +15731,7 @@ pub(crate) fn discard_resolved_definition_iteratively(definition: ResolvedDefini
 }
 
 pub(crate) fn discard_resolved_implementation_iteratively(implementation: ResolvedImplementation) {
-    discard_origin_iteratively(implementation.interface.origin);
-    discard_resolved_type(implementation.argument);
+    discard_resolved_interface_application(implementation.head);
     for parameter in implementation.head_parameters {
         discard_origin_iteratively(parameter.origin);
     }
@@ -13964,7 +15753,17 @@ pub(crate) fn discard_resolved_implementation_iteratively(implementation: Resolv
 }
 
 pub(crate) fn discard_resolved_interface_iteratively(interface: ResolvedInterfaceDeclaration) {
-    discard_origin_iteratively(interface.parameter.origin);
+    for parameter in interface.parameters {
+        discard_origin_iteratively(parameter.origin);
+    }
+    if let Some(determination) = interface.determination {
+        for parameter in determination.determinant.parameters {
+            discard_origin_iteratively(parameter.origin);
+        }
+        for parameter in determination.dependent.parameters {
+            discard_origin_iteratively(parameter.origin);
+        }
+    }
     for method in interface.methods.into_vec() {
         discard_resolved_type(method.annotation);
         for parameter in method.type_parameters.into_vec() {
@@ -13987,8 +15786,14 @@ fn discard_external_interface(interface: ResolvedExternalInterface) {
 }
 
 pub(crate) fn discard_resolved_requirement(requirement: ResolvedRequirement) {
-    discard_origin_iteratively(requirement.interface.origin);
-    discard_resolved_type(requirement.argument);
+    discard_resolved_interface_application(requirement.application);
+}
+
+fn discard_resolved_interface_application(application: ResolvedInterfaceApplication) {
+    discard_origin_iteratively(application.interface.origin);
+    for argument in application.arguments {
+        discard_resolved_type(argument);
+    }
 }
 
 pub(crate) fn discard_resolved_equation_iteratively(equation: ResolvedEquation) {
@@ -14139,6 +15944,328 @@ pub(crate) fn discard_resolved_local_declaration_iteratively(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_resolved_determination_side_never_authenticates_as_total() {
+        let source = SourceFile::new("empty-determination.ash", "edge")
+            .expect("the empty-determination source should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the edge range should be ordered"))
+            .expect("the edge span should fit");
+        let module = ModuleId::new(9_799);
+        let parameters = [
+            ResolvedTypeVariable {
+                id: TypeVariableId::resolved(module, 0),
+                spelling: "A".to_owned(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            },
+            ResolvedTypeVariable {
+                id: TypeVariableId::resolved(module, 1),
+                spelling: "B".to_owned(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            },
+        ];
+        let occurrence = |index: usize, spelling: &str| ResolvedDeterminationParameter {
+            id: parameters[index].id,
+            spelling: spelling.to_owned(),
+            origin: Origin::Source(span),
+        };
+        let edge = |determinant, dependent| ResolvedInterfaceDetermination {
+            determinant: ResolvedDeterminationSide {
+                parameters: determinant,
+                span,
+            },
+            dependent: ResolvedDeterminationSide {
+                parameters: dependent,
+                span,
+            },
+            span,
+        };
+
+        for forged in [
+            edge(Box::new([]), Box::new([occurrence(1, "B")])),
+            edge(Box::new([occurrence(0, "A")]), Box::new([])),
+        ] {
+            let mut used = 0;
+            assert_eq!(
+                resolved_determination_is_total(&parameters, &forged, |work| {
+                    used += work;
+                    Ok(())
+                }),
+                Ok(false),
+            );
+            assert_eq!(used, 0, "an empty carrier rejects before positional work");
+        }
+
+        let mut used = 0;
+        assert_eq!(
+            resolved_determination_is_total(
+                &parameters,
+                &edge(
+                    Box::new([occurrence(0, "A")]),
+                    Box::new([occurrence(1, "B")]),
+                ),
+                |work| {
+                    used += work;
+                    Ok(())
+                },
+            ),
+            Ok(true),
+        );
+        assert_eq!(used, parameters.len());
+    }
+
+    #[test]
+    fn checked_interface_fact_equality_authenticates_determination_positions() {
+        let source = SourceFile::new("determination-equality.ash", "fact")
+            .expect("the determination-equality source should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the fact range should be ordered"))
+            .expect("the fact span should fit");
+        let module = ModuleId::new(9_798);
+        let interface = InterfaceId::new(module, 0);
+        let parameters = || {
+            Box::new([
+                ResolvedTypeVariable {
+                    id: TypeVariableId::resolved(module, 0),
+                    spelling: "A".to_owned(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(span),
+                },
+                ResolvedTypeVariable {
+                    id: TypeVariableId::resolved(module, 1),
+                    spelling: "B".to_owned(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(span),
+                },
+            ])
+        };
+        let mut left = CheckedInterfaceFact::without_methods_for_test(
+            interface,
+            "Relation".to_owned(),
+            parameters(),
+            Origin::Source(span),
+            span,
+        );
+        let mut right = CheckedInterfaceFact::without_methods_for_test(
+            interface,
+            "Relation".to_owned(),
+            parameters(),
+            Origin::Source(span),
+            span,
+        );
+        left.determination = Some(DeterminationKey::new(Box::new([0])));
+        right.determination = Some(DeterminationKey::new(Box::new([1])));
+
+        assert_eq!(
+            same_checked_interface_fact_with_budget(
+                &left,
+                &right,
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Ok(false),
+        );
+        right.determination = None;
+        assert_eq!(
+            same_checked_interface_fact_with_budget(
+                &left,
+                &right,
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Ok(false),
+        );
+    }
+
+    #[test]
+    fn local_summary_publication_authenticates_source_and_fact_determination_metadata() {
+        #[derive(Clone, Copy, Debug)]
+        enum Mutation {
+            Missing,
+            Extra,
+            Duplicate,
+            Reordered,
+            OutOfRange,
+            WrongInterface,
+            MismatchedPositions,
+        }
+
+        let source_file = SourceFile::new("summary-determination.ash", "interface")
+            .expect("the summary-determination source should fit");
+        let span = source_file
+            .span(ByteRange::new(0, 9).expect("the interface range should be ordered"))
+            .expect("the interface span should fit");
+        let module = ModuleId::new(9_797);
+        let interface = InterfaceId::new(module, 0);
+        let parameters = || {
+            Box::new([
+                ResolvedTypeVariable {
+                    id: TypeVariableId::resolved(module, 0),
+                    spelling: "A".to_owned(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(span),
+                },
+                ResolvedTypeVariable {
+                    id: TypeVariableId::resolved(module, 1),
+                    spelling: "B".to_owned(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(span),
+                },
+                ResolvedTypeVariable {
+                    id: TypeVariableId::resolved(module, 2),
+                    spelling: "C".to_owned(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(span),
+                },
+            ])
+        };
+        let determination = |parameters: &[ResolvedTypeVariable]| {
+            let occurrence = |position: usize| ResolvedDeterminationParameter {
+                id: parameters[position].id,
+                spelling: parameters[position].spelling.clone(),
+                origin: Origin::Source(span),
+            };
+            ResolvedInterfaceDetermination {
+                determinant: ResolvedDeterminationSide {
+                    parameters: Box::new([occurrence(0), occurrence(1)]),
+                    span,
+                },
+                dependent: ResolvedDeterminationSide {
+                    parameters: Box::new([occurrence(2)]),
+                    span,
+                },
+                span,
+            }
+        };
+
+        let mut unexpectedly_accepted = Vec::new();
+        for mutation in [
+            Mutation::Missing,
+            Mutation::Extra,
+            Mutation::Duplicate,
+            Mutation::Reordered,
+            Mutation::OutOfRange,
+            Mutation::WrongInterface,
+            Mutation::MismatchedPositions,
+        ] {
+            let source_parameters = parameters();
+            let source_determination = (!matches!(mutation, Mutation::Extra))
+                .then(|| determination(source_parameters.as_ref()));
+            let source = ResolvedInterfaceDeclaration {
+                id: interface,
+                public: true,
+                spelling: "Relation".to_owned(),
+                parameters: source_parameters,
+                determination: source_determination,
+                methods: Box::new([]),
+                origin: Origin::Source(span),
+                span,
+            };
+            let fact_determination = match mutation {
+                Mutation::Missing => None,
+                Mutation::Extra | Mutation::WrongInterface => {
+                    Some(DeterminationKey::new(Box::new([0, 1])))
+                }
+                Mutation::Duplicate => Some(DeterminationKey::new(Box::new([0, 0]))),
+                Mutation::Reordered => Some(DeterminationKey::new(Box::new([1, 0]))),
+                Mutation::OutOfRange => Some(DeterminationKey::new(Box::new([3]))),
+                Mutation::MismatchedPositions => Some(DeterminationKey::new(Box::new([0, 2]))),
+            };
+            let fact = CheckedInterfaceFact::new(
+                if matches!(mutation, Mutation::WrongInterface) {
+                    InterfaceId::new(module, 1)
+                } else {
+                    interface
+                },
+                "Relation".to_owned(),
+                parameters(),
+                fact_determination,
+                Box::new([]),
+                Origin::Source(span),
+                span,
+            );
+
+            if clone_checked_interface_fact(
+                &fact,
+                Some(&source),
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .is_ok()
+            {
+                unexpectedly_accepted.push(mutation);
+            }
+        }
+
+        assert!(
+            unexpectedly_accepted.is_empty(),
+            "local summary publication accepted {unexpectedly_accepted:?}",
+        );
+
+        // One source-totality visit and one declaration-coordinate derivation
+        // visit per parameter, one comparison per determinant position, the
+        // predecessor fact scalar, and one retained cell per key position.
+        const PARAMETER_COUNT: usize = 3;
+        const DETERMINANT_COUNT: usize = 2;
+        const KEY_AUTH_WORK: usize = 2 * PARAMETER_COUNT + DETERMINANT_COUNT;
+        const KEY_RETENTION_WORK: usize = DETERMINANT_COUNT;
+        const PREDECESSOR_FACT_WORK: usize = 1;
+        const EXACT_WORK: usize = KEY_AUTH_WORK + KEY_RETENTION_WORK + PREDECESSOR_FACT_WORK;
+        let source_parameters = parameters();
+        let source = ResolvedInterfaceDeclaration {
+            id: interface,
+            public: true,
+            spelling: "Relation".to_owned(),
+            determination: Some(determination(source_parameters.as_ref())),
+            parameters: source_parameters,
+            methods: Box::new([]),
+            origin: Origin::Source(span),
+            span,
+        };
+        let fact = CheckedInterfaceFact::new(
+            interface,
+            "Relation".to_owned(),
+            parameters(),
+            Some(DeterminationKey::new(Box::new([0, 1]))),
+            Box::new([]),
+            Origin::Source(span),
+            span,
+        );
+
+        let mut short = crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            clone_checked_interface_fact(
+                &fact,
+                Some(&source),
+                &mut TypeWorkBudget::default(),
+                &mut short,
+            ),
+            Err(ResolvedBuildFailure::ConstraintResource),
+        );
+        assert_eq!(
+            short.used(),
+            KEY_AUTH_WORK + PREDECESSOR_FACT_WORK,
+            "the two-cell retention reserve must fail atomically",
+        );
+
+        for _ in 0..2 {
+            let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK);
+            let cloned = clone_checked_interface_fact(
+                &fact,
+                Some(&source),
+                &mut TypeWorkBudget::default(),
+                &mut exact,
+            )
+            .expect("the exact summary key-authentication boundary should fit on retry");
+            assert_eq!(cloned.determinant_positions(), Some(&[0, 1][..]));
+            assert_eq!(exact.used(), EXACT_WORK);
+            assert_eq!(exact.charge(1), Err(()));
+        }
+        assert_eq!(fact.determinant_positions(), Some(&[0, 1][..]));
+    }
 
     #[derive(Clone, Copy)]
     enum FamilyCarrierForTest {
@@ -14609,12 +16736,13 @@ mod tests {
             CheckedInterfaceFact {
                 id,
                 spelling: spelling.to_owned(),
-                parameter: ResolvedTypeVariable {
+                parameters: Box::new([ResolvedTypeVariable {
                     id: parameter,
                     spelling: "A".to_owned(),
                     kind: Kind::Type,
                     origin: Origin::Source(span),
-                },
+                }]),
+                determination: None,
                 methods: Box::new([CheckedInterfaceMethodFact {
                     id: MethodId::new(id, 0),
                     spelling: format!("{spelling}Method"),
@@ -14694,7 +16822,8 @@ mod tests {
         // method-owner relations. Each
         // method's free-variable closure, outer Function shape, and Kind are
         // authenticated on TypeWork.
-        const EXACT: usize = NAMES + METHODS + 2 * PUBLIC + HIDDEN + NAMES + METHODS;
+        const EXACT: usize =
+            NAMES + METHODS + 2 * PUBLIC + HIDDEN + NAMES + METHODS + PUBLIC + HIDDEN;
         let summary =
             interface_authentication_summary(InterfaceAuthenticationMutationForTest::None);
         let mut measured = crate::interface::InterfaceConstraintBudget::default();
@@ -14707,7 +16836,7 @@ mod tests {
             summary.authenticate(&mut TypeWorkBudget::default(), &mut short),
             Err(ResolvedBuildFailure::ConstraintResource),
         );
-        assert_eq!(short.used(), NAMES + METHODS + PUBLIC + HIDDEN + NAMES);
+        assert_eq!(short.used(), EXACT - 1);
         for _ in 0..2 {
             let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(EXACT);
             summary
@@ -14760,8 +16889,7 @@ mod tests {
                 crate::interface::RequirementOwner::Global(binder),
                 declaration,
             ),
-            interface,
-            argument: Type::Unit,
+            application: InterfaceApplication::new(interface, Box::new([Type::Unit])),
             origin: Origin::Source(span),
             span,
         };
@@ -14839,12 +16967,13 @@ mod tests {
         summary.interfaces.push(CheckedInterfaceFact {
             id: interface,
             spelling: "Functor".to_owned(),
-            parameter: ResolvedTypeVariable {
+            parameters: Box::new([ResolvedTypeVariable {
                 id: interface_parameter,
                 spelling: "F".to_owned(),
                 kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
                 origin: Origin::Source(interface_span),
-            },
+            }]),
+            determination: None,
             methods: Box::new([CheckedInterfaceMethodFact {
                 id: method,
                 spelling: "map".to_owned(),
@@ -14933,7 +17062,7 @@ mod tests {
                 method.type_parameters[0].spelling = "Forged".to_owned();
             }
             Some(PolymorphicMethodSummaryMutationForTest::FreeBinder) => {
-                discard_type_iteratively(std::mem::replace(
+                drop(std::mem::replace(
                     &mut method.value_type,
                     Type::Function(
                         Box::new(Type::Variable(TypeVariableId::resolved(module, 99))),
@@ -15013,12 +17142,14 @@ mod tests {
             id: interface,
             public: true,
             spelling: "Boxed".to_owned(),
-            parameter: ResolvedTypeVariable {
+            parameters: vec![ResolvedTypeVariable {
                 id: interface_parameter,
                 spelling: "I".to_owned(),
                 kind: Kind::Type,
                 origin: Origin::Source(span),
-            },
+            }]
+            .into_boxed_slice(),
+            determination: None,
             methods: Box::new([ResolvedInterfaceMethod {
                 id: method,
                 spelling: "keep".to_owned(),
@@ -15054,7 +17185,8 @@ mod tests {
         let checked = [CheckedInterfaceFact {
             id: interface,
             spelling: "Boxed".to_owned(),
-            parameter: resolved_interface.parameter.clone(),
+            parameters: Box::new([resolved_interface.parameters[0].clone()]),
+            determination: None,
             methods: Box::new([CheckedInterfaceMethodFact {
                 id: method,
                 spelling: "keep".to_owned(),
@@ -15145,12 +17277,14 @@ mod tests {
             id: interface,
             public: true,
             spelling: "Boxed".to_owned(),
-            parameter: ResolvedTypeVariable {
+            parameters: vec![ResolvedTypeVariable {
                 id: interface_parameter,
                 spelling: "I".to_owned(),
                 kind: Kind::Type,
                 origin: Origin::Source(span),
-            },
+            }]
+            .into_boxed_slice(),
+            determination: None,
             methods: Box::new([ResolvedInterfaceMethod {
                 id: method,
                 spelling: "keep".to_owned(),
@@ -15181,7 +17315,8 @@ mod tests {
         let mut checked = [CheckedInterfaceFact {
             id: interface,
             spelling: "Boxed".to_owned(),
-            parameter: resolved_interface.parameter.clone(),
+            parameters: Box::new([resolved_interface.parameters[0].clone()]),
+            determination: None,
             methods: Box::new([CheckedInterfaceMethodFact {
                 id: method,
                 spelling: "keep".to_owned(),
@@ -15426,9 +17561,8 @@ mod tests {
             .push(AuthorizedImplementationFact::local_for_test(
                 CheckedImplementationFact {
                     id,
-                    interface: interface.id,
+                    application: InterfaceApplication::new(interface.id, Box::new([Type::Int])),
                     head_parameters: Box::new([]),
-                    argument: Type::Int,
                     prerequisites: Box::new([]),
                     methods: Box::new([CheckedImplementationMethodFact {
                         id: ImplMethodId::new(id, method),
@@ -15455,12 +17589,12 @@ mod tests {
 
     #[test]
     fn implementation_summary_authentication_has_exact_independent_ledgers() {
-        // The interface-only Constraint fixture costs 15. One implementation adds one
+        // The interface-only Constraint fixture costs 18. One implementation adds one
         // implementation-count scan, one G+M term-binder slot, one local
         // authorization method cell, two exact ground-head cells, ten fused
         // interface-method substitution cells, and two implementation-index
         // cells.
-        const EXACT: usize = 15 + 1 + 1 + 1 + 2 + 10 + 2;
+        const EXACT: usize = 35;
         const TYPE_WORK: usize = 58;
         let summary = interface_summary_with_local_implementation(false);
         let mut short_type = TypeWorkBudget::with_limit(TYPE_WORK);
@@ -15482,7 +17616,7 @@ mod tests {
         assert_eq!(type_short.used(), TYPE_WORK - 1);
         assert_eq!(
             type_short_constraint.used(),
-            30,
+            33,
             "Type failure follows every carrier comparison and precedes final index retention",
         );
         for _ in 0..2 {
@@ -15498,7 +17632,7 @@ mod tests {
         // Before method-shape checking, the two new aggregate cells and the
         // authorization cell are all charged. A malformed position then owns
         // InvalidState; one-short cannot reach that semantic check.
-        const BAD_POSITION_EXACT: usize = 15 + 1 + 1 + 1;
+        const BAD_POSITION_EXACT: usize = 18;
         let malformed = interface_summary_with_local_implementation(true);
         let mut short =
             crate::interface::InterfaceConstraintBudget::with_limit(BAD_POSITION_EXACT - 1);
@@ -16139,6 +18273,7 @@ mod tests {
                 CheckedInterfaceFact {
                     id,
                     spelling: format!("Interface{index}"),
+                    determination: None,
                     methods: vec![CheckedInterfaceMethodFact {
                         id: method,
                         spelling: "method".to_owned(),
@@ -16153,7 +18288,7 @@ mod tests {
                         span,
                     }]
                     .into_boxed_slice(),
-                    parameter,
+                    parameters: Box::new([parameter]),
                     origin: Origin::Source(span),
                     span,
                 }
@@ -16196,9 +18331,11 @@ mod tests {
             .expect("the wide method codomain should fit");
         let implementation = CheckedImplementationFact {
             id: implementation_id,
-            interface: interface_facts[0].id,
+            application: InterfaceApplication::new(
+                interface_facts[0].id,
+                Box::new([implementation_argument]),
+            ),
             head_parameters: implementation_parameters.into_boxed_slice(),
-            argument: implementation_argument,
             prerequisites: Box::new([]),
             methods: Box::new([CheckedImplementationMethodFact {
                 id: ImplMethodId::new(implementation_id, implementation_method),
@@ -16352,7 +18489,7 @@ mod tests {
         // carrier remains shallow for evidence validation to reject later.
         const TYPE_WORK: usize = 26;
         let mut modules = wide_combined_registry_fixture(4);
-        let interface_parameter = modules[0].interface_facts[0].parameter.id;
+        let interface_parameter = modules[0].interface_facts[0].parameters[0].id;
         Arc::get_mut(&mut modules[0].registry)
             .expect("the canonical interface registry should be uniquely owned")
             .type_variables
@@ -16985,7 +19122,7 @@ mod tests {
             let interface_parameter = modules[0]
                 .interface_facts
                 .first()
-                .map(|interface| interface.parameter.id);
+                .map(|interface| interface.parameters[0].id);
             let global_parameter = modules[0]
                 .schemes
                 .first()
@@ -17159,7 +19296,7 @@ mod tests {
                     parameters[1].id = parameters[0].id;
                 }
                 Mutation::InterfaceParameterOwner => {
-                    modules[0].interface_facts[0].parameter.id =
+                    modules[0].interface_facts[0].parameters[0].id =
                         TypeVariableId::resolved(ModuleId::new(99), 0);
                 }
                 Mutation::GlobalParameterOwner => {
@@ -17465,10 +19602,10 @@ mod tests {
                 let mut substitution_short =
                     crate::interface::InterfaceConstraintBudget::with_limit(SUBSTITUTION_WORK - 1);
                 assert_eq!(
-                    same_summary_type_after_single_substitution(
+                    same_summary_type_after_substitutions(
                         &expected,
-                        parameter_id,
-                        &Type::Unit,
+                        &parameters,
+                        &[Type::Unit],
                         &actual,
                         &mut substitution_short,
                     ),
@@ -17478,10 +19615,10 @@ mod tests {
                 let mut substitution_exact =
                     crate::interface::InterfaceConstraintBudget::with_limit(SUBSTITUTION_WORK);
                 assert_eq!(
-                    same_summary_type_after_single_substitution(
+                    same_summary_type_after_substitutions(
                         &expected,
-                        parameter_id,
-                        &Type::Unit,
+                        &parameters,
+                        &[Type::Unit],
                         &actual,
                         &mut substitution_exact,
                     ),
@@ -17510,15 +19647,19 @@ mod tests {
                 let interface = InterfaceId::new(module, 0);
                 let method_requirement = CheckedRequirement {
                     id: requirement_id,
-                    interface,
-                    argument: deep_type(Type::Unit),
+                    application: InterfaceApplication::new(
+                        interface,
+                        Box::new([deep_type(Type::Unit)]),
+                    ),
                     origin: deep_origin(),
                     span,
                 };
                 let prerequisite = CheckedRequirement {
                     id: requirement_id,
-                    interface,
-                    argument: deep_type(Type::Unit),
+                    application: InterfaceApplication::new(
+                        interface,
+                        Box::new([deep_type(Type::Unit)]),
+                    ),
                     origin: deep_origin(),
                     span,
                 };
@@ -17551,6 +19692,137 @@ mod tests {
     }
 
     #[test]
+    fn implementation_prerequisite_binder_containment_is_linear_exact_and_retryable() {
+        const WIDTH: usize = 32_768;
+        // Each distinct bare prerequisite variable owns one pending-root
+        // retention, one Type visit, one variable-set storage cell, and one
+        // canonical owner-index lookup: WIDTH * (1 + 1 + 1 + 1).
+        const EXACT_WORK: usize = 4 * WIDTH;
+
+        std::thread::Builder::new()
+            .name("wide-implementation-prerequisite-binders".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("wide-prerequisite-binders.ash", "prerequisite")
+                    .expect("the prerequisite-binder source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 12).expect("the prerequisite range should order"))
+                    .expect("the prerequisite-binder span should fit");
+                let module = ModuleId::new(9_819);
+                let implementation = ImplId::new(module, 0);
+                let interface = InterfaceId::new(module, 0);
+                let parameters = (0..WIDTH)
+                    .map(|position| ResolvedTypeVariable {
+                        id: TypeVariableId::resolved(
+                            module,
+                            u32::try_from(position).expect("the parameter ordinal should fit"),
+                        ),
+                        spelling: format!("T{position}"),
+                        kind: Kind::Type,
+                        origin: Origin::Source(span),
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
+                let prerequisite_arguments = parameters
+                    .iter()
+                    .map(|parameter| Type::Variable(parameter.id))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
+                let fact = CheckedImplementationFact {
+                    id: implementation,
+                    application: InterfaceApplication::new(interface, Box::new([Type::Int])),
+                    head_parameters: parameters,
+                    prerequisites: Box::new([CheckedRequirement {
+                        id: RequirementId::new(
+                            crate::interface::RequirementOwner::Impl(implementation),
+                            0,
+                        ),
+                        application: InterfaceApplication::new(interface, prerequisite_arguments),
+                        origin: Origin::Source(span),
+                        span,
+                    }]),
+                    methods: Box::new([]),
+                    origin: Origin::Source(span),
+                    span,
+                };
+                let canonical_variables = fact
+                    .head_parameters
+                    .iter()
+                    .map(|parameter| {
+                        (
+                            parameter.id,
+                            (
+                                &parameter.kind,
+                                parameter.origin.primary_span(),
+                                SummaryBinderOwner::Implementation(implementation),
+                            ),
+                        )
+                    })
+                    .collect::<HashMap<_, _>>();
+
+                let mut one_short =
+                    crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+                assert_eq!(
+                    authenticate_implementation_prerequisite_binders(
+                        &fact,
+                        &canonical_variables,
+                        &mut one_short,
+                    ),
+                    Err(ResolvedBuildFailure::ConstraintResource),
+                );
+                assert_eq!(
+                    one_short.used(),
+                    3 * WIDTH,
+                    "the final WIDTH-cell owner-lookup batch must fail atomically",
+                );
+
+                for _ in 0..2 {
+                    let mut exact =
+                        crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK);
+                    authenticate_implementation_prerequisite_binders(
+                        &fact,
+                        &canonical_variables,
+                        &mut exact,
+                    )
+                    .expect("the exact prerequisite-binder budget should remain reusable");
+                    assert_eq!(exact.used(), EXACT_WORK);
+                    assert_eq!(exact.charge(1), Err(()));
+                }
+
+                let foreign_implementation = ImplId::new(module, 1);
+                let foreign_variables = fact
+                    .head_parameters
+                    .iter()
+                    .map(|parameter| {
+                        (
+                            parameter.id,
+                            (
+                                &parameter.kind,
+                                parameter.origin.primary_span(),
+                                SummaryBinderOwner::Implementation(foreign_implementation),
+                            ),
+                        )
+                    })
+                    .collect::<HashMap<_, _>>();
+                let mut invalid =
+                    crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK);
+                assert_eq!(
+                    authenticate_implementation_prerequisite_binders(
+                        &fact,
+                        &foreign_variables,
+                        &mut invalid,
+                    ),
+                    Err(ResolvedBuildFailure::InvalidState),
+                    "a canonical variable owned by another implementation is not contained",
+                );
+                assert_eq!(invalid.used(), EXACT_WORK);
+            })
+            .expect("the wide prerequisite-binder worker should start")
+            .join()
+            .expect("wide prerequisite-binder containment must fit a 256 KiB stack");
+    }
+
+    #[test]
     fn summary_duplicate_indexes_are_linear_exact_and_stack_safe() {
         const WIDTH: usize = 32_768;
         std::thread::Builder::new()
@@ -17569,8 +19841,7 @@ mod tests {
                         crate::interface::RequirementOwner::Global(global),
                         u32::try_from(index).expect("the requirement ordinal should fit"),
                     ),
-                    interface,
-                    argument: Type::Unit,
+                    application: InterfaceApplication::new(interface, Box::new([Type::Unit])),
                     origin: Origin::Source(span),
                     span,
                 };
@@ -17580,9 +19851,8 @@ mod tests {
                             module,
                             u32::try_from(index).expect("the implementation ordinal should fit"),
                         ),
-                        interface,
+                        application: InterfaceApplication::new(interface, Box::new([Type::Unit])),
                         head_parameters: Box::new([]),
-                        argument: Type::Unit,
                         prerequisites: Box::new([]),
                         methods: Box::new([]),
                         origin: Origin::Source(span),
@@ -17655,6 +19925,7 @@ mod tests {
                 assert_eq!(
                     authenticate_nonoverlapping_summary_implementations(
                         &distinct_implementations,
+                        |_| Ok(None),
                         &mut implementation_short,
                     ),
                     Err(ResolvedBuildFailure::ConstraintResource),
@@ -17664,6 +19935,7 @@ mod tests {
                     crate::interface::InterfaceConstraintBudget::with_limit(2 * WIDTH);
                 authenticate_nonoverlapping_summary_implementations(
                     &distinct_implementations,
+                    |_| Ok(None),
                     &mut implementation_exact,
                 )
                 .expect("the exact all-distinct implementation index should fit");
@@ -17671,12 +19943,15 @@ mod tests {
 
                 let mut late_implementations = distinct_implementations;
                 late_implementations.push(implementation(WIDTH, InterfaceId::new(module, 0)));
-                let overlap_work = 2 * WIDTH + 4;
+                // The duplicate comparison materializes both complete argument
+                // vectors before structural overlap, adding one visit per side.
+                let overlap_work = 2 * WIDTH + 7;
                 let mut overlap_short =
                     crate::interface::InterfaceConstraintBudget::with_limit(overlap_work - 1);
                 assert_eq!(
                     authenticate_nonoverlapping_summary_implementations(
                         &late_implementations,
+                        |_| Ok(None),
                         &mut overlap_short,
                     ),
                     Err(ResolvedBuildFailure::ConstraintResource),
@@ -17687,6 +19962,7 @@ mod tests {
                 assert_eq!(
                     authenticate_nonoverlapping_summary_implementations(
                         &late_implementations,
+                        |_| Ok(None),
                         &mut overlap_exact,
                     ),
                     Err(ResolvedBuildFailure::InvalidState),
@@ -17696,6 +19972,850 @@ mod tests {
             .expect("the wide duplicate-index worker should start")
             .join()
             .expect("wide duplicate indexes must fit a 256 KiB stack");
+    }
+
+    #[test]
+    fn determined_summary_pair_coherence_has_an_exact_retryable_boundary() {
+        let source = SourceFile::new("determined-summary-pair.ash", "pair")
+            .expect("the summary-pair source should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the summary-pair range should order"))
+            .expect("the summary-pair span should fit");
+        let module = ModuleId::new(9_704);
+        let interface = InterfaceId::new(module, 0);
+        let implementation = |declaration, arguments| CheckedImplementationFact {
+            id: ImplId::new(module, declaration),
+            application: InterfaceApplication::new(interface, arguments),
+            head_parameters: Box::new([]),
+            prerequisites: Box::new([]),
+            methods: Box::new([]),
+            origin: Origin::Source(span),
+            span,
+        };
+        let facts = [
+            implementation(0, Box::new([Type::Int, Type::Int])),
+            implementation(1, Box::new([Type::Int, Type::Bool])),
+        ];
+        let determination = DeterminationKey::new(Box::new([0]));
+
+        // The first index insertion costs two units. The second fact owns one
+        // pair, four complete-argument visits, one key-position validation,
+        // two selected visits, one key comparison, four key-match visits, and
+        // eight independent full-head-match visits.
+        const EXACT_WORK: usize = 2 + 1 + 4 + 1 + 2 + 1 + 4 + 8;
+        let mut short = crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            authenticate_nonoverlapping_summary_implementations(
+                &facts,
+                |_| Ok(Some(&determination)),
+                &mut short,
+            ),
+            Err(ResolvedBuildFailure::ConstraintResource),
+        );
+        assert_eq!(short.used(), EXACT_WORK - 1);
+        assert_eq!(facts[0].arguments(), &[Type::Int, Type::Int]);
+        assert_eq!(facts[1].arguments(), &[Type::Int, Type::Bool]);
+
+        let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        assert_eq!(
+            authenticate_nonoverlapping_summary_implementations(
+                &facts,
+                |_| Ok(Some(&determination)),
+                &mut exact,
+            ),
+            Err(ResolvedBuildFailure::InvalidState),
+        );
+        assert_eq!(exact.used(), EXACT_WORK);
+        assert_eq!(exact.charge(1), Err(()));
+        assert_eq!(facts[0].arguments(), &[Type::Int, Type::Int]);
+        assert_eq!(facts[1].arguments(), &[Type::Int, Type::Bool]);
+    }
+
+    #[test]
+    fn detached_global_scheme_authenticates_only_dependent_only_binders() {
+        // Parameter-set retention (2), value-variable discovery (3),
+        // determinant slicing (5), key/dependent variable discovery (6),
+        // required-variable membership (1), dependent-variable admission (1),
+        // and exact parameter coverage (2).
+        const EXACT_WORK: usize = 20;
+        let source = SourceFile::new("determined-global-summary.ash", "global")
+            .expect("the detached-global source should fit");
+        let span = source
+            .span(ByteRange::new(0, 6).expect("the global range should be ordered"))
+            .expect("the detached-global span should fit");
+        let module = ModuleId::new(9_812);
+        let interface_id = InterfaceId::new(module, 0);
+        let key = TypeVariableId::resolved(module, 0);
+        let dependent = TypeVariableId::resolved(module, 1);
+        let bridge = TypeVariableId::resolved(module, 2);
+        let parameter = |id, spelling: &str| ResolvedTypeVariable {
+            id,
+            spelling: spelling.to_owned(),
+            kind: Kind::Type,
+            origin: Origin::Source(span),
+        };
+        let determined = CheckedInterfaceFact::new(
+            interface_id,
+            "Relation".to_owned(),
+            Box::new([parameter(key, "Key"), parameter(dependent, "Value")]),
+            Some(DeterminationKey::new(Box::new([0]))),
+            Box::new([]),
+            Origin::Source(span),
+            span,
+        );
+        let ordinary_id = InterfaceId::new(module, 1);
+        let ordinary = CheckedInterfaceFact::new(
+            ordinary_id,
+            "Ordinary".to_owned(),
+            Box::new([parameter(key, "Key"), parameter(dependent, "Value")]),
+            None,
+            Box::new([]),
+            Origin::Source(span),
+            span,
+        );
+        let facts = HashMap::from([(interface_id, &determined), (ordinary_id, &ordinary)]);
+        let binder = BinderId::resolved(module, 0);
+        let scheme = |interface, value_type| ConstrainedScheme {
+            type_parameters: Box::new([(key, Kind::Type), (dependent, Kind::Type)]),
+            requirements: Box::new([CheckedRequirement {
+                id: RequirementId::new(crate::interface::RequirementOwner::Global(binder), 0),
+                application: InterfaceApplication::new(
+                    interface,
+                    Box::new([Type::Variable(key), Type::Variable(dependent)]),
+                ),
+                origin: Origin::Source(span),
+                span,
+            }]),
+            value_type,
+        };
+
+        let valid = scheme(interface_id, Type::Variable(key));
+        let mut one_short = crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            authenticate_exact_global_scheme_binders(&valid, &facts, &mut one_short),
+            Err(ResolvedBuildFailure::ConstraintResource),
+        );
+        assert_eq!(one_short.used(), EXACT_WORK - 2);
+        for _ in 0..2 {
+            let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK);
+            authenticate_exact_global_scheme_binders(&valid, &facts, &mut exact)
+                .expect("the exact dependent-only summary binder budget should fit");
+            assert_eq!(exact.used(), EXACT_WORK);
+        }
+
+        assert_eq!(
+            authenticate_exact_global_scheme_binders(
+                &scheme(ordinary_id, Type::Variable(key)),
+                &facts,
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState),
+            "a no-edge requirement must not admit a dependent-only binder",
+        );
+        assert_eq!(
+            authenticate_exact_global_scheme_binders(
+                &scheme(interface_id, Type::Variable(dependent)),
+                &facts,
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState),
+            "a determined key-only binder must still occur in the global value type",
+        );
+        let chained = ConstrainedScheme {
+            type_parameters: Box::new([
+                (key, Kind::Type),
+                (dependent, Kind::Type),
+                (bridge, Kind::Type),
+            ]),
+            requirements: Box::new([
+                CheckedRequirement {
+                    id: RequirementId::new(crate::interface::RequirementOwner::Global(binder), 0),
+                    application: InterfaceApplication::new(
+                        interface_id,
+                        Box::new([Type::Variable(key), Type::Variable(bridge)]),
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                },
+                CheckedRequirement {
+                    id: RequirementId::new(crate::interface::RequirementOwner::Global(binder), 1),
+                    application: InterfaceApplication::new(
+                        interface_id,
+                        Box::new([Type::Variable(bridge), Type::Variable(dependent)]),
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                },
+            ]),
+            value_type: Type::Variable(key),
+        };
+        assert_eq!(
+            authenticate_exact_global_scheme_binders(
+                &chained,
+                &facts,
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState),
+            "one requirement's dependent must not close another requirement's missing key",
+        );
+    }
+
+    #[test]
+    fn detached_global_requirement_index_rejects_same_determined_key_exactly() {
+        // First-interface storage (2), full two-argument comparison (4), one
+        // determinant position (1), and the selected-key comparison (2).
+        const EXACT_WORK: usize = 9;
+        let source = SourceFile::new("determined-global-pair-summary.ash", "pair")
+            .expect("the detached pair source should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the pair range should be ordered"))
+            .expect("the detached pair span should fit");
+        let module = ModuleId::new(9_813);
+        let interface = InterfaceId::new(module, 0);
+        let owner = crate::interface::RequirementOwner::Global(BinderId::resolved(module, 0));
+        let requirement = |declaration, dependent| CheckedRequirement {
+            id: RequirementId::new(owner, declaration),
+            application: InterfaceApplication::new(interface, Box::new([Type::Int, dependent])),
+            origin: Origin::Source(span),
+            span,
+        };
+        let requirements = [requirement(0, Type::Bool), requirement(1, Type::Unit)];
+        let determination = DeterminationKey::new(Box::new([0]));
+        let exercise = |budget: &mut crate::interface::InterfaceConstraintBudget| {
+            let mut index = SummaryRequirementIndex::default();
+            index.observe(&requirements[0], Some(&determination), budget)?;
+            index.observe(&requirements[1], Some(&determination), budget)
+        };
+
+        let mut one_short = crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            exercise(&mut one_short),
+            Err(ResolvedBuildFailure::ConstraintResource),
+        );
+        assert_eq!(one_short.used(), EXACT_WORK - 1);
+        for _ in 0..2 {
+            let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK);
+            assert_eq!(
+                exercise(&mut exact),
+                Err(ResolvedBuildFailure::InvalidState)
+            );
+            assert_eq!(exact.used(), EXACT_WORK);
+        }
+
+        let duplicate = [requirement(0, Type::Bool), requirement(1, Type::Bool)];
+        let mut duplicate_index = SummaryRequirementIndex::default();
+        duplicate_index
+            .observe(
+                &duplicate[0],
+                Some(&determination),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .expect("the first complete requirement should index");
+        assert_eq!(
+            duplicate_index.observe(
+                &duplicate[1],
+                Some(&determination),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState),
+            "a complete duplicate remains invalid before same-key classification",
+        );
+    }
+
+    fn implementation_summary_with_prerequisite_dependents(dependents: [Type; 2]) -> ExportSummary {
+        let source = SourceFile::new("implementation-prerequisite-summary.ash", "relation")
+            .expect("the detached implementation-prerequisite source should fit");
+        let span = source
+            .span(ByteRange::new(0, 8).expect("the relation range should be ordered"))
+            .expect("the detached implementation-prerequisite span should fit");
+        let module = ModuleId::new(9_814);
+        let interface = InterfaceId::new(module, 0);
+        let method = MethodId::new(interface, 0);
+        let implementation = ImplId::new(module, 0);
+        let key_parameter = TypeVariableId::resolved(module, 0);
+        let dependent_parameter = TypeVariableId::resolved(module, 1);
+        let parameter = |id, spelling: &str| ResolvedTypeVariable {
+            id,
+            spelling: spelling.to_owned(),
+            kind: Kind::Type,
+            origin: Origin::Source(span),
+        };
+        let requirement = |declaration, dependent| CheckedRequirement {
+            id: RequirementId::new(
+                crate::interface::RequirementOwner::Impl(implementation),
+                declaration,
+            ),
+            application: InterfaceApplication::new(interface, Box::new([Type::Int, dependent])),
+            origin: Origin::Source(span),
+            span,
+        };
+
+        let mut summary = ExportSummary::empty(module);
+        summary.interfaces.push(CheckedInterfaceFact::new(
+            interface,
+            "Relation".to_owned(),
+            Box::new([
+                parameter(key_parameter, "Key"),
+                parameter(dependent_parameter, "Value"),
+            ]),
+            Some(DeterminationKey::new(Box::new([0]))),
+            Box::new([CheckedInterfaceMethodFact {
+                id: method,
+                spelling: "relate".to_owned(),
+                type_parameters: Box::new([]),
+                method_binder_authority: None,
+                value_type: Type::Function(
+                    Box::new(Type::Variable(key_parameter)),
+                    Box::new(Type::Int),
+                ),
+                origin: Origin::Source(span),
+                annotation_span: span,
+                span,
+            }]),
+            Origin::Source(span),
+            span,
+        ));
+        summary.interface_positions.insert(interface, 0);
+        summary.interface_name_order.push("Relation".to_owned());
+        summary
+            .interface_names
+            .insert("Relation".to_owned(), interface);
+        summary.method_name_order.push("relate".to_owned());
+        summary.method_names.insert("relate".to_owned(), method);
+
+        let [first_dependent, second_dependent] = dependents;
+        summary
+            .implementations
+            .push(AuthorizedImplementationFact::local_for_test(
+                CheckedImplementationFact {
+                    id: implementation,
+                    application: InterfaceApplication::new(
+                        interface,
+                        Box::new([Type::Int, Type::Bool]),
+                    ),
+                    head_parameters: Box::new([]),
+                    prerequisites: Box::new([
+                        requirement(0, first_dependent.clone()),
+                        requirement(1, second_dependent.clone()),
+                    ]),
+                    methods: Box::new([CheckedImplementationMethodFact {
+                        id: ImplMethodId::new(implementation, method),
+                        method,
+                        binder: BinderId::resolved(module, 0),
+                        scheme: ConstrainedScheme {
+                            type_parameters: Box::new([]),
+                            requirements: Box::new([
+                                requirement(0, first_dependent),
+                                requirement(1, second_dependent),
+                            ]),
+                            value_type: Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
+                        },
+                        head_type_parameter_count: 0,
+                        origin: Origin::Source(span),
+                        span,
+                    }]),
+                    origin: Origin::Source(span),
+                    span,
+                },
+            ));
+        summary.implementation_positions.insert(implementation, 0);
+        summary
+    }
+
+    fn implementation_summary_with_wrong_kind_prerequisites(dependents: &[Type]) -> ExportSummary {
+        let source = SourceFile::new("wrong-kind-implementation-prerequisite-summary.ash", "kind")
+            .expect("the detached wrong-kind prerequisite source should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the kind range should be ordered"))
+            .expect("the detached wrong-kind prerequisite span should fit");
+        let module = ModuleId::new(9_816);
+        let relation = InterfaceId::new(module, 0);
+        let marker = InterfaceId::new(module, 1);
+        let relation_method = MethodId::new(relation, 0);
+        let marker_method = MethodId::new(marker, 0);
+        let implementation = ImplId::new(module, 0);
+        let key_parameter = TypeVariableId::resolved(module, 0);
+        let dependent_parameter = TypeVariableId::resolved(module, 1);
+        let marker_parameter = TypeVariableId::resolved(module, 2);
+        let parameter = |id, spelling: &str, kind| ResolvedTypeVariable {
+            id,
+            spelling: spelling.to_owned(),
+            kind,
+            origin: Origin::Source(span),
+        };
+        let requirement = |declaration, dependent| CheckedRequirement {
+            id: RequirementId::new(
+                crate::interface::RequirementOwner::Impl(implementation),
+                declaration,
+            ),
+            application: InterfaceApplication::new(relation, Box::new([Type::Int, dependent])),
+            origin: Origin::Source(span),
+            span,
+        };
+        let prerequisites = dependents
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(declaration, dependent)| {
+                requirement(
+                    u32::try_from(declaration).expect("the tiny declaration index should fit"),
+                    dependent,
+                )
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let method_requirements = dependents
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(declaration, dependent)| {
+                requirement(
+                    u32::try_from(declaration).expect("the tiny declaration index should fit"),
+                    dependent,
+                )
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+
+        let mut summary = ExportSummary::empty(module);
+        summary.interfaces.push(CheckedInterfaceFact::new(
+            relation,
+            "Relation".to_owned(),
+            Box::new([
+                parameter(key_parameter, "Key", Kind::Type),
+                parameter(
+                    dependent_parameter,
+                    "ValueConstructor",
+                    Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                ),
+            ]),
+            Some(DeterminationKey::new(Box::new([0]))),
+            Box::new([CheckedInterfaceMethodFact {
+                id: relation_method,
+                spelling: "relate".to_owned(),
+                type_parameters: Box::new([]),
+                method_binder_authority: None,
+                value_type: Type::Function(
+                    Box::new(Type::Variable(key_parameter)),
+                    Box::new(Type::Application(
+                        Box::new(Type::Variable(dependent_parameter)),
+                        Box::new(Type::Variable(key_parameter)),
+                    )),
+                ),
+                origin: Origin::Source(span),
+                annotation_span: span,
+                span,
+            }]),
+            Origin::Source(span),
+            span,
+        ));
+        summary.interfaces.push(CheckedInterfaceFact::new(
+            marker,
+            "Marker".to_owned(),
+            Box::new([parameter(marker_parameter, "Value", Kind::Type)]),
+            None,
+            Box::new([CheckedInterfaceMethodFact {
+                id: marker_method,
+                spelling: "mark".to_owned(),
+                type_parameters: Box::new([]),
+                method_binder_authority: None,
+                value_type: Type::Function(
+                    Box::new(Type::Variable(marker_parameter)),
+                    Box::new(Type::Variable(marker_parameter)),
+                ),
+                origin: Origin::Source(span),
+                annotation_span: span,
+                span,
+            }]),
+            Origin::Source(span),
+            span,
+        ));
+        summary.interface_positions.insert(relation, 0);
+        summary.interface_positions.insert(marker, 1);
+        summary.interface_name_order.push("Relation".to_owned());
+        summary.interface_name_order.push("Marker".to_owned());
+        summary
+            .interface_names
+            .insert("Relation".to_owned(), relation);
+        summary.interface_names.insert("Marker".to_owned(), marker);
+        summary.method_name_order.push("relate".to_owned());
+        summary.method_name_order.push("mark".to_owned());
+        summary
+            .method_names
+            .insert("relate".to_owned(), relation_method);
+        summary
+            .method_names
+            .insert("mark".to_owned(), marker_method);
+
+        summary
+            .implementations
+            .push(AuthorizedImplementationFact::local_for_test(
+                CheckedImplementationFact {
+                    id: implementation,
+                    application: InterfaceApplication::new(marker, Box::new([Type::Int])),
+                    head_parameters: Box::new([]),
+                    prerequisites,
+                    methods: Box::new([CheckedImplementationMethodFact {
+                        id: ImplMethodId::new(implementation, marker_method),
+                        method: marker_method,
+                        binder: BinderId::resolved(module, 0),
+                        scheme: ConstrainedScheme {
+                            type_parameters: Box::new([]),
+                            requirements: method_requirements,
+                            value_type: Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
+                        },
+                        head_type_parameter_count: 0,
+                        origin: Origin::Source(span),
+                        span,
+                    }]),
+                    origin: Origin::Source(span),
+                    span,
+                },
+            ));
+        summary.implementation_positions.insert(implementation, 0);
+        summary
+    }
+
+    #[test]
+    fn detached_implementation_kind_preflight_precedes_prerequisite_pair_classification() {
+        // Three parameter records and two interface records cost eight
+        // TypeWork cells. The two interface-method kind checks cost thirty,
+        // the concrete head preflight costs five, and the first malformed
+        // prerequisite costs ten: 8 + 30 + 5 + 10 = 53. Constraint work owns
+        // twelve name/interface-index cells, two implementation-index cells,
+        // one authorization cell, two exact-head cells, and four interface
+        // parameter/determination cells: 12 + 2 + 1 + 2 + 4 = 21. Pair-index
+        // storage or comparison is outside both semantic prefixes.
+        const TYPE_WORK: usize = 53;
+        const CONSTRAINT_WORK: usize = 21;
+        // The constraint one-short stops after the eight environment cells and
+        // the twenty-cell `Relation` method kind check.
+        const CONSTRAINT_SHORT_TYPE_PREFIX: usize = 28;
+        for (label, dependents) in [
+            ("complete duplicate", [Type::Bool, Type::Bool]),
+            ("determined-key conflict", [Type::Bool, Type::Unit]),
+        ] {
+            let summary = implementation_summary_with_wrong_kind_prerequisites(&dependents);
+            let mut one_short_type = TypeWorkBudget::with_limit(TYPE_WORK - 1);
+            let mut exact_constraint =
+                crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
+            assert_eq!(
+                summary.authenticate(&mut one_short_type, &mut exact_constraint,),
+                Err(ResolvedBuildFailure::TypeResource),
+                "{label}: positional-kind preflight owns the TypeWork one-short failure",
+            );
+            assert_eq!(one_short_type.used(), TYPE_WORK - 1, "{label}");
+            assert_eq!(exact_constraint.used(), CONSTRAINT_WORK, "{label}");
+
+            let mut exact_type = TypeWorkBudget::with_limit(TYPE_WORK);
+            let mut one_short_constraint =
+                crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK - 1);
+            assert_eq!(
+                summary.authenticate(&mut exact_type, &mut one_short_constraint),
+                Err(ResolvedBuildFailure::ConstraintResource),
+                "{label}: the preflight prefix retains its exact constraint boundary",
+            );
+            assert_eq!(exact_type.used(), CONSTRAINT_SHORT_TYPE_PREFIX, "{label}");
+            assert_eq!(one_short_constraint.used(), CONSTRAINT_WORK - 1, "{label}");
+
+            for _ in 0..2 {
+                let mut exact_type = TypeWorkBudget::with_limit(TYPE_WORK);
+                let mut exact_constraint =
+                    crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
+                assert_eq!(
+                    summary.authenticate(&mut exact_type, &mut exact_constraint),
+                    Err(ResolvedBuildFailure::InvalidState),
+                    "{label}: positional-kind preflight owns the semantic failure",
+                );
+                assert_eq!(exact_type.used(), TYPE_WORK, "{label}");
+                assert_eq!(exact_constraint.used(), CONSTRAINT_WORK, "{label}");
+            }
+        }
+    }
+
+    #[test]
+    fn detached_implementation_summary_rejects_both_invalid_prerequisite_relations() {
+        for (label, dependents) in [
+            ("complete duplicate", [Type::Bool, Type::Bool]),
+            ("determined-key conflict", [Type::Bool, Type::Unit]),
+        ] {
+            let summary = implementation_summary_with_prerequisite_dependents(dependents);
+            for _ in 0..2 {
+                assert_eq!(
+                    summary.authenticate(
+                        &mut TypeWorkBudget::default(),
+                        &mut crate::interface::InterfaceConstraintBudget::default(),
+                    ),
+                    Err(ResolvedBuildFailure::InvalidState),
+                    "{label}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn detached_implementation_prerequisite_index_has_exact_ordered_resource_boundaries() {
+        let source = SourceFile::new("implementation-prerequisite-index.ash", "relation")
+            .expect("the detached prerequisite-index source should fit");
+        let span = source
+            .span(ByteRange::new(0, 8).expect("the relation range should be ordered"))
+            .expect("the detached prerequisite-index span should fit");
+        let module = ModuleId::new(9_815);
+        let interface = InterfaceId::new(module, 0);
+        let implementation = ImplId::new(module, 0);
+        let owner = crate::interface::RequirementOwner::Impl(implementation);
+        let requirement = |declaration, dependent| CheckedRequirement {
+            id: RequirementId::new(owner, declaration),
+            application: InterfaceApplication::new(interface, Box::new([Type::Int, dependent])),
+            origin: Origin::Source(span),
+            span,
+        };
+        let determination = DeterminationKey::new(Box::new([0]));
+        let exercise =
+            |requirements: &[CheckedRequirement; 2],
+             budget: &mut crate::interface::InterfaceConstraintBudget| {
+                let mut index = SummaryRequirementIndex::default();
+                index.observe(&requirements[0], Some(&determination), budget)?;
+                index.observe(&requirements[1], Some(&determination), budget)
+            };
+
+        // First storage costs two and the complete comparison costs four. A
+        // duplicate stops there, before the three-cell determinant comparison.
+        const DUPLICATE_WORK: usize = 2 + 4;
+        let duplicate = [requirement(0, Type::Bool), requirement(1, Type::Bool)];
+        let mut duplicate_short =
+            crate::interface::InterfaceConstraintBudget::with_limit(DUPLICATE_WORK - 1);
+        assert_eq!(
+            exercise(&duplicate, &mut duplicate_short),
+            Err(ResolvedBuildFailure::ConstraintResource),
+        );
+        assert_eq!(duplicate_short.used(), DUPLICATE_WORK - 1);
+        for _ in 0..2 {
+            let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(DUPLICATE_WORK);
+            assert_eq!(
+                exercise(&duplicate, &mut exact),
+                Err(ResolvedBuildFailure::InvalidState),
+            );
+            assert_eq!(exact.used(), DUPLICATE_WORK);
+        }
+
+        // A distinct dependent tuple reaches the one-position, two-cell key
+        // comparison only after the complete comparison rejects identity.
+        const CONFLICT_WORK: usize = DUPLICATE_WORK + 1 + 2;
+        let conflict = [requirement(0, Type::Bool), requirement(1, Type::Unit)];
+        let mut conflict_short =
+            crate::interface::InterfaceConstraintBudget::with_limit(CONFLICT_WORK - 1);
+        assert_eq!(
+            exercise(&conflict, &mut conflict_short),
+            Err(ResolvedBuildFailure::ConstraintResource),
+        );
+        assert_eq!(conflict_short.used(), CONFLICT_WORK - 1);
+        for _ in 0..2 {
+            let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(CONFLICT_WORK);
+            assert_eq!(
+                exercise(&conflict, &mut exact),
+                Err(ResolvedBuildFailure::InvalidState),
+            );
+            assert_eq!(exact.used(), CONFLICT_WORK);
+        }
+    }
+
+    #[test]
+    fn summary_selection_key_without_an_edge_precharges_retention_before_reserving() {
+        let source = SourceFile::new("summary-selection-key-no-edge.ash", "key")
+            .expect("the no-edge selection-key source should fit");
+        let span = source
+            .span(ByteRange::new(0, 3).expect("the selection-key range should order"))
+            .expect("the selection-key span should fit");
+        let module = ModuleId::new(9_706);
+        let parameters = ["A", "B"]
+            .into_iter()
+            .enumerate()
+            .map(|(position, spelling)| ResolvedTypeVariable {
+                id: TypeVariableId::resolved(
+                    module,
+                    u32::try_from(position).expect("the parameter ordinal should fit"),
+                ),
+                spelling: spelling.to_owned(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            });
+        let interface = CheckedInterfaceFact::new(
+            InterfaceId::new(module, 0),
+            "Pair".to_owned(),
+            parameters.collect::<Vec<_>>().into_boxed_slice(),
+            None,
+            Box::new([]),
+            Origin::Source(span),
+            span,
+        );
+        let arguments = [Type::Int, Type::Bool];
+
+        let mut short = crate::interface::InterfaceConstraintBudget::with_limit(1);
+        assert_eq!(
+            summary_selection_key_types(&interface, &arguments, &mut short),
+            Err(ResolvedBuildFailure::ConstraintResource),
+        );
+        assert_eq!(
+            short.used(),
+            0,
+            "the complete two-slot retention charge is atomic before reserve",
+        );
+        assert!(interface.determination().is_none());
+        assert_eq!(arguments, [Type::Int, Type::Bool]);
+
+        for _ in 0..2 {
+            let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(2);
+            let selected = summary_selection_key_types(&interface, &arguments, &mut exact)
+                .expect("the exact no-edge selection-key retry should retain both arguments");
+            assert_eq!(selected, [&Type::Int, &Type::Bool]);
+            assert_eq!(exact.used(), 2);
+            assert!(interface.determination().is_none());
+            assert_eq!(arguments, [Type::Int, Type::Bool]);
+        }
+    }
+
+    #[test]
+    fn determined_summary_selection_key_validates_before_precharging_retention() {
+        let source = SourceFile::new("summary-selection-key-determined.ash", "key")
+            .expect("the determined selection-key source should fit");
+        let span = source
+            .span(ByteRange::new(0, 3).expect("the selection-key range should order"))
+            .expect("the selection-key span should fit");
+        let module = ModuleId::new(9_707);
+        let parameters = ["A", "B", "C"]
+            .into_iter()
+            .enumerate()
+            .map(|(position, spelling)| ResolvedTypeVariable {
+                id: TypeVariableId::resolved(
+                    module,
+                    u32::try_from(position).expect("the parameter ordinal should fit"),
+                ),
+                spelling: spelling.to_owned(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let interface = CheckedInterfaceFact::new(
+            InterfaceId::new(module, 0),
+            "Triple".to_owned(),
+            parameters,
+            Some(DeterminationKey::new(Box::new([0, 1]))),
+            Box::new([]),
+            Origin::Source(span),
+            span,
+        );
+        let arguments = [Type::Int, Type::Bool, Type::Unit];
+
+        // Both position validations precede the atomic two-slot retention charge.
+        let mut short = crate::interface::InterfaceConstraintBudget::with_limit(3);
+        assert_eq!(
+            summary_selection_key_types(&interface, &arguments, &mut short),
+            Err(ResolvedBuildFailure::ConstraintResource),
+        );
+        assert_eq!(short.used(), 2);
+        assert_eq!(
+            interface.determination().map(DeterminationKey::positions),
+            Some(&[0, 1][..]),
+        );
+        assert_eq!(arguments, [Type::Int, Type::Bool, Type::Unit]);
+
+        for _ in 0..2 {
+            let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(4);
+            let selected = summary_selection_key_types(&interface, &arguments, &mut exact)
+                .expect("the exact determined selection-key retry should retain both arguments");
+            assert_eq!(selected, [&Type::Int, &Type::Bool]);
+            assert_eq!(exact.used(), 4);
+            assert_eq!(
+                interface.determination().map(DeterminationKey::positions),
+                Some(&[0, 1][..]),
+            );
+            assert_eq!(arguments, [Type::Int, Type::Bool, Type::Unit]);
+        }
+    }
+
+    #[test]
+    fn determined_summary_decrease_has_an_exact_retryable_key_boundary() {
+        let source = SourceFile::new("determined-summary-decrease.ash", "decrease")
+            .expect("the summary-decrease source should fit");
+        let span = source
+            .span(ByteRange::new(0, 8).expect("the summary-decrease range should order"))
+            .expect("the summary-decrease span should fit");
+        let module = ModuleId::new(9_705);
+        let interface_id = InterfaceId::new(module, 0);
+        let first = TypeVariableId::resolved(module, 0);
+        let second = TypeVariableId::resolved(module, 1);
+        let list = NominalTypeId::new(module, 0);
+        let interface = CheckedInterfaceFact::new(
+            interface_id,
+            "Relation".to_owned(),
+            vec![
+                ResolvedTypeVariable {
+                    id: first,
+                    spelling: "A".to_owned(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(span),
+                },
+                ResolvedTypeVariable {
+                    id: second,
+                    spelling: "B".to_owned(),
+                    kind: Kind::Type,
+                    origin: Origin::Source(span),
+                },
+            ]
+            .into_boxed_slice(),
+            Some(DeterminationKey::new(Box::new([0]))),
+            Box::new([]),
+            Origin::Source(span),
+            span,
+        );
+        let head = [
+            Type::Application(
+                Box::new(Type::Nominal(list)),
+                Box::new(Type::Variable(first)),
+            ),
+            Type::Variable(first),
+        ];
+        let prerequisite = [
+            Type::Variable(first),
+            Type::Application(
+                Box::new(Type::Nominal(list)),
+                Box::new(Type::Variable(first)),
+            ),
+        ];
+        // Two key extractions own two visits each, complete-prerequisite
+        // retention owns two, complete groundness owns eight, and the aligned
+        // component plus strict-subterm walk own nine.
+        const EXACT_WORK: usize = 2 + 2 + 2 + 8 + 9;
+        let exercise = |work: &mut crate::interface::InterfaceConstraintBudget| {
+            let head_key = summary_selection_key_types(&interface, &head, work)?;
+            let complete = type_references_with_constraint_budget(&prerequisite, work)?;
+            let prerequisite_key = summary_selection_key_types(&interface, &prerequisite, work)?;
+            implementation_prerequisite_selection_key_terminates(
+                &complete,
+                &prerequisite_key,
+                &head_key,
+                work,
+            )
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)
+        };
+
+        let mut short = crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            exercise(&mut short),
+            Err(ResolvedBuildFailure::ConstraintResource)
+        );
+        assert_eq!(short.used(), EXACT_WORK - 1);
+        assert_eq!(head.len(), 2);
+        assert_eq!(prerequisite.len(), 2);
+
+        let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        assert_eq!(exercise(&mut exact), Ok(true));
+        assert_eq!(exact.used(), EXACT_WORK);
+        assert_eq!(exact.charge(1), Err(()));
+        assert_eq!(head.len(), 2);
+        assert_eq!(prerequisite.len(), 2);
     }
 
     #[test]
@@ -17765,12 +20885,13 @@ mod tests {
         let interface_fact = || CheckedInterfaceFact {
             id: interface_id,
             spelling: "Observe".to_owned(),
-            parameter: ResolvedTypeVariable {
+            parameters: Box::new([ResolvedTypeVariable {
                 id: parameter,
                 spelling: "A".to_owned(),
                 kind: Kind::Type,
                 origin: Origin::Source(span),
-            },
+            }]),
+            determination: None,
             methods: Box::new([CheckedInterfaceMethodFact {
                 id: method_id,
                 spelling: "observe".to_owned(),
@@ -17795,14 +20916,13 @@ mod tests {
         };
         let implementation_fact = || CheckedImplementationFact {
             id: implementation_id,
-            interface: interface_id,
+            application: InterfaceApplication::new(interface_id, Box::new([head_argument()])),
             head_parameters: Box::new([ResolvedTypeVariable {
                 id: parameter,
                 spelling: "A".to_owned(),
                 kind: Kind::Type,
                 origin: Origin::Source(span),
             }]),
-            argument: head_argument(),
             prerequisites: Box::new([]),
             methods: Box::new([CheckedImplementationMethodFact {
                 id: ImplMethodId::new(implementation_id, method_id),
@@ -18211,12 +21331,13 @@ mod tests {
                 let interface_fact = || CheckedInterfaceFact {
                     id: interface,
                     spelling: "DeepInterface".to_owned(),
-                    parameter: ResolvedTypeVariable {
+                    parameters: Box::new([ResolvedTypeVariable {
                         id: parameter,
                         spelling: "F".to_owned(),
                         kind: deep_kind(),
                         origin: Origin::Source(span),
-                    },
+                    }]),
+                    determination: None,
                     methods: Box::new([CheckedInterfaceMethodFact {
                         id: method,
                         spelling: "deep".to_owned(),
@@ -18262,14 +21383,16 @@ mod tests {
                 };
                 let implementation_fact = || CheckedImplementationFact {
                     id: implementation,
-                    interface,
+                    application: InterfaceApplication::new(
+                        interface,
+                        Box::new([lifted_parameter()]),
+                    ),
                     head_parameters: Box::new([ResolvedTypeVariable {
                         id: parameter,
                         spelling: "F".to_owned(),
                         kind: deep_kind(),
                         origin: Origin::Source(span),
                     }]),
-                    argument: lifted_parameter(),
                     prerequisites: Box::new([]),
                     methods: Box::new([CheckedImplementationMethodFact {
                         id: ImplMethodId::new(implementation, method),
@@ -18334,7 +21457,9 @@ mod tests {
         const GLOBAL_FIRST_ARGUMENT_MISMATCH_WORK: usize = WIDTH + 6;
         const INTERFACE_FIRST_METHOD_MISMATCH_WORK: usize = WIDTH + 5;
         const PREREQUISITE_TOP_MISMATCH_WORK: usize = WIDTH + 13;
-        const PREREQUISITE_METHOD_MISMATCH_WORK: usize = 4 * WIDTH + 17;
+        // The late method requirement compares its complete checked application
+        // after all top-level prerequisites, including its positional argument.
+        const PREREQUISITE_METHOD_MISMATCH_WORK: usize = 4 * WIDTH + 18;
         const IMPLEMENTATION_FIRST_METHOD_MISMATCH_WORK: usize = WIDTH + 4;
 
         std::thread::Builder::new()
@@ -18420,8 +21545,10 @@ mod tests {
                     for ordinal in 0..WIDTH {
                         requirements.push(CheckedRequirement {
                             id: RequirementId::new(owner, ordinal as u32),
-                            interface: InterfaceId::new(module, ordinal as u32),
-                            argument: Type::Unit,
+                            application: InterfaceApplication::new(
+                                InterfaceId::new(module, ordinal as u32),
+                                Box::new([Type::Unit]),
+                            ),
                             origin: Origin::Source(span),
                             span,
                         });
@@ -18451,9 +21578,9 @@ mod tests {
                         constraint_work,
                     )
                 });
-                discard_type_iteratively(std::mem::replace(
-                    &mut exported_global.scheme.requirements[0].argument,
-                    Type::Bool,
+                drop(std::mem::replace(
+                    &mut exported_global.scheme.requirements[0].application,
+                    InterfaceApplication::new(InterfaceId::new(module, 0), Box::new([Type::Bool])),
                 ));
                 assert_prefix(
                     "global first requirement argument",
@@ -18495,12 +21622,13 @@ mod tests {
                     CheckedInterfaceFact {
                         id: interface,
                         spelling: "Wide".to_owned(),
-                        parameter: ResolvedTypeVariable {
+                        parameters: Box::new([ResolvedTypeVariable {
                             id: parameter,
                             spelling: "A".to_owned(),
                             kind: Kind::Type,
                             origin: Origin::Source(span),
-                        },
+                        }]),
+                        determination: None,
                         methods: methods.into_boxed_slice(),
                         origin: Origin::Source(span),
                         span,
@@ -18547,8 +21675,10 @@ mod tests {
                                 RequirementOwner::Impl(implementation),
                                 ordinal as u32,
                             ),
-                            interface: InterfaceId::new(module, ordinal as u32 + 1),
-                            argument: Type::Variable(parameter),
+                            application: InterfaceApplication::new(
+                                InterfaceId::new(module, ordinal as u32 + 1),
+                                Box::new([Type::Variable(parameter)]),
+                            ),
                             origin: Origin::Source(span),
                             span,
                         });
@@ -18560,14 +21690,13 @@ mod tests {
                     let method_requirements = implementation_requirements();
                     CheckedImplementationFact {
                         id: implementation,
-                        interface,
+                        application: InterfaceApplication::new(interface, Box::new([head_type()])),
                         head_parameters: Box::new([ResolvedTypeVariable {
                             id: parameter,
                             spelling: "A".to_owned(),
                             kind: Kind::Type,
                             origin: Origin::Source(span),
                         }]),
-                        argument: head_type(),
                         prerequisites,
                         methods: Box::new([CheckedImplementationMethodFact {
                             id: ImplMethodId::new(implementation, MethodId::new(interface, 0)),
@@ -18604,9 +21733,15 @@ mod tests {
                     },
                 );
                 let replacement_interface = InterfaceId::new(module, u32::MAX);
-                right_prerequisites.prerequisites[0].interface = replacement_interface;
-                right_prerequisites.methods[0].scheme.requirements[0].interface =
-                    replacement_interface;
+                right_prerequisites.prerequisites[0].application = InterfaceApplication::new(
+                    replacement_interface,
+                    Box::new([Type::Variable(parameter)]),
+                );
+                right_prerequisites.methods[0].scheme.requirements[0].application =
+                    InterfaceApplication::new(
+                        replacement_interface,
+                        Box::new([Type::Variable(parameter)]),
+                    );
                 assert_prefix(
                     "implementation top prerequisite before method mirror",
                     PREREQUISITE_TOP_MISMATCH_WORK,
@@ -18620,9 +21755,15 @@ mod tests {
                     },
                 );
                 let original_interface = InterfaceId::new(module, 1);
-                right_prerequisites.prerequisites[0].interface = original_interface;
-                right_prerequisites.methods[0].scheme.requirements[0].interface =
-                    replacement_interface;
+                right_prerequisites.prerequisites[0].application = InterfaceApplication::new(
+                    original_interface,
+                    Box::new([Type::Variable(parameter)]),
+                );
+                right_prerequisites.methods[0].scheme.requirements[0].application =
+                    InterfaceApplication::new(
+                        replacement_interface,
+                        Box::new([Type::Variable(parameter)]),
+                    );
                 assert_prefix(
                     "implementation method requirement after top prerequisites",
                     PREREQUISITE_METHOD_MISMATCH_WORK,
@@ -18640,9 +21781,11 @@ mod tests {
 
                 let method_implementation = || CheckedImplementationFact {
                     id: implementation,
-                    interface,
+                    application: InterfaceApplication::new(
+                        interface,
+                        Box::new([Type::Nominal(nominal)]),
+                    ),
                     head_parameters: Box::new([]),
-                    argument: Type::Nominal(nominal),
                     prerequisites: Box::new([]),
                     methods: {
                         let mut prerequisites = Vec::new();
@@ -19905,12 +23048,13 @@ mod tests {
             CheckedInterfaceFact {
                 id: interface,
                 spelling: "Interface".into(),
-                parameter: ResolvedTypeVariable {
+                parameters: Box::new([ResolvedTypeVariable {
                     id: parameter,
                     spelling: "F".into(),
                     kind: kind.clone(),
                     origin: Origin::Source(span),
-                },
+                }]),
+                determination: None,
                 methods: Box::new([]),
                 origin: Origin::Source(span),
                 span,
@@ -19929,7 +23073,7 @@ mod tests {
         assert_eq!(
             imported
                 .interface(interface)
-                .map(|fact| (&fact.parameter.kind, fact.parameter.id)),
+                .map(|fact| (&fact.parameters[0].kind, fact.parameters[0].id)),
             Some((&kind, parameter)),
             "failed checker-view construction must not mutate imported authority"
         );
@@ -19989,7 +23133,10 @@ mod tests {
                 imported.insert_implementation(
                     CheckedImplementationFact {
                         id: implementation,
-                        interface,
+                        application: InterfaceApplication::new(
+                            interface,
+                            Box::new([Type::Variable(first)]),
+                        ),
                         head_parameters: Box::new([
                             ResolvedTypeVariable {
                                 id: first,
@@ -20004,7 +23151,6 @@ mod tests {
                                 origin: Origin::Source(second_span),
                             },
                         ]),
-                        argument: Type::Variable(first),
                         prerequisites: Box::new([]),
                         methods: Box::new([]),
                         origin: Origin::Source(implementation_span),
@@ -20261,12 +23407,13 @@ mod tests {
             CheckedInterfaceFact {
                 id: interface,
                 spelling: "Interface".into(),
-                parameter: ResolvedTypeVariable {
+                parameters: Box::new([ResolvedTypeVariable {
                     id: collision,
                     spelling: "A".into(),
                     kind: Kind::Type,
                     origin: Origin::Source(interface_span),
-                },
+                }]),
+                determination: None,
                 methods: Box::new([]),
                 origin: Origin::Source(interface_span),
                 span: interface_span,
@@ -20281,14 +23428,16 @@ mod tests {
         imported.insert_implementation(
             CheckedImplementationFact {
                 id: implementation,
-                interface,
+                application: InterfaceApplication::new(
+                    interface,
+                    Box::new([Type::Variable(collision)]),
+                ),
                 head_parameters: Box::new([ResolvedTypeVariable {
                     id: collision,
                     spelling: "B".into(),
                     kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
                     origin: Origin::Source(implementation_span),
                 }]),
-                argument: Type::Variable(collision),
                 prerequisites: Box::new([]),
                 methods: Box::new([]),
                 origin: Origin::Source(implementation_span),
@@ -20309,7 +23458,7 @@ mod tests {
         assert_eq!(
             imported
                 .interface(interface)
-                .map(|fact| fact.parameter.spelling.as_str()),
+                .map(|fact| fact.parameters[0].spelling.as_str()),
             Some("A")
         );
         assert_eq!(
@@ -20520,12 +23669,13 @@ mod tests {
                         CheckedInterfaceFact {
                             id: interface,
                             spelling: spelling.into(),
-                            parameter: ResolvedTypeVariable {
+                            parameters: Box::new([ResolvedTypeVariable {
                                 id: TypeVariableId::resolved(module, declaration),
                                 spelling: "A".into(),
                                 kind: Kind::Type,
                                 origin,
-                            },
+                            }]),
+                            determination: None,
                             methods: Box::new([]),
                             origin: Origin::Source(span),
                             span,
@@ -20545,7 +23695,7 @@ mod tests {
                 assert_eq!(
                     imported
                         .interface(InterfaceId::new(module, 0))
-                        .map(|fact| fact.parameter.origin.primary_span()),
+                        .map(|fact| fact.parameters[0].origin.primary_span()),
                     Some(deep_origin_span),
                     "late failure must leave source authority immutable"
                 );
@@ -20624,12 +23774,14 @@ mod tests {
             id: interface,
             public: false,
             spelling: "Deep".into(),
-            parameter: ResolvedTypeVariable {
+            parameters: vec![ResolvedTypeVariable {
                 id: TypeVariableId::new(0),
                 spelling: "A".into(),
                 kind: crate::types::Kind::Type,
                 origin: Origin::Source(span),
-            },
+            }]
+            .into_boxed_slice(),
+            determination: None,
             methods: vec![ResolvedInterfaceMethod {
                 id: MethodId::new(interface, 0),
                 spelling: "method".into(),
@@ -20786,18 +23938,22 @@ mod tests {
         let implementation = CheckedImplementationBody::new(ResolvedImplementation {
             id: implementation_id,
             public: false,
-            interface: ResolvedInterfaceOccurrence {
-                id: interface,
-                spelling: "Show".into(),
-                origin: Origin::Source(span),
-            },
-            argument: ResolvedType {
-                ty: Type::Unit,
-                provenance: ResolvedTypeProvenance::new(
-                    vec![ResolvedTypeProvenanceNode::Fact(span)],
-                    0,
-                ),
-                origin: Origin::Source(span),
+            head: ResolvedInterfaceApplication {
+                interface: ResolvedInterfaceOccurrence {
+                    id: interface,
+                    spelling: "Show".into(),
+                    origin: Origin::Source(span),
+                },
+                arguments: vec![ResolvedType {
+                    ty: Type::Unit,
+                    provenance: ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                }]
+                .into_boxed_slice(),
                 span,
             },
             head_parameters: Box::new([]),
@@ -21050,18 +24206,22 @@ mod tests {
                 let implementation = CheckedImplementationBody::new(ResolvedImplementation {
                     id: implementation_id,
                     public: false,
-                    interface: ResolvedInterfaceOccurrence {
-                        id: InterfaceId::new(module, 0),
-                        spelling: "Deep".into(),
-                        origin: Origin::Source(span),
-                    },
-                    argument: ResolvedType {
-                        ty: Type::Unit,
-                        provenance: ResolvedTypeProvenance::new(
-                            vec![ResolvedTypeProvenanceNode::Fact(span)],
-                            0,
-                        ),
-                        origin: Origin::Source(span),
+                    head: ResolvedInterfaceApplication {
+                        interface: ResolvedInterfaceOccurrence {
+                            id: InterfaceId::new(module, 0),
+                            spelling: "Deep".into(),
+                            origin: Origin::Source(span),
+                        },
+                        arguments: vec![ResolvedType {
+                            ty: Type::Unit,
+                            provenance: ResolvedTypeProvenance::new(
+                                vec![ResolvedTypeProvenanceNode::Fact(span)],
+                                0,
+                            ),
+                            origin: Origin::Source(span),
+                            span,
+                        }]
+                        .into_boxed_slice(),
                         span,
                     },
                     head_parameters: Box::new([]),
@@ -21112,9 +24272,8 @@ mod tests {
         let method = MethodId::new(interface, 0);
         let fact = CheckedImplementationFact {
             id: implementation,
-            interface,
+            application: InterfaceApplication::new(interface, Box::new([Type::Int])),
             head_parameters: Box::new([]),
-            argument: Type::Int,
             prerequisites: Box::new([]),
             methods: vec![CheckedImplementationMethodFact {
                 id: ImplMethodId::new(implementation, method),
@@ -21142,11 +24301,11 @@ mod tests {
         );
 
         let mut type_work = TypeWorkBudget::default();
-        let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(11);
+        let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(12);
         let cloned = clone_checked_implementation_fact(&fact, &mut type_work, &mut exact)
             .expect("the exact summary budget should clone the checked fact");
         assert_eq!(cloned, fact);
-        assert_eq!(exact.used(), 11);
+        assert_eq!(exact.used(), 12);
         assert_eq!(exact.charge(1), Err(()));
     }
 
@@ -21154,7 +24313,7 @@ mod tests {
     fn checked_impl_clone_late_argument_failure_dismantles_deep_head_parameter_provenance() {
         const DEPTH: usize = 32_768;
         const PARAMETER_TYPE_WORK: usize = 2;
-        const EXACT_TYPE_WORK: usize = PARAMETER_TYPE_WORK + 1;
+        const EXACT_TYPE_WORK: usize = PARAMETER_TYPE_WORK + 2;
 
         std::thread::Builder::new()
             .name("checked-impl-deep-head-parameter-rejection".to_owned())
@@ -21171,14 +24330,13 @@ mod tests {
                 let parameter = TypeVariableId::resolved(module, 0);
                 let fact = CheckedImplementationFact {
                     id: implementation,
-                    interface,
+                    application: InterfaceApplication::new(interface, Box::new([Type::Unit])),
                     head_parameters: Box::new([ResolvedTypeVariable {
                         id: parameter,
                         spelling: "A".to_owned(),
                         kind: Kind::Type,
                         origin: generated_origin(&source, DEPTH),
                     }]),
-                    argument: Type::Unit,
                     prerequisites: Box::new([]),
                     methods: Box::new([]),
                     origin: Origin::Source(span),
@@ -21405,12 +24563,13 @@ mod tests {
             CheckedInterfaceFact {
                 id: interface,
                 spelling: "Render".into(),
-                parameter: ResolvedTypeVariable {
+                parameters: Box::new([ResolvedTypeVariable {
                     id: TypeVariableId::new(0),
                     spelling: "A".into(),
                     kind: crate::types::Kind::Type,
                     origin: Origin::Source(interface_span),
-                },
+                }]),
+                determination: None,
                 methods: Box::new([]),
                 origin: Origin::Source(interface_span),
                 span: interface_span,
@@ -21460,14 +24619,16 @@ mod tests {
             imported.insert_implementation(
                 CheckedImplementationFact {
                     id: implementation,
-                    interface,
+                    application: InterfaceApplication::new(
+                        interface,
+                        Box::new([match index {
+                            0 => Type::Int,
+                            1 => Type::Bool,
+                            2 => Type::Unit,
+                            _ => Type::Tuple(vec![Type::Int, Type::Bool].into_boxed_slice()),
+                        }]),
+                    ),
                     head_parameters: Box::new([]),
-                    argument: match index {
-                        0 => Type::Int,
-                        1 => Type::Bool,
-                        2 => Type::Unit,
-                        _ => Type::Tuple(vec![Type::Int, Type::Bool].into_boxed_slice()),
-                    },
                     prerequisites: Box::new([]),
                     methods: Box::new([]),
                     origin: Origin::Source(implementation_span),
@@ -21514,7 +24675,7 @@ mod tests {
         // interface closure cells, including both transient hidden-identity
         // indexes. Authorization validity owns the route scan; the caller does
         // not charge those hops a second time.
-        const EXACT_WORK: usize = 2 + 1 + 2 + 3 + 1 + 6;
+        const EXACT_WORK: usize = 2 + 1 + 2 + 4 + 1 + 6;
         let (empty, empty_used) = freeze_public_implementation_summary_with_limit(false, 0);
         let empty = empty.expect("an unused imported interface should require no constraint work");
         assert_eq!(empty_used, 0);
@@ -21536,7 +24697,7 @@ mod tests {
 
     #[test]
     fn linked_public_authorization_move_has_an_exact_preflight_budget() {
-        const SUMMARY_FREEZE_WORK: usize = 2 + 1 + 2 + 3 + 1 + 6;
+        const SUMMARY_FREEZE_WORK: usize = 2 + 1 + 2 + 4 + 1 + 6;
         let (short_summary, _) =
             freeze_public_implementation_summary_with_limit(true, SUMMARY_FREEZE_WORK);
         let mut short_summary = short_summary.expect("the public summary should freeze");
@@ -21750,18 +24911,22 @@ mod tests {
         let implementation = ResolvedImplementation {
             id: ImplId::new(module, 0),
             public: false,
-            interface: ResolvedInterfaceOccurrence {
-                id: InterfaceId::new(module, 0),
-                spelling: "Local".to_owned(),
-                origin: Origin::Source(span),
-            },
-            argument: ResolvedType {
-                ty: Type::Unit,
-                provenance: ResolvedTypeProvenance::new(
-                    vec![ResolvedTypeProvenanceNode::Fact(span)],
-                    0,
-                ),
-                origin: Origin::Source(span),
+            head: ResolvedInterfaceApplication {
+                interface: ResolvedInterfaceOccurrence {
+                    id: InterfaceId::new(module, 0),
+                    spelling: "Local".to_owned(),
+                    origin: Origin::Source(span),
+                },
+                arguments: vec![ResolvedType {
+                    ty: Type::Unit,
+                    provenance: ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                }]
+                .into_boxed_slice(),
                 span,
             },
             head_parameters: Box::new([]),
@@ -21782,17 +24947,19 @@ mod tests {
             export_candidate: ResolvedExportCandidate::default(),
             span,
         });
-        let admitted = [CheckedImplementation {
-            source_index: 0,
-            id: ImplId::new(module, 0),
-            interface: InterfaceId::new(module, 0),
-            methods: Box::new([]),
-        }];
+        let admitted = [CheckedImplementation::new(
+            0,
+            ImplId::new(module, 0),
+            InterfaceApplication::new(InterfaceId::new(module, 0), Box::new([Type::Unit])),
+            Box::new([]),
+        )];
         let checked = [CheckedImplementationFact {
             id: ImplId::new(module, 0),
-            interface: InterfaceId::new(module, 0),
+            application: InterfaceApplication::new(
+                InterfaceId::new(module, 0),
+                Box::new([Type::Unit]),
+            ),
             head_parameters: Box::new([]),
-            argument: Type::Unit,
             prerequisites: Box::new([]),
             methods: Box::new([]),
             origin: Origin::Source(span),
@@ -22168,12 +25335,13 @@ mod tests {
             CheckedInterfaceFact {
                 id: interface,
                 spelling: "Render".into(),
-                parameter: ResolvedTypeVariable {
+                parameters: Box::new([ResolvedTypeVariable {
                     id: TypeVariableId::new(0),
                     spelling: "A".into(),
                     kind: crate::types::Kind::Type,
                     origin: Origin::Source(interface_span),
-                },
+                }]),
+                determination: None,
                 methods: vec![CheckedInterfaceMethodFact {
                     id: method,
                     spelling: "render".into(),
@@ -22223,8 +25391,7 @@ mod tests {
                 type_parameters: Box::new([]),
                 requirements: vec![CheckedRequirement {
                     id: RequirementId::new(RequirementOwner::Global(binder), 0),
-                    interface,
-                    argument: Type::Int,
+                    application: InterfaceApplication::new(interface, Box::new([Type::Int])),
                     origin: Origin::Source(global_span),
                     span: global_span,
                 }]
@@ -22286,12 +25453,13 @@ mod tests {
             CheckedInterfaceFact {
                 id: interface,
                 spelling: "Render".into(),
-                parameter: ResolvedTypeVariable {
+                parameters: Box::new([ResolvedTypeVariable {
                     id: TypeVariableId::new(0),
                     spelling: "A".into(),
                     kind: crate::types::Kind::Type,
                     origin: Origin::Source(hidden_span),
-                },
+                }]),
+                determination: None,
                 methods: Box::new([]),
                 origin: Origin::Source(hidden_span),
                 span: hidden_span,
@@ -22334,12 +25502,13 @@ mod tests {
             CheckedInterfaceFact {
                 id: interface,
                 spelling: "Render".into(),
-                parameter: ResolvedTypeVariable {
+                parameters: Box::new([ResolvedTypeVariable {
                     id: TypeVariableId::new(0),
                     spelling: "A".into(),
                     kind: crate::types::Kind::Type,
                     origin: Origin::Source(first),
-                },
+                }]),
+                determination: None,
                 methods: Box::new([]),
                 origin: Origin::Source(first),
                 span: first,
@@ -22384,9 +25553,11 @@ mod tests {
                 imported.insert_implementation(
                     CheckedImplementationFact {
                         id: implementation,
-                        interface: InterfaceId::new(module, 0),
+                        application: InterfaceApplication::new(
+                            InterfaceId::new(module, 0),
+                            Box::new([argument]),
+                        ),
                         head_parameters: Box::new([]),
-                        argument,
                         prerequisites: Box::new([]),
                         methods: Box::new([]),
                         origin: Origin::Source(span),

@@ -662,6 +662,25 @@ fn polymorphic_method_evidence_uses_only_the_existing_runtime_inventory() {
 }
 
 #[test]
+fn dependent_only_global_binder_lowers_complete_abstract_evidence() {
+    let observation = run(concat!(
+        "interface Iterator<I, Item> where I -> Item {\n",
+        "measure : I -> Int\n",
+        "}\n\n",
+        "size<I, Item> : I -> Int where Iterator<I, Item>\n",
+        "size value = measure value\n\n",
+        "impl Iterator<Int, Bool> {\n",
+        "measure value = value\n",
+        "}\n\n",
+        "main : Unit -> Int\n",
+        "main () = size(42)\n",
+    ));
+
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+}
+
+#[test]
 fn eligible_local_relay_generalizes_higher_kinded_parameters() {
     fn assert_no_scheme_below_function(ty: &ash::types::Type) {
         let mut work = vec![(ty, false)];

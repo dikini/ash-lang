@@ -2,7 +2,7 @@
 
 - ID: `DN-0025`
 - Status: exploring
-- Related: [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md), [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0023: Interfaces and Implementations](DN-0023-interfaces-and-implementations.md), [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), the [explicit-import evidence](lib-ash/imports-evidence.md), the [explicit-kind evidence](lib-ash/kinds-evidence.md), the [method-parameter evidence](lib-ash/method-parameters-evidence.md), the [core-and-library audit](modular-ash/core-library-evidence.md), and the [Modular Ash closure report](modular-ash/closure.md)
+- Related: [DN-0020: Ash Dialect Milestones](DN-0020-ash-dialect-milestones.md), [DN-0022: Passive Static Modules](DN-0022-passive-static-modules.md), [DN-0023: Interfaces and Implementations](DN-0023-interfaces-and-implementations.md), [DN-0019: Primitive Feature Composition](DN-0019-primitive-feature-composition.md), [DN-0006: Initial Type System](DN-0006-initial-type-system.md), [DN-0008: Typed Core and Elaboration](DN-0008-typed-core-and-elaboration.md), [AD-0007: Typed Core Dialects](../decisions/AD-0007-typed-core-dialects.md), the [explicit-import evidence](lib-ash/imports-evidence.md), the [explicit-kind evidence](lib-ash/kinds-evidence.md), the [method-parameter evidence](lib-ash/method-parameters-evidence.md), the [relational-interface evidence](lib-ash/relational-interfaces-evidence.md), the [core-and-library audit](modular-ash/core-library-evidence.md), and the [Modular Ash closure report](modular-ash/closure.md)
 
 > This design note is informative. It does not define current Ash, accept
 > language semantics, or accept a package or artifact architecture.
@@ -15,15 +15,17 @@ capabilities require a later milestone?
 
 ## Current boundary
 
-The [current specification](../../spec/README.md) defines the first three bounded
+The [current specification](../../spec/README.md) defines four bounded
 `lib-ash` increments on the completed Modular Ash base. It has passive acyclic source
 modules, public and private declarations, opaque type exports, qualified and
 targeted imports, targeted public name and implementation re-exports,
-compiler-generated body-free export summaries, method-only single-parameter
+compiler-generated body-free export summaries, method-only relational
 interfaces, explicit implementation selection, authenticated transitive
 authorization routes, explicit kinds, higher-kinded declaration parameters,
 explicit fixed-kinded method-local parameters, authenticated polymorphic method
-evidence, kind-preserving evidence lowering, and one linked typed Core program.
+evidence, complete ordered interface applications, one optional total forward
+determination edge, kind-preserving evidence lowering, and one linked typed
+Core program.
 Interfaces are not module signatures. Persistent compiled modules, package
 resolution, and separate object linking remain outside current Ash.
 
@@ -38,7 +40,7 @@ reviews, and the closure commit completed the lifecycle mechanics. The
 annotated `modular-ash` tag retains that commit. None of those mechanics added
 language work.
 
-The proposed type-system additions cross parsing, name resolution, kind and
+The retained relational addition crosses parsing, name resolution, kind and
 type checking, implementation selection, export summaries, linked-evidence
 validation, and Core elaboration. Package and artifact work crosses module
 identity, graph loading, compiler inputs, persistence, linker validation,
@@ -74,10 +76,14 @@ Core validation are retained by the
 [kind evidence](lib-ash/kinds-evidence.md). The third bounded increment is also
 complete. Its explicit method-local type parameters, authenticated evidence
 adapters, rank-1 source boundary, and runtime erasure are retained by the
-[method-parameter evidence](lib-ash/method-parameters-evidence.md). The complete
-milestone remains open. Later proposals may add multi-parameter interfaces,
-associated outputs or relational determination, and method and associated-type
-defaults.
+[method-parameter evidence](lib-ash/method-parameters-evidence.md). The fourth
+bounded increment is implemented and specified. Its complete relational
+applications, total forward determination, one-pass improvement, linked
+authentication, exact resources, and downstream exclusions are retained by the
+[relational-interface evidence](lib-ash/relational-interfaces-evidence.md).
+That integrated product checkpoint closes the revised `lib-ash` milestone.
+Associated outputs, general determination graphs, and defaults are separate
+future features rather than requirements for this milestone.
 
 ### `pack-ash`
 
@@ -113,17 +119,16 @@ narrow, reorder, or remove it.
    polymorphic term slots only as authenticated compiler-generated interface
    evidence. The completed third increment is retained by the
    [method-parameter evidence report](lib-ash/method-parameters-evidence.md).
-4. Compare multi-parameter interfaces, associated outputs, and functional
-   dependencies on one corpus. Retain only source forms that improve
-   expressiveness or diagnostics, and make equivalent relationships converge
-   on one canonical determination model and Core shape.
-5. Add method defaults after method evidence is stable. Add associated-output
-   defaults only if the comparison retains associated outputs. Lower defaults
-   through generated adapters rather than runtime dictionaries.
-6. Close `lib-ash` with its combined library corpus, summary and identity
-   audit, Core-versus-library simplification analysis, resource verification,
-   specification review, migration verification, and one retained linked Core
-   program.
+4. Add complete ordered multi-parameter interface applications and at most one
+   total forward determination edge. Retain one isolated improvement pass and
+   full-application evidence selection. The completed product increment is
+   retained by the
+   [relational-interface evidence report](lib-ash/relational-interfaces-evidence.md).
+5. Close the revised `lib-ash` product boundary with the combined library
+   corpus, summary and identity audit, downstream-pressure review, exact
+   resource verification, normative reconciliation, migration guards, and one
+   retained linked Core program. The fourth increment supplies these product
+   facts; the integrated result completes the lifecycle.
 
 The first increment establishes the visibility and coherence closure used by
 later multi-parameter and determination work. The second establishes fixed
@@ -131,6 +136,9 @@ kinds, canonical applications, and authenticated polymorphic identities.
 The third establishes canonical method schemes, occurrence-local
 instantiation, authenticated generated evidence adapters, and the preserved
 rank-1 source and erased-runtime boundaries.
+The fourth establishes complete relational applications and an explicit
+selection key without generalizing evidence authority or adding a Core or
+runtime mechanism.
 `pack-ash` remains separate until the complete `lib-ash` milestone stabilizes
 those summaries and identities.
 
@@ -167,7 +175,8 @@ This does not add source syntax for higher-rank values. A polymorphic interface
 method does, however, require compiler-generated higher-rank evidence. For
 `Functor<F>`, the method slot has a type shaped like
 `forall A B. (A -> B, F<A>) -> F<B>`. A constrained function receives that
-polymorphic slot, and a default adapter passes it to the default binder.
+polymorphic slot, and a generated evidence adapter exposes the selected
+implementation method at that scheme.
 
 Core therefore admits polymorphic term parameters only in authenticated
 compiler-generated evidence positions during this increment. Independent Core
@@ -176,196 +185,43 @@ Ash annotations cannot introduce, accept, or return such a value. This keeps
 the source language rank-1 without pretending that polymorphic dictionaries
 are ordinary monomorphic functions.
 
-### Canonical determination model
+### Retained relational determination model
 
-Associated types and functional dependencies must not become independent
-solvers. Every interface declaration produces one canonical checked model:
+The revised milestone settles on the simplest complete lowered form: a
+nonempty ordered interface parameter vector, a complete application vector,
+and at most one total forward edge from a nonempty determinant slice to its
+entire complement. Without an edge, every parameter remains part of the
+selection key. With an edge, every method must mention each determinant while
+dependents may occur anywhere or nowhere. One fixed pre-mutation snapshot
+permits forward improvement from inference-free keys; evidence selection still
+uses complete applications.
 
-```text
-explicit parameters
-associated outputs
-determination edges
-methods and defaults
-```
+This form is sufficient for the revised `lib-ash` goals. It preserves stable
+interface and implementation identities, complete relationships through body-
+free summaries and linked validation, occurrence-owned opaque evidence,
+simultaneous substitution, and ordinary Core method evidence. Determinant
+metadata erases before Core and adds no runtime mechanism.
 
-For example, the following schematic declaration has three explicit
-parameters, one associated output, and one explicit determination edge:
+Associated-output declarations, projections, equations, normalization, and
+their source elaboration are not current Ash. Multiple, partial, chained,
+cyclic, reverse, or injective edges, neutral parameters, and alternative keys
+are likewise deferred rather than encoded into this boundary.
 
-```ash
-interface Decode<Format, Source, Value>
-    where (Format, Source) -> Value
-{
-    type Error
-    decode : (Format, Source) -> Result<Value, Error>
-}
-```
+The retained representation also answers three downward pressures without
+prematurely implementing them. Effects may reuse stable typed identities and
+ordered applications, but handler and provider authority must remain separate.
+Proofs may reuse typed identities and complete arguments, but proof authority
+must not be confused with implementation evidence. Existential packages may
+hide any argument while preserving its equality relationships with payloads
+and encapsulated evidence; because summaries and selections already carry the
+complete application, that future work need not refactor interface heads.
+Existentials still require their own binders, scope, generativity, Core forms,
+and evidence authority.
 
-The explicit edge determines `Value` from `(Format, Source)`. The complete
-interface argument tuple determines `Error`, so transitive closure also
-determines `Error` from `(Format, Source)`.
-
-The initial source roles remain disjoint:
-
-- functional dependencies relate explicit interface parameters;
-- associated types introduce named outputs;
-- each associated output is implicitly determined by the complete interface
-  argument tuple plus any local associated-family parameters;
-- one output cannot appear both as an explicit parameter and as an associated
-  type; and
-- functional-dependency clauses cannot name associated outputs.
-
-A later design may add syntax for an associated output with a smaller
-determinant set. It should not overload the initial functional-dependency
-syntax before examples justify the interaction.
-
-Method use must remain deterministic before evidence selection. The explicit
-interface parameters that occur in a method's ordinary type form its syntactic
-seed set. Associated projections do not reveal their own determinants. Closing
-the seed set under the interface's determination edges must cover every
-explicit interface argument needed for selection. Otherwise the interface
-declaration is rejected. At a particular occurrence, ordinary checking may
-still leave a seed parameter ambiguous; selection then waits and reports
-ambiguity if the surrounding arguments or expected type do not resolve it. An
-explicit interface-application syntax could relax this rule later; the initial
-design does not add one.
-
-Inference first performs ordinary kind-aware unification. When a determinant
-tuple contains no unsolved inference variable, matching that tuple against
-visible implementations may fill its dependent arguments; coherence guarantees
-that every match agrees on those arguments. This improvement does not select
-method evidence until the complete goal has one full-head candidate. Equal
-visible constraints for the same interface and determinant tuple also equate
-their dependent tuples. The solver never guesses a determinant, reverses an
-edge, or uses a dependent output to choose among unknown inputs. Abstract
-requirements already supply their complete explicit interface arguments.
-
-Coverage and coherence use the same relation for generic and ground
-implementations. For every determination edge `X -> Y`, the checker first makes
-two independently alpha-freshened instances of one implementation head,
-normalizes their terminating projections, and unifies their `X` tuples. Their
-`Y` tuples must then be definitionally equal under the resulting substitution.
-This self-comparison rejects a head such as `C<Int, B>` when the interface says
-its first parameter determines `B`.
-
-The checker then applies the same comparison to every pair of distinct visible
-implementations. Ordinary full-head overlap remains a separate error. This
-rejects, for example, separate `Convert<Int, Bool>` and
-`Convert<Int, String>` implementations when the interface declares its first
-parameter determines its second.
-
-A public multi-parameter implementation satisfies the orphan rule when its
-interface is local or a local outer nominal constructor occurs in a determinant
-set whose closure determines the complete explicit interface head. Without a
-smaller declared determinant, the complete head is that set. Scoped import and
-re-export closures determine which pairs undergo overlap and determination
-checks; unrelated branches do not acquire global coherence.
-
-Determination metadata uses declaration-position sets sorted lexicographically
-and removes duplicate edges. Closure may contain redundant or cyclic edges, but
-those edges do not add evidence binders or change declaration order.
-
-The associated and relational source forms should be compared on the same
-programs before both are retained. Equivalent relationships should lower to
-the same explicit Core type parameters and evidence shape, up to alpha-renaming
-of generated binders. If one source form adds no useful expressive or
-diagnostic power, `lib-ash` should omit it.
-
-### Associated outputs and Core
-
-Concrete associated projections may normalize during checking. Abstract
-projections in constrained public declarations cannot always normalize to a
-nominal type before Core. Elaboration therefore makes the determined output an
-explicit Core type parameter.
-
-Schematically:
-
-```ash
-forall I. Iterator<I> => I -> Option<Iterator<I>.Item>
-```
-
-lowers to a Core shape equivalent to:
-
-```text
-forall I Item. (I -> Option<Item>) -> I -> Option<Item>
-```
-
-Concrete selection supplies the output type arguments and then the method
-evidence. Associated-type and functional-dependency forms therefore need no
-distinct runtime representation.
-
-### Termination and canonical goals
-
-Projection normalization uses canonical goals consisting of the associated
-output identity and normalized argument tuple. Merely detecting an identical
-active projection is insufficient because an equation can grow its arguments.
-
-The checker builds the dependency graph induced by associated equations and
-defaults in the current visible closure. Each checked summary retains its
-dependency transitions so an importer can recheck a larger combined closure.
-An edge between different acyclic components may preserve argument size. Every
-edge within a recursive component must make a syntactically checkable
-strict-subterm decrease in the ordered argument tuple for every substitution.
-The checker rejects an equation when it cannot establish that decrease. This
-conservative size-change condition permits acyclic aliases and structurally
-recursive families but rejects growing projection chains.
-
-Implementation prerequisites use the same normalized argument order. A
-generic prerequisite must be strictly smaller than its implementation head
-under the fixed structural multiset order. A ground prerequisite may rely on
-canonical active-goal cycle detection. An unresolved projection cannot
-participate in the measure. One driver-owned constraint budget spans
-normalization, improvement, candidate matching, prerequisite traversal, and
-evidence construction; exhaustion does not stand in for a termination rule.
-
-## Defaults and implementation completion
-
-Resolution allocates all method and associated-output identities before it
-checks defaults. Declaration order determines identity but not source
-visibility among interface members.
-
-A default associated equation is kind-checked. It may refer to interface
-parameters, its own family parameters, and other associated projections.
-It must satisfy the projection dependency and decrease rule. Normalization also
-tracks canonical active projections and rejects concrete cycles. A public
-interface summary retains the checked equation and its verified dependency
-facts.
-
-A default method body is checked once in the interface-owning module under:
-
-- the interface parameters and their kinds;
-- method-local type parameters;
-- abstract associated outputs; and
-- abstract evidence for the interface methods.
-
-The export summary retains the checked scheme and binder identity, not the
-method body. The defining module's compiled fragment retains the body.
-
-Each implementation member is either explicit or supplied by one default.
-Missing, duplicate, and extra members are errors. Defaults do not create
-implementation candidates, fallback implementations, or specialization.
-
-An implementation using a method default receives a generated adapter. The
-adapter applies the interface arguments, associated-output arguments, and final
-method functions to the interface-owned default binder. Explicit methods and
-generated adapters form the implementation's recursive Core group. This lets a
-default call required, defaulted, or overridden methods without a runtime
-interface object.
-
-Implementation completion proceeds in this order:
-
-1. admit explicit associated equations;
-2. fill missing equations from defaults;
-3. kind-check completed outputs;
-4. verify projection dependencies, decrease, and cycle freedom;
-5. check canonical determination consistency; and
-6. check implementation method bodies.
-
-Checked evidence carries every explicit interface argument once in declaration
-order, every associated output once in declaration order, and every method slot
-once in declaration order. A polymorphic method occupies one slot with its
-complete checked scheme. Determination edges are metadata and add no duplicate
-type binder. A failure in any member, default, equation, determination, or
-evidence fact makes the implementation summary unavailable as a whole.
+Associated outputs and method or associated-output defaults are not current
+Ash or unfinished `lib-ash` work. If later examples justify them, each requires
+a separate proposal covering its source syntax, identity, checking,
+elaboration, authentication, termination where applicable, and evidence.
 
 ## Name and implementation re-exports
 
@@ -417,8 +273,9 @@ declarations still undergo overlap and determination checks. Dead-code
 elimination may remove unused evidence only after the full imported closure has
 passed validation.
 
-The first increment retains current single-parameter interfaces, so its
-coherence check remains ordinary full-head overlap. A module checks the
+The first increment retained predecessor single-parameter interfaces, so its
+coherence evidence used ordinary full-head overlap. Current Ash generalizes
+that case to complete selection keys. A module checks the
 deduplicated union of its selected imported and local implementations. The
 first module that combines two distinct overlapping implementations owns the
 failure. A public summary is available only after that closure succeeds.
@@ -434,22 +291,20 @@ produces the existing unsatisfied-constraint failure.
 An error belongs to the first judgment with enough information to establish it.
 Parsing owns malformed declarations and selectors. Resolution owns identities,
 visibility, and unavailable exports. Kind and interface checking own invalid
-kinds, method determinacy, contradictory determination, nonterminating
-projection dependencies, and invalid defaults. Implementation checking owns
-completion, equations, orphan status, prerequisites, and conflicts already
+kinds, method determinacy, and contradictory determination. Implementation
+checking owns completion, orphan status, prerequisites, and conflicts already
 visible to the defining module.
 
-Import-closure construction owns a conflict or nonterminating projection graph
-first created by combining imported implementation sets. If that module also
-re-exports the facts, it does not report the failure again during summary
-construction. Summary construction instead owns invalid public closure or
-privacy. Linked-evidence validation owns forged or inconsistent retained
-selections. Constraint improvement and selection at a source occurrence own
-ambiguous or unsatisfied goals and concrete active-goal cycles. Exhaustion of
-the shared constraint budget belongs to whichever declaration, import-closure,
-selection, linking, or validation judgment consumes its final unit. Core
-validation owns Core kind, scope, type, dialect, registry, and provenance
-failures.
+Import-closure construction owns a conflict first created by combining imported
+implementation sets. If that module also re-exports the facts, it does not
+report the failure again during summary construction. Summary construction
+instead owns invalid public closure or privacy. Linked-evidence validation owns
+forged or inconsistent retained selections. Constraint improvement and
+selection at a source occurrence own ambiguous or unsatisfied goals and
+concrete active-goal cycles. Exhaustion of the shared constraint budget belongs
+to whichever declaration, import-closure, selection, linking, or validation
+judgment consumes its final unit. Core validation owns Core kind, scope, type,
+dialect, registry, and provenance failures.
 
 Diagnostics identify the normalized interface arguments, relevant
 determination edge, original implementation locations, and import or re-export
@@ -484,27 +339,22 @@ fixed-kinded method schemes, rigid implementation checking, body-free and
 linked authentication, generated Core adapters, transforms, diagnostics,
 migration, exact resources, small-stack disposal, and runtime erasure.
 
-The remaining comparison corpus should cover method determinacy,
-multi-parameter improvement and selection, generic
-determination conflicts, multi-parameter orphan ownership, direct and
-transitive determination, growing and cyclic projection rejection,
-prerequisite termination, default completion, overrides, mutually recursive
-method defaults, re-export diamonds, privacy, opacity, conflicts, and
-deterministic diagnostics.
+The fourth increment's current
+[relational-interface evidence](lib-ash/relational-interfaces-evidence.md)
+covers complete ordered vectors, total partition admission, method
+determinacy, requirement and implementation rules, coherence, forward-only
+improvement, full-goal selection, body-free summaries, linked and independent
+Core authentication, hidden and opaque dependents, deterministic diagnostics,
+exact resources, predecessor migration, and runtime erasure.
 
-The associated and relational forms should be compared for expressiveness,
-annotation burden, inference, ambiguity diagnostics, summary complexity, and
-Core output. Existing Modular Ash programs should remain valid except for an
-intentional change accepted by a proposal. Explicit implementation imports are
-the expected compatibility change in this design and require a migration
-corpus.
-
-`lib-ash` closes only after retained semantics are specified, positive and
-negative evidence passes, summaries support separate dependent-module checking,
-linked validation authenticates generated evidence and default adapters, and
-the associated-versus-relational comparison has a recorded outcome. It retains
-one linked Core program and adds no package resolver, persistent object format,
-runtime registry, or dynamic interface lookup.
+Together the four reports supply the revised `lib-ash` product boundary:
+specified retained semantics, positive and negative corpus evidence, separate
+dependent-module checking, linked evidence authentication, Core validation and
+transforms, one linked relational program, and no package resolver, persistent
+object format, universal evidence family, runtime registry, or dynamic
+interface lookup. The product checkpoint, transition cleanup, and integration
+are complete. Any milestone tag is a separate lifecycle action, not additional
+language semantics.
 
 ## `pack-ash` exact graph and identity
 
@@ -561,7 +411,7 @@ cache path.
 
 A module artifact joins a checked body-free export summary with a validated
 typed Core fragment. The fragment contains definitions, private binders,
-implementation methods, default adapters, and diagnostic provenance.
+implementation methods, generated evidence adapters, and diagnostic provenance.
 Cross-module references use a `ModuleId` plus declaration identity and the
 dependency or re-export summary route that authorized the occurrence. Local
 intermediate binders may use fragment-local indices.
@@ -570,8 +420,8 @@ An artifact records its module identity, source revision, artifact key, module
 map and owning-root fingerprint, Ash milestone, private format version,
 dependency-summary fingerprints, external identities and authorization routes,
 exported and hidden linker closure, typed Core, retained evidence, and source
-provenance. A default binder is a hidden linker capability in its interface
-summary; it is not thereby a source-visible export.
+provenance. Generated evidence adapters remain authenticated Core relationships;
+they do not become source-visible exports.
 
 The linker:
 
@@ -649,7 +499,7 @@ stable rendering is compared exactly.
 Evidence must cover deterministic lock resolution, simultaneous package
 versions, alternate routes, workspace relocation, forbidden traversal,
 cold-versus-warm builds, precise summary invalidation, diamond linking,
-separately compiled defaults and evidence, validation before dead-code
+separately compiled method evidence, validation before dead-code
 elimination, corruption recovery, source-free incompatibility, tampering,
 deterministic output, and the cumulative resource boundary across decoding,
 linking, validation, and optimization.
@@ -679,8 +529,8 @@ surface.
 ### Close `modular-ash`, then combine library and package work
 
 This preserves the current milestone but freezes artifacts while the same
-increment changes kinds, interface evidence, defaults, and re-export summaries.
-Cache and linker failures could conceal language-model failures.
+increment changes kinds, method and relational evidence, and re-export
+summaries. Cache and linker failures could conceal language-model failures.
 
 ### Use three stages
 
@@ -697,6 +547,10 @@ The design does not currently include:
   increment also excludes kind inference as a phase-dependent constraint, not
   a permanent language principle;
 - fallback implementations or specialization;
+- associated-output declarations or projections, general determination graphs,
+  or method and associated-output defaults;
+- effect handlers or providers, proof authority, a common universal evidence
+  family, or existential pack and unpack forms;
 - implementation-head import patterns or individual implementation names;
 - parent-directory module traversal;
 - dynamic module loading or runtime interface lookup;
@@ -709,11 +563,12 @@ type-class-like constraints rather than module APIs.
 ## Required authority transitions
 
 This note can guide comparison and proposal work but cannot authorize product
-implementation. All three completed bounded increments followed the change-
+implementation. All four completed bounded increments followed the change-
 proposal and task workflow; the current specification and the retained
 [import](lib-ash/imports-evidence.md), [kind](lib-ash/kinds-evidence.md), and
-[method-parameter](lib-ash/method-parameters-evidence.md) evidence reports
-record their results. Further language changes for `lib-ash`
+[method-parameter](lib-ash/method-parameters-evidence.md), and
+[relational-interface](lib-ash/relational-interfaces-evidence.md) evidence
+reports record their results. Further language changes for `lib-ash`
 require one or more change proposals and tasks. Package, cache, and linker
 architecture that does not alter language semantics requires accepted
 architectural decisions and tasks. Any source-visible package or import
@@ -722,10 +577,6 @@ changes only with retained implementation evidence.
 
 ## Open questions
 
-- Does the comparison retain associated types, functional dependencies, or a
-  narrower combination of both?
-- What syntax, if any, lets an associated output declare a smaller determinant
-  set?
 - Which implementation-head import patterns are justified after the initial
   all-for-interface form has evidence?
 - How does a portable lock graph encode unpublished workspace identity?

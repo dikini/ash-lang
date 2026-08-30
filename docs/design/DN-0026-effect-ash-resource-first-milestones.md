@@ -25,11 +25,11 @@ evidence preserve checked identities. Static module and interface machinery
 erases: evaluation has no runtime module value, interface registry, or dynamic
 implementation lookup.
 
-`lib-ash` has three completed bounded increments, but its complete milestone
-remains exploratory. [DN-0025](DN-0025-library-and-package-milestones.md)
-separates later library-type work from `pack-ash`. The trajectory gives
-`effect-ash` no ordering dependency on `pack-ash`. Dynamic loading is therefore
-future composition pressure, not part of the boundary outlined here.
+`lib-ash` has four completed bounded increments, and its revised milestone is
+complete. [DN-0025](DN-0025-library-and-package-milestones.md) separates later
+library-type work from `pack-ash`. The trajectory gives `effect-ash` no ordering
+dependency on `pack-ash`. Dynamic loading is therefore future composition
+pressure, not part of the boundary outlined here.
 
 [AD-0007](../decisions/AD-0007-typed-core-dialects.md) provides a typed Core
 operation-family seam while requiring the pure dialect to contain no inhabited
@@ -196,13 +196,18 @@ binder, and equality substrate.
 
 ## Constraint elaboration
 
-### Preserve current evidence selection
+### Preserve current improvement and evidence selection
 
-Current Ash resolves a zonked constraint goal from checked abstract
-requirements, exact current-implementation evidence, or one matching concrete
-implementation. Selected evidence lowers to authenticated ordinary Core type
-abstractions, functions, and applications. Evaluation performs no interface
-lookup.
+Current Ash applies ordinary unification before relational improvement. For
+eligible pending determined roots, it freezes one snapshot and performs one
+source-ordered improvement pass from an abstract requirement, exact current-
+implementation evidence, or one matching concrete implementation. Improvement
+cannot refine a determinant key, inspect prerequisites, repeat to saturation, or
+construct evidence. After a complete root passes that gate, evidence selection
+uses the same source order. Recursively selected prerequisites use complete-
+application selection without snapshot membership. Selected evidence lowers to
+authenticated ordinary Core type abstractions, functions, and applications.
+Evaluation performs no interface lookup.
 
 The initial generativity work should extend that flow rather than add a second
 constraint solver or a runtime interface registry.
@@ -211,9 +216,9 @@ constraint solver or a runtime interface registry.
 
 An acquisition or other trusted identity-introduction construct may introduce
 exact evidence indexed by its fresh identity. The evidence is lexical and
-matches only an identity-equal, fully determined goal. It must take precedence
-over general concrete implementation search so a global implementation cannot
-capture a relationship established for a fresh resource.
+matches only an identity-equal complete goal. In complete-goal selection, it
+must take precedence over general concrete implementation search so a global
+implementation cannot capture a relationship established for a fresh resource.
 
 This is authenticated evidence introduction, not a locally searchable `impl`.
 The initial boundary therefore has these rules:
@@ -230,10 +235,14 @@ The initial boundary therefore has these rules:
 - evidence may escape only through an independently valid abstraction. The
   initial boundary adds no existential package merely to permit escape.
 
-A later proposal must place scoped evidence precisely relative to current
-abstract requirements and exact current-implementation evidence. The minimum
-property is clear: exact scoped evidence uses identity equality, is validated
-before Core construction, and cannot become a competing global candidate.
+A later proposal must make two placements explicit: whether scoped evidence can
+supply relational improvement for an eligible known determinant key, and where
+it enters complete-goal selection relative to abstract requirements and exact
+current-implementation evidence. It must preserve the fixed root snapshot,
+single forward pass, mandatory consistency check, and separate complete-
+application selection of recursive prerequisites. Scoped evidence cannot refine
+a key, unlock a root outside the snapshot, or become a competing global
+candidate. It uses identity equality and is validated before Core construction.
 
 ### Keep effect requirements separate
 
@@ -264,10 +273,13 @@ pure generativity corpus; it does not add existentials or local `impl` search.
 
 ### 3. Scoped exact evidence
 
-Extend constraint elaboration with authenticated, lexically scoped evidence
-for one fully determined identity-indexed relationship. Reuse current evidence
-binders, application order, Core validation, and erasure. Test the mechanism
-first with a pure relation before a resource acquisition depends on it.
+Extend constraint elaboration with authenticated, lexically scoped evidence for
+one complete identity-indexed relationship. Specify separately whether that
+evidence participates in relational improvement and where it enters complete-
+goal selection, while preserving the fixed-snapshot and recursive-prerequisite
+boundaries. Reuse current evidence binders, application order, Core validation,
+and erasure. Test the mechanism first with a pure relation before a resource
+acquisition depends on it.
 
 ### 4. Effect kernel
 
@@ -394,9 +406,9 @@ negative tests, specification changes, and review. A non-language runtime
 choice that converges independently requires an architectural decision before
 product work.
 
-No `effect-ash` tag or completion claim follows from this outline. The complete
-`lib-ash` milestone also remains open until its own closure conditions are met;
-this dependency analysis does not silently close it.
+No `effect-ash` tag or completion claim follows from this outline. The revised
+`lib-ash` milestone is complete independently; this dependency analysis neither
+closed it nor authorizes a later language increment.
 
 ## Open questions
 
@@ -408,8 +420,9 @@ this dependency analysis does not silently close it.
   relate to an identity freshly established on each resource acquisition?
 - What Core form or validated metadata must retain a `newtype` representation
   boundary until its last checked use?
-- Where exactly does scoped evidence enter the current abstract, exact-current,
-  and concrete selection order?
+- Does scoped exact evidence participate in fixed-snapshot improvement for an
+  eligible known determinant key, and where does it enter the abstract, exact-
+  current, and concrete complete-goal selection order?
 - Which first pure relation best tests scoped exact evidence without effects?
 - Which row representation and inference boundary is sufficient for the first
   closed and open effect cases?

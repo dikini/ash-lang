@@ -7,10 +7,12 @@ alone defines the current language. Git history retains the accepted proposal,
 task, design record, and execution plans removed after the reviewed product
 checkpoints retained their results.
 
-This report does not close the complete `lib-ash` milestone. Method-local type
-parameters, multi-parameter interfaces, determination, associated outputs,
-defaults, the combined library corpus, and the final library simplification
-audit remain separate work. This increment receives no `lib-ash` tag.
+This report alone did not close the complete `lib-ash` milestone. At the second-
+increment checkpoint, method-local type parameters, multi-parameter interfaces,
+determination, associated outputs, defaults, the combined library corpus, and
+the final library simplification audit remained separate work. Later integrated
+increments close the revised milestone without changing this report's evidence
+scope. This increment received no `lib-ash` tag.
 
 ## Scope and checkpoints
 
@@ -501,8 +503,9 @@ The fresh all-target inventory contains 1,422 tests: 642 library tests, ten
 all-target and all-feature checking, all 1,422 tests, Clippy with warnings
 denied, the exact test inventory, `cargo xtask verify`, Markdown lint,
 relative-link checks, and diff hygiene pass on the retained tree. This report
-is the final evidence record for the bounded increment; transition-artifact
-cleanup does not close or tag the complete `lib-ash` milestone.
+is the final evidence record for the bounded increment; its transition-artifact
+cleanup did not close or tag the complete `lib-ash` milestone. Later integrated
+increments provide the separate milestone-closure evidence.
 
 ## Intentional exclusions and remaining pressure
 
@@ -515,5 +518,6 @@ manifests, persistent summaries, compiled artifacts, or separate linking.
 
 Later work may use the fixed kind environments, canonical applications, stable
 identities, body-free facts, and authenticated linked boundary. It requires its
-own semantic authority and evidence. The complete `lib-ash` milestone remains
-open and untagged.
+own semantic authority and evidence. At this checkpoint, the complete `lib-ash`
+milestone remained open and untagged; later integrated increments close the
+revised milestone without claiming a tag.

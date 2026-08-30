@@ -30,16 +30,20 @@ implementation facts without becoming nameable. A `pub opaque type` exports a
 name without constructors, and a `pub type` exports its name and complete
 constructor family.
 
-An interface declares one type parameter and an ordered set of method
-signatures. A method may bind an explicit ordered list of fixed-kinded local
+An interface declares one or more ordered, fixed-kinded type parameters and an
+ordered set of method signatures. It may declare one total forward
+determination edge from a nonempty parameter key to the entire dependent
+complement. A method may bind an explicit ordered list of fixed-kinded local
 parameters, and every method value type has `Function` as its top-level
-constructor. Each occurrence instantiates the interface and method parameters,
-while only the interface argument creates an evidence obligation. Its methods
-are constrained terms. An implementation supplies the complete method set for
-one interface argument but introduces no source name. Private implementations
-remain available only in their defining module; `pub impl` publishes a body-
-free fact that dependents or later facades may select explicitly. Body-free
-summaries preserve canonical method schemes and their defining identities.
+constructor. Each occurrence instantiates the complete interface vector and
+the method parameters, while only the complete interface application creates
+an evidence obligation. Its methods are constrained terms. An implementation
+supplies the complete method set for one complete interface application but
+introduces no source name. Private implementations remain available only in
+their defining module; `pub impl` publishes a body-free fact that dependents or
+later facades may select explicitly. Body-free summaries preserve canonical
+interface parameter and determination records, complete applications, method
+schemes, and their defining identities.
 
 Ash's monomorphic kind language contains `Type` and right-associative function
 kinds such as `Type -> Type`. Declaration parameters may state their kinds.
@@ -69,6 +73,11 @@ method binders or method requirements; or use polymorphic recursion.
 Core admits a nested scheme only where authenticated compiler-generated method
 evidence requires it. Every other term slot and every runtime value remains
 monomorphic.
+
+Determination adds no associated-output syntax or projection, multiple or
+partial edges, effect row or handler authority, proposition or proof evidence,
+common universal evidence, or existential pack and unpack form. Those future
+features require separate source, Core, authentication, and dynamic rules.
 
 Within a module, Ash provides global and explicit local recursion, rank-1
 polymorphism, nominal data, structural tuples, constructor values, typed
@@ -250,6 +259,26 @@ pub type Box<A> = Box(A)
 pub impl Functor<Box> {
 map (function, Box(value)) = Box(function(value))
 }
+```
+
+A total determination edge permits a dependent parameter to occur anywhere or
+nowhere in a method type, while every determinant must occur. Improvement uses
+an inference-free key to fill the whole dependent tuple before complete-
+application evidence selection. This program determines `Result` as `Unit`
+from the `Bool` key even though `Result` is absent from `measure` and observes
+`42 : Int`:
+
+```ash
+interface Measure<Key, Result> where Key -> Result {
+    measure : Key -> Int
+}
+
+impl Measure<Bool, Unit> {
+    measure value = 42
+}
+
+main : Unit -> Int
+main () = measure(true)
 ```
 
 The `entry.ash` module imports the constrained global and explicitly selects

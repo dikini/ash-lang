@@ -130,6 +130,11 @@ fn linked_product_entry() -> PathBuf {
         .join("tests/fixtures/explicit-kinds/linked-product/entry.ash")
 }
 
+fn linked_relational_entry() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/relational-interfaces/linked-composite/entry.ash")
+}
+
 fn module_named<'a>(graph: &'a ModuleGraph, name: &str) -> &'a LoadedModule {
     graph
         .modules()
@@ -352,6 +357,107 @@ fn abstract_polymorphic_method_evidence_instantiates_at_retained_arguments() {
         [vec![Type::Int, Type::Bool]],
         "the abstract evidence occurrence must instantiate the complete retained method arguments once",
     );
+}
+
+#[test]
+fn complete_interface_application_authenticates_before_method_arguments() {
+    let (program, graph) = validated_interface_core_with_graph(concat!(
+        "type Option<A> =\nNone\n| Some(A)\n\n",
+        "type Wrap<A> = Wrap(A)\n\n",
+        "interface Combine<F : Type -> Type, Item> {\n",
+        "combine<X> : (F<Item>, Item, X) -> Int\n",
+        "}\n\n",
+        "impl<F : Type -> Type, A> Combine<F, Wrap<A>> {\n",
+        "combine (container, item, ignored) = 42\n",
+        "}\n\n",
+        "use_combine<F : Type -> Type, A> : (F<Wrap<A>>, Wrap<A>) -> Int where Combine<F, Wrap<A>>\n",
+        "use_combine (container, item) = combine((container, item, true))\n\n",
+        "main : Unit -> Int\n",
+        "main () = use_combine((Some(Wrap(0)), Wrap(42)))\n",
+    ));
+
+    assert_integer_evaluation(&program, "42");
+    let option = program
+        .registry()
+        .nominals()
+        .iter()
+        .find(|nominal| nominal.spelling == "Option")
+        .expect("the higher-kinded interface argument should retain Option")
+        .id;
+    let mut aligned_adapter_application = None;
+    let mut method_local_application = None;
+    for id in reachable_nodes(&program) {
+        let node = program
+            .node(id)
+            .expect("the reachable Core node should exist");
+        let PureExprKind::Computation(PureComputation::TypeApplication(application)) = &node.kind
+        else {
+            continue;
+        };
+        let function = program
+            .node(application.function())
+            .expect("the aligned method application function should exist");
+        match application.arguments() {
+            [
+                Type::Nominal(actual_option),
+                Type::Int,
+                Type::Variable(method_argument),
+            ] if *actual_option == option => {
+                let Type::Forall(parameters, _) = &function.ty else {
+                    panic!("the aligned adapter application should consume one Core scheme");
+                };
+                assert_eq!(parameters.len(), 3);
+                assert_type_to_type(&parameters[0].1);
+                assert_eq!(parameters[1].1, Kind::Type);
+                assert_eq!(parameters[2].1, Kind::Type);
+                assert!(matches!(method_argument, TypeVariableId::Generated(_)));
+                assert!(
+                    aligned_adapter_application.replace(id).is_none(),
+                    "the adapter should apply the interface-derived head prefix once",
+                );
+            }
+            [Type::Bool] => {
+                let Type::Forall(parameters, _) = &function.ty else {
+                    continue;
+                };
+                if parameters.len() == 1 && parameters[0].1 == Kind::Type {
+                    assert!(
+                        method_local_application.replace(id).is_none(),
+                        "the method-local suffix should instantiate once",
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        aligned_adapter_application.is_some(),
+        "Core must apply interface-derived [F, A] before the forwarded method-local X",
+    );
+    assert!(
+        method_local_application.is_some(),
+        "the source call must instantiate method-local X only after the interface application",
+    );
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let identity = identity_traversal(&program)
+        .expect("identity traversal should preserve the complete interface application");
+    let identity = ash::core::validate_modules(identity, &sources, &module_sources)
+        .expect("identity traversal should independently revalidate complete authentication");
+    assert_integer_evaluation(&identity, "42");
+    let folded = fold_literal_primitives(&program)
+        .expect("literal folding should preserve the complete interface application");
+    let folded = ash::core::validate_modules(folded, &sources, &module_sources)
+        .expect("literal folding should independently revalidate complete authentication");
+    assert_integer_evaluation(&folded, "42");
 }
 
 #[test]
@@ -690,8 +796,7 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
     };
     assert_eq!(surface_observe.name.text, "Observe");
     assert_surface_type_to_type(
-        &surface_observe
-            .parameter
+        &surface_observe.parameters[0]
             .kind
             .as_ref()
             .expect("Observe should retain its explicit kind")
@@ -755,7 +860,7 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         panic!("Observe should be the only resolved interface");
     };
     assert_eq!(resolved_observe.spelling, "Observe");
-    assert_type_to_type(&resolved_observe.parameter.kind);
+    assert_type_to_type(&resolved_observe.parameters[0].kind);
     let observe: InterfaceId = resolved_observe.id;
     let [resolved_observe_method] = resolved_observe.methods.as_ref() else {
         panic!("Observe should resolve exactly one method");
@@ -764,7 +869,7 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
     let [resolved_implementation] = resolved_dependency.implementations() else {
         panic!("the dependency should retain one implementation");
     };
-    assert_eq!(resolved_implementation.interface.id, observe);
+    assert_eq!(resolved_implementation.head.interface.id, observe);
     let implementation: ImplId = resolved_implementation.id;
     let resolved_relay = resolved_dependency
         .definitions()
@@ -792,13 +897,16 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         panic!("the checked dependency should retain one interface fact");
     };
     assert_eq!(checked_observe.id, observe);
-    assert_type_to_type(&checked_observe.parameter.kind);
+    let [checked_observe_parameter] = checked_observe.parameters.as_ref() else {
+        panic!("the checked interface should retain one parameter");
+    };
+    assert_type_to_type(&checked_observe_parameter.kind);
     let [checked_implementation] = checked_dependency.implementation_facts() else {
         panic!("the checked dependency should retain one implementation fact");
     };
     assert_eq!(checked_implementation.id, implementation);
-    assert_eq!(checked_implementation.interface, observe);
-    assert_eq!(checked_implementation.argument(), &Type::Nominal(option));
+    assert_eq!(checked_implementation.interface(), observe);
+    assert_eq!(checked_implementation.arguments(), [Type::Nominal(option)]);
     let checked_relay = checked_dependency
         .schemes()
         .iter()
@@ -860,7 +968,10 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         .interface(observe)
         .expect("the entry should import Observe's canonical fact");
     assert_eq!(imported_observe.id, observe);
-    assert_type_to_type(&imported_observe.parameter.kind);
+    let [imported_observe_parameter] = imported_observe.parameters.as_ref() else {
+        panic!("the imported interface should retain one parameter");
+    };
+    assert_type_to_type(&imported_observe_parameter.kind);
     let imported_relay = imported
         .global(relay)
         .expect("the entry should import relay's canonical scheme");
@@ -875,8 +986,8 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         .implementation(implementation)
         .expect("the entry should import the selected Observe<Option> implementation");
     assert_eq!(imported_implementation.id, implementation);
-    assert_eq!(imported_implementation.interface, observe);
-    assert_eq!(imported_implementation.argument(), &Type::Nominal(option));
+    assert_eq!(imported_implementation.interface(), observe);
+    assert_eq!(imported_implementation.arguments(), [Type::Nominal(option)]);
     let checked_entry = check_module(resolved_entry)
         .expect("the entry should type-check from detached imported facts");
     let main = checked_entry
@@ -913,7 +1024,7 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         .selection()
         .expect("entry checking should fill observe's evidence slot");
     assert_eq!(observe_selection.interface(), observe);
-    assert_eq!(observe_selection.argument(), &Type::Nominal(option));
+    assert_eq!(observe_selection.arguments(), [Type::Nominal(option)]);
     assert_eq!(observe_selection.node_count(), 1);
     let Some(EvidenceNode::Implementation {
         implementation: selected_implementation,
@@ -955,7 +1066,7 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         panic!("linked evidence should retain one implementation fact");
     };
     assert_eq!(linked_implementation.id, implementation);
-    assert_eq!(linked_implementation.interface, observe);
+    assert_eq!(linked_implementation.interface(), observe);
     let mut elaborator =
         Elaborator::for_module_program(&linked).expect("the linked binder namespace should fit");
     let typed = elaborator
@@ -1018,6 +1129,356 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stdout, b"42 : Int\n");
     assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn linked_relational_program_crosses_facade_diamond_transforms_and_runtime() {
+    let entry = linked_relational_entry();
+    let graph = load_module_graph(&entry, &ModuleRoots::empty())
+        .expect("the linked relational graph should load");
+    let base_module = module_named(&graph, "base.ash");
+    let entry_module = module_named(&graph, "entry.ash");
+    let short_module = module_named(&graph, "short.ash");
+    let long_one_module = module_named(&graph, "long_one.ash");
+    let long_two_module = module_named(&graph, "long_two.ash");
+
+    let mut checked = Vec::new();
+    let mut relation = None;
+    let mut relation_parameters = None;
+    let mut relation_method = None;
+    let mut implementation = None;
+    let mut implementation_method_binder = None;
+    let mut wrap = None;
+
+    for module in graph.modules() {
+        let dependencies = module
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                let dependency = checked
+                    .iter()
+                    .find(|checked: &&ash::resolved::CheckedModule| {
+                        checked.module() == edge.target()
+                    })
+                    .expect("the dependency should already have checked body-free exports");
+                DependencyExports::new(edge, dependency.exports())
+                    .expect("the detached relational summary should authenticate its edge")
+            })
+            .collect::<Vec<_>>();
+        let resolved = resolve_module(module, &dependencies)
+            .expect("every relational fixture module should resolve from summaries");
+
+        if module.id() == base_module.id() {
+            let [resolved_relation] = resolved.interfaces() else {
+                panic!("the base should resolve one relational interface");
+            };
+            assert_eq!(resolved_relation.spelling, "Relation");
+            assert_eq!(
+                resolved_relation
+                    .parameters
+                    .iter()
+                    .map(|parameter| parameter.spelling.as_str())
+                    .collect::<Vec<_>>(),
+                ["F", "Key", "Dep"],
+            );
+            assert_type_to_type(&resolved_relation.parameters[0].kind);
+            assert_eq!(resolved_relation.parameters[1].kind, Kind::Type);
+            assert_eq!(resolved_relation.parameters[2].kind, Kind::Type);
+            relation = Some(resolved_relation.id);
+            relation_parameters = Some([
+                resolved_relation.parameters[0].id,
+                resolved_relation.parameters[1].id,
+                resolved_relation.parameters[2].id,
+            ]);
+            let [method] = resolved_relation.methods.as_ref() else {
+                panic!("Relation should resolve one polymorphic method");
+            };
+            let [method_parameter] = method.type_parameters.as_ref() else {
+                panic!("relate should retain one method-local parameter");
+            };
+            assert_eq!(method_parameter.spelling, "X");
+            relation_method = Some(method.id);
+
+            let [resolved_implementation] = resolved.implementations() else {
+                panic!("the base should resolve one public implementation");
+            };
+            implementation = Some(resolved_implementation.id);
+            let [head_parameter] = resolved_implementation.head_parameters.as_ref() else {
+                panic!("the relational implementation should retain one head parameter");
+            };
+            assert_eq!(head_parameter.spelling, "A");
+            let [method_group] = resolved_implementation.method_groups.as_ref() else {
+                panic!("the implementation should retain one method body");
+            };
+            implementation_method_binder = Some(method_group.binder.id);
+            wrap = Some(
+                resolved
+                    .registry()
+                    .nominals()
+                    .iter()
+                    .find(|nominal| nominal.spelling == "Wrap")
+                    .expect("the base should retain Wrap")
+                    .id,
+            );
+        } else {
+            if matches!(
+                module.id(),
+                id if id == short_module.id()
+                    || id == long_one_module.id()
+                    || id == long_two_module.id()
+                    || id == entry_module.id()
+            ) {
+                let relation = relation.expect("the base should resolve before its facades");
+                let implementation =
+                    implementation.expect("the base implementation should already exist");
+                assert_eq!(
+                    resolved
+                        .imported_facts()
+                        .interface(relation)
+                        .map(|fact| fact.id),
+                    Some(relation),
+                    "every facade route must preserve the defining interface identity",
+                );
+                assert_eq!(
+                    resolved
+                        .imported_facts()
+                        .implementation(implementation)
+                        .map(|fact| fact.id),
+                    Some(implementation),
+                    "every facade route must preserve the defining implementation identity",
+                );
+            }
+        }
+
+        let module_checked = check_module(resolved)
+            .expect("every relational fixture module should check independently");
+        if module.id() == base_module.id() {
+            let relation = relation.expect("the base relation identity should be retained");
+            let relation_parameters =
+                relation_parameters.expect("the interface parameter order should be retained");
+            let relation_method = relation_method.expect("the method identity should be retained");
+            let implementation =
+                implementation.expect("the implementation identity should be retained");
+            let wrap = wrap.expect("the Wrap identity should be retained");
+            let [interface_fact] = module_checked.interface_facts() else {
+                panic!("the checked base should retain one interface fact");
+            };
+            assert_eq!(interface_fact.id, relation);
+            assert_eq!(
+                interface_fact
+                    .parameters
+                    .iter()
+                    .map(|parameter| parameter.id)
+                    .collect::<Vec<_>>(),
+                relation_parameters,
+            );
+            let [implementation_fact] = module_checked.implementation_facts() else {
+                panic!("the checked base should retain one implementation fact");
+            };
+            assert_eq!(implementation_fact.id, implementation);
+            assert_eq!(implementation_fact.interface(), relation);
+            assert_eq!(implementation_fact.arguments().len(), 3);
+            assert_eq!(implementation_fact.arguments()[0], Type::Nominal(wrap));
+            assert!(matches!(
+                &implementation_fact.arguments()[1],
+                Type::Application(function, argument)
+                    if function.as_ref() == &Type::Nominal(wrap)
+                        && argument.as_ref()
+                            == &Type::Variable(implementation_fact.head_parameters[0].id)
+            ));
+            assert_eq!(
+                implementation_fact.arguments()[2],
+                Type::Variable(implementation_fact.head_parameters[0].id),
+            );
+
+            let relay = module_checked
+                .definitions()
+                .iter()
+                .find_map(|definition| match definition.kind() {
+                    ResolvedDefinitionKind::Equational(global)
+                        if global.interface.name.spelling == "relay" =>
+                    {
+                        Some(global)
+                    }
+                    ResolvedDefinitionKind::Equational(_)
+                    | ResolvedDefinitionKind::InlineOperational(_) => None,
+                })
+                .expect("the checked base should retain relay");
+            let ResolvedExprKind::Apply(call) = &relay.equations[0].body.kind else {
+                panic!("relay should call the interface method");
+            };
+            let ResolvedExprKind::Occurrence(occurrence) = &call.function.kind else {
+                panic!("relay should retain the abstract method occurrence");
+            };
+            assert_eq!(occurrence.term, ResolvedTermName::Method(relation_method));
+            let [slot] = occurrence.evidence.as_ref() else {
+                panic!("the abstract method occurrence should own one evidence slot");
+            };
+            let selection = slot
+                .selection()
+                .expect("base checking should fill abstract method evidence");
+            assert_eq!(selection.interface(), relation);
+            assert_eq!(selection.arguments().len(), 3);
+            assert_eq!(slot.method_arguments().len(), 1);
+            assert!(matches!(
+                selection.node(selection.root()),
+                Some(EvidenceNode::Abstract { methods, .. }) if methods == [relation_method]
+            ));
+        }
+        if module.id() == entry_module.id() {
+            let relation = relation.expect("the entry should preserve Relation");
+            let implementation = implementation.expect("the entry should preserve the impl");
+            let wrap = wrap.expect("the entry should preserve Wrap");
+            let [available] = module_checked.available_implementations() else {
+                panic!("the diamond should deduplicate one effective implementation");
+            };
+            assert_eq!(available.id(), implementation);
+            assert_eq!(
+                available.authorization().hops().len(),
+                2,
+                "the unequal diamond must retain the shorter entry-short-base route",
+            );
+
+            let main = module_checked
+                .definitions()
+                .iter()
+                .find_map(|definition| match definition.kind() {
+                    ResolvedDefinitionKind::Equational(global)
+                        if global.interface.name.spelling == "main" =>
+                    {
+                        Some(global)
+                    }
+                    ResolvedDefinitionKind::Equational(_)
+                    | ResolvedDefinitionKind::InlineOperational(_) => None,
+                })
+                .expect("the checked entry should retain main");
+            let ResolvedExprKind::Apply(reveal_call) = &main.equations[0].body.kind else {
+                panic!("main should call reveal");
+            };
+            let ResolvedExprKind::Apply(relay_call) = &reveal_call.argument.kind else {
+                panic!("main should call relay before reveal");
+            };
+            let ResolvedExprKind::Occurrence(relay_occurrence) = &relay_call.function.kind else {
+                panic!("main should retain the constrained relay occurrence");
+            };
+            let [slot] = relay_occurrence.evidence.as_ref() else {
+                panic!("relay should own one concrete evidence slot");
+            };
+            let selection = slot
+                .selection()
+                .expect("entry checking should fill concrete implementation evidence");
+            assert_eq!(selection.interface(), relation);
+            assert_eq!(
+                selection.arguments(),
+                [
+                    Type::Nominal(wrap),
+                    Type::Application(Box::new(Type::Nominal(wrap)), Box::new(Type::Int)),
+                    Type::Int,
+                ],
+            );
+            assert!(matches!(
+                selection.node(selection.root()),
+                Some(EvidenceNode::Implementation {
+                    implementation: selected,
+                    substitution,
+                    prerequisites: [],
+                    ..
+                }) if selected == implementation
+                    && substitution.len() == 1
+                    && substitution[0].argument() == &Type::Int
+            ));
+        }
+        checked.push(module_checked);
+    }
+
+    let linked =
+        link_modules(checked, graph.entry()).expect("the checked relational diamond should link");
+    let linked = validate_interface_evidence(linked)
+        .expect("the complete relational applications and routes should authenticate");
+    let mut elaborator =
+        Elaborator::for_module_program(&linked).expect("the relational namespace should reserve");
+    let typed = elaborator
+        .synthesize_module_program(&linked)
+        .expect("the authenticated relational program should lower");
+    assert_eq!(typed.ty, Type::Int);
+    let unchecked = elaborator
+        .finish(typed.node)
+        .expect("the relational Core root should finish");
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let original = ash::core::validate_modules(unchecked, &sources, &module_sources)
+        .expect("relational Core should independently validate");
+    let implementation_method_binder =
+        implementation_method_binder.expect("the implementation binder should be retained");
+    let adapter_applications = reachable_nodes(&original)
+        .into_iter()
+        .filter_map(|node| {
+            let payload = original.node(node)?;
+            let PureExprKind::Computation(PureComputation::TypeApplication(application)) =
+                &payload.kind
+            else {
+                return None;
+            };
+            let function = original.node(application.function())?;
+            matches!(
+                function.kind,
+                PureExprKind::Variable(variable)
+                    if variable.binder() == implementation_method_binder
+            )
+            .then_some((node, application.arguments()))
+        })
+        .collect::<Vec<_>>();
+    let [(adapter_application, adapter_arguments)] = adapter_applications.as_slice() else {
+        panic!("the generic implementation should retain one generated adapter application");
+    };
+    let [Type::Int, Type::Variable(method_argument)] = adapter_arguments else {
+        panic!("the implementation-head argument must precede the method-local argument");
+    };
+    assert!(reachable_nodes(&original).into_iter().any(|node| {
+        matches!(
+            &original
+                .node(node)
+                .expect("the adapter abstraction should remain reachable")
+                .kind,
+            PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))
+                if abstraction.body() == *adapter_application
+                    && abstraction.parameters() == [(*method_argument, Kind::Type)]
+        )
+    }));
+    assert_primitive_profile(&original, 1, 0);
+    assert_integer_evaluation(&original, "42");
+
+    let identity = identity_traversal(&original)
+        .expect("the identity transform should rebuild relational Core");
+    let identity = ash::core::validate_modules(identity, &sources, &module_sources)
+        .expect("identity-transformed relational Core should independently revalidate");
+    assert_integer_evaluation(&identity, "42");
+    let folded =
+        fold_literal_primitives(&original).expect("literal folding should rebuild relational Core");
+    let folded = ash::core::validate_modules(folded, &sources, &module_sources)
+        .expect("folded relational Core should independently revalidate");
+    assert_primitive_profile(&folded, 0, 1);
+    assert_integer_evaluation(&folded, "42");
+
+    let observation = run_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .expect("the public driver path should run the body-free relational entry");
+    assert_eq!(observation.ty(), &Type::Int);
+    assert!(matches!(
+        observation.value(),
+        Value::Integer(value)
+            if value == &Integer::parse_decimal("42").expect("42 should parse")
+    ));
 }
 
 #[test]

@@ -19,18 +19,20 @@ use crate::{
     },
     diagnostic::{Diagnostic, SourceLabel},
     evidence::{
-        EvidenceSelector, MethodObligationMetadata, MethodRigidityCheck, MethodRigidityCondition,
-        MethodRigiditySite, MethodRigidityTarget, PendingEvidencePublication, SelectionCauseKind,
-        SelectionError, SelectionFailure, SelectionSite,
+        EvidenceSelector, ImprovementTask, MethodObligationMetadata, MethodRigidityCheck,
+        MethodRigidityCondition, MethodRigiditySite, MethodRigidityTarget,
+        PendingEvidencePublication, PendingObligationMarker, SelectionCauseKind, SelectionError,
+        SelectionFailure, SelectionSite,
     },
     evidence_audit::{EvidenceAuditFailure, audit_checked_body_evidence},
     evidence_validation::ValidatedInterfaceProgram,
     interface::{
         CheckedImplMethod, CheckedImplementation, CheckedInterface, CheckedRequirement,
-        ConstrainedScheme, EvidenceNode, EvidenceSelection, ImplId, ImplMethodId,
-        InterfaceConstraintBudget, InterfaceId, InterfaceOperationWork, InterfaceReason, MethodId,
-        OverlapFailure, RequirementId, implementation_heads_overlap,
-        implementation_prerequisite_terminates, same_type_with_constraint_budget,
+        ConstrainedScheme, DeterminationKey, EvidenceNode, EvidenceSelection, ImplId, ImplMethodId,
+        InterfaceApplication, InterfaceConstraintBudget, InterfaceId, InterfaceOperationWork,
+        InterfaceReason, MethodId, OverlapFailure, RequirementId,
+        implementation_application_heads_overlap,
+        implementation_prerequisite_selection_key_terminates, same_type_with_constraint_budget,
     },
     kind::{KindEnvironments, KindFailure},
     pattern::{
@@ -318,10 +320,16 @@ fn discard_type_fact(mut fact: TypeFact) {
 #[derive(Debug)]
 struct LoweredInterfaceMethod {
     interface: InterfaceId,
-    parameter: TypeVariableId,
+    parameters: Box<[TypeVariableId]>,
     type_parameters: Box<[(TypeVariableId, Kind)]>,
     value_type: Type,
     declaration_span: Span,
+}
+
+#[derive(Debug)]
+struct LoweredInterface {
+    methods: Box<[MethodId]>,
+    determination: Option<Box<[usize]>>,
 }
 
 impl Drop for LoweredInterfaceMethod {
@@ -333,13 +341,12 @@ impl Drop for LoweredInterfaceMethod {
 #[derive(Debug)]
 struct LoweredRequirementMethod {
     method: MethodId,
-    interface_argument: Type,
+    application: InterfaceApplication,
     ty: Type,
 }
 
 impl Drop for LoweredRequirementMethod {
     fn drop(&mut self) {
-        discard_type_iteratively(std::mem::replace(&mut self.interface_argument, Type::Unit));
         discard_type_iteratively(std::mem::replace(&mut self.ty, Type::Unit));
     }
 }
@@ -381,38 +388,31 @@ impl Drop for LoweredScheme {
 struct LoweredImplementationMethod {
     binder: BinderId,
     head_type_parameter_count: usize,
-    interface_argument: Type,
+    application: InterfaceApplication,
     scheme: LoweredScheme,
     span: Span,
 }
 
-impl Drop for LoweredImplementationMethod {
-    fn drop(&mut self) {
-        discard_type_iteratively(std::mem::replace(&mut self.interface_argument, Type::Unit));
-    }
-}
-
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct ActiveEvidenceBinder {
     binder: BinderId,
-    interface_argument: Type,
+    application: InterfaceApplication,
     ty: Type,
 }
 
 impl Drop for ActiveEvidenceBinder {
     fn drop(&mut self) {
-        discard_type_iteratively(std::mem::replace(&mut self.interface_argument, Type::Unit));
         discard_type_iteratively(std::mem::replace(&mut self.ty, Type::Unit));
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct LoweredEvidenceMethod {
     method: MethodId,
     node: NodeId,
     ty: Type,
     producer: PolymorphicEvidenceProducer,
-    adapter_interface_argument: Option<Type>,
+    adapter_application: Option<InterfaceApplication>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -431,9 +431,6 @@ enum PolymorphicEvidenceProducer {
 impl Drop for LoweredEvidenceMethod {
     fn drop(&mut self) {
         discard_type_iteratively(std::mem::replace(&mut self.ty, Type::Unit));
-        if let Some(argument) = self.adapter_interface_argument.take() {
-            discard_type_iteratively(argument);
-        }
     }
 }
 
@@ -441,13 +438,13 @@ struct ScopedEvidenceBinder {
     owner: MethodEvidenceOwner,
     requirement: RequirementId,
     method: MethodId,
-    interface_argument: IterativeTypeOwner,
+    application: InterfaceApplication,
     binder: TypedBinder,
 }
 
 #[derive(Debug)]
 struct EvidenceLowering {
-    interfaces: HashMap<InterfaceId, Box<[MethodId]>>,
+    interfaces: HashMap<InterfaceId, LoweredInterface>,
     interface_methods: HashMap<MethodId, LoweredInterfaceMethod>,
     global_schemes: HashMap<BinderId, LoweredScheme>,
     implementation_methods: HashMap<ImplMethodId, LoweredImplementationMethod>,
@@ -1022,6 +1019,36 @@ impl OriginOwner {
 impl Drop for OriginOwner {
     fn drop(&mut self) {
         if let Some(origin) = self.0.take() {
+            discard_origin_iteratively(origin);
+        }
+    }
+}
+
+struct CheckedTypeVariableBuffer(Vec<crate::resolved::ResolvedTypeVariable>);
+
+impl CheckedTypeVariableBuffer {
+    fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
+        self.0.try_reserve(additional)
+    }
+
+    fn push(&mut self, parameter: crate::resolved::ResolvedTypeVariable) {
+        self.0.push(parameter);
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn into_boxed_slice(mut self) -> Box<[crate::resolved::ResolvedTypeVariable]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+}
+
+impl Drop for CheckedTypeVariableBuffer {
+    fn drop(&mut self) {
+        while let Some(parameter) = self.0.pop() {
+            let crate::resolved::ResolvedTypeVariable { origin, .. } = parameter;
             discard_origin_iteratively(origin);
         }
     }
@@ -1688,9 +1715,22 @@ impl Elaborator {
                             )?,
                         ));
                     }
+                    self.type_work
+                        .charge(interface.parameters.len())
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                    let mut interface_parameters = Vec::new();
+                    interface_parameters
+                        .try_reserve(interface.parameters.len())
+                        .map_err(|_| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                    interface_parameters
+                        .extend(interface.parameters.iter().map(|parameter| parameter.id));
                     let lowered = LoweredInterfaceMethod {
                         interface: interface.id,
-                        parameter: interface.parameter.id,
+                        parameters: interface_parameters.into_boxed_slice(),
                         type_parameters: type_parameters.into_boxed_slice(),
                         value_type: self.clone_type(&method.value_type)?,
                         declaration_span: method.span,
@@ -1699,8 +1739,28 @@ impl Elaborator {
                         return Err(invalid_state());
                     }
                 }
+                let determination = interface
+                    .determination()
+                    .map(|determination| {
+                        self.constraint_work
+                            .charge(determination.positions().len())
+                            .map_err(|()| constraint_resource())?;
+                        let mut positions = Vec::new();
+                        positions
+                            .try_reserve_exact(determination.positions().len())
+                            .map_err(|_| constraint_resource())?;
+                        positions.extend_from_slice(determination.positions());
+                        Ok::<_, TypeError>(positions.into_boxed_slice())
+                    })
+                    .transpose()?;
                 if interfaces
-                    .insert(interface.id, methods.into_boxed_slice())
+                    .insert(
+                        interface.id,
+                        LoweredInterface {
+                            methods: methods.into_boxed_slice(),
+                            determination,
+                        },
+                    )
                     .is_some()
                 {
                     return Err(invalid_state());
@@ -1752,7 +1812,12 @@ impl Elaborator {
                     let lowered = LoweredImplementationMethod {
                         binder: method.binder,
                         head_type_parameter_count: method.head_type_parameter_count(),
-                        interface_argument: self.clone_type(&implementation.argument)?,
+                        application: implementation
+                            .application()
+                            .clone_with_budget(&mut self.type_work)
+                            .map_err(|()| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?,
                         scheme,
                         span: method.span,
                     };
@@ -1816,32 +1881,41 @@ impl Elaborator {
             .try_reserve(scheme.requirements.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         for requirement in &scheme.requirements {
-            let method_order = lowering
+            let lowered_interface = lowering
                 .interfaces
-                .get(&requirement.interface)
+                .get(&requirement.interface())
                 .ok_or_else(invalid_state)?;
+            self.type_work
+                .charge(lowered_interface.methods.len())
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             let mut methods = Vec::new();
             methods
-                .try_reserve(method_order.len())
+                .try_reserve(lowered_interface.methods.len())
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            for method in method_order {
+            for method in &lowered_interface.methods {
                 let method_fact = lowering
                     .interface_methods
                     .get(method)
                     .ok_or_else(invalid_state)?;
-                if method_fact.interface != requirement.interface {
+                if method_fact.interface != requirement.interface()
+                    || method_fact.parameters.len() != requirement.arguments().len()
+                {
                     return Err(invalid_state());
                 }
+                self.type_work
+                    .charge(method_fact.parameters.len())
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 let mut replacement = TypeReplacementBuffer::new();
                 replacement
-                    .try_reserve(1)
+                    .try_reserve(method_fact.parameters.len())
                     .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                replacement
-                    .try_insert_unique(
-                        method_fact.parameter,
-                        self.clone_type(&requirement.argument)?,
-                    )
-                    .map_err(|()| invalid_state())?;
+                for (parameter, argument) in
+                    method_fact.parameters.iter().zip(requirement.arguments())
+                {
+                    replacement
+                        .try_insert_unique(*parameter, self.clone_type(argument)?)
+                        .map_err(|()| invalid_state())?;
+                }
                 let ty = IterativeTypeOwner::new(
                     substitute_type_variables_with(
                         &method_fact.value_type,
@@ -1865,7 +1939,12 @@ impl Elaborator {
                 };
                 methods.push(LoweredRequirementMethod {
                     method: *method,
-                    interface_argument: self.clone_type(&requirement.argument)?,
+                    application: requirement
+                        .application()
+                        .clone_with_budget(&mut self.type_work)
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?,
                     ty,
                 });
             }
@@ -2208,30 +2287,49 @@ impl Elaborator {
             .implementations()
             .get(checked.source_index)
             .ok_or_else(invalid_state)?;
-        if implementation.id != checked.id || implementation.interface.id != checked.interface {
+        if implementation.id != checked.id
+            || implementation.head.interface.id != checked.interface()
+            || implementation.head.arguments.len() != checked.arguments().len()
+        {
             return Err(invalid_state());
+        }
+        for (resolved_argument, checked_argument) in implementation
+            .head
+            .arguments
+            .iter()
+            .zip(checked.arguments())
+        {
+            if !same_type(&resolved_argument.ty, checked_argument) {
+                return Err(invalid_state());
+            }
         }
         let interface = checked_interface(
             module,
             checked_interfaces,
-            checked.interface,
+            checked.interface(),
             &mut self.constraint_work,
         )?
         .ok_or_else(invalid_state)?;
 
+        if interface.parameters().len() != implementation.head.arguments.len() {
+            return Err(invalid_state());
+        }
         self.type_work
-            .charge(1)
+            .charge(interface.parameters().len())
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let mut replacements = TypeReplacementBuffer::new();
         replacements
-            .try_reserve(1)
+            .try_reserve(interface.parameters().len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        replacements
-            .try_insert_unique(
-                interface.parameter(),
-                self.clone_type(&implementation.argument.ty)?,
-            )
-            .map_err(|()| invalid_state())?;
+        for (parameter, argument) in interface
+            .parameters()
+            .iter()
+            .zip(&implementation.head.arguments)
+        {
+            replacements
+                .try_insert_unique(parameter.id, self.clone_type(&argument.ty)?)
+                .map_err(|()| invalid_state())?;
+        }
 
         if checked.methods.len() != interface.method_count() {
             return Err(invalid_state());
@@ -2386,14 +2484,10 @@ impl Elaborator {
         }
         let prerequisites =
             self.clone_implementation_requirements(&implementation.prerequisites)?;
-        self.constraint_work
-            .charge_type(&implementation.argument.ty)
-            .map_err(|()| constraint_resource())?;
         Ok(CheckedImplementationFact {
             id: implementation.id,
-            interface: implementation.interface.id,
+            application: self.clone_resolved_interface_application(&implementation.head)?,
             head_parameters: head_parameters.into_boxed_slice(),
-            argument: self.clone_type(&implementation.argument.ty)?,
             prerequisites,
             methods: method_facts.into_boxed_slice(),
             origin: Origin::Source(implementation.span),
@@ -2462,18 +2556,37 @@ impl Elaborator {
             .try_reserve(requirements.len())
             .map_err(|_| constraint_resource())?;
         for requirement in requirements {
-            self.constraint_work
-                .charge_type(&requirement.argument.ty)
-                .map_err(|()| constraint_resource())?;
             checked.push(CheckedRequirement {
                 id: requirement.id,
-                interface: requirement.interface.id,
-                argument: self.clone_type(&requirement.argument.ty)?,
-                origin: Origin::Source(requirement.span),
-                span: requirement.span,
+                application: self.clone_resolved_interface_application(&requirement.application)?,
+                origin: Origin::Source(requirement.application.span),
+                span: requirement.application.span,
             });
         }
         Ok(checked.into_boxed_slice())
+    }
+
+    fn clone_resolved_interface_application(
+        &mut self,
+        application: &crate::resolved::ResolvedInterfaceApplication,
+    ) -> Result<InterfaceApplication, TypeError> {
+        self.constraint_work
+            .charge(application.arguments.len())
+            .map_err(|()| constraint_resource())?;
+        let mut arguments = OwnedTypeBuffer(Vec::new());
+        arguments
+            .try_reserve(application.arguments.len())
+            .map_err(|_| constraint_resource())?;
+        for argument in &application.arguments {
+            self.constraint_work
+                .charge_type(&argument.ty)
+                .map_err(|()| constraint_resource())?;
+            arguments.push(self.clone_type(&argument.ty)?);
+        }
+        Ok(InterfaceApplication::new(
+            application.interface.id,
+            arguments.into_boxed_slice(),
+        ))
     }
 
     fn checked_module_schemes(
@@ -2516,10 +2629,10 @@ impl Elaborator {
             for requirement in requirements {
                 checked_requirements.push(CheckedRequirement {
                     id: requirement.id,
-                    interface: requirement.interface.id,
-                    argument: self.clone_type(&requirement.argument.ty)?,
-                    origin: Origin::Source(requirement.span),
-                    span: requirement.span,
+                    application: self
+                        .clone_resolved_interface_application(&requirement.application)?,
+                    origin: Origin::Source(requirement.application.span),
+                    span: requirement.application.span,
                 });
             }
             let body = match &definition.kind {
@@ -2753,7 +2866,10 @@ impl Elaborator {
         result
     }
 
-    fn enter_global_evidence_scope(&mut self, binder: BinderId) -> Result<usize, TypeError> {
+    fn enter_global_evidence_scope(
+        &mut self,
+        binder: BinderId,
+    ) -> Result<PendingObligationMarker, TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck {
             return Err(invalid_state());
         }
@@ -2767,7 +2883,7 @@ impl Elaborator {
     fn enter_implementation_evidence_scope(
         &mut self,
         implementation: ImplId,
-    ) -> Result<usize, TypeError> {
+    ) -> Result<PendingObligationMarker, TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck {
             return Err(invalid_state());
         }
@@ -2782,7 +2898,7 @@ impl Elaborator {
         Ok(selector.pending_marker())
     }
 
-    fn evidence_marker(&self) -> Result<usize, TypeError> {
+    fn evidence_marker(&self) -> Result<PendingObligationMarker, TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck {
             return Err(invalid_state());
         }
@@ -2804,17 +2920,71 @@ impl Elaborator {
         Ok(())
     }
 
-    fn close_evidence_obligations(&mut self, marker: usize) -> Result<(), TypeError> {
+    fn close_evidence_obligations(
+        &mut self,
+        marker: PendingObligationMarker,
+    ) -> Result<(), TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck {
             return Err(invalid_state());
         }
         let mut selector = self.selection.take().ok_or_else(invalid_state)?;
+        let mut snapshot = {
+            let solutions = &self.inference_solutions;
+            let inference_variables = &self.inference_variables;
+            let authenticated_solutions = &self.authenticated_inference_solutions;
+            selector
+                .prepare_determination_snapshot(
+                    &self.registry,
+                    marker,
+                    |argument, type_work| {
+                        let zonked =
+                            zonk_type_with_status_and_inference(&argument, solutions, |work| {
+                                match work {
+                                    ZonkWork::TypeCells(cells) => type_work
+                                        .charge(cells)
+                                        .map_err(|()| SelectionFailure::TypeResource),
+                                    ZonkWork::Inference(identity) => {
+                                        authenticate_zonk_inference_occurrence(
+                                            identity,
+                                            inference_variables,
+                                            solutions,
+                                            authenticated_solutions,
+                                            type_work,
+                                        )
+                                        .map_err(
+                                            |failure| match failure {
+                                                UnificationFailure::Resource => {
+                                                    SelectionFailure::TypeResource
+                                                }
+                                                UnificationFailure::Mismatch
+                                                | UnificationFailure::Infinite
+                                                | UnificationFailure::Invariant => {
+                                                    SelectionFailure::InvalidState
+                                                }
+                                            },
+                                        )
+                                    }
+                                }
+                            });
+                        discard_type_iteratively(argument);
+                        zonked.map(|(ty, _)| ty)
+                    },
+                    &mut self.constraint_work,
+                    &mut self.type_work,
+                )
+                .map_err(|failure| selection_failure(failure, None))?
+        };
+        if let Err(error) = self.apply_improvement_tasks(snapshot.take_tasks()) {
+            self.selection = Some(selector);
+            return Err(error);
+        }
         let solutions = &self.inference_solutions;
         let inference_variables = &self.inference_variables;
         let authenticated_solutions = &self.authenticated_inference_solutions;
-        let result = selector.close_with_registry(
+        let result = selector.close_with_snapshot_and_registry(
             &self.registry,
             marker,
+            &snapshot,
             |argument, type_work| {
                 let zonked =
                     zonk_type_with_status_and_inference(&argument, solutions, |work| match work {
@@ -2857,21 +3027,124 @@ impl Elaborator {
         Ok(())
     }
 
+    fn apply_improvement_tasks(
+        &mut self,
+        tasks: impl IntoIterator<Item = ImprovementTask>,
+    ) -> Result<(), TypeError> {
+        for task in tasks {
+            let (key, expected, actual, obligation_span, source_span) = task.into_parts();
+            let key = IterativeTypeOwner::new(Type::Tuple(key));
+            let expected = IterativeTypeOwner::new(Type::Tuple(expected));
+            let actual = IterativeTypeOwner::new(Type::Tuple(actual));
+            match self.unify(&expected, &actual) {
+                Ok(()) => {}
+                Err(UnificationFailure::Resource) => {
+                    return Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted,
+                    ));
+                }
+                Err(UnificationFailure::Invariant) => return Err(invalid_state()),
+                Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
+                    let key = IterativeTypeOwner::new(self.zonk(&key)?);
+                    let expected = IterativeTypeOwner::new(self.zonk(&expected)?);
+                    let actual = IterativeTypeOwner::new(self.zonk(&actual)?);
+                    self.constraint_work
+                        .charge(3)
+                        .map_err(|()| constraint_resource())?;
+                    let mut diagnostic = Diagnostic::new(
+                        InterfaceReason::DeterminationConflict,
+                        SourceLabel::new(
+                            obligation_span,
+                            "this dependent tuple conflicts with the tuple determined by the known key",
+                        ),
+                    );
+                    retain_interface_label(
+                        &mut diagnostic,
+                        source_span,
+                        "this source determines the expected dependent tuple",
+                        &mut self.constraint_work,
+                    )?;
+                    diagnostic.expected = Some(self.registry.display_source_type(&expected));
+                    diagnostic.found = Some(self.registry.display_source_type(&actual));
+                    diagnostic.help = Some(format!(
+                        "the known determinant key is {}",
+                        self.registry.display_source_type(&key)
+                    ));
+                    return Err(TypeError::Interface(Box::new(diagnostic)));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn close_method_rigidity_for_failed_body(
         &mut self,
-        marker: usize,
+        marker: PendingObligationMarker,
         failure_span: Span,
     ) -> Result<bool, TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck {
             return Err(invalid_state());
         }
         let mut selector = self.selection.take().ok_or_else(invalid_state)?;
+        let mut snapshot = {
+            let solutions = &self.inference_solutions;
+            let inference_variables = &self.inference_variables;
+            let authenticated_solutions = &self.authenticated_inference_solutions;
+            selector
+                .prepare_method_rigidity_determination(
+                    &self.registry,
+                    MethodRigidityTarget::new(marker, failure_span),
+                    |argument, type_work| {
+                        let zonked =
+                            zonk_type_with_status_and_inference(&argument, solutions, |work| {
+                                match work {
+                                    ZonkWork::TypeCells(cells) => type_work
+                                        .charge(cells)
+                                        .map_err(|()| SelectionFailure::TypeResource),
+                                    ZonkWork::Inference(identity) => {
+                                        authenticate_zonk_inference_occurrence(
+                                            identity,
+                                            inference_variables,
+                                            solutions,
+                                            authenticated_solutions,
+                                            type_work,
+                                        )
+                                        .map_err(
+                                            |failure| match failure {
+                                                UnificationFailure::Resource => {
+                                                    SelectionFailure::TypeResource
+                                                }
+                                                UnificationFailure::Mismatch
+                                                | UnificationFailure::Infinite
+                                                | UnificationFailure::Invariant => {
+                                                    SelectionFailure::InvalidState
+                                                }
+                                            },
+                                        )
+                                    }
+                                }
+                            });
+                        discard_type_iteratively(argument);
+                        zonked.map(|(ty, _)| ty)
+                    },
+                    &mut self.constraint_work,
+                    &mut self.type_work,
+                )
+                .map_err(|failure| selection_failure(failure, None))?
+        };
+        if let Some(task) = snapshot.take_task()
+            && let Err(error) = self.apply_improvement_tasks(std::iter::once(task))
+        {
+            self.selection = Some(selector);
+            return Err(error);
+        }
         let solutions = &self.inference_solutions;
         let inference_variables = &self.inference_variables;
         let authenticated_solutions = &self.authenticated_inference_solutions;
-        let result = selector.close_method_rigidity_with_registry(
+        let result = selector.close_method_rigidity_with_snapshot_and_registry(
             &self.registry,
             MethodRigidityTarget::new(marker, failure_span),
+            &snapshot,
             |argument, type_work| {
                 let zonked =
                     zonk_type_with_status_and_inference(&argument, solutions, |work| match work {
@@ -3073,21 +3346,40 @@ impl Elaborator {
                 if index >= requirement_count {
                     return Err(invalid_state());
                 }
-                let (interface, argument) = {
+                let application = {
                     let scheme = selector.scheme(binder).ok_or_else(invalid_state)?;
                     let requirement = scheme.requirements.get(index).ok_or_else(invalid_state)?;
-                    let argument = substitute_type_variables_with(
-                        &requirement.argument,
-                        replacements.as_map(),
-                        |cells| self.type_work.charge(cells),
+                    self.type_work
+                        .charge(requirement.arguments().len())
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                    let mut application_arguments = OwnedTypeBuffer(Vec::new());
+                    application_arguments
+                        .try_reserve(requirement.arguments().len())
+                        .map_err(|_| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                    for argument in requirement.arguments() {
+                        application_arguments.push(
+                            substitute_type_variables_with(
+                                argument,
+                                replacements.as_map(),
+                                |cells| self.type_work.charge(cells),
+                            )
+                            .map_err(|()| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?,
+                        );
+                    }
+                    InterfaceApplication::new(
+                        requirement.interface(),
+                        application_arguments.into_boxed_slice(),
                     )
-                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                    (requirement.interface, argument)
                 };
                 selector
                     .push_owned_obligation(
-                        interface,
-                        argument,
+                        application,
                         SelectionSite::contextual(
                             slot.handle(),
                             span,
@@ -3118,10 +3410,8 @@ impl Elaborator {
         let result = (|| {
             let method_fact = selector.method(method).ok_or_else(invalid_state)?;
             let interface = method_fact.interface();
-            let parameter = method_fact.interface_parameter();
             let (fact_parameters, scheme_parameters) = retain_method_occurrence_parameters(
-                parameter,
-                method_fact.interface_parameter_kind(),
+                method_fact.interface_parameters(),
                 method_fact.type_parameters(),
                 &mut self.type_work,
             )
@@ -3136,9 +3426,26 @@ impl Elaborator {
             let (ty, arguments) = self.instantiate(&fact, false, span)?;
             let ty = IterativeTypeOwner::new(ty);
             let arguments = OwnedTypeBuffer(arguments);
-            let Some((argument, method_arguments)) = arguments.as_slice().split_first() else {
+            let interface_parameter_count = method_fact.interface_parameters().len();
+            if interface_parameter_count == 0 || arguments.len() < interface_parameter_count {
                 return Err(invalid_state());
-            };
+            }
+            let (interface_arguments, method_arguments) =
+                arguments.as_slice().split_at(interface_parameter_count);
+            let mut retained_interface_arguments = OwnedTypeBuffer(Vec::new());
+            self.type_work
+                .charge(interface_arguments.len())
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            retained_interface_arguments
+                .try_reserve(interface_arguments.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            for argument in interface_arguments {
+                retained_interface_arguments.push(self.clone_type(argument)?);
+            }
+            let application = InterfaceApplication::new(
+                interface,
+                retained_interface_arguments.into_boxed_slice(),
+            );
             let mut retained_method_arguments = Vec::new();
             self.type_work
                 .charge(method_arguments.len())
@@ -3189,8 +3496,7 @@ impl Elaborator {
             let method_rigidity = method_rigidity?;
             selector
                 .push_cloned_obligation(
-                    interface,
-                    argument,
+                    &application,
                     MethodObligationMetadata::new(
                         method,
                         retained_method_arguments.into_boxed_slice(),
@@ -3340,13 +3646,16 @@ impl Elaborator {
                     occurrence.origin.clone(),
                 )?;
                 if let Some((requirement, binder)) = authentication {
-                    let interface_argument = self.clone_type(selection.argument())?;
+                    let application = InterfaceApplication::new(
+                        selection.interface(),
+                        self.clone_types(selection.arguments())?,
+                    );
                     self.builder.authenticate_method_evidence(
                         node,
                         None,
                         requirement,
                         method,
-                        interface_argument,
+                        application,
                         MethodEvidenceAnchorRole::Instantiation { binder },
                         Some(slot.storage_id()),
                     )?;
@@ -3400,7 +3709,9 @@ impl Elaborator {
                     requirement.owner,
                     requirement.id,
                     method.method,
-                    clone_type_with_budget(&method.interface_argument, &mut self.type_work)
+                    method
+                        .application
+                        .clone_with_budget(&mut self.type_work)
                         .map_err(|()| {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                         })?,
@@ -3446,7 +3757,9 @@ impl Elaborator {
                     requirement.owner,
                     requirement.id,
                     method.method,
-                    clone_type_with_budget(&method.interface_argument, &mut self.type_work)
+                    method
+                        .application
+                        .clone_with_budget(&mut self.type_work)
                         .map_err(|()| {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                         })?,
@@ -3504,8 +3817,7 @@ impl Elaborator {
         staged_active
             .try_reserve(specifications.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        for (owner, requirement, method, interface_argument, ty) in specifications.into_sequence() {
-            let interface_argument = IterativeTypeOwner::new(interface_argument);
+        for (owner, requirement, method, application, ty) in specifications.into_sequence() {
             let ty = IterativeTypeOwner::new(ty);
             let binder_ty = self.clone_type(&ty)?;
             let binder = self.builder.binder(
@@ -3517,7 +3829,9 @@ impl Elaborator {
             )?;
             let active = ActiveEvidenceBinder {
                 binder: binder.id(),
-                interface_argument: self.clone_type(&interface_argument)?,
+                application: application
+                    .clone_with_budget(&mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
                 ty: ty.into_inner(),
             };
             if staged_active
@@ -3530,7 +3844,7 @@ impl Elaborator {
                 owner,
                 requirement,
                 method,
-                interface_argument,
+                application,
                 binder,
             });
         }
@@ -3554,7 +3868,7 @@ impl Elaborator {
                 owner,
                 requirement,
                 method,
-                interface_argument,
+                application,
                 binder,
             } = scoped;
             let active = self
@@ -3570,13 +3884,11 @@ impl Elaborator {
             {
                 return Err(invalid_state());
             }
-            if !same_type_with_budget(
-                &active.interface_argument,
-                &interface_argument,
+            if !same_interface_application_with_budget(
+                &active.application,
+                &application,
                 &mut self.type_work,
-            )
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
-            {
+            )? {
                 return Err(invalid_state());
             }
             let is_polymorphic = matches!(binder.ty(), Type::Forall(_, _));
@@ -3603,12 +3915,12 @@ impl Elaborator {
                     Some(owner),
                     Some(requirement),
                     method,
-                    interface_argument.into_inner(),
+                    application,
                     MethodEvidenceAnchorRole::Domain { binder: binder_id },
                     None,
                 )?;
             } else {
-                drop(interface_argument);
+                drop(application);
             }
             function.set_node(node);
             function.replace_type(ty.into_inner());
@@ -3722,6 +4034,179 @@ impl Elaborator {
         .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
     }
 
+    fn instantiate_lowered_source_application(
+        &mut self,
+        parameters: &[(TypeVariableId, Kind)],
+        application: &InterfaceApplication,
+        arguments: &[Type],
+    ) -> Result<InterfaceApplication, TypeError> {
+        self.type_work
+            .charge(application.arguments().len())
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut instantiated = OwnedTypeBuffer(Vec::new());
+        instantiated
+            .try_reserve(application.arguments().len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for ty in application.arguments() {
+            instantiated.push(self.instantiate_lowered_source_type(parameters, ty, arguments)?);
+        }
+        Ok(InterfaceApplication::new(
+            application.interface(),
+            instantiated.into_boxed_slice(),
+        ))
+    }
+
+    fn replay_lowered_global_determination(
+        &mut self,
+        scheme: &LoweredScheme,
+        arguments: &[Type],
+        occurrence: &crate::resolved::ResolvedOccurrence,
+        lowering: &EvidenceLowering,
+    ) -> Result<(), TypeError> {
+        if occurrence.evidence.len() != scheme.requirements.len() {
+            return Err(invalid_state());
+        }
+        for (requirement, slot) in scheme.requirements.iter().zip(&occurrence.evidence) {
+            let source_application = requirement
+                .methods
+                .first()
+                .map(|method| &method.application)
+                .ok_or_else(invalid_state)?;
+            let lowered_interface = lowering
+                .interfaces
+                .get(&source_application.interface())
+                .ok_or_else(invalid_state)?;
+            let Some(determination) = lowered_interface.determination.as_deref() else {
+                continue;
+            };
+            let (checked_application, _) = slot.filled().ok_or_else(invalid_state)?;
+            let instantiated = self.instantiate_lowered_source_application(
+                scheme.binder_parameters(),
+                source_application,
+                arguments,
+            )?;
+            if checked_application.interface() != instantiated.interface()
+                || checked_application.arguments().len() != instantiated.arguments().len()
+            {
+                return Err(invalid_state());
+            }
+            let mut previous = None;
+            for &position in determination {
+                self.constraint_work
+                    .charge(1)
+                    .map_err(|()| constraint_resource())?;
+                if position >= instantiated.arguments().len()
+                    || previous.is_some_and(|previous| previous >= position)
+                {
+                    return Err(invalid_state());
+                }
+                previous = Some(position);
+            }
+            let dependent_count = instantiated
+                .arguments()
+                .len()
+                .checked_sub(determination.len())
+                .ok_or_else(invalid_state)?;
+            let dependent_storage_work = dependent_count
+                .checked_mul(2)
+                .and_then(|work| work.checked_add(1))
+                .ok_or_else(constraint_resource)?;
+            self.constraint_work
+                .charge(dependent_storage_work)
+                .map_err(|()| constraint_resource())?;
+            let mut expected = OwnedTypeBuffer(Vec::new());
+            let mut found = OwnedTypeBuffer(Vec::new());
+            expected
+                .try_reserve(dependent_count)
+                .map_err(|_| constraint_resource())?;
+            found
+                .try_reserve(dependent_count)
+                .map_err(|_| constraint_resource())?;
+            let mut next_key = determination.iter().copied().peekable();
+            for (position, (instantiated, checked)) in instantiated
+                .arguments()
+                .iter()
+                .zip(checked_application.arguments())
+                .enumerate()
+            {
+                if next_key.peek() == Some(&position) {
+                    next_key.next();
+                    continue;
+                }
+                expected.push(self.clone_type(instantiated)?);
+                found.push(self.clone_type(checked)?);
+            }
+            if next_key.next().is_some() || expected.len() != dependent_count {
+                return Err(invalid_state());
+            }
+            let expected = IterativeTypeOwner::new(Type::Tuple(expected.into_boxed_slice()));
+            let found = IterativeTypeOwner::new(Type::Tuple(found.into_boxed_slice()));
+            match self.unify(&expected, &found) {
+                Ok(()) => {}
+                Err(
+                    UnificationFailure::Mismatch
+                    | UnificationFailure::Infinite
+                    | UnificationFailure::Invariant,
+                ) => {
+                    return Err(invalid_state());
+                }
+                Err(UnificationFailure::Resource) => {
+                    return Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted,
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn unify_interface_applications(
+        &mut self,
+        expected: &InterfaceApplication,
+        actual: &InterfaceApplication,
+    ) -> Result<(), TypeError> {
+        if expected.interface() != actual.interface()
+            || expected.arguments().len() != actual.arguments().len()
+        {
+            return Err(invalid_state());
+        }
+        for (expected, actual) in expected.arguments().iter().zip(actual.arguments()) {
+            match self.unify(expected, actual) {
+                Ok(()) => {}
+                Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
+                    return Err(invalid_state());
+                }
+                Err(UnificationFailure::Resource) => {
+                    return Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted,
+                    ));
+                }
+                Err(UnificationFailure::Invariant) => return Err(invalid_state()),
+            }
+        }
+        Ok(())
+    }
+
+    fn zonk_interface_application(
+        &mut self,
+        application: &InterfaceApplication,
+    ) -> Result<InterfaceApplication, TypeError> {
+        self.type_work
+            .charge(application.arguments().len())
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut arguments = OwnedTypeBuffer(Vec::new());
+        arguments
+            .try_reserve(application.arguments().len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for argument in application.arguments() {
+            arguments.push(self.zonk(argument)?);
+        }
+        Ok(InterfaceApplication::new(
+            application.interface(),
+            arguments.into_boxed_slice(),
+        ))
+    }
+
     #[allow(
         clippy::too_many_arguments,
         reason = "the authenticated adapter edge is checked field-for-field"
@@ -3733,7 +4218,7 @@ impl Elaborator {
         target_owner: MethodEvidenceOwner,
         target_requirement: RequirementId,
         target: &LoweredRequirementMethod,
-        target_interface_argument: &Type,
+        target_application: &InterfaceApplication,
         canonical_method: &LoweredInterfaceMethod,
         adapter_edge: Option<(ImplMethodId, crate::interface::EvidenceNodeId, usize)>,
         origin: &Origin,
@@ -3747,22 +4232,10 @@ impl Elaborator {
         if polymorphic {
             let producer_matches = match argument.producer {
                 PolymorphicEvidenceProducer::Abstract { .. } => {
-                    let Some(interface_argument) = argument.adapter_interface_argument.as_ref()
-                    else {
+                    let Some(application) = argument.adapter_application.as_ref() else {
                         return Err(invalid_state());
                     };
-                    match self.unify(target_interface_argument, interface_argument) {
-                        Ok(()) => {}
-                        Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
-                            return Err(invalid_state());
-                        }
-                        Err(UnificationFailure::Resource) => {
-                            return Err(TypeError::Internal(
-                                ElaborationFailure::TypeResourceExhausted,
-                            ));
-                        }
-                        Err(UnificationFailure::Invariant) => return Err(invalid_state()),
-                    }
+                    self.unify_interface_applications(target_application, application)?;
                     let current_domain = IterativeTypeOwner::new(self.zonk(domain)?);
                     same_type_with_budget(&current_domain, &argument.ty, &mut self.type_work)
                         .map_err(|()| {
@@ -3770,22 +4243,10 @@ impl Elaborator {
                         })?
                 }
                 PolymorphicEvidenceProducer::Adapter { implementation, .. } => {
-                    let Some(interface_argument) = argument.adapter_interface_argument.as_ref()
-                    else {
+                    let Some(application) = argument.adapter_application.as_ref() else {
                         return Err(invalid_state());
                     };
-                    match self.unify(target_interface_argument, interface_argument) {
-                        Ok(()) => {}
-                        Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
-                            return Err(invalid_state());
-                        }
-                        Err(UnificationFailure::Resource) => {
-                            return Err(TypeError::Internal(
-                                ElaborationFailure::TypeResourceExhausted,
-                            ));
-                        }
-                        Err(UnificationFailure::Invariant) => return Err(invalid_state()),
-                    }
+                    self.unify_interface_applications(target_application, application)?;
                     let current_domain = IterativeTypeOwner::new(self.zonk(domain)?);
                     implementation.method() == target.method
                         && self.authenticated_adapter_scheme_matches(
@@ -3821,7 +4282,7 @@ impl Elaborator {
             self.builder
                 .application(function.node, argument.node, core_ty, origin.clone())?;
         if polymorphic || adapter_edge.is_some() {
-            let interface_argument = self.zonk(target_interface_argument)?;
+            let application = self.zonk_interface_application(target_application)?;
             let (producer, producer_selection_node, producer_binder) = match argument.producer {
                 PolymorphicEvidenceProducer::Abstract {
                     requirement,
@@ -3860,7 +4321,7 @@ impl Elaborator {
                 Some(target_owner),
                 Some(target_requirement),
                 target.method,
-                interface_argument,
+                application,
                 role,
                 Some(occurrence),
             )?;
@@ -4100,8 +4561,15 @@ impl Elaborator {
                                         selection_node: node,
                                         binder: active.binder,
                                     },
-                                    adapter_interface_argument: Some(
-                                        self.clone_type(&active.interface_argument)?,
+                                    adapter_application: Some(
+                                        active
+                                            .application
+                                            .clone_with_budget(&mut self.type_work)
+                                            .map_err(|()| {
+                                            TypeError::Internal(
+                                                ElaborationFailure::TypeResourceExhausted,
+                                            )
+                                        })?,
                                     ),
                                     ty: ty.into_inner(),
                                 });
@@ -4272,13 +4740,12 @@ impl Elaborator {
                                     for (argument, target_method) in
                                         prerequisite_methods.iter().zip(&target_requirement.methods)
                                     {
-                                        let target_interface_argument = IterativeTypeOwner::new(
-                                            self.instantiate_lowered_source_type(
+                                        let target_application = self
+                                            .instantiate_lowered_source_application(
                                                 source_parameters,
-                                                &target_method.interface_argument,
+                                                &target_method.application,
                                                 &current_arguments,
-                                            )?,
-                                        );
+                                            )?;
                                         let canonical_method = lowering
                                             .interface_methods
                                             .get(&target_method.method)
@@ -4290,7 +4757,7 @@ impl Elaborator {
                                                 target_requirement.owner,
                                                 target_requirement.id,
                                                 target_method,
-                                                &target_interface_argument,
+                                                &target_application,
                                                 canonical_method,
                                                 (!interface_method.type_parameters.is_empty())
                                                     .then_some((
@@ -4307,12 +4774,12 @@ impl Elaborator {
                                             .ok_or_else(invalid_state)?;
                                     }
                                 }
-                                let adapter_interface_argument =
+                                let adapter_application =
                                     (!interface_method.type_parameters.is_empty())
                                         .then(|| {
-                                            self.instantiate_lowered_source_type(
+                                            self.instantiate_lowered_source_application(
                                                 source_parameters,
-                                                &lowered.interface_argument,
+                                                &lowered.application,
                                                 &current_arguments,
                                             )
                                         })
@@ -4345,17 +4812,21 @@ impl Elaborator {
                                         abstraction_type,
                                         origin.clone(),
                                     )?;
-                                    let interface_argument = self.clone_type(
-                                        adapter_interface_argument
-                                            .as_ref()
-                                            .ok_or_else(invalid_state)?,
-                                    )?;
+                                    let application = adapter_application
+                                        .as_ref()
+                                        .ok_or_else(invalid_state)?
+                                        .clone_with_budget(&mut self.type_work)
+                                        .map_err(|()| {
+                                            TypeError::Internal(
+                                                ElaborationFailure::TypeResourceExhausted,
+                                            )
+                                        })?;
                                     self.builder.authenticate_method_evidence(
                                         abstraction,
                                         None,
                                         None,
                                         method.method(),
-                                        interface_argument,
+                                        application,
                                         MethodEvidenceAnchorRole::Adapter {
                                             implementation: *method,
                                             selection_node: node,
@@ -4373,7 +4844,7 @@ impl Elaborator {
                                         implementation: *method,
                                         selection_node: node,
                                     },
-                                    adapter_interface_argument,
+                                    adapter_application,
                                     ty: current.ty,
                                 });
                             }
@@ -4438,6 +4909,20 @@ impl Elaborator {
     fn clone_type(&mut self, ty: &Type) -> Result<Type, TypeError> {
         clone_type_with_budget(ty, &mut self.type_work)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+    }
+
+    fn clone_types(&mut self, types: &[Type]) -> Result<Box<[Type]>, TypeError> {
+        self.type_work
+            .charge(types.len())
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut cloned = OwnedTypeBuffer(Vec::new());
+        cloned
+            .try_reserve(types.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for ty in types {
+            cloned.push(self.clone_type(ty)?);
+        }
+        Ok(cloned.into_boxed_slice())
     }
 
     fn unknown_provenance(&mut self, ty: &Type) -> Result<TypeProvenance, TypeError> {
@@ -5200,17 +5685,16 @@ impl Elaborator {
                 .builder
                 .requires_method_evidence_implementation_owner(fact.id)?
             {
-                let interface_argument =
-                    clone_type_with_budget(&lowered.interface_argument, &mut self.type_work)
-                        .map_err(|()| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
+                let application = lowered
+                    .application
+                    .clone_with_budget(&mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 self.builder.authenticate_method_evidence(
                     function.node,
                     Some(MethodEvidenceOwner::Implementation(fact.id)),
                     None,
                     fact.id.method(),
-                    interface_argument,
+                    application,
                     MethodEvidenceAnchorRole::ImplementationOwner {
                         implementation: fact.id,
                         binder: fact.binder,
@@ -5243,17 +5727,16 @@ impl Elaborator {
                 .builder
                 .requires_method_evidence_implementation_owner(fact.id)?
             {
-                let interface_argument =
-                    clone_type_with_budget(&lowered.interface_argument, &mut self.type_work)
-                        .map_err(|()| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
+                let application = lowered
+                    .application
+                    .clone_with_budget(&mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 self.builder.authenticate_method_evidence(
                     node,
                     Some(MethodEvidenceOwner::Implementation(fact.id)),
                     None,
                     fact.id.method(),
-                    interface_argument,
+                    application,
                     MethodEvidenceAnchorRole::ImplementationOwner {
                         implementation: fact.id,
                         binder: fact.binder,
@@ -5408,8 +5891,13 @@ impl Elaborator {
                     && checked.scheme.requirements.iter().zip(requirements).all(
                         |(checked, resolved)| {
                             checked.id == resolved.id
-                                && checked.interface == resolved.interface.id
-                                && same_type(&checked.argument, &resolved.argument.ty)
+                                && checked.interface() == resolved.application.interface.id
+                                && checked.arguments().len() == resolved.application.arguments.len()
+                                && checked
+                                    .arguments()
+                                    .iter()
+                                    .zip(&resolved.application.arguments)
+                                    .all(|(checked, resolved)| same_type(checked, &resolved.ty))
                         },
                     );
                 if checked.spelling != name.spelling
@@ -5830,6 +6318,12 @@ impl Elaborator {
                                     for argument in arguments.iter() {
                                         current_arguments.push(self.clone_type(argument)?);
                                     }
+                                    self.replay_lowered_global_determination(
+                                        scheme,
+                                        &current_arguments,
+                                        occurrence,
+                                        &lowering,
+                                    )?;
                                     if !arguments.is_empty() {
                                         let core_ty = IterativeTypeOwner::new(
                                             self.instantiate_lowered_core_body(scheme, &arguments)?,
@@ -5878,17 +6372,16 @@ impl Elaborator {
                                         for (method, target_method) in
                                             methods.iter().zip(&target_requirement.methods)
                                         {
-                                            let target_interface_argument = IterativeTypeOwner::new(
-                                                self.instantiate_lowered_source_type(
+                                            let target_application = self
+                                                .instantiate_lowered_source_application(
                                                     lowering
                                                         .global_schemes
                                                         .get(&binder)
                                                         .ok_or_else(invalid_state)?
                                                         .binder_parameters(),
-                                                    &target_method.interface_argument,
+                                                    &target_method.application,
                                                     &current_arguments,
-                                                )?,
-                                            );
+                                                )?;
                                             let canonical_method = lowering
                                                 .interface_methods
                                                 .get(&target_method.method)
@@ -5900,7 +6393,7 @@ impl Elaborator {
                                                     target_requirement.owner,
                                                     target_requirement.id,
                                                     target_method,
-                                                    &target_interface_argument,
+                                                    &target_application,
                                                     canonical_method,
                                                     None,
                                                     &occurrence.origin,
@@ -8116,6 +8609,7 @@ fn check_interface_declarations(
     module: &ResolvedModule,
     budget: &mut InterfaceConstraintBudget,
 ) -> Result<Box<[CheckedInterface]>, TypeError> {
+    preflight_application_arities(module, budget)?;
     budget
         .charge(module.interfaces().len())
         .map_err(|()| constraint_resource())?;
@@ -8125,16 +8619,53 @@ fn check_interface_declarations(
         .map_err(|_| constraint_resource())?;
     for (source_index, interface) in module.interfaces().iter().enumerate() {
         budget.charge(1).map_err(|()| constraint_resource())?;
+        if interface.parameters.is_empty() {
+            return Err(invalid_state());
+        }
+        let determination = match &interface.determination {
+            Some(source) => Some(check_determination_key(interface, source, budget)?),
+            None => None,
+        };
+        checked.push(CheckedInterface::new(
+            source_index,
+            interface.id,
+            determination,
+        ));
+    }
+
+    for (interface, checked_interface) in module.interfaces().iter().zip(&checked) {
+        let determinant_positions = checked_interface.determinant_positions();
         for method in &interface.methods {
             budget
                 .charge(method.type_parameters.len().saturating_add(1))
                 .map_err(|()| constraint_resource())?;
-            let parameter_occurs =
-                type_contains_variable(&method.annotation.ty, interface.parameter.id, budget)
-                    .map_err(|()| constraint_resource())?;
-            if (!method.has_explicit_type_parameters && !method.type_parameters.is_empty())
-                || !parameter_occurs
-            {
+            let invalid_binder_state =
+                !method.has_explicit_type_parameters && !method.type_parameters.is_empty();
+            let mut missing_parameter = None;
+            if let Some(positions) = determinant_positions {
+                for position in positions {
+                    let parameter = interface
+                        .parameters
+                        .get(*position)
+                        .ok_or_else(invalid_state)?;
+                    if !type_contains_variable(&method.annotation.ty, parameter.id, budget)
+                        .map_err(|()| constraint_resource())?
+                    {
+                        missing_parameter = Some(parameter);
+                        break;
+                    }
+                }
+            } else {
+                for parameter in &interface.parameters {
+                    if !type_contains_variable(&method.annotation.ty, parameter.id, budget)
+                        .map_err(|()| constraint_resource())?
+                    {
+                        missing_parameter = Some(parameter);
+                        break;
+                    }
+                }
+            }
+            if invalid_binder_state || missing_parameter.is_some() {
                 let mut diagnostic = Diagnostic::new(
                     InterfaceReason::MethodParameter,
                     SourceLabel::new(
@@ -8143,7 +8674,16 @@ fn check_interface_declarations(
                     ),
                 );
                 diagnostic.related.push(SourceLabel::new(
-                    interface.parameter.origin.primary_span(),
+                    missing_parameter
+                        .or_else(|| {
+                            determinant_positions
+                                .and_then(|positions| positions.first())
+                                .and_then(|position| interface.parameters.get(*position))
+                        })
+                        .or_else(|| interface.parameters.first())
+                        .ok_or_else(invalid_state)?
+                        .origin
+                        .primary_span(),
                     "the interface parameter is declared here",
                 ));
                 return Err(TypeError::Interface(Box::new(diagnostic)));
@@ -8163,12 +8703,301 @@ fn check_interface_declarations(
                 return Err(TypeError::Interface(Box::new(diagnostic)));
             }
         }
-        checked.push(CheckedInterface {
-            source_index,
-            id: interface.id,
-        });
     }
     Ok(checked.into_boxed_slice())
+}
+
+fn preflight_application_arities(
+    module: &ResolvedModule,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), TypeError> {
+    if module.definitions().is_empty() && module.implementations().is_empty() {
+        return Ok(());
+    }
+    let interface_count = module
+        .interfaces()
+        .len()
+        .checked_add(module.imported_facts().interface_imports().count())
+        .ok_or_else(constraint_resource)?;
+    budget
+        .charge(interface_count)
+        .map_err(|()| constraint_resource())?;
+    let mut interfaces = HashMap::new();
+    interfaces
+        .try_reserve(interface_count)
+        .map_err(|_| constraint_resource())?;
+    for interface in module.interfaces() {
+        if interfaces
+            .insert(interface.id, (interface.parameters.len(), interface.span))
+            .is_some()
+        {
+            return Err(invalid_state());
+        }
+    }
+    for imported in module.imported_facts().interface_imports() {
+        if interfaces
+            .insert(
+                imported.fact.id,
+                (imported.fact.parameters.len(), imported.fact.span),
+            )
+            .is_some()
+        {
+            return Err(invalid_state());
+        }
+    }
+
+    let check = |application: &crate::resolved::ResolvedInterfaceApplication,
+                 budget: &mut InterfaceConstraintBudget| {
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        let (expected, declaration_span) = interfaces
+            .get(&application.interface.id)
+            .copied()
+            .ok_or_else(invalid_state)?;
+        check_application_arity_parts(
+            expected,
+            declaration_span,
+            application.arguments.len(),
+            application.span,
+        )
+    };
+    for declaration in module.declaration_order() {
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        match *declaration {
+            ResolvedDeclarationIndex::Type(_) | ResolvedDeclarationIndex::Interface(_) => {}
+            ResolvedDeclarationIndex::Global(index) => {
+                let definition = module.definitions().get(index).ok_or_else(invalid_state)?;
+                let requirements = match &definition.kind {
+                    ResolvedDefinitionKind::Equational(global) => &global.interface.requirements,
+                    ResolvedDefinitionKind::InlineOperational(global) => {
+                        &global.header.requirements
+                    }
+                };
+                for requirement in requirements.iter() {
+                    check(&requirement.application, budget)?;
+                }
+            }
+            ResolvedDeclarationIndex::Implementation(index) => {
+                let implementation = module
+                    .implementations()
+                    .get(index)
+                    .ok_or_else(invalid_state)?;
+                check(&implementation.head, budget)?;
+                for prerequisite in &implementation.prerequisites {
+                    check(&prerequisite.application, budget)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_determination_key(
+    interface: &crate::resolved::ResolvedInterfaceDeclaration,
+    determination: &crate::resolved::ResolvedInterfaceDetermination,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<DeterminationKey, TypeError> {
+    let structurally_total = crate::resolved::resolved_determination_is_total(
+        &interface.parameters,
+        determination,
+        |work| budget.charge(work),
+    )
+    .map_err(|()| constraint_resource())?;
+    if determination.determinant.parameters.is_empty() {
+        return Err(determination_parameter_error(
+            determination.determinant.span,
+            "the determinant key must contain an interface parameter",
+            interface.parameters.first().map(|parameter| {
+                (
+                    parameter.origin.primary_span(),
+                    "an interface parameter is declared here",
+                )
+            }),
+            budget,
+        )?);
+    }
+    if determination.dependent.parameters.is_empty() {
+        return Err(determination_parameter_error(
+            determination.dependent.span,
+            "the dependent complement must contain an interface parameter",
+            interface.parameters.first().map(|parameter| {
+                (
+                    parameter.origin.primary_span(),
+                    "an interface parameter is declared here",
+                )
+            }),
+            budget,
+        )?);
+    }
+
+    let occurrence_count = determination
+        .determinant
+        .parameters
+        .len()
+        .checked_add(determination.dependent.parameters.len())
+        .ok_or_else(constraint_resource)?;
+    budget
+        .charge(occurrence_count)
+        .map_err(|()| constraint_resource())?;
+    let determinant_positions =
+        determination_side_positions(&determination.determinant, &interface.parameters, budget)?;
+    let dependent_positions =
+        determination_side_positions(&determination.dependent, &interface.parameters, budget)?;
+
+    let mut determinant_index = 0;
+    let mut dependent_index = 0;
+    while determinant_index < determinant_positions.len()
+        && dependent_index < dependent_positions.len()
+    {
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        let determinant_position = determinant_positions[determinant_index];
+        let dependent_position = dependent_positions[dependent_index];
+        match determinant_position.cmp(&dependent_position) {
+            std::cmp::Ordering::Less => determinant_index += 1,
+            std::cmp::Ordering::Greater => dependent_index += 1,
+            std::cmp::Ordering::Equal => {
+                let dependent = determination
+                    .dependent
+                    .parameters
+                    .get(dependent_index)
+                    .ok_or_else(invalid_state)?;
+                let determinant = determination
+                    .determinant
+                    .parameters
+                    .get(determinant_index)
+                    .ok_or_else(invalid_state)?;
+                return Err(determination_parameter_error(
+                    dependent.origin.primary_span(),
+                    "this parameter occurs on both sides of the determination",
+                    Some((
+                        determinant.origin.primary_span(),
+                        "the determinant occurrence is here",
+                    )),
+                    budget,
+                )?);
+            }
+        }
+    }
+
+    let covered = determinant_positions
+        .len()
+        .checked_add(dependent_positions.len())
+        .ok_or_else(constraint_resource)?;
+    if covered != interface.parameters.len() {
+        let mut determinant_index = 0;
+        let mut dependent_index = 0;
+        let mut missing = None;
+        for (position, parameter) in interface.parameters.iter().enumerate() {
+            budget.charge(1).map_err(|()| constraint_resource())?;
+            if determinant_positions.get(determinant_index) == Some(&position) {
+                determinant_index += 1;
+            } else if dependent_positions.get(dependent_index) == Some(&position) {
+                dependent_index += 1;
+            } else {
+                missing = Some(parameter);
+                break;
+            }
+        }
+        let missing = missing.ok_or_else(invalid_state)?;
+        return Err(determination_parameter_error(
+            determination.span,
+            "this determination does not cover every interface parameter",
+            Some((
+                missing.origin.primary_span(),
+                "this interface parameter is omitted",
+            )),
+            budget,
+        )?);
+    }
+    if !structurally_total {
+        return Err(invalid_state());
+    }
+
+    // This charge owns the checked declaration-position vector separately
+    // from the already retained source occurrences. A failure still disposes
+    // both temporary primitive buffers before checked publication.
+    budget
+        .charge(determinant_positions.len())
+        .map_err(|()| constraint_resource())?;
+    Ok(DeterminationKey::new(
+        determinant_positions.into_boxed_slice(),
+    ))
+}
+
+fn determination_side_positions(
+    side: &crate::resolved::ResolvedDeterminationSide,
+    parameters: &[crate::resolved::ResolvedTypeVariable],
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<Vec<usize>, TypeError> {
+    let mut positions = Vec::new();
+    positions
+        .try_reserve_exact(side.parameters.len())
+        .map_err(|_| constraint_resource())?;
+    let mut next_declaration_position = 0;
+    let mut previous = None;
+    for occurrence in &side.parameters {
+        let mut found = None;
+        while let Some(parameter) = parameters.get(next_declaration_position) {
+            budget.charge(1).map_err(|()| constraint_resource())?;
+            let position = next_declaration_position;
+            next_declaration_position += 1;
+            if parameter.id == occurrence.id {
+                found = Some(position);
+                break;
+            }
+        }
+        let Some(position) = found else {
+            let mut actual = None;
+            for (position, parameter) in parameters.iter().enumerate() {
+                budget.charge(1).map_err(|()| constraint_resource())?;
+                if parameter.id == occurrence.id {
+                    actual = Some(position);
+                    break;
+                }
+            }
+            let actual = actual.ok_or_else(invalid_state)?;
+            let (message, related_message) =
+                if previous.is_some_and(|(previous_position, _)| previous_position == actual) {
+                    (
+                        "this determination parameter is repeated",
+                        "the first occurrence on this side is here",
+                    )
+                } else {
+                    (
+                        "this determination side does not follow interface declaration order",
+                        "the preceding occurrence on this side is here",
+                    )
+                };
+            return Err(determination_parameter_error(
+                occurrence.origin.primary_span(),
+                message,
+                previous.map(
+                    |(_, previous): (usize, &crate::resolved::ResolvedDeterminationParameter)| {
+                        (previous.origin.primary_span(), related_message)
+                    },
+                ),
+                budget,
+            )?);
+        };
+        positions.push(position);
+        previous = Some((position, occurrence));
+    }
+    Ok(positions)
+}
+
+fn determination_parameter_error(
+    primary: Span,
+    message: &'static str,
+    related: Option<(Span, &'static str)>,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<TypeError, TypeError> {
+    let mut diagnostic = Diagnostic::new(
+        InterfaceReason::DeterminationParameter,
+        SourceLabel::new(primary, message),
+    );
+    if let Some((span, message)) = related {
+        retain_interface_label(&mut diagnostic, span, message, budget)?;
+    }
+    Ok(TypeError::Interface(Box::new(diagnostic)))
 }
 
 fn check_global_requirements(
@@ -8194,6 +9023,20 @@ fn check_global_requirements(
         budget
             .charge(value_type_count)
             .map_err(|()| constraint_resource())?;
+        for requirement in requirements.iter() {
+            let interface = checked_interface(
+                module,
+                checked_interfaces,
+                requirement.application.interface.id,
+                budget,
+            )?
+            .ok_or_else(invalid_state)?;
+            check_application_arity(
+                interface,
+                requirement.application.arguments.len(),
+                requirement.application.span,
+            )?;
+        }
         let mut value_types = Vec::new();
         value_types
             .try_reserve(value_type_count)
@@ -8220,7 +9063,7 @@ fn check_global_requirements(
                 let private = checked_interface(
                     module,
                     checked_interfaces,
-                    requirement.interface.id,
+                    requirement.application.interface.id,
                     budget,
                 )?
                 .filter(|interface| !interface.is_public());
@@ -8228,7 +9071,7 @@ fn check_global_requirements(
                     let mut diagnostic = Diagnostic::new(
                         InterfaceReason::ConstraintPrivateInterface,
                         SourceLabel::new(
-                            requirement.span,
+                            requirement.application.span,
                             "a public global cannot expose this private interface",
                         ),
                     );
@@ -8241,44 +9084,117 @@ fn check_global_requirements(
             }
         }
         for (index, requirement) in requirements.iter().enumerate() {
-            budget.charge(1).map_err(|()| constraint_resource())?;
             let mut duplicate = None;
+            let mut determination_conflict = None;
+            let interface = checked_interface(
+                module,
+                checked_interfaces,
+                requirement.application.interface.id,
+                budget,
+            )?
+            .ok_or_else(invalid_state)?;
             for first in &requirements[..index] {
                 budget.charge(1).map_err(|()| constraint_resource())?;
-                if first.interface.id == requirement.interface.id
-                    && same_type_with_constraint_budget(
-                        &first.argument.ty,
-                        &requirement.argument.ty,
-                        budget,
-                    )
-                    .map_err(|()| constraint_resource())?
-                {
+                if first.application.interface.id != requirement.application.interface.id {
+                    continue;
+                }
+                if same_resolved_application_arguments(
+                    &first.application.arguments,
+                    &requirement.application.arguments,
+                    budget,
+                )? {
                     duplicate = Some(first);
+                    break;
+                }
+                if let Some(determination) = interface.determination()
+                    && same_resolved_application_key(
+                        &first.application.arguments,
+                        &requirement.application.arguments,
+                        determination,
+                        budget,
+                    )?
+                {
+                    determination_conflict = Some(first);
                     break;
                 }
             }
             if let Some(first) = duplicate {
                 let mut diagnostic = Diagnostic::new(
                     InterfaceReason::DuplicateRequirement,
-                    SourceLabel::new(requirement.span, "this requirement is already declared"),
+                    SourceLabel::new(
+                        requirement.application.span,
+                        "this requirement is already declared",
+                    ),
                 );
                 diagnostic.related.push(SourceLabel::new(
-                    first.span,
+                    first.application.span,
                     "the first identical requirement is here",
+                ));
+                return Err(TypeError::Interface(Box::new(diagnostic)));
+            }
+            if let Some(first) = determination_conflict {
+                budget.charge(2).map_err(|()| constraint_resource())?;
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::DeterminationConflict,
+                    SourceLabel::new(
+                        requirement.application.span,
+                        "this requirement conflicts with the dependent tuple fixed for the same determinant key",
+                    ),
+                );
+                diagnostic
+                    .related
+                    .try_reserve(1)
+                    .map_err(|_| constraint_resource())?;
+                diagnostic.related.push(SourceLabel::new(
+                    first.application.span,
+                    "this earlier requirement fixes a different dependent tuple for that key",
                 ));
                 return Err(TypeError::Interface(Box::new(diagnostic)));
             }
         }
         for requirement in requirements.iter() {
             budget.charge(1).map_err(|()| constraint_resource())?;
-            if let Some(variable) =
-                first_variable_absent_from_types(&requirement.argument.ty, &value_types, budget)
-                    .map_err(|()| constraint_resource())?
-            {
+            let interface = checked_interface(
+                module,
+                checked_interfaces,
+                requirement.application.interface.id,
+                budget,
+            )?
+            .ok_or_else(invalid_state)?;
+            let mut absent = None;
+            if let Some(determination) = interface.determination() {
+                let mut previous_position = None;
+                for &position in determination.positions() {
+                    budget.charge(1).map_err(|()| constraint_resource())?;
+                    if previous_position.is_some_and(|previous| previous >= position) {
+                        return Err(invalid_state());
+                    }
+                    previous_position = Some(position);
+                    let argument = requirement
+                        .application
+                        .arguments
+                        .get(position)
+                        .ok_or_else(invalid_state)?;
+                    absent = first_variable_absent_from_types(&argument.ty, &value_types, budget)
+                        .map_err(|()| constraint_resource())?;
+                    if absent.is_some() {
+                        break;
+                    }
+                }
+            } else {
+                for argument in &requirement.application.arguments {
+                    absent = first_variable_absent_from_types(&argument.ty, &value_types, budget)
+                        .map_err(|()| constraint_resource())?;
+                    if absent.is_some() {
+                        break;
+                    }
+                }
+            }
+            if let Some(variable) = absent {
                 let mut diagnostic = Diagnostic::new(
                     InterfaceReason::UndeterminedParameter,
                     SourceLabel::new(
-                        requirement.span,
+                        requirement.application.span,
                         "this requirement parameter is not determined by the value type",
                     ),
                 );
@@ -8305,7 +9221,13 @@ fn check_implementation_headers_and_membership(
     for implementation in module.implementations() {
         check_implementation_header(module, checked_interfaces, implementation, budget)?;
     }
-    check_effective_implementation_overlap(module, registry, budget, type_work)?;
+    check_effective_implementation_overlap(
+        module,
+        checked_interfaces,
+        registry,
+        budget,
+        type_work,
+    )?;
 
     budget
         .charge(module.implementations().len())
@@ -8321,6 +9243,7 @@ fn check_implementation_headers_and_membership(
             source_index,
             implementation,
             budget,
+            type_work,
         )?);
     }
     Ok(checked.into_boxed_slice())
@@ -8340,17 +9263,28 @@ impl<'a> ImplementationHeadRef<'a> {
         }
     }
 
-    const fn interface(self) -> crate::interface::InterfaceId {
+    fn interface(self) -> crate::interface::InterfaceId {
         match self {
-            Self::Imported(implementation) => implementation.fact.interface,
-            Self::Local(implementation) => implementation.interface.id,
+            Self::Imported(implementation) => implementation.fact.interface(),
+            Self::Local(implementation) => implementation.head.interface.id,
         }
     }
 
-    const fn argument(self) -> &'a Type {
+    fn argument_count(self) -> usize {
         match self {
-            Self::Imported(implementation) => &implementation.fact.argument,
-            Self::Local(implementation) => &implementation.argument.ty,
+            Self::Imported(implementation) => implementation.fact.arguments().len(),
+            Self::Local(implementation) => implementation.head.arguments.len(),
+        }
+    }
+
+    fn argument(self, index: usize) -> Option<&'a Type> {
+        match self {
+            Self::Imported(implementation) => implementation.fact.arguments().get(index),
+            Self::Local(implementation) => implementation
+                .head
+                .arguments
+                .get(index)
+                .map(|argument| &argument.ty),
         }
     }
 
@@ -8361,20 +9295,24 @@ impl<'a> ImplementationHeadRef<'a> {
         }
     }
 
-    const fn primary_span(self) -> Span {
+    fn primary_span(self) -> Span {
         match self {
             Self::Imported(implementation) => match implementation.authorization().hops().first() {
                 Some(hop) => hop.import_span,
                 None => implementation.fact.span,
             },
-            Self::Local(implementation) => implementation.argument.span,
+            Self::Local(implementation) => implementation
+                .head
+                .arguments
+                .first()
+                .map_or(implementation.head.span, |argument| argument.span),
         }
     }
 
     const fn definition_span(self) -> Span {
         match self {
             Self::Imported(implementation) => implementation.fact.span,
-            Self::Local(implementation) => implementation.argument.span,
+            Self::Local(implementation) => implementation.head.span,
         }
     }
 
@@ -8386,7 +9324,7 @@ impl<'a> ImplementationHeadRef<'a> {
     }
 }
 
-fn retain_overlap_label(
+fn retain_interface_label(
     diagnostic: &mut Diagnostic<InterfaceReason>,
     span: Span,
     message: &'static str,
@@ -8403,6 +9341,7 @@ fn retain_overlap_label(
 
 fn check_effective_implementation_overlap(
     module: &ResolvedModule,
+    checked_interfaces: &[CheckedInterface],
     registry: &ResolvedRegistry,
     budget: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
@@ -8432,15 +9371,32 @@ fn check_effective_implementation_overlap(
             .map(ImplementationHeadRef::Local),
     );
 
-    check_effective_implementation_heads(registry, &effective, budget, type_work)
+    check_effective_implementation_heads(
+        registry,
+        &effective,
+        |interface, budget| {
+            let interface = checked_interface(module, checked_interfaces, interface, budget)?
+                .ok_or_else(invalid_state)?;
+            Ok(interface.determination())
+        },
+        budget,
+        type_work,
+    )
 }
 
-fn check_effective_implementation_heads(
+fn check_effective_implementation_heads<'key, F>(
     registry: &ResolvedRegistry,
     effective: &[ImplementationHeadRef<'_>],
+    mut determination_for: F,
     budget: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
-) -> Result<(), TypeError> {
+) -> Result<(), TypeError>
+where
+    F: FnMut(
+        InterfaceId,
+        &mut InterfaceConstraintBudget,
+    ) -> Result<Option<&'key DeterminationKey>, TypeError>,
+{
     for (index, implementation) in effective.iter().copied().enumerate() {
         budget.charge(1).map_err(|()| constraint_resource())?;
         for previous in effective[..index].iter().copied() {
@@ -8478,40 +9434,135 @@ fn check_effective_implementation_heads(
                     .iter()
                     .map(|parameter| parameter.id),
             );
-            let overlaps = implementation_heads_overlap(
+            if previous.argument_count() != implementation.argument_count() {
+                return Err(invalid_state());
+            }
+            let complete_argument_work = previous
+                .argument_count()
+                .checked_mul(2)
+                .ok_or_else(constraint_resource)?;
+            budget
+                .charge(complete_argument_work)
+                .map_err(|()| constraint_resource())?;
+            let mut previous_arguments = Vec::new();
+            let mut implementation_arguments = Vec::new();
+            previous_arguments
+                .try_reserve(previous.argument_count())
+                .map_err(|_| constraint_resource())?;
+            implementation_arguments
+                .try_reserve(implementation.argument_count())
+                .map_err(|_| constraint_resource())?;
+            for position in 0..previous.argument_count() {
+                previous_arguments.push(previous.argument(position).ok_or_else(invalid_state)?);
+                implementation_arguments.push(
+                    implementation
+                        .argument(position)
+                        .ok_or_else(invalid_state)?,
+                );
+            }
+            let determination = determination_for(implementation.interface(), budget)?;
+            let pair_failure = if let Some(determination) = determination {
+                let positions = determination.positions();
+                let mut previous_position = None;
+                for &position in positions {
+                    budget.charge(1).map_err(|()| constraint_resource())?;
+                    if position >= previous_arguments.len()
+                        || previous_position.is_some_and(|previous| previous >= position)
+                    {
+                        return Err(invalid_state());
+                    }
+                    previous_position = Some(position);
+                }
+                let selected_argument_work = positions
+                    .len()
+                    .checked_mul(2)
+                    .ok_or_else(constraint_resource)?;
+                budget
+                    .charge(selected_argument_work)
+                    .map_err(|()| constraint_resource())?;
+                let mut previous_key = Vec::new();
+                let mut implementation_key = Vec::new();
+                previous_key
+                    .try_reserve_exact(positions.len())
+                    .map_err(|_| constraint_resource())?;
+                implementation_key
+                    .try_reserve_exact(positions.len())
+                    .map_err(|_| constraint_resource())?;
+                for &position in positions {
+                    previous_key.push(*previous_arguments.get(position).ok_or_else(invalid_state)?);
+                    implementation_key.push(
+                        *implementation_arguments
+                            .get(position)
+                            .ok_or_else(invalid_state)?,
+                    );
+                }
+                budget.charge(1).map_err(|()| constraint_resource())?;
+                let keys_overlap = map_overlap_result(implementation_application_heads_overlap(
+                    registry,
+                    InterfaceOperationWork::new(implementation.primary_span(), budget, type_work),
+                    &previous_parameters,
+                    &previous_key,
+                    &implementation_parameters,
+                    &implementation_key,
+                ))?;
+                if !keys_overlap {
+                    None
+                } else {
+                    let complete_heads_overlap =
+                        map_overlap_result(implementation_application_heads_overlap(
+                            registry,
+                            InterfaceOperationWork::new(
+                                implementation.primary_span(),
+                                budget,
+                                type_work,
+                            ),
+                            &previous_parameters,
+                            &previous_arguments,
+                            &implementation_parameters,
+                            &implementation_arguments,
+                        ))?;
+                    Some(if complete_heads_overlap {
+                        InterfaceReason::ImplOverlap
+                    } else {
+                        InterfaceReason::ImplDeterminationConflict
+                    })
+                }
+            } else if map_overlap_result(implementation_application_heads_overlap(
                 registry,
                 InterfaceOperationWork::new(implementation.primary_span(), budget, type_work),
                 &previous_parameters,
-                previous.argument(),
+                &previous_arguments,
                 &implementation_parameters,
-                implementation.argument(),
-            );
-            let overlaps = match overlaps {
-                Ok(overlaps) => overlaps,
-                Err(OverlapFailure::Resource) => return Err(constraint_resource()),
-                Err(OverlapFailure::TypeResource) => {
-                    return Err(TypeError::Internal(
-                        ElaborationFailure::TypeResourceExhausted,
-                    ));
-                }
-                Err(OverlapFailure::InvalidState) => return Err(invalid_state()),
+                &implementation_arguments,
+            ))? {
+                Some(InterfaceReason::ImplOverlap)
+            } else {
+                None
             };
-            if overlaps {
-                let mut diagnostic = Diagnostic::new(
-                    InterfaceReason::ImplOverlap,
-                    SourceLabel::new(
-                        implementation.primary_span(),
+            if let Some(pair_failure) = pair_failure {
+                let (primary_message, earlier_message) = match pair_failure {
+                    InterfaceReason::ImplOverlap => (
                         "this implementation overlaps an earlier available implementation",
+                        "the earlier overlapping implementation head is here",
                     ),
+                    InterfaceReason::ImplDeterminationConflict => (
+                        "this implementation shares a determinant key with an earlier implementation but disagrees on dependents",
+                        "the earlier conflicting implementation head is here",
+                    ),
+                    _ => return Err(invalid_state()),
+                };
+                let mut diagnostic = Diagnostic::new(
+                    pair_failure,
+                    SourceLabel::new(implementation.primary_span(), primary_message),
                 );
-                retain_overlap_label(
+                retain_interface_label(
                     &mut diagnostic,
                     previous.definition_span(),
-                    "the earlier overlapping implementation head is here",
+                    earlier_message,
                     budget,
                 )?;
                 for hop in previous.import_route() {
-                    retain_overlap_label(
+                    retain_interface_label(
                         &mut diagnostic,
                         hop.import_span,
                         "the earlier implementation became available through this import",
@@ -8520,14 +9571,14 @@ fn check_effective_implementation_heads(
                 }
                 let later_route = implementation.import_route();
                 if !later_route.is_empty() {
-                    retain_overlap_label(
+                    retain_interface_label(
                         &mut diagnostic,
                         implementation.definition_span(),
                         "the later implementation is defined here",
                         budget,
                     )?;
                     for hop in &later_route[1..] {
-                        retain_overlap_label(
+                        retain_interface_label(
                             &mut diagnostic,
                             hop.import_span,
                             "the later implementation became available through this import",
@@ -8540,6 +9591,17 @@ fn check_effective_implementation_heads(
         }
     }
     Ok(())
+}
+
+fn map_overlap_result(result: Result<bool, OverlapFailure>) -> Result<bool, TypeError> {
+    match result {
+        Ok(overlaps) => Ok(overlaps),
+        Err(OverlapFailure::Resource) => Err(constraint_resource()),
+        Err(OverlapFailure::TypeResource) => Err(TypeError::Internal(
+            ElaborationFailure::TypeResourceExhausted,
+        )),
+        Err(OverlapFailure::InvalidState) => Err(invalid_state()),
+    }
 }
 
 fn check_implementation_header(
@@ -8558,72 +9620,65 @@ fn check_implementation_header(
                 .saturating_add(1),
         )
         .map_err(|()| constraint_resource())?;
-    budget
-        .charge_type(&implementation.argument.ty)
-        .map_err(|()| constraint_resource())?;
-    for prerequisite in &implementation.prerequisites {
+    let head_interface = checked_interface(
+        module,
+        checked_interfaces,
+        implementation.head.interface.id,
+        budget,
+    )?
+    .ok_or_else(invalid_state)?;
+    check_application_arity(
+        head_interface,
+        implementation.head.arguments.len(),
+        implementation.head.span,
+    )?;
+    for argument in &implementation.head.arguments {
         budget
-            .charge_type(&prerequisite.argument.ty)
+            .charge_type(&argument.ty)
             .map_err(|()| constraint_resource())?;
     }
-
-    if implementation.public {
-        if let Some(interface) = checked_interface(
+    for prerequisite in &implementation.prerequisites {
+        let interface = checked_interface(
             module,
             checked_interfaces,
-            implementation.interface.id,
+            prerequisite.application.interface.id,
             budget,
-        )? && !interface.is_public()
-        {
-            let mut diagnostic = Diagnostic::new(
-                InterfaceReason::ImplPrivateInterface,
-                SourceLabel::new(
-                    implementation.interface.origin.primary_span(),
-                    "a public implementation cannot expose this private interface",
-                ),
-            );
-            diagnostic.related.push(SourceLabel::new(
-                interface.span(),
-                "the private interface is declared here",
-            ));
-            return Err(TypeError::Interface(Box::new(diagnostic)));
-        }
-        for prerequisite in &implementation.prerequisites {
-            if let Some(interface) = checked_interface(
-                module,
-                checked_interfaces,
-                prerequisite.interface.id,
-                budget,
-            )? && !interface.is_public()
-            {
-                let mut diagnostic = Diagnostic::new(
-                    InterfaceReason::ImplPrivateInterface,
-                    SourceLabel::new(
-                        prerequisite.span,
-                        "a public implementation cannot expose this private prerequisite",
-                    ),
-                );
-                diagnostic.related.push(SourceLabel::new(
-                    interface.span(),
-                    "the private interface is declared here",
-                ));
-                return Err(TypeError::Interface(Box::new(diagnostic)));
-            }
+        )?
+        .ok_or_else(invalid_state)?;
+        check_application_arity(
+            interface,
+            prerequisite.application.arguments.len(),
+            prerequisite.application.span,
+        )?;
+        for argument in &prerequisite.application.arguments {
+            budget
+                .charge_type(&argument.ty)
+                .map_err(|()| constraint_resource())?;
         }
     }
 
-    if matches!(implementation.argument.ty, Type::Variable(_)) {
+    check_implementation_prerequisite_relations(
+        module,
+        checked_interfaces,
+        implementation,
+        budget,
+    )?;
+
+    if selection_key_is_all_bare_variables(head_interface, &implementation.head.arguments, budget)?
+    {
         let mut diagnostic = Diagnostic::new(
             InterfaceReason::ImplVariableHead,
             SourceLabel::new(
-                implementation.argument.span,
-                "an implementation head cannot be a bare type variable",
+                implementation.head.span,
+                "an implementation selection key cannot contain only bare type variables",
             ),
         );
-        diagnostic.related.push(SourceLabel::new(
-            implementation.interface.origin.primary_span(),
+        retain_interface_label(
+            &mut diagnostic,
+            implementation.head.interface.origin.primary_span(),
             "this is the implemented interface",
-        ));
+            budget,
+        )?;
         return Err(TypeError::Interface(Box::new(diagnostic)));
     }
 
@@ -8635,37 +9690,78 @@ fn check_implementation_header(
                 "this prerequisite variable does not occur in the implementation head",
             ),
         );
-        diagnostic.related.push(SourceLabel::new(
-            implementation.argument.span,
+        retain_interface_label(
+            &mut diagnostic,
+            implementation.head.span,
             "the implementation head determines every prerequisite variable",
-        ));
+            budget,
+        )?;
         return Err(TypeError::Interface(Box::new(diagnostic)));
     }
 
-    let local_interface_owner = implementation.interface.id.module() == module.module();
-    let local_nominal_owner = match implementation.argument.ty.outer_nominal() {
-        Some(id) => id.module() == module.module(),
-        None => false,
-    };
-    if !local_interface_owner && !local_nominal_owner {
+    check_implementation_determination_coverage(module, head_interface, implementation, budget)?;
+
+    let local_interface_owner = implementation.head.interface.id.module() == module.module();
+    if !local_interface_owner
+        && !selection_key_has_local_outer_nominal(
+            head_interface,
+            &implementation.head.arguments,
+            module.module(),
+            budget,
+        )?
+    {
         let mut diagnostic = Diagnostic::new(
             InterfaceReason::ImplOrphan,
             SourceLabel::new(
-                implementation.argument.span,
-                "this module owns neither the interface nor the outer nominal type",
+                implementation.head.span,
+                "this module owns neither the interface nor an outer nominal type in the selection key",
             ),
         );
-        diagnostic.related.push(SourceLabel::new(
-            implementation.interface.origin.primary_span(),
+        retain_interface_label(
+            &mut diagnostic,
+            implementation.head.interface.origin.primary_span(),
             "the foreign interface is selected here",
-        ));
+            budget,
+        )?;
         return Err(TypeError::Interface(Box::new(diagnostic)));
     }
 
+    let head_key = if implementation.prerequisites.is_empty() {
+        Vec::new()
+    } else {
+        collect_selection_key_types(head_interface, &implementation.head.arguments, budget)?
+    };
     for prerequisite in &implementation.prerequisites {
-        if !implementation_prerequisite_terminates(
-            &prerequisite.argument.ty,
-            &implementation.argument.ty,
+        budget
+            .charge(prerequisite.application.arguments.len())
+            .map_err(|()| constraint_resource())?;
+        let mut prerequisite_arguments = Vec::new();
+        prerequisite_arguments
+            .try_reserve(prerequisite.application.arguments.len())
+            .map_err(|_| constraint_resource())?;
+        prerequisite_arguments.extend(
+            prerequisite
+                .application
+                .arguments
+                .iter()
+                .map(|argument| &argument.ty),
+        );
+        let prerequisite_interface = checked_interface(
+            module,
+            checked_interfaces,
+            prerequisite.application.interface.id,
+            budget,
+        )?
+        .ok_or_else(invalid_state)?;
+        let prerequisite_key = collect_selection_key_types(
+            prerequisite_interface,
+            &prerequisite.application.arguments,
+            budget,
+        )?;
+        if !implementation_prerequisite_selection_key_terminates(
+            &prerequisite_arguments,
+            &prerequisite_key,
+            &head_key,
             budget,
         )
         .map_err(|()| constraint_resource())?
@@ -8673,16 +9769,355 @@ fn check_implementation_header(
             let mut diagnostic = Diagnostic::new(
                 InterfaceReason::ImplPrerequisiteNotDecreasing,
                 SourceLabel::new(
-                    prerequisite.span,
+                    prerequisite.application.span,
                     "this generic prerequisite does not strictly decrease",
                 ),
             );
-            diagnostic.related.push(SourceLabel::new(
-                implementation.argument.span,
-                "the prerequisite must be a strict subterm of this head",
-            ));
+            retain_interface_label(
+                &mut diagnostic,
+                implementation.head.span,
+                "the prerequisite must decrease pointwise from this head",
+                budget,
+            )?;
             return Err(TypeError::Interface(Box::new(diagnostic)));
         }
+    }
+    if implementation.public {
+        if let Some(interface) = checked_interface(
+            module,
+            checked_interfaces,
+            implementation.head.interface.id,
+            budget,
+        )? && !interface.is_public()
+        {
+            let mut diagnostic = Diagnostic::new(
+                InterfaceReason::ImplPrivateInterface,
+                SourceLabel::new(
+                    implementation.head.interface.origin.primary_span(),
+                    "a public implementation cannot expose this private interface",
+                ),
+            );
+            retain_interface_label(
+                &mut diagnostic,
+                interface.span(),
+                "the private interface is declared here",
+                budget,
+            )?;
+            return Err(TypeError::Interface(Box::new(diagnostic)));
+        }
+        for prerequisite in &implementation.prerequisites {
+            if let Some(interface) = checked_interface(
+                module,
+                checked_interfaces,
+                prerequisite.application.interface.id,
+                budget,
+            )? && !interface.is_public()
+            {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::ImplPrivateInterface,
+                    SourceLabel::new(
+                        prerequisite.application.span,
+                        "a public implementation cannot expose this private prerequisite",
+                    ),
+                );
+                retain_interface_label(
+                    &mut diagnostic,
+                    interface.span(),
+                    "the private interface is declared here",
+                    budget,
+                )?;
+                return Err(TypeError::Interface(Box::new(diagnostic)));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_implementation_prerequisite_relations(
+    module: &ResolvedModule,
+    checked_interfaces: &[CheckedInterface],
+    implementation: &crate::resolved::ResolvedImplementation,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), TypeError> {
+    for (index, prerequisite) in implementation.prerequisites.iter().enumerate() {
+        let interface = checked_interface(
+            module,
+            checked_interfaces,
+            prerequisite.application.interface.id,
+            budget,
+        )?
+        .ok_or_else(invalid_state)?;
+        for earlier in &implementation.prerequisites[..index] {
+            budget.charge(1).map_err(|()| constraint_resource())?;
+            if earlier.application.interface.id != prerequisite.application.interface.id {
+                continue;
+            }
+            if same_resolved_application_arguments(
+                &earlier.application.arguments,
+                &prerequisite.application.arguments,
+                budget,
+            )? {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::DuplicateRequirement,
+                    SourceLabel::new(
+                        prerequisite.application.span,
+                        "this prerequisite is already declared",
+                    ),
+                );
+                retain_interface_label(
+                    &mut diagnostic,
+                    earlier.application.span,
+                    "the first identical prerequisite is here",
+                    budget,
+                )?;
+                return Err(TypeError::Interface(Box::new(diagnostic)));
+            }
+            if let Some(determination) = interface.determination()
+                && same_resolved_application_key(
+                    &earlier.application.arguments,
+                    &prerequisite.application.arguments,
+                    determination,
+                    budget,
+                )?
+            {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::DeterminationConflict,
+                    SourceLabel::new(
+                        prerequisite.application.span,
+                        "this prerequisite conflicts with the dependent tuple fixed for the same determinant key",
+                    ),
+                );
+                retain_interface_label(
+                    &mut diagnostic,
+                    earlier.application.span,
+                    "this earlier prerequisite fixes a different dependent tuple for that key",
+                    budget,
+                )?;
+                return Err(TypeError::Interface(Box::new(diagnostic)));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect_selection_key_types<'a>(
+    interface: CheckedInterfaceRef<'_>,
+    arguments: &'a [ResolvedType],
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<Vec<&'a Type>, TypeError> {
+    if arguments.len() != interface.parameters().len() {
+        return Err(invalid_state());
+    }
+    let selected_count = interface
+        .determination()
+        .map_or(arguments.len(), |determination| {
+            determination.positions().len()
+        });
+    let Some(determination) = interface.determination() else {
+        budget
+            .charge(selected_count)
+            .map_err(|()| constraint_resource())?;
+        let mut selected = Vec::new();
+        selected
+            .try_reserve_exact(selected_count)
+            .map_err(|_| constraint_resource())?;
+        selected.extend(arguments.iter().map(|argument| &argument.ty));
+        return Ok(selected);
+    };
+
+    let mut previous_position = None;
+    for &position in determination.positions() {
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        if position >= arguments.len()
+            || previous_position.is_some_and(|previous| previous >= position)
+        {
+            return Err(invalid_state());
+        }
+        previous_position = Some(position);
+    }
+    budget
+        .charge(selected_count)
+        .map_err(|()| constraint_resource())?;
+    let mut selected = Vec::new();
+    selected
+        .try_reserve_exact(selected_count)
+        .map_err(|_| constraint_resource())?;
+    for &position in determination.positions() {
+        selected.push(&arguments.get(position).ok_or_else(invalid_state)?.ty);
+    }
+    Ok(selected)
+}
+
+fn selection_key_has_local_outer_nominal(
+    interface: CheckedInterfaceRef<'_>,
+    arguments: &[ResolvedType],
+    module: crate::module::ModuleId,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, TypeError> {
+    if arguments.len() != interface.parameters().len() {
+        return Err(invalid_state());
+    }
+    let Some(determination) = interface.determination() else {
+        for argument in arguments {
+            budget.charge(2).map_err(|()| constraint_resource())?;
+            if argument
+                .ty
+                .outer_nominal()
+                .is_some_and(|id| id.module() == module)
+            {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    };
+
+    let positions = determination.positions();
+    let mut previous_position = None;
+    for &position in positions {
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        if position >= arguments.len()
+            || previous_position.is_some_and(|previous| previous >= position)
+        {
+            return Err(invalid_state());
+        }
+        previous_position = Some(position);
+    }
+    for &position in positions {
+        budget.charge(2).map_err(|()| constraint_resource())?;
+        let argument = arguments.get(position).ok_or_else(invalid_state)?;
+        if argument
+            .ty
+            .outer_nominal()
+            .is_some_and(|id| id.module() == module)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn selection_key_is_all_bare_variables(
+    interface: CheckedInterfaceRef<'_>,
+    arguments: &[ResolvedType],
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, TypeError> {
+    if arguments.len() != interface.parameters().len() {
+        return Err(invalid_state());
+    }
+    let Some(determination) = interface.determination() else {
+        for argument in arguments {
+            budget.charge(1).map_err(|()| constraint_resource())?;
+            if !matches!(argument.ty, Type::Variable(_)) {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    };
+
+    let positions = determination.positions();
+    let mut previous_position = None;
+    for &position in positions {
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        if position >= arguments.len()
+            || previous_position.is_some_and(|previous| previous >= position)
+        {
+            return Err(invalid_state());
+        }
+        previous_position = Some(position);
+    }
+    for &position in positions {
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        let argument = arguments.get(position).ok_or_else(invalid_state)?;
+        if !matches!(argument.ty, Type::Variable(_)) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn check_implementation_determination_coverage(
+    module: &ResolvedModule,
+    interface: CheckedInterfaceRef<'_>,
+    implementation: &crate::resolved::ResolvedImplementation,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), TypeError> {
+    let Some(determination) = interface.determination() else {
+        return Ok(());
+    };
+    let arguments = &implementation.head.arguments;
+    if arguments.len() != interface.parameters().len() {
+        return Err(invalid_state());
+    }
+    let positions = determination.positions();
+    let mut previous_position = None;
+    for &position in positions {
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        if position >= arguments.len()
+            || previous_position.is_some_and(|previous| previous >= position)
+        {
+            return Err(invalid_state());
+        }
+        previous_position = Some(position);
+    }
+
+    let mut key_index = 0;
+    for (position, dependent) in arguments.iter().enumerate() {
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        if positions.get(key_index) == Some(&position) {
+            key_index += 1;
+            continue;
+        }
+        let mut absent = None;
+        visit_type_variables(&dependent.ty, budget, |variable, budget| {
+            let mut occurs_in_key = false;
+            for &key_position in positions {
+                budget.charge(2)?;
+                let key_argument = arguments.get(key_position).ok_or(())?;
+                if type_contains_variable(&key_argument.ty, variable, budget)? {
+                    occurs_in_key = true;
+                    break;
+                }
+            }
+            if !occurs_in_key {
+                absent = Some(variable);
+                return Ok(true);
+            }
+            Ok(false)
+        })
+        .map_err(|()| constraint_resource())?;
+        let Some(variable) = absent else {
+            continue;
+        };
+
+        let mut diagnostic = Diagnostic::new(
+            InterfaceReason::ImplDeterminationCoverage,
+            SourceLabel::new(
+                dependent.span,
+                "this dependent argument contains a variable absent from the determinant key",
+            ),
+        );
+        if let Some(parameter) = module.registry().type_variable(variable) {
+            retain_interface_label(
+                &mut diagnostic,
+                parameter.origin.primary_span(),
+                "this dependent variable is bound here",
+                budget,
+            )?;
+        }
+        for &key_position in positions {
+            budget.charge(1).map_err(|()| constraint_resource())?;
+            let key_argument = arguments.get(key_position).ok_or_else(invalid_state)?;
+            retain_interface_label(
+                &mut diagnostic,
+                key_argument.span,
+                "this determinant-key argument does not contain the dependent variable",
+                budget,
+            )?;
+        }
+        return Err(TypeError::Interface(Box::new(diagnostic)));
+    }
+    if key_index != positions.len() {
+        return Err(invalid_state());
     }
     Ok(())
 }
@@ -8693,11 +10128,12 @@ fn check_implementation_membership(
     source_index: usize,
     implementation: &crate::resolved::ResolvedImplementation,
     budget: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
 ) -> Result<CheckedImplementation, TypeError> {
     let interface = checked_interface(
         module,
         checked_interfaces,
-        implementation.interface.id,
+        implementation.head.interface.id,
         budget,
     )?
     .ok_or_else(invalid_state)?;
@@ -8779,59 +10215,78 @@ fn check_implementation_membership(
             binder: group.binder.id,
         });
     }
-    Ok(CheckedImplementation {
+    type_work
+        .charge(implementation.head.arguments.len())
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    let mut application_arguments = OwnedTypeBuffer(Vec::new());
+    application_arguments
+        .try_reserve(implementation.head.arguments.len())
+        .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    for argument in &implementation.head.arguments {
+        application_arguments.push(
+            clone_type_with_budget(&argument.ty, type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+        );
+    }
+    Ok(CheckedImplementation::new(
         source_index,
-        id: implementation.id,
-        interface: implementation.interface.id,
-        methods: methods.into_boxed_slice(),
-    })
+        implementation.id,
+        InterfaceApplication::new(
+            implementation.head.interface.id,
+            application_arguments.into_boxed_slice(),
+        ),
+        methods.into_boxed_slice(),
+    ))
 }
 
 #[derive(Clone, Copy)]
 enum CheckedInterfaceRef<'a> {
-    Local(&'a crate::resolved::ResolvedInterfaceDeclaration),
+    Local(
+        &'a crate::resolved::ResolvedInterfaceDeclaration,
+        &'a CheckedInterface,
+    ),
     Imported(&'a crate::resolved::CheckedInterfaceFact),
 }
 
 impl<'a> CheckedInterfaceRef<'a> {
     const fn id(self) -> crate::interface::InterfaceId {
         match self {
-            Self::Local(interface) => interface.id,
+            Self::Local(interface, _) => interface.id,
             Self::Imported(interface) => interface.id,
         }
     }
 
     const fn is_public(self) -> bool {
         match self {
-            Self::Local(interface) => interface.public,
+            Self::Local(interface, _) => interface.public,
             Self::Imported(_) => true,
         }
     }
 
-    const fn parameter(self) -> TypeVariableId {
+    const fn parameters(self) -> &'a [crate::resolved::ResolvedTypeVariable] {
         match self {
-            Self::Local(interface) => interface.parameter.id,
-            Self::Imported(interface) => interface.parameter.id,
+            Self::Local(interface, _) => &interface.parameters,
+            Self::Imported(interface) => &interface.parameters,
         }
     }
 
     const fn span(self) -> Span {
         match self {
-            Self::Local(interface) => interface.span,
+            Self::Local(interface, _) => interface.span,
             Self::Imported(interface) => interface.span,
         }
     }
 
     fn method_count(self) -> usize {
         match self {
-            Self::Local(interface) => interface.methods.len(),
+            Self::Local(interface, _) => interface.methods.len(),
             Self::Imported(interface) => interface.methods.len(),
         }
     }
 
     fn method(self, index: usize) -> Option<CheckedInterfaceMethodRef<'a>> {
         match self {
-            Self::Local(interface) => interface
+            Self::Local(interface, _) => interface
                 .methods
                 .get(index)
                 .map(CheckedInterfaceMethodRef::Local),
@@ -8841,6 +10296,88 @@ impl<'a> CheckedInterfaceRef<'a> {
                 .map(CheckedInterfaceMethodRef::Imported),
         }
     }
+
+    const fn determination(self) -> Option<&'a DeterminationKey> {
+        match self {
+            Self::Local(_, checked) => checked.determination(),
+            Self::Imported(interface) => interface.determination(),
+        }
+    }
+}
+
+fn check_application_arity(
+    interface: CheckedInterfaceRef<'_>,
+    found: usize,
+    span: Span,
+) -> Result<(), TypeError> {
+    check_application_arity_parts(interface.parameters().len(), interface.span(), found, span)
+}
+
+fn check_application_arity_parts(
+    expected: usize,
+    declaration_span: Span,
+    found: usize,
+    span: Span,
+) -> Result<(), TypeError> {
+    if found == expected {
+        return Ok(());
+    }
+    let mut diagnostic = Diagnostic::new(
+        InterfaceReason::ArgumentCount,
+        SourceLabel::new(
+            span,
+            "this interface application has the wrong number of arguments",
+        ),
+    );
+    diagnostic.related.push(SourceLabel::new(
+        declaration_span,
+        "the interface parameter list is declared here",
+    ));
+    Err(TypeError::Interface(Box::new(diagnostic)))
+}
+
+fn same_resolved_application_arguments(
+    left: &[ResolvedType],
+    right: &[ResolvedType],
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, TypeError> {
+    if left.len() != right.len() {
+        return Ok(false);
+    }
+    for (left, right) in left.iter().zip(right) {
+        if !same_type_with_constraint_budget(&left.ty, &right.ty, budget)
+            .map_err(|()| constraint_resource())?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn same_resolved_application_key(
+    left: &[ResolvedType],
+    right: &[ResolvedType],
+    determination: &DeterminationKey,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, TypeError> {
+    if left.len() != right.len() {
+        return Ok(false);
+    }
+    let mut previous_position = None;
+    for &position in determination.positions() {
+        budget.charge(1).map_err(|()| constraint_resource())?;
+        if position >= left.len() || previous_position.is_some_and(|previous| previous >= position)
+        {
+            return Err(invalid_state());
+        }
+        previous_position = Some(position);
+        if !same_type_with_constraint_budget(&left[position].ty, &right[position].ty, budget)
+            .map_err(|()| constraint_resource())?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 #[derive(Clone, Copy)]
@@ -8888,7 +10425,7 @@ impl<'a> CheckedInterfaceMethodRef<'a> {
 
 fn checked_interface<'a>(
     module: &'a ResolvedModule,
-    checked_interfaces: &[CheckedInterface],
+    checked_interfaces: &'a [CheckedInterface],
     id: crate::interface::InterfaceId,
     budget: &mut InterfaceConstraintBudget,
 ) -> Result<Option<CheckedInterfaceRef<'a>>, TypeError> {
@@ -8902,7 +10439,7 @@ fn checked_interface<'a>(
             return Err(invalid_state());
         }
         if checked.id == id {
-            return Ok(Some(CheckedInterfaceRef::Local(interface)));
+            return Ok(Some(CheckedInterfaceRef::Local(interface, checked)));
         }
     }
     budget.charge(1).map_err(|()| constraint_resource())?;
@@ -9320,6 +10857,26 @@ fn build_evidence_selector(
     Ok(selector)
 }
 
+fn clone_checked_type_variables(
+    parameters: &[crate::resolved::ResolvedTypeVariable],
+    type_work: &mut TypeWorkBudget,
+) -> Result<CheckedTypeVariableBuffer, TypeError> {
+    type_work
+        .charge(parameters.len())
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    let mut cloned = CheckedTypeVariableBuffer(Vec::new());
+    cloned
+        .try_reserve(parameters.len())
+        .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    for parameter in parameters {
+        cloned.push(
+            clone_resolved_type_variable_with_budget(parameter, type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+        );
+    }
+    Ok(cloned)
+}
+
 fn checked_interface_facts(
     resolved: &ResolvedModule,
     checked: &[CheckedInterface],
@@ -9355,17 +10912,8 @@ fn checked_interface_facts(
             constraint_work
                 .charge(method.type_parameters.len())
                 .map_err(|()| constraint_resource())?;
-            let mut method_parameters = Vec::new();
-            method_parameters
-                .try_reserve(method.type_parameters.len())
-                .map_err(|_| constraint_resource())?;
-            for parameter in &method.type_parameters {
-                method_parameters.push(
-                    clone_resolved_type_variable_with_budget(parameter, type_work).map_err(
-                        |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
-                    )?,
-                );
-            }
+            let method_parameters =
+                clone_checked_type_variables(&method.type_parameters, type_work)?;
             let value_type = clone_type_with_budget(&method.annotation.ty, type_work)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             methods.push(
@@ -9385,15 +10933,21 @@ fn checked_interface_facts(
                 })?,
             );
         }
-        facts.push(CheckedInterfaceFact {
-            id: interface.id,
-            spelling: interface.spelling.clone(),
-            parameter: clone_resolved_type_variable_with_budget(&interface.parameter, type_work)
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
-            methods: methods.into_boxed_slice(),
-            origin: interface.origin.clone(),
-            span: interface.span,
-        });
+        let parameters = clone_checked_type_variables(&interface.parameters, type_work)?;
+        let determination = token
+            .determination()
+            .map(|key| key.clone_with_budget(constraint_work))
+            .transpose()
+            .map_err(|()| constraint_resource())?;
+        facts.push(CheckedInterfaceFact::new(
+            interface.id,
+            interface.spelling.clone(),
+            parameters.into_boxed_slice(),
+            determination,
+            methods.into_boxed_slice(),
+            interface.origin.clone(),
+            interface.span,
+        ));
     }
     Ok(facts.into_boxed_slice())
 }
@@ -9656,7 +11210,7 @@ enum ElaborationTask<'a> {
     FinishBinding {
         binding: &'a ResolvedBinding,
         expected: Option<ProvenancedType>,
-        evidence_marker: Option<usize>,
+        evidence_marker: Option<PendingObligationMarker>,
     },
     CheckRecursiveMember(&'a crate::resolved::ResolvedRecursiveMember),
     BeginRecursiveGroup(&'a ResolvedRecursiveGroup),
@@ -10216,10 +11770,24 @@ impl Drop for ProvenancedTypeBuffer {
     }
 }
 
-struct EvidenceSpecificationBuffer(Vec<(MethodEvidenceOwner, RequirementId, MethodId, Type, Type)>);
+struct EvidenceSpecificationBuffer(
+    Vec<(
+        MethodEvidenceOwner,
+        RequirementId,
+        MethodId,
+        InterfaceApplication,
+        Type,
+    )>,
+);
 
 impl Deref for EvidenceSpecificationBuffer {
-    type Target = Vec<(MethodEvidenceOwner, RequirementId, MethodId, Type, Type)>;
+    type Target = Vec<(
+        MethodEvidenceOwner,
+        RequirementId,
+        MethodId,
+        InterfaceApplication,
+        Type,
+    )>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -10227,7 +11795,16 @@ impl Deref for EvidenceSpecificationBuffer {
 }
 
 impl EvidenceSpecificationBuffer {
-    fn push(&mut self, specification: (MethodEvidenceOwner, RequirementId, MethodId, Type, Type)) {
+    fn push(
+        &mut self,
+        specification: (
+            MethodEvidenceOwner,
+            RequirementId,
+            MethodId,
+            InterfaceApplication,
+            Type,
+        ),
+    ) {
         self.0.push(specification);
     }
 
@@ -10242,19 +11819,31 @@ impl EvidenceSpecificationBuffer {
 
 impl Drop for EvidenceSpecificationBuffer {
     fn drop(&mut self) {
-        for (_, _, _, interface_argument, ty) in self.0.drain(..) {
-            discard_type_iteratively(interface_argument);
+        for (_, _, _, application, ty) in self.0.drain(..) {
+            drop(application);
             discard_type_iteratively(ty);
         }
     }
 }
 
 struct EvidenceSpecificationSequence(
-    std::vec::IntoIter<(MethodEvidenceOwner, RequirementId, MethodId, Type, Type)>,
+    std::vec::IntoIter<(
+        MethodEvidenceOwner,
+        RequirementId,
+        MethodId,
+        InterfaceApplication,
+        Type,
+    )>,
 );
 
 impl Iterator for EvidenceSpecificationSequence {
-    type Item = (MethodEvidenceOwner, RequirementId, MethodId, Type, Type);
+    type Item = (
+        MethodEvidenceOwner,
+        RequirementId,
+        MethodId,
+        InterfaceApplication,
+        Type,
+    );
 
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()
@@ -10263,8 +11852,8 @@ impl Iterator for EvidenceSpecificationSequence {
 
 impl Drop for EvidenceSpecificationSequence {
     fn drop(&mut self) {
-        for (_, _, _, interface_argument, ty) in self.0.by_ref() {
-            discard_type_iteratively(interface_argument);
+        for (_, _, _, application, ty) in self.0.by_ref() {
+            drop(application);
             discard_type_iteratively(ty);
         }
     }
@@ -11400,18 +12989,22 @@ fn clone_type_with_budget(ty: &Type, budget: &mut TypeWorkBudget) -> Result<Type
 }
 
 fn retain_method_occurrence_parameters(
-    parameter: TypeVariableId,
-    kind: &Kind,
+    interface_parameters: &[(TypeVariableId, Kind)],
     method_parameters: &[(TypeVariableId, Kind)],
     budget: &mut TypeWorkBudget,
 ) -> Result<(KindedTypeParameters, KindedTypeParameters), ()> {
-    let parameter_count = method_parameters.len().checked_add(1).ok_or(())?;
+    let parameter_count = interface_parameters
+        .len()
+        .checked_add(method_parameters.len())
+        .ok_or(())?;
     budget.charge(parameter_count)?;
     let mut fact_parameters = Vec::new();
     fact_parameters
         .try_reserve(parameter_count)
         .map_err(|_| ())?;
-    fact_parameters.push((parameter, clone_kind_with_budget(kind, budget)?));
+    for (identity, kind) in interface_parameters {
+        fact_parameters.push((*identity, clone_kind_with_budget(kind, budget)?));
+    }
     for (identity, kind) in method_parameters {
         fact_parameters.push((*identity, clone_kind_with_budget(kind, budget)?));
     }
@@ -11423,7 +13016,9 @@ fn retain_method_occurrence_parameters(
     scheme_parameters
         .try_reserve(parameter_count)
         .map_err(|_| ())?;
-    scheme_parameters.push((parameter, clone_kind_with_budget(kind, budget)?));
+    for (identity, kind) in interface_parameters {
+        scheme_parameters.push((*identity, clone_kind_with_budget(kind, budget)?));
+    }
     for (identity, kind) in method_parameters {
         scheme_parameters.push((*identity, clone_kind_with_budget(kind, budget)?));
     }
@@ -11432,6 +13027,24 @@ fn retain_method_occurrence_parameters(
         fact_parameters.into_boxed_slice(),
         scheme_parameters.into_boxed_slice(),
     ))
+}
+
+fn same_interface_application_with_budget(
+    left: &InterfaceApplication,
+    right: &InterfaceApplication,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, TypeError> {
+    if left.interface() != right.interface() || left.arguments().len() != right.arguments().len() {
+        return Ok(false);
+    }
+    for (left, right) in left.arguments().iter().zip(right.arguments()) {
+        if !same_type_with_budget(left, right, budget)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn clone_scheme_with_budget(fact: &TypeFact, budget: &mut TypeWorkBudget) -> Result<Type, ()> {
@@ -12092,6 +13705,149 @@ mod tests {
     static MODULE_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
 
     #[test]
+    fn resolved_application_clone_discards_a_deep_first_argument_when_the_second_is_one_short() {
+        const DEPTH: usize = 16_384;
+        const DEEP_ARGUMENT_CELLS: usize = 1 + 2 * DEPTH;
+        const EXACT_TYPE_WORK: usize = DEEP_ARGUMENT_CELLS + 1;
+
+        std::thread::Builder::new()
+            .name("resolved-application-partial-clone-owner".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("resolved-application-clone.ash", "Pair")
+                    .expect("the application fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 4).expect("the fixture range is ordered"))
+                    .expect("the fixture span should fit");
+                let module = ModuleId::from(source.id());
+                let interface = InterfaceId::new(module, 0);
+                let application = crate::resolved::ResolvedInterfaceApplication {
+                    interface: crate::resolved::ResolvedInterfaceOccurrence {
+                        id: interface,
+                        spelling: "Pair".to_owned(),
+                        origin: Origin::Source(span),
+                    },
+                    arguments: Box::new([
+                        ResolvedType {
+                            ty: deep_application_type(DEPTH),
+                            provenance: ResolvedTypeProvenance::new(
+                                vec![ResolvedTypeProvenanceNode::Fact(span)],
+                                0,
+                            ),
+                            origin: Origin::Source(span),
+                            span,
+                        },
+                        ResolvedType {
+                            ty: Type::Bool,
+                            provenance: ResolvedTypeProvenance::new(
+                                vec![ResolvedTypeProvenanceNode::Fact(span)],
+                                0,
+                            ),
+                            origin: Origin::Source(span),
+                            span,
+                        },
+                    ]),
+                    span,
+                };
+
+                let mut elaborator = Elaborator::new();
+                elaborator.type_work = TypeWorkBudget::with_limit(DEEP_ARGUMENT_CELLS);
+                assert!(matches!(
+                    elaborator.clone_resolved_interface_application(&application),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    )),
+                ));
+                assert_eq!(elaborator.type_work.used(), DEEP_ARGUMENT_CELLS);
+
+                elaborator.type_work = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
+                let cloned = elaborator
+                    .clone_resolved_interface_application(&application)
+                    .expect("a fresh exact clone budget should retain both arguments");
+                assert_eq!(cloned.arguments().len(), 2);
+                assert_eq!(elaborator.type_work.used(), EXACT_TYPE_WORK);
+                drop(cloned);
+
+                let crate::resolved::ResolvedInterfaceApplication {
+                    interface,
+                    arguments,
+                    ..
+                } = application;
+                for argument in arguments.into_vec() {
+                    argument.discard_iteratively();
+                }
+                discard_origin_iteratively(interface.origin);
+            })
+            .expect("the small-stack clone worker should start")
+            .join()
+            .expect("partial and complete application clones must dismantle iteratively");
+    }
+
+    #[test]
+    fn checked_parameter_clone_discards_a_deep_origin_on_partial_failure_and_exact_retry() {
+        const DEPTH: usize = 16_384;
+        // Two vector records, then one record and one Type-kind node per
+        // parameter. Four cells therefore retain only the deep first clone.
+        const FIRST_PARAMETER_PREFIX: usize = 2 + 1 + 1;
+        const EXACT_TYPE_WORK: usize = FIRST_PARAMETER_PREFIX + 1 + 1;
+
+        std::thread::Builder::new()
+            .name("checked-parameter-partial-clone-owner".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("checked-parameter-clone.ash", "Pair")
+                    .expect("the parameter fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 4).expect("the fixture range is ordered"))
+                    .expect("the fixture span should fit");
+                let module = ModuleId::from(source.id());
+                let parameters: Box<[ResolvedTypeVariable]> = Box::new([
+                    ResolvedTypeVariable {
+                        id: TypeVariableId::resolved(module, 0),
+                        spelling: "Left".to_owned(),
+                        kind: Kind::Type,
+                        origin: deep_generated_origin(DEPTH, span),
+                    },
+                    ResolvedTypeVariable {
+                        id: TypeVariableId::resolved(module, 1),
+                        spelling: "Right".to_owned(),
+                        kind: Kind::Type,
+                        origin: Origin::Source(span),
+                    },
+                ]);
+
+                let mut one_short = TypeWorkBudget::with_limit(FIRST_PARAMETER_PREFIX);
+                assert!(matches!(
+                    clone_checked_type_variables(&parameters, &mut one_short),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    )),
+                ));
+                assert_eq!(one_short.used(), FIRST_PARAMETER_PREFIX);
+
+                let mut exact = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
+                let cloned = clone_checked_type_variables(&parameters, &mut exact)
+                    .expect("a fresh exact parameter budget should retain both records");
+                assert_eq!(cloned.len(), 2);
+                assert_eq!(exact.used(), EXACT_TYPE_WORK);
+                let fact = CheckedInterfaceFact::without_methods_for_test(
+                    InterfaceId::new(module, 0),
+                    "Pair".to_owned(),
+                    cloned.into_boxed_slice(),
+                    Origin::Source(span),
+                    span,
+                );
+                drop(fact);
+                for parameter in parameters.into_vec() {
+                    discard_origin_iteratively(parameter.origin);
+                }
+            })
+            .expect("the small-stack parameter worker should start")
+            .join()
+            .expect("partial and complete parameter clones must dismantle origins iteratively");
+    }
+
+    #[test]
     fn scoped_evidence_binders_dispose_deep_interface_arguments_on_success_and_failure() {
         const DEPTH: usize = 32_768;
         for accepted in [false, true] {
@@ -12123,7 +13879,10 @@ mod tests {
                         owner: MethodEvidenceOwner::Global(owner),
                         requirement,
                         method,
-                        interface_argument: IterativeTypeOwner::new(interface_argument),
+                        application: InterfaceApplication::new(
+                            interface,
+                            Box::new([interface_argument]),
+                        ),
                         binder,
                     }];
                     let result = if accepted { Ok(scoped) } else { Err(scoped) };
@@ -12137,7 +13896,9 @@ mod tests {
 
     #[test]
     fn evidence_scope_entry_has_an_exact_carrier_boundary_and_fresh_retry() {
-        const EXACT_WORK: usize = 4 + 2;
+        // One specification reserve, three scope records, one binder Type,
+        // and one complete-application vector plus its primitive argument.
+        const EXACT_WORK: usize = 1 + 3 + 1 + 2;
 
         fn enter_with_limit(limit: usize) -> Result<usize, TypeError> {
             let resolved = resolved_module_fixture("evidence-scope-budget.ash", "", "Unit", "()");
@@ -12163,7 +13924,7 @@ mod tests {
                 MethodEvidenceOwner::Global(owner),
                 requirement,
                 method,
-                Type::Unit,
+                InterfaceApplication::new(interface, Box::new([Type::Unit])),
                 Type::Unit,
             ));
             let binders = elaborator
@@ -12782,7 +14543,9 @@ mod tests {
         let mut type_work = TypeWorkBudget::default();
         let mut coverage_work = UsefulnessBudget::default();
         // A monomorphic private interface retains no method-binder authority.
-        const EXACT_WORK: usize = 39;
+        // Unconditional arity preflight adds one interface-map cell plus the
+        // interface and global declaration visits.
+        const EXACT_WORK: usize = 39 + 1 + 2;
         let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
 
         let failure =
@@ -12819,6 +14582,641 @@ mod tests {
             failure,
             TypeError::Internal(ElaborationFailure::ConstraintResourceExhausted)
         );
+    }
+
+    #[test]
+    fn relational_interface_shape_has_an_exact_declaration_guard_boundary() {
+        // Application arity preflight owns one interface-map cell and visits
+        // the interface and global declarations once. One interface-vector
+        // cell, one declaration cell, and one method cell then precede complete
+        // occurrence walks for First (five cells) and absent Second (six).
+        const EXACT_WORK: usize = (1 + 2) + 1 + 1 + 1 + 5 + 6;
+        let declarations =
+            "interface Relational<First, Second> {\nrelational : First -> First\n}\n";
+
+        let short_module = resolved_module_fixture(
+            "short-relational-interface-guard.ash",
+            declarations,
+            "Unit",
+            "()",
+        );
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            check_interface_declarations(&short_module, &mut short),
+            Err(TypeError::Internal(
+                ElaborationFailure::ConstraintResourceExhausted
+            ))
+        );
+
+        let exact_module = resolved_module_fixture(
+            "exact-relational-interface-guard.ash",
+            declarations,
+            "Unit",
+            "()",
+        );
+        for _ in 0..2 {
+            let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+            let error = check_interface_declarations(&exact_module, &mut exact)
+                .expect_err("the exact budget should reach the missing-parameter diagnostic");
+            let TypeError::Interface(diagnostic) = error else {
+                panic!("a missing relational method parameter must remain a source error");
+            };
+            assert_eq!(diagnostic.reason, InterfaceReason::MethodParameter);
+            assert_eq!(exact.used(), EXACT_WORK);
+        }
+    }
+
+    #[test]
+    fn determination_related_label_has_an_exact_retryable_declaration_boundary() {
+        // Application arity preflight owns one interface-map cell plus the
+        // interface and global declaration visits. Interface admission owns
+        // one vector cell and one declaration cell, then two total-partition
+        // visits, three source-occurrence cells, three ordered-side visits,
+        // and the retained related label on the repeated occurrence.
+        const EXACT_WORK: usize = (1 + 2) + 1 + 1 + 2 + 3 + 3 + 1;
+        let module = resolved_module_fixture(
+            "determination-related-label-budget.ash",
+            "interface Bad<A, B> where (A, A) -> B {\nbad : A -> B\n}\n",
+            "Unit",
+            "()",
+        );
+        let determination = module.interfaces()[0]
+            .determination
+            .as_ref()
+            .expect("the fixture should retain its source determination");
+        assert_eq!(determination.determinant.parameters.len(), 2);
+        assert_eq!(determination.dependent.parameters.len(), 1);
+
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            check_interface_declarations(&module, &mut short),
+            Err(TypeError::Internal(
+                ElaborationFailure::ConstraintResourceExhausted
+            ))
+        );
+        assert_eq!(short.used(), EXACT_WORK - 1);
+
+        for _ in 0..2 {
+            let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+            let error = check_interface_declarations(&module, &mut exact)
+                .expect_err("the exact retry should retain the causal occurrence label");
+            let TypeError::Interface(diagnostic) = error else {
+                panic!("a repeated determination member must remain a source error");
+            };
+            assert_eq!(diagnostic.reason, InterfaceReason::DeterminationParameter);
+            assert_eq!(diagnostic.related.len(), 1);
+            assert_eq!(exact.used(), EXACT_WORK);
+            assert_eq!(exact.charge(1), Err(()));
+            assert_eq!(determination.determinant.parameters.len(), 2);
+            assert_eq!(determination.dependent.parameters.len(), 1);
+        }
+    }
+
+    #[test]
+    fn checked_determinations_retain_exact_private_declaration_positions() {
+        let module = resolved_module_fixture(
+            "checked-determination-positions.ash",
+            concat!(
+                "interface Iterable<I, Item> where I -> Item {\n",
+                "next : I -> Item\n",
+                "}\n\n",
+                "interface Decode<Format, Source, Value> where (Format, Source) -> Value {\n",
+                "decode : (Format, Source) -> Value\n",
+                "}\n\n",
+                "interface Lookup<Key, Value, Context> where (Key, Context) -> Value {\n",
+                "lookup : (Key, Context) -> Value\n",
+                "}\n",
+            ),
+            "Unit",
+            "()",
+        );
+        let checked =
+            check_interface_declarations(&module, &mut InterfaceConstraintBudget::default())
+                .expect("all total determinations should reach checked publication");
+        let cases: [(&[usize], &[&str], &[&str]); 3] = [
+            (&[0], &["I"], &["Item"]),
+            (&[0, 1], &["Format", "Source"], &["Value"]),
+            (&[0, 2], &["Key", "Context"], &["Value"]),
+        ];
+
+        for ((source, token), (expected_positions, expected_key, expected_dependents)) in
+            module.interfaces().iter().zip(&checked).zip(cases)
+        {
+            let positions = token
+                .determinant_positions()
+                .expect("each fixture interface should retain a determinant key");
+            assert_eq!(positions, expected_positions);
+            assert_eq!(
+                positions
+                    .iter()
+                    .map(|position| source.parameters[*position].spelling.as_str())
+                    .collect::<Vec<_>>(),
+                expected_key,
+            );
+
+            let mut next_determinant = positions.iter().copied().peekable();
+            assert_eq!(
+                source
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(position, parameter)| {
+                        if next_determinant.peek() == Some(&position) {
+                            next_determinant.next();
+                            None
+                        } else {
+                            Some(parameter.spelling.as_str())
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+                expected_dependents,
+            );
+        }
+    }
+
+    #[test]
+    fn determination_coverage_has_an_exact_retryable_constraint_boundary() {
+        // One determinant-position validation, two ordered argument visits,
+        // two dependent-FV traversal cells, one key-position/argument pair,
+        // two key-type traversal cells, and three retained-label visits.
+        const EXACT_WORK: usize = 1 + 2 + 2 + 2 + 2 + 3;
+        let module = resolved_module_fixture(
+            "determination-coverage-budget.ash",
+            concat!(
+                "interface Relation<A, B> where A -> B {\n",
+                "relate : A -> Int\n",
+                "}\n\n",
+                "impl<B> Relation<Int, B> {\n",
+                "relate value = 0\n",
+                "}\n",
+            ),
+            "Unit",
+            "()",
+        );
+        let checked =
+            check_interface_declarations(&module, &mut InterfaceConstraintBudget::default())
+                .expect("the determined interface should admit its key");
+        let implementation = &module.implementations()[0];
+        let interface = checked_interface(
+            &module,
+            &checked,
+            implementation.head.interface.id,
+            &mut InterfaceConstraintBudget::default(),
+        )
+        .expect("the checked-interface lookup should fit")
+        .expect("the implementation interface should be checked");
+
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            check_implementation_determination_coverage(
+                &module,
+                interface,
+                implementation,
+                &mut short,
+            ),
+            Err(TypeError::Internal(
+                ElaborationFailure::ConstraintResourceExhausted
+            ))
+        );
+        assert_eq!(short.used(), EXACT_WORK - 1);
+        assert_eq!(implementation.head.arguments.len(), 2);
+
+        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        let error = check_implementation_determination_coverage(
+            &module,
+            interface,
+            implementation,
+            &mut exact,
+        )
+        .expect_err("the exact retry should reach determination coverage");
+        assert!(matches!(
+            error,
+            TypeError::Interface(diagnostic)
+                if diagnostic.reason == InterfaceReason::ImplDeterminationCoverage
+        ));
+        assert_eq!(exact.used(), EXACT_WORK);
+        assert_eq!(exact.charge(1), Err(()));
+        assert_eq!(implementation.head.arguments.len(), 2);
+    }
+
+    #[test]
+    fn determined_prerequisite_decrease_has_an_exact_retryable_key_boundary() {
+        // Each determinant-key extraction owns one position validation and one
+        // selected-argument visit. Retaining both complete prerequisite
+        // arguments owns two visits. Complete groundness then visits A and
+        // List<A> (eight), while the aligned key component and strict-subterm
+        // walk own nine more visits.
+        const EXACT_WORK: usize = (1 + 1) + 2 + (1 + 1) + 8 + 9;
+        let module = resolved_module_fixture(
+            "determined-prerequisite-budget.ash",
+            concat!(
+                "type List<A> =\nNil\n| Cons(A, List<A>)\n",
+                "interface Relation<A, B> where A -> B {\n",
+                "relate : A -> Int\n",
+                "}\n\n",
+                "impl<A> Relation<List<A>, A> where Relation<A, List<A>> {\n",
+                "relate value = 0\n",
+                "}\n",
+            ),
+            "Unit",
+            "()",
+        );
+        let checked =
+            check_interface_declarations(&module, &mut InterfaceConstraintBudget::default())
+                .expect("the determined interface should admit its key");
+        let implementation = &module.implementations()[0];
+        let interface = checked_interface(
+            &module,
+            &checked,
+            implementation.head.interface.id,
+            &mut InterfaceConstraintBudget::default(),
+        )
+        .expect("the checked-interface lookup should fit")
+        .expect("the implementation interface should be checked");
+        let prerequisite = &implementation.prerequisites[0];
+
+        let exercise = |budget: &mut InterfaceConstraintBudget| -> Result<bool, TypeError> {
+            let head_key =
+                collect_selection_key_types(interface, &implementation.head.arguments, budget)?;
+            budget
+                .charge(prerequisite.application.arguments.len())
+                .map_err(|()| constraint_resource())?;
+            let mut complete_prerequisite = Vec::new();
+            complete_prerequisite
+                .try_reserve_exact(prerequisite.application.arguments.len())
+                .map_err(|_| constraint_resource())?;
+            complete_prerequisite.extend(
+                prerequisite
+                    .application
+                    .arguments
+                    .iter()
+                    .map(|argument| &argument.ty),
+            );
+            let prerequisite_key = collect_selection_key_types(
+                interface,
+                &prerequisite.application.arguments,
+                budget,
+            )?;
+            implementation_prerequisite_selection_key_terminates(
+                &complete_prerequisite,
+                &prerequisite_key,
+                &head_key,
+                budget,
+            )
+            .map_err(|()| constraint_resource())
+        };
+
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            exercise(&mut short),
+            Err(TypeError::Internal(
+                ElaborationFailure::ConstraintResourceExhausted
+            ))
+        );
+        assert_eq!(short.used(), EXACT_WORK - 1);
+        assert_eq!(implementation.head.arguments.len(), 2);
+        assert_eq!(prerequisite.application.arguments.len(), 2);
+
+        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        assert_eq!(exercise(&mut exact), Ok(true));
+        assert_eq!(exact.used(), EXACT_WORK);
+        assert_eq!(exact.charge(1), Err(()));
+        assert_eq!(implementation.head.arguments.len(), 2);
+        assert_eq!(prerequisite.application.arguments.len(), 2);
+    }
+
+    #[test]
+    fn selection_key_collection_precharges_slots_before_reserving_and_is_retryable() {
+        let no_edge_module = resolved_module_fixture(
+            "no-edge-selection-key-storage-budget.ash",
+            concat!(
+                "interface Pair<A, B> {\n",
+                "pair : (A, B) -> Int\n",
+                "}\n\n",
+                "impl Pair<Int, Bool> {\n",
+                "pair value = 0\n",
+                "}\n",
+            ),
+            "Unit",
+            "()",
+        );
+        let no_edge_checked = check_interface_declarations(
+            &no_edge_module,
+            &mut InterfaceConstraintBudget::default(),
+        )
+        .expect("the ordinary interface should check");
+        let no_edge_implementation = &no_edge_module.implementations()[0];
+        let no_edge_interface = checked_interface(
+            &no_edge_module,
+            &no_edge_checked,
+            no_edge_implementation.head.interface.id,
+            &mut InterfaceConstraintBudget::default(),
+        )
+        .expect("the ordinary interface lookup should fit")
+        .expect("the ordinary interface should be checked");
+
+        let mut no_edge_short = InterfaceConstraintBudget::with_limit(1);
+        assert_eq!(
+            collect_selection_key_types(
+                no_edge_interface,
+                &no_edge_implementation.head.arguments,
+                &mut no_edge_short,
+            ),
+            Err(TypeError::Internal(
+                ElaborationFailure::ConstraintResourceExhausted
+            ))
+        );
+        assert_eq!(
+            no_edge_short.used(),
+            0,
+            "the two-slot storage charge is atomic before reserve"
+        );
+        let mut no_edge_exact = InterfaceConstraintBudget::with_limit(2);
+        let no_edge_key = collect_selection_key_types(
+            no_edge_interface,
+            &no_edge_implementation.head.arguments,
+            &mut no_edge_exact,
+        )
+        .expect("the exact no-edge retry should retain both arguments");
+        assert_eq!(no_edge_key, [&Type::Int, &Type::Bool]);
+        assert_eq!(no_edge_exact.used(), 2);
+
+        let determined_module = resolved_module_fixture(
+            "determined-selection-key-storage-budget.ash",
+            concat!(
+                "interface Triple<A, B, C> where (A, B) -> C {\n",
+                "triple : (A, B) -> Int\n",
+                "}\n\n",
+                "impl Triple<Int, Bool, Unit> {\n",
+                "triple value = 0\n",
+                "}\n",
+            ),
+            "Unit",
+            "()",
+        );
+        let determined_checked = check_interface_declarations(
+            &determined_module,
+            &mut InterfaceConstraintBudget::default(),
+        )
+        .expect("the determined interface should check");
+        let determined_implementation = &determined_module.implementations()[0];
+        let determined_interface = checked_interface(
+            &determined_module,
+            &determined_checked,
+            determined_implementation.head.interface.id,
+            &mut InterfaceConstraintBudget::default(),
+        )
+        .expect("the determined interface lookup should fit")
+        .expect("the determined interface should be checked");
+
+        // Two position validations precede one atomic two-slot charge.
+        let mut determined_short = InterfaceConstraintBudget::with_limit(3);
+        assert_eq!(
+            collect_selection_key_types(
+                determined_interface,
+                &determined_implementation.head.arguments,
+                &mut determined_short,
+            ),
+            Err(TypeError::Internal(
+                ElaborationFailure::ConstraintResourceExhausted
+            ))
+        );
+        assert_eq!(determined_short.used(), 2);
+        let mut determined_exact = InterfaceConstraintBudget::with_limit(4);
+        let determined_key = collect_selection_key_types(
+            determined_interface,
+            &determined_implementation.head.arguments,
+            &mut determined_exact,
+        )
+        .expect("the exact determined retry should retain both key arguments");
+        assert_eq!(determined_key, [&Type::Int, &Type::Bool]);
+        assert_eq!(determined_exact.used(), 4);
+    }
+
+    #[test]
+    fn determined_non_decreasing_header_retains_its_label_at_an_exact_retryable_boundary() {
+        // Header staging and complete type authentication own 21 visits; the
+        // ordered prerequisite-relation scan owns one interface lookup;
+        // variable-head selection owns two; determination coverage owns 13;
+        // key/reference staging owns seven; complete-groundness plus the
+        // aligned equality comparison own 15; the causal label owns one.
+        const EXACT_WORK: usize = 21 + 1 + 2 + 13 + 7 + 15 + 1;
+        let module = resolved_module_fixture(
+            "determined-non-decreasing-header-budget.ash",
+            concat!(
+                "type List<A> =\nNil\n| Cons(A, List<A>)\n",
+                "interface Relation<A, B> where A -> B {\n",
+                "relate : A -> Int\n",
+                "}\n\n",
+                "impl<A> Relation<List<A>, A> where Relation<List<A>, A> {\n",
+                "relate value = 0\n",
+                "}\n",
+            ),
+            "Unit",
+            "()",
+        );
+        let checked =
+            check_interface_declarations(&module, &mut InterfaceConstraintBudget::default())
+                .expect("the determined interface should admit its key");
+        let implementation = &module.implementations()[0];
+
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            check_implementation_header(&module, &checked, implementation, &mut short),
+            Err(TypeError::Internal(
+                ElaborationFailure::ConstraintResourceExhausted
+            ))
+        );
+        assert_eq!(short.used(), EXACT_WORK - 1);
+        assert_eq!(implementation.head.arguments.len(), 2);
+        assert_eq!(implementation.prerequisites.len(), 1);
+
+        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        let error = check_implementation_header(&module, &checked, implementation, &mut exact)
+            .expect_err("the exact retry should publish the non-decreasing diagnostic");
+        assert!(matches!(
+            error,
+            TypeError::Interface(diagnostic)
+                if diagnostic.reason == InterfaceReason::ImplPrerequisiteNotDecreasing
+                    && diagnostic.related.len() == 1
+        ));
+        assert_eq!(exact.used(), EXACT_WORK);
+        assert_eq!(exact.charge(1), Err(()));
+        assert_eq!(implementation.head.arguments.len(), 2);
+        assert_eq!(implementation.prerequisites.len(), 1);
+    }
+
+    #[test]
+    fn determined_prerequisite_conflict_has_an_exact_retryable_header_boundary() {
+        // Header staging and complete type authentication own 17 visits. Two
+        // prerequisite-interface lookups, one pair visit, the four-cell full
+        // comparison, the three-cell determinant comparison, and one retained
+        // causal label add eleven more visits.
+        const EXACT_WORK: usize = 17 + 2 + 1 + 4 + 3 + 1;
+        let module = resolved_module_fixture(
+            "determined-prerequisite-conflict-budget.ash",
+            concat!(
+                "interface Relation<Key, Value> where Key -> Value {\n",
+                "relate : Key -> Int\n",
+                "}\n\n",
+                "interface Target<A> {\n",
+                "target : A -> A\n",
+                "}\n\n",
+                "impl Target<Int> where Relation<Int, Bool>, Relation<Int, Unit> {\n",
+                "target value = value\n",
+                "}\n",
+            ),
+            "Unit",
+            "()",
+        );
+        let checked =
+            check_interface_declarations(&module, &mut InterfaceConstraintBudget::default())
+                .expect("both interfaces should admit their declarations");
+        let implementation = &module.implementations()[0];
+
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            check_implementation_header(&module, &checked, implementation, &mut short),
+            Err(TypeError::Internal(
+                ElaborationFailure::ConstraintResourceExhausted
+            ))
+        );
+        assert_eq!(short.used(), EXACT_WORK - 1);
+        assert_eq!(implementation.prerequisites.len(), 2);
+
+        for _ in 0..2 {
+            let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+            let error = check_implementation_header(&module, &checked, implementation, &mut exact)
+                .expect_err("the exact retry should publish the prerequisite-key conflict");
+            assert!(matches!(
+                error,
+                TypeError::Interface(diagnostic)
+                    if diagnostic.reason == InterfaceReason::DeterminationConflict
+                        && diagnostic.related.len() == 1
+            ));
+            assert_eq!(exact.used(), EXACT_WORK);
+            assert_eq!(exact.charge(1), Err(()));
+            assert_eq!(implementation.prerequisites.len(), 2);
+        }
+    }
+
+    #[test]
+    fn determined_variable_head_selection_has_an_exact_retryable_boundary() {
+        const EXACT_WORK: usize = 1 + 1;
+        let module = resolved_module_fixture(
+            "determined-variable-head-budget.ash",
+            concat!(
+                "interface Relation<A, B> where A -> B {\n",
+                "relate : A -> Int\n",
+                "}\n\n",
+                "impl<A> Relation<A, Bool> {\n",
+                "relate value = 0\n",
+                "}\n",
+            ),
+            "Unit",
+            "()",
+        );
+        let checked =
+            check_interface_declarations(&module, &mut InterfaceConstraintBudget::default())
+                .expect("the determined interface should admit its key");
+        let implementation = &module.implementations()[0];
+        let interface = checked_interface(
+            &module,
+            &checked,
+            implementation.head.interface.id,
+            &mut InterfaceConstraintBudget::default(),
+        )
+        .expect("the checked-interface lookup should fit")
+        .expect("the implementation interface should be checked");
+
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            selection_key_is_all_bare_variables(
+                interface,
+                &implementation.head.arguments,
+                &mut short,
+            ),
+            Err(TypeError::Internal(
+                ElaborationFailure::ConstraintResourceExhausted
+            ))
+        );
+        assert_eq!(short.used(), EXACT_WORK - 1);
+        assert_eq!(implementation.head.arguments.len(), 2);
+
+        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        assert_eq!(
+            selection_key_is_all_bare_variables(
+                interface,
+                &implementation.head.arguments,
+                &mut exact,
+            ),
+            Ok(true)
+        );
+        assert_eq!(exact.used(), EXACT_WORK);
+        assert_eq!(exact.charge(1), Err(()));
+        assert_eq!(implementation.head.arguments.len(), 2);
+    }
+
+    #[test]
+    fn determined_orphan_selection_has_an_exact_retryable_boundary() {
+        // One determinant-position validation plus the selected argument and
+        // its accepted outer-spine visit.
+        const EXACT_WORK: usize = 1 + 2;
+        let module = resolved_module_fixture(
+            "determined-orphan-budget.ash",
+            concat!(
+                "type Local = Local\n",
+                "interface Relation<A, B> where A -> B {\n",
+                "relate : A -> Int\n",
+                "}\n\n",
+                "impl Relation<Int, Local> {\n",
+                "relate value = 0\n",
+                "}\n",
+            ),
+            "Unit",
+            "()",
+        );
+        let checked =
+            check_interface_declarations(&module, &mut InterfaceConstraintBudget::default())
+                .expect("the determined interface should admit its key");
+        let implementation = &module.implementations()[0];
+        let interface = checked_interface(
+            &module,
+            &checked,
+            implementation.head.interface.id,
+            &mut InterfaceConstraintBudget::default(),
+        )
+        .expect("the checked-interface lookup should fit")
+        .expect("the implementation interface should be checked");
+
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            selection_key_has_local_outer_nominal(
+                interface,
+                &implementation.head.arguments,
+                module.module(),
+                &mut short,
+            ),
+            Err(TypeError::Internal(
+                ElaborationFailure::ConstraintResourceExhausted
+            ))
+        );
+        assert_eq!(short.used(), 1, "the two-unit outer-spine visit is atomic");
+        assert_eq!(implementation.head.arguments.len(), 2);
+
+        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        assert_eq!(
+            selection_key_has_local_outer_nominal(
+                interface,
+                &implementation.head.arguments,
+                module.module(),
+                &mut exact,
+            ),
+            Ok(false)
+        );
+        assert_eq!(exact.used(), EXACT_WORK);
+        assert_eq!(exact.charge(1), Err(()));
+        assert_eq!(implementation.head.arguments.len(), 2);
     }
 
     #[test]
@@ -12878,8 +15276,11 @@ mod tests {
     #[test]
     fn impl_method_substitution_uses_the_exact_constraint_budget() {
         // The interface and implementation method relation form one complete
-        // check-and-freeze boundary.
-        const EXACT_WORK: usize = 84;
+        // check-and-freeze boundary. Complete-application staging and matching
+        // add eight aligned root cells to the predecessor boundary. Global
+        // arity preflight adds one interface-map cell, visits the interface,
+        // implementation, and global declarations, and checks the head.
+        const EXACT_WORK: usize = 84 + 8 + 1 + 3 + 1;
         let declarations = concat!(
             "interface Keep<A> {\nkeep : A -> A\n}\n\n",
             "impl Keep<Int> {\nkeep value = value\n}\n",
@@ -12955,12 +15356,14 @@ mod tests {
                         id: interface_id,
                         public: false,
                         spelling: "Deep".to_owned(),
-                        parameter: ResolvedTypeVariable {
+                        parameters: vec![ResolvedTypeVariable {
                             id: parameter_id,
                             spelling: "A".to_owned(),
                             kind: crate::types::Kind::Type,
                             origin: Origin::Source(span),
-                        },
+                        }]
+                        .into_boxed_slice(),
+                        determination: None,
                         methods: vec![ResolvedInterfaceMethod {
                             id: MethodId::new(interface_id, 0),
                             spelling: "deep".to_owned(),
@@ -13045,9 +15448,8 @@ mod tests {
         let first = crate::resolved::ImportedImplementationFact {
             fact: CheckedImplementationFact {
                 id: crate::interface::ImplId::new(ModuleId::new(90), 0),
-                interface,
+                application: InterfaceApplication::new(interface, Box::new([Type::Int])),
                 head_parameters: Box::new([]),
-                argument: Type::Int,
                 prerequisites: Box::new([]),
                 methods: Box::new([]),
                 origin: Origin::Source(first_definition),
@@ -13070,9 +15472,8 @@ mod tests {
         let second = crate::resolved::ImportedImplementationFact {
             fact: CheckedImplementationFact {
                 id: crate::interface::ImplId::new(ModuleId::new(10), 0),
-                interface,
+                application: InterfaceApplication::new(interface, Box::new([Type::Int])),
                 head_parameters: Box::new([]),
-                argument: Type::Int,
                 prerequisites: Box::new([]),
                 methods: Box::new([]),
                 origin: Origin::Source(second_definition),
@@ -13097,10 +15498,11 @@ mod tests {
             ImplementationHeadRef::Imported(&second),
         ];
 
-        // Two head visits plus one pair visit, two body-free Int environment
+        // Two head visits plus one pair visit and two aligned application-copy
+        // cells, then two overlap root cells and four body-free Int environment
         // visits, four structural overlap cells, and five retained route labels.
-        const HEAD_AND_PAIR_WORK: usize = 3;
-        const ENVIRONMENT_WORK: usize = 4;
+        const HEAD_AND_PAIR_WORK: usize = 3 + 2;
+        const ENVIRONMENT_WORK: usize = 2 + 4;
         const OVERLAP_WORK: usize = 4;
         const ROUTE_LABEL_WORK: usize = 5;
         const EXACT_CONSTRAINT_WORK: usize =
@@ -13112,6 +15514,7 @@ mod tests {
             check_effective_implementation_heads(
                 &registry,
                 &effective,
+                |_, _| Ok(None),
                 &mut short,
                 &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
             ),
@@ -13125,6 +15528,7 @@ mod tests {
         let error = check_effective_implementation_heads(
             &registry,
             &effective,
+            |_, _| Ok(None),
             &mut exact,
             &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
         )
@@ -13171,13 +15575,140 @@ mod tests {
     }
 
     #[test]
+    fn determined_pair_coherence_has_an_exact_retryable_route_boundary() {
+        let source = SourceFile::new("determination-conflict.ash", "abcdefghijklmnopqrstuvwx")
+            .expect("the conflict span fixture should fit");
+        let span = |start, end| {
+            source
+                .span(ByteRange::new(start, end).expect("the span should be ordered"))
+                .expect("the span should belong to the fixture")
+        };
+        let first_definition = span(0, 2);
+        let first_route = span(3, 5);
+        let first_route_suffix = span(6, 8);
+        let second_definition = span(9, 11);
+        let second_route = span(12, 14);
+        let second_route_suffix = span(15, 17);
+        let interface = InterfaceId::new(ModuleId::new(70), 0);
+        let first = crate::resolved::ImportedImplementationFact {
+            fact: CheckedImplementationFact {
+                id: ImplId::new(ModuleId::new(90), 0),
+                application: InterfaceApplication::new(interface, Box::new([Type::Int, Type::Int])),
+                head_parameters: Box::new([]),
+                prerequisites: Box::new([]),
+                methods: Box::new([]),
+                origin: Origin::Source(first_definition),
+                span: first_definition,
+            },
+            authorization: crate::resolved::ImplementationAuthorization::from_hops(vec![
+                crate::resolved::ImplementationRouteHop {
+                    from: ModuleId::new(1),
+                    to: ModuleId::new(80),
+                    import_span: first_route,
+                },
+                crate::resolved::ImplementationRouteHop {
+                    from: ModuleId::new(80),
+                    to: ModuleId::new(90),
+                    import_span: first_route_suffix,
+                },
+            ]),
+            public_authorization: None,
+        };
+        let second = crate::resolved::ImportedImplementationFact {
+            fact: CheckedImplementationFact {
+                id: ImplId::new(ModuleId::new(10), 0),
+                application: InterfaceApplication::new(
+                    interface,
+                    Box::new([Type::Int, Type::Bool]),
+                ),
+                head_parameters: Box::new([]),
+                prerequisites: Box::new([]),
+                methods: Box::new([]),
+                origin: Origin::Source(second_definition),
+                span: second_definition,
+            },
+            authorization: crate::resolved::ImplementationAuthorization::from_hops(vec![
+                crate::resolved::ImplementationRouteHop {
+                    from: ModuleId::new(1),
+                    to: ModuleId::new(20),
+                    import_span: second_route,
+                },
+                crate::resolved::ImplementationRouteHop {
+                    from: ModuleId::new(20),
+                    to: ModuleId::new(10),
+                    import_span: second_route_suffix,
+                },
+            ]),
+            public_authorization: None,
+        };
+        let effective = [
+            ImplementationHeadRef::Imported(&first),
+            ImplementationHeadRef::Imported(&second),
+        ];
+        let determination = DeterminationKey::new(Box::new([0]));
+
+        // Two head visits, one pair, four full-argument copies, one key-position
+        // validation, two selected-argument visits, and one key comparison.
+        const PAIR_STAGING_WORK: usize = 2 + 1 + 4 + 1 + 2 + 1;
+        // The key comparison owns two roots, four environment visits, and four
+        // first-order visits. The independent full comparison owns four roots,
+        // eight environment visits, and eight first-order visits.
+        const KEY_MATCH_WORK: usize = 2 + 4 + 4;
+        const FULL_MATCH_WORK: usize = 4 + 8 + 8;
+        const ROUTE_LABEL_WORK: usize = 5;
+        const EXACT_WORK: usize =
+            PAIR_STAGING_WORK + KEY_MATCH_WORK + FULL_MATCH_WORK + ROUTE_LABEL_WORK;
+
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            check_effective_implementation_heads(
+                &ResolvedRegistry::new(Vec::new(), Vec::new()),
+                &effective,
+                |_, _| Ok(Some(&determination)),
+                &mut short,
+                &mut TypeWorkBudget::with_limit(0),
+            ),
+            Err(TypeError::Internal(
+                ElaborationFailure::ConstraintResourceExhausted
+            ))
+        );
+        assert_eq!(short.used(), EXACT_WORK - 1);
+        assert_eq!(first.fact.arguments(), &[Type::Int, Type::Int]);
+        assert_eq!(second.fact.arguments(), &[Type::Int, Type::Bool]);
+
+        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_WORK);
+        let error = check_effective_implementation_heads(
+            &ResolvedRegistry::new(Vec::new(), Vec::new()),
+            &effective,
+            |_, _| Ok(Some(&determination)),
+            &mut exact,
+            &mut TypeWorkBudget::with_limit(0),
+        )
+        .expect_err("the exact retry should reach the route-rich key conflict");
+        let TypeError::Interface(diagnostic) = error else {
+            panic!("the key conflict should use an interface diagnostic");
+        };
+        assert_eq!(
+            diagnostic.reason,
+            InterfaceReason::ImplDeterminationConflict
+        );
+        assert_eq!(diagnostic.primary.span(), second_route);
+        assert_eq!(diagnostic.related.len(), ROUTE_LABEL_WORK);
+        assert_eq!(exact.used(), EXACT_WORK);
+        assert_eq!(exact.charge(1), Err(()));
+        assert_eq!(first.fact.arguments(), &[Type::Int, Type::Int]);
+        assert_eq!(second.fact.arguments(), &[Type::Int, Type::Bool]);
+    }
+
+    #[test]
     fn higher_kinded_overlap_caller_preserves_exact_type_resource_classification() {
-        // The caller charges two head visits, one pair visit, and one copied
-        // head-parameter ID. The overlap seam then owns 16 canonical
+        // The caller charges two head visits, one pair visit, one copied
+        // head-parameter ID, and two aligned application-copy cells. The
+        // overlap seam then owns two application roots, 16 canonical
         // environment discovery cells and 26 unification/authentication
         // cells. One retained diagnostic label completes the exact boundary.
-        const HEAD_COLLECTION_AND_PAIR_WORK: usize = 4;
-        const CANONICAL_ENVIRONMENT_WORK: usize = 16;
+        const HEAD_COLLECTION_AND_PAIR_WORK: usize = 4 + 2;
+        const CANONICAL_ENVIRONMENT_WORK: usize = 2 + 16;
         const OVERLAP_UNIFICATION_WORK: usize = 26;
         const DIAGNOSTIC_RETENTION_WORK: usize = 1;
         const EXACT_CONSTRAINT_WORK: usize = HEAD_COLLECTION_AND_PAIR_WORK
@@ -13234,7 +15765,7 @@ mod tests {
         let first = crate::resolved::ImportedImplementationFact {
             fact: CheckedImplementationFact {
                 id: first_id,
-                interface,
+                application: InterfaceApplication::new(interface, Box::new([first_argument])),
                 head_parameters: vec![ResolvedTypeVariable {
                     id: function,
                     spelling: "F".into(),
@@ -13242,7 +15773,6 @@ mod tests {
                     origin: Origin::Source(span),
                 }]
                 .into_boxed_slice(),
-                argument: first_argument,
                 prerequisites: Box::new([]),
                 methods: Box::new([]),
                 origin: Origin::Source(span),
@@ -13254,9 +15784,8 @@ mod tests {
         let second = crate::resolved::ImportedImplementationFact {
             fact: CheckedImplementationFact {
                 id: second_id,
-                interface,
+                application: InterfaceApplication::new(interface, Box::new([second_argument])),
                 head_parameters: Box::new([]),
-                argument: second_argument,
                 prerequisites: Box::new([]),
                 methods: Box::new([]),
                 origin: Origin::Source(span),
@@ -13274,6 +15803,7 @@ mod tests {
             check_effective_implementation_heads(
                 &registry,
                 &effective,
+                |_, _| Ok(None),
                 &mut InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK),
                 &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK - 1),
             ),
@@ -13283,18 +15813,25 @@ mod tests {
             "the overlap caller must preserve TypeWork ownership"
         );
         assert_eq!(
-            first.fact.argument(),
-            &Type::Application(Box::new(Type::Variable(function)), Box::new(Type::Int),)
+            first.fact.arguments(),
+            &[Type::Application(
+                Box::new(Type::Variable(function)),
+                Box::new(Type::Int),
+            )]
         );
         assert_eq!(
-            second.fact.argument(),
-            &Type::Application(Box::new(Type::Nominal(option)), Box::new(Type::Int),)
+            second.fact.arguments(),
+            &[Type::Application(
+                Box::new(Type::Nominal(option)),
+                Box::new(Type::Int),
+            )]
         );
 
         assert_eq!(
             check_effective_implementation_heads(
                 &registry,
                 &effective,
+                |_, _| Ok(None),
                 &mut InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK - 1),
                 &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
             ),
@@ -13308,6 +15845,7 @@ mod tests {
         let error = check_effective_implementation_heads(
             &registry,
             &effective,
+            |_, _| Ok(None),
             &mut exact_constraints,
             &mut exact_types,
         )
@@ -13787,6 +16325,7 @@ mod tests {
                 let parameter = TypeVariableId::new(0);
                 let method_parameter = TypeVariableId::new(1);
                 let method_parameters = [(method_parameter, Kind::Type)];
+                let interface_parameters = [(parameter, deep_kind())];
 
                 let mut short = TypeWorkBudget::default();
                 short
@@ -13794,8 +16333,7 @@ mod tests {
                     .expect("one-short method-occurrence precharge");
                 assert_eq!(
                     retain_method_occurrence_parameters(
-                        parameter,
-                        &deep_kind(),
+                        &interface_parameters,
                         &method_parameters,
                         &mut short,
                     ),
@@ -13809,8 +16347,7 @@ mod tests {
                     .charge(crate::types::TYPE_WORK_LIMIT - EXACT_WORK)
                     .expect("exact method-occurrence precharge");
                 let (fact, scheme) = retain_method_occurrence_parameters(
-                    parameter,
-                    &source_kind,
+                    &[(parameter, source_kind.clone())],
                     &method_parameters,
                     &mut exact,
                 )
@@ -14226,6 +16763,80 @@ mod tests {
             Err(UnificationFailure::Invariant)
         );
         assert!(elaborator.inference_solutions.is_empty());
+    }
+
+    #[test]
+    fn determination_conflict_rolls_back_the_complete_dependent_tuple() {
+        // A two-dependent rejected tuple transaction costs `6D + 20 = 32`.
+        // Conflict reporting then zonks the two-cell key, the three-cell
+        // expected tuple, and the three-cell actual tuple plus one unresolved
+        // inference authentication: `32 + 2 + 3 + 4 = 41` type units. Three
+        // rendered fields and one retained source label cost four constraint
+        // units.
+        const CONSTRAINT_WORK: usize = 4;
+        const TYPE_WORK: usize = 41;
+        let run = |constraint_limit, type_limit| {
+            let source = SourceFile::new("determination-transaction.ash", "source goal")
+                .expect("the fixture source should fit");
+            let source_span = source
+                .span(ByteRange::new(0, 6).expect("the source range should be ordered"))
+                .expect("the source span should fit");
+            let obligation_span = source
+                .span(ByteRange::new(7, 11).expect("the goal range should be ordered"))
+                .expect("the goal span should fit");
+            let mut elaborator = Elaborator::new();
+            let inference = elaborator
+                .fresh_inference(&Kind::Type, obligation_span)
+                .expect("the dependent inference variable should register");
+            let Type::Inference(identity) = inference else {
+                unreachable!()
+            };
+            elaborator.constraint_work = InterfaceConstraintBudget::with_limit(constraint_limit);
+            elaborator.type_work = TypeWorkBudget::with_limit(type_limit);
+            let task = ImprovementTask::for_test(
+                Box::new([Type::Unit]),
+                Box::new([Type::Int, Type::Bool]),
+                Box::new([Type::Inference(identity), Type::Int]),
+                obligation_span,
+                source_span,
+            );
+            let result = elaborator.apply_improvement_tasks(std::iter::once(task));
+            assert!(
+                elaborator.inference_solutions.is_empty(),
+                "the first dependent must not publish when a later dependent conflicts"
+            );
+            assert!(elaborator.authenticated_inference_solutions.is_empty());
+            (elaborator, result)
+        };
+
+        let (constraint_short, result) = run(CONSTRAINT_WORK - 1, TYPE_WORK);
+        assert_eq!(
+            result,
+            Err(TypeError::Internal(
+                ElaborationFailure::ConstraintResourceExhausted
+            )),
+        );
+        assert_eq!(constraint_short.constraint_work.used(), CONSTRAINT_WORK - 1);
+
+        let (type_short, result) = run(CONSTRAINT_WORK, TYPE_WORK - 1);
+        assert_eq!(
+            result,
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            )),
+        );
+        assert_eq!(type_short.type_work.used(), TYPE_WORK - 1);
+
+        for _ in 0..2 {
+            let (exact, result) = run(CONSTRAINT_WORK, TYPE_WORK);
+            assert!(matches!(
+                result,
+                Err(TypeError::Interface(diagnostic))
+                    if diagnostic.reason == InterfaceReason::DeterminationConflict
+            ));
+            assert_eq!(exact.constraint_work.used(), CONSTRAINT_WORK);
+            assert_eq!(exact.type_work.used(), TYPE_WORK);
+        }
     }
 
     #[test]
@@ -16792,7 +19403,10 @@ mod tests {
                     )
                     .expect("the one-node evidence plan should fit");
                 let selection = selection_builder
-                    .finish(root, interface, Type::Unit)
+                    .finish(
+                        root,
+                        InterfaceApplication::new(interface, Box::new([Type::Unit])),
+                    )
                     .expect("the evidence root should exist");
                 let mut lowering = EvidenceLowering {
                     interfaces: HashMap::new(),
@@ -16800,7 +19414,7 @@ mod tests {
                         method,
                         LoweredInterfaceMethod {
                             interface,
-                            parameter: TypeVariableId::resolved(module, 0),
+                            parameters: Box::new([TypeVariableId::resolved(module, 0)]),
                             type_parameters: Box::new([]),
                             value_type: Type::Unit,
                             declaration_span: span,
@@ -16812,7 +19426,10 @@ mod tests {
                         LoweredImplementationMethod {
                             binder: BinderId::resolved(module, 0),
                             head_type_parameter_count: 0,
-                            interface_argument: Type::Unit,
+                            application: InterfaceApplication::new(
+                                interface,
+                                Box::new([Type::Unit]),
+                            ),
                             scheme: LoweredScheme {
                                 source_type_parameters: Some(Box::new([])),
                                 type_parameters: Box::new([]),
@@ -17432,6 +20049,86 @@ mod tests {
             .expect("the constrained-scheme budget thread should start")
             .join()
             .expect("constrained-scheme construction must fit the small stack");
+    }
+
+    #[test]
+    fn lowered_requirement_rows_and_replacements_have_an_exact_retryable_type_boundary() {
+        // One requirement-row owner + one source value clone + one method-row
+        // owner + one replacement-entry owner + one replacement argument +
+        // one substituted result + two application cells + one Core value
+        // clone + one evidence-function cell + one evidence-domain clone.
+        const EXACT_TYPE_WORK: usize = 1 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1;
+
+        let resolved = resolved_module_fixture("lowered-row-budget.ash", "", "Unit", "()");
+        let span = fixture_result(&resolved).span;
+        let module = ModuleId::new(777);
+        let owner = BinderId::resolved(module, 0);
+        let interface = InterfaceId::new(module, 0);
+        let parameter = TypeVariableId::resolved(module, 0);
+        let method = MethodId::new(interface, 0);
+        let requirement = RequirementId::new(RequirementOwner::Global(owner), 0);
+        let scheme = ConstrainedScheme {
+            type_parameters: Box::new([]),
+            requirements: Box::new([CheckedRequirement {
+                id: requirement,
+                application: InterfaceApplication::new(interface, Box::new([Type::Unit])),
+                origin: Origin::Source(span),
+                span,
+            }]),
+            value_type: Type::Unit,
+        };
+        let lowering = EvidenceLowering {
+            interfaces: HashMap::from([(
+                interface,
+                LoweredInterface {
+                    methods: Box::new([method]),
+                    determination: None,
+                },
+            )]),
+            interface_methods: HashMap::from([(
+                method,
+                LoweredInterfaceMethod {
+                    interface,
+                    parameters: Box::new([parameter]),
+                    type_parameters: Box::new([]),
+                    value_type: Type::Variable(parameter),
+                    declaration_span: span,
+                },
+            )]),
+            global_schemes: HashMap::new(),
+            implementation_methods: HashMap::new(),
+            active_binders: HashMap::new(),
+        };
+        let mut elaborator =
+            Elaborator::for_module(&resolved).expect("the lowering fixture namespace should fit");
+
+        elaborator.type_work = TypeWorkBudget::with_limit(EXACT_TYPE_WORK - 1);
+        assert!(matches!(
+            elaborator.lower_constrained_scheme(
+                &scheme,
+                &lowering,
+                MethodEvidenceOwner::Global(owner),
+                false,
+                span,
+            ),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            )),
+        ));
+
+        elaborator.type_work = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
+        let lowered = elaborator
+            .lower_constrained_scheme(
+                &scheme,
+                &lowering,
+                MethodEvidenceOwner::Global(owner),
+                false,
+                span,
+            )
+            .expect("a fresh exact budget should retry the unpublished lowered scheme");
+        assert_eq!(elaborator.type_work.used(), EXACT_TYPE_WORK);
+        assert_eq!(lowered.requirements.len(), 1);
+        assert_eq!(lowered.requirements[0].methods.len(), 1);
     }
 
     #[test]

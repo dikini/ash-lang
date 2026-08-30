@@ -230,6 +230,7 @@ impl InterfaceConstraintBudget {
 ///
 /// Ground prerequisites are admitted. A prerequisite containing a rigid type
 /// variable must be a strict syntactic subterm of the implementation head.
+#[cfg(test)]
 pub(crate) fn implementation_prerequisite_terminates(
     prerequisite: &Type,
     head: &Type,
@@ -248,6 +249,51 @@ pub(crate) fn implementation_prerequisite_terminates(
         schedule_type_children(candidate, &mut pending, budget)?;
     }
     Ok(false)
+}
+
+/// Checks a generic prerequisite against canonical selection-key tuples while
+/// retaining full-application groundness as the earlier exemption.
+pub(crate) fn implementation_prerequisite_selection_key_terminates(
+    complete_prerequisite: &[&Type],
+    prerequisite_key: &[&Type],
+    head_key: &[&Type],
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, ()> {
+    let mut ground = true;
+    for argument in complete_prerequisite {
+        if type_contains_any_variable(argument, budget)? {
+            ground = false;
+        }
+    }
+    if ground {
+        return Ok(true);
+    }
+    if prerequisite_key.len() != head_key.len() {
+        return Ok(false);
+    }
+
+    let mut any_strict = false;
+    for (prerequisite, head) in prerequisite_key.iter().zip(head_key) {
+        budget.charge(1)?;
+        if same_type_with_constraint_budget(prerequisite, head, budget)? {
+            continue;
+        }
+        let mut pending = Vec::new();
+        schedule_type_children(head, &mut pending, budget)?;
+        let mut strict = false;
+        while let Some(candidate) = pending.pop() {
+            if same_type_with_constraint_budget(prerequisite, candidate, budget)? {
+                strict = true;
+                break;
+            }
+            schedule_type_children(candidate, &mut pending, budget)?;
+        }
+        if !strict {
+            return Ok(false);
+        }
+        any_strict = true;
+    }
+    Ok(any_strict)
 }
 
 fn type_contains_any_variable(
@@ -555,6 +601,7 @@ pub(crate) fn match_implementation_head(
 /// Evidence selection builds this once per obligation and reuses it across all
 /// candidate inspections. The complete candidate and goal kinds remain a
 /// checked-boundary precondition; only retained substitutions are synthesized.
+#[cfg(test)]
 pub(crate) fn match_implementation_head_in_environment(
     registry: &ResolvedRegistry,
     operation: InterfaceOperationWork<'_>,
@@ -563,6 +610,102 @@ pub(crate) fn match_implementation_head_in_environment(
     candidate: &Type,
     goal: &Type,
 ) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
+    match_implementation_application_head_in_environment(
+        registry,
+        operation,
+        goal_environments,
+        candidate_parameters,
+        &[candidate],
+        &[goal],
+    )
+}
+
+pub(crate) fn match_implementation_application_head_in_environment(
+    registry: &ResolvedRegistry,
+    operation: InterfaceOperationWork<'_>,
+    goal_environments: &KindEnvironments<'_>,
+    candidate_parameters: &[TypeVariableId],
+    candidate: &[&Type],
+    goal: &[&Type],
+) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
+    match_implementation_application_head_with_goal_validation(
+        registry,
+        operation,
+        goal_environments,
+        candidate_parameters,
+        candidate,
+        goal,
+        true,
+    )
+}
+
+/// Capability for one exact goal vector whose complete roots have already
+/// been authenticated against its canonical kind environments.
+pub(crate) struct CanonicalImplementationGoal<'registry, 'goal> {
+    environments: KindEnvironments<'registry>,
+    roots: &'goal [&'goal Type],
+}
+
+/// Authenticates one exact goal vector and binds the roots to the resulting
+/// canonical environments. Private fields prevent a later caller from pairing
+/// those environments with a different goal.
+pub(crate) fn authenticate_implementation_application_goal<'registry, 'goal>(
+    registry: &'registry ResolvedRegistry,
+    operation: InterfaceOperationWork<'_>,
+    roots: &'goal [&'goal Type],
+) -> Result<CanonicalImplementationGoal<'registry, 'goal>, HeadMatchFailure> {
+    let InterfaceOperationWork {
+        span,
+        constraint_budget,
+        type_budget,
+    } = operation;
+    let environments = canonical_body_free_environments(
+        registry,
+        &[],
+        roots,
+        span,
+        constraint_budget,
+        type_budget,
+    )
+    .map_err(map_match_environment_failure)?;
+    Ok(CanonicalImplementationGoal {
+        environments,
+        roots,
+    })
+}
+
+/// Matches one candidate against the exact goal roots bound into a canonical
+/// goal capability.
+pub(crate) fn match_implementation_application_head_against_canonical_goal(
+    registry: &ResolvedRegistry,
+    operation: InterfaceOperationWork<'_>,
+    candidate_parameters: &[TypeVariableId],
+    candidate: &[&Type],
+    goal: &CanonicalImplementationGoal<'_, '_>,
+) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
+    match_implementation_application_head_with_goal_validation(
+        registry,
+        operation,
+        &goal.environments,
+        candidate_parameters,
+        candidate,
+        goal.roots,
+        false,
+    )
+}
+
+fn match_implementation_application_head_with_goal_validation(
+    registry: &ResolvedRegistry,
+    operation: InterfaceOperationWork<'_>,
+    goal_environments: &KindEnvironments<'_>,
+    candidate_parameters: &[TypeVariableId],
+    candidate: &[&Type],
+    goal: &[&Type],
+    validate_goal: bool,
+) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
+    if candidate.len() != goal.len() {
+        return Err(HeadMatchFailure::InvalidState);
+    }
     let InterfaceOperationWork {
         span,
         constraint_budget,
@@ -574,6 +717,7 @@ pub(crate) fn match_implementation_head_in_environment(
         goal,
         constraint_budget,
         type_budget,
+        validate_goal,
         |parameter, binding, constraint_budget, _type_budget| {
             let expected =
                 canonical_type_variable_kind(registry, parameter, span, constraint_budget)
@@ -585,7 +729,6 @@ pub(crate) fn match_implementation_head_in_environment(
     )
 }
 
-#[cfg(test)]
 fn map_match_environment_failure(failure: CanonicalEnvironmentFailure) -> HeadMatchFailure {
     match failure {
         CanonicalEnvironmentFailure::ConstraintResource => HeadMatchFailure::ConstraintResource,
@@ -614,20 +757,22 @@ where
 {
     match_implementation_head_with(
         candidate_parameters,
-        candidate,
-        goal,
+        &[candidate],
+        &[goal],
         constraint_budget,
         type_budget,
+        true,
         |_, _, _, _| Ok(()),
     )
 }
 
 fn match_implementation_head_with<I, F>(
     candidate_parameters: I,
-    candidate: &Type,
-    goal: &Type,
+    candidate: &[&Type],
+    goal: &[&Type],
     constraint_budget: &mut InterfaceConstraintBudget,
     type_budget: &mut TypeWorkBudget,
+    validate_goal: bool,
     mut authenticate_binding: F,
 ) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure>
 where
@@ -639,6 +784,9 @@ where
         &mut TypeWorkBudget,
     ) -> Result<(), HeadMatchFailure>,
 {
+    if candidate.len() != goal.len() {
+        return Err(HeadMatchFailure::InvalidState);
+    }
     let parameter_count = candidate_parameters.len();
     constraint_budget
         .charge(parameter_count)
@@ -661,17 +809,23 @@ where
         parameters.push(parameter);
     }
 
-    validate_match_type(candidate, Some(&positions), constraint_budget)?;
-    validate_match_type(goal, None, constraint_budget)?;
+    for candidate in candidate {
+        validate_match_type(candidate, Some(&positions), constraint_budget)?;
+    }
+    if validate_goal {
+        for goal in goal {
+            validate_match_type(goal, None, constraint_budget)?;
+        }
+    }
 
     constraint_budget
-        .charge(1)
+        .charge(candidate.len())
         .map_err(|()| HeadMatchFailure::ConstraintResource)?;
     let mut pending = Vec::new();
     pending
-        .try_reserve(1)
+        .try_reserve(candidate.len())
         .map_err(|_| HeadMatchFailure::ConstraintResource)?;
-    pending.push((candidate, goal));
+    pending.extend(candidate.iter().copied().zip(goal.iter().copied()).rev());
     let mut bindings = Vec::new();
     constraint_budget
         .charge(parameter_count)
@@ -923,6 +1077,7 @@ struct FreshOverlapVariable {
 /// Source/import validation authenticated the complete heads. This operation
 /// independently freshens their binders and kind-authenticates only each new
 /// unification solution before caching it.
+#[cfg(test)]
 pub(crate) fn implementation_heads_overlap(
     registry: &ResolvedRegistry,
     operation: InterfaceOperationWork<'_>,
@@ -931,15 +1086,51 @@ pub(crate) fn implementation_heads_overlap(
     right_parameters: &[TypeVariableId],
     right: &Type,
 ) -> Result<bool, OverlapFailure> {
+    implementation_application_heads_overlap(
+        registry,
+        operation,
+        left_parameters,
+        &[left],
+        right_parameters,
+        &[right],
+    )
+}
+
+/// Determines first-order overlap between two complete ordered interface
+/// applications while sharing one freshening substitution across positions.
+pub(crate) fn implementation_application_heads_overlap(
+    registry: &ResolvedRegistry,
+    operation: InterfaceOperationWork<'_>,
+    left_parameters: &[TypeVariableId],
+    left: &[&Type],
+    right_parameters: &[TypeVariableId],
+    right: &[&Type],
+) -> Result<bool, OverlapFailure> {
+    if left.len() != right.len() {
+        return Err(OverlapFailure::InvalidState);
+    }
     let InterfaceOperationWork {
         span,
         constraint_budget,
         type_budget,
     } = operation;
+    let root_count = left
+        .len()
+        .checked_add(right.len())
+        .ok_or(OverlapFailure::Resource)?;
+    constraint_budget
+        .charge(root_count)
+        .map_err(|()| OverlapFailure::Resource)?;
+    let mut roots = Vec::new();
+    roots
+        .try_reserve(root_count)
+        .map_err(|_| OverlapFailure::Resource)?;
+    roots.extend(left.iter().copied());
+    roots.extend(right.iter().copied());
     let environments = canonical_body_free_environments(
         registry,
         &[],
-        &[left, right],
+        &roots,
         span,
         constraint_budget,
         type_budget,
@@ -988,6 +1179,7 @@ fn map_overlap_kind_failure(failure: KindFailure) -> OverlapFailure {
 /// Determines structural overlap after both heads and their declared binders
 /// have already been independently kind-authenticated for the same interface
 /// parameter kind.
+#[cfg(test)]
 pub(crate) fn implementation_heads_overlap_structurally<L, R>(
     left_parameters: L,
     left: &Type,
@@ -1001,6 +1193,30 @@ where
 {
     implementation_heads_overlap_with(
         left_parameters,
+        &[left],
+        right_parameters,
+        &[right],
+        budget,
+        |_, _, _| Ok(()),
+    )
+}
+
+pub(crate) fn implementation_application_heads_overlap_structurally<L, R>(
+    left_parameters: L,
+    left: &[&Type],
+    right_parameters: R,
+    right: &[&Type],
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, OverlapFailure>
+where
+    L: ExactSizeIterator<Item = TypeVariableId>,
+    R: ExactSizeIterator<Item = TypeVariableId>,
+{
+    if left.len() != right.len() {
+        return Err(OverlapFailure::InvalidState);
+    }
+    implementation_heads_overlap_with(
+        left_parameters,
         left,
         right_parameters,
         right,
@@ -1011,9 +1227,9 @@ where
 
 fn implementation_heads_overlap_with<L, R, F>(
     left_parameters: L,
-    left: &Type,
+    left: &[&Type],
     right_parameters: R,
-    right: &Type,
+    right: &[&Type],
     budget: &mut InterfaceConstraintBudget,
     mut authenticate_solution: F,
 ) -> Result<bool, OverlapFailure>
@@ -1026,23 +1242,30 @@ where
         &mut InterfaceConstraintBudget,
     ) -> Result<(), OverlapFailure>,
 {
+    if left.len() != right.len() {
+        return Err(OverlapFailure::InvalidState);
+    }
     let left_positions = overlap_parameter_positions(left_parameters, budget)?;
     let right_positions = overlap_parameter_positions(right_parameters, budget)?;
-    budget.charge(1).map_err(|()| OverlapFailure::Resource)?;
+    budget
+        .charge(left.len())
+        .map_err(|()| OverlapFailure::Resource)?;
     let mut pending = Vec::new();
     pending
-        .try_reserve(1)
+        .try_reserve(left.len())
         .map_err(|_| OverlapFailure::Resource)?;
-    pending.push((
-        OverlapHead {
-            side: OverlapSide::Left,
-            ty: left,
-        },
-        OverlapHead {
-            side: OverlapSide::Right,
-            ty: right,
-        },
-    ));
+    pending.extend(left.iter().zip(right).rev().map(|(left, right)| {
+        (
+            OverlapHead {
+                side: OverlapSide::Left,
+                ty: left,
+            },
+            OverlapHead {
+                side: OverlapSide::Right,
+                ty: right,
+            },
+        )
+    }));
     let mut solutions = HashMap::new();
     while let Some((left, right)) = pending.pop() {
         let left =
@@ -1330,6 +1553,10 @@ fn overlap_occurs<'a>(
 /// The interface or implementation header judgment that rejected source.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InterfaceReason {
+    /// An interface application has a different arity from its declaration.
+    ArgumentCount,
+    /// An interface determination does not partition its parameters exactly once.
+    DeterminationParameter,
     /// An interface method omits its parameter or introduces another type variable.
     MethodParameter,
     /// An interface method signature does not have a top-level function arrow.
@@ -1342,6 +1569,8 @@ pub enum InterfaceReason {
     Unsatisfied,
     /// The obligation remains undetermined when evidence selection must begin.
     Ambiguous,
+    /// A determined source and the pending dependent tuple disagree.
+    DeterminationConflict,
     /// Selecting prerequisites re-entered an active obligation.
     Cycle,
     /// A public constrained global exposes a private interface.
@@ -1352,8 +1581,12 @@ pub enum InterfaceReason {
     ImplOrphan,
     /// An implementation head is a bare type variable.
     ImplVariableHead,
+    /// A determined implementation dependent contains a variable absent from its key.
+    ImplDeterminationCoverage,
     /// Two available implementation heads unify.
     ImplOverlap,
+    /// Two available implementation heads share a key but disagree on dependents.
+    ImplDeterminationConflict,
     /// An implementation prerequisite introduces a variable absent from the head.
     ImplPrerequisiteVariable,
     /// A non-ground implementation prerequisite is not a strict head subterm.
@@ -1369,18 +1602,23 @@ pub enum InterfaceReason {
 impl fmt::Display for InterfaceReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::ArgumentCount => "interface.argument-count",
+            Self::DeterminationParameter => "interface.determination-parameter",
             Self::MethodParameter => "interface.method-parameter",
             Self::MethodNotFunction => "interface.method-not-function",
             Self::DuplicateRequirement => "constraint.duplicate-requirement",
             Self::UndeterminedParameter => "constraint.undetermined-parameter",
             Self::Unsatisfied => "constraint.unsatisfied",
             Self::Ambiguous => "constraint.ambiguous",
+            Self::DeterminationConflict => "constraint.determination-conflict",
             Self::Cycle => "constraint.cycle",
             Self::ConstraintPrivateInterface => "constraint.private-interface",
             Self::ImplPrivateInterface => "impl.private-interface",
             Self::ImplOrphan => "impl.orphan",
             Self::ImplVariableHead => "impl.variable-head",
+            Self::ImplDeterminationCoverage => "impl.determination-coverage",
             Self::ImplOverlap => "impl.overlap",
+            Self::ImplDeterminationConflict => "impl.determination-conflict",
             Self::ImplPrerequisiteVariable => "impl.prerequisite-variable",
             Self::ImplPrerequisiteNotDecreasing => "impl.prerequisite-not-decreasing",
             Self::ImplMissingMethod => "impl.missing-method",
@@ -1558,6 +1796,81 @@ impl EvidenceNodeId {
     }
 }
 
+/// One complete checked interface application in declaration argument order.
+///
+/// This compiler-private carrier is shared by checked requirements,
+/// implementation heads, selected evidence, and independent authentication.
+/// Its argument vector is never encoded as an Ash tuple type.
+#[derive(Debug, Eq, PartialEq)]
+#[cfg_attr(test, derive(Clone))]
+pub(crate) struct InterfaceApplication {
+    interface: InterfaceId,
+    arguments: Box<[Type]>,
+}
+
+struct InterfaceArgumentBuffer(Vec<Type>);
+
+impl InterfaceArgumentBuffer {
+    fn into_boxed_slice(mut self) -> Box<[Type]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+}
+
+impl Drop for InterfaceArgumentBuffer {
+    fn drop(&mut self) {
+        while let Some(argument) = self.0.pop() {
+            discard_type_iteratively(argument);
+        }
+    }
+}
+
+impl InterfaceApplication {
+    pub(crate) const fn new(interface: InterfaceId, arguments: Box<[Type]>) -> Self {
+        Self {
+            interface,
+            arguments,
+        }
+    }
+
+    pub(crate) const fn interface(&self) -> InterfaceId {
+        self.interface
+    }
+
+    pub(crate) const fn arguments(&self) -> &[Type] {
+        &self.arguments
+    }
+
+    pub(crate) fn into_parts(mut self) -> (InterfaceId, Box<[Type]>) {
+        (self.interface, std::mem::take(&mut self.arguments))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn arguments_mut_for_summary_test(&mut self) -> &mut Box<[Type]> {
+        &mut self.arguments
+    }
+
+    pub(crate) fn clone_with_budget(&self, budget: &mut TypeWorkBudget) -> Result<Self, ()> {
+        budget.charge(self.arguments.len())?;
+        let mut arguments = InterfaceArgumentBuffer(Vec::new());
+        arguments
+            .0
+            .try_reserve(self.arguments.len())
+            .map_err(|_| ())?;
+        for argument in &self.arguments {
+            arguments.0.push(clone_type_with_budget(argument, budget)?);
+        }
+        Ok(Self::new(self.interface, arguments.into_boxed_slice()))
+    }
+}
+
+impl Drop for InterfaceApplication {
+    fn drop(&mut self) {
+        for argument in std::mem::take(&mut self.arguments).into_vec() {
+            discard_type_iteratively(argument);
+        }
+    }
+}
+
 /// One ordered implementation-head parameter substitution.
 #[derive(Debug, Eq, PartialEq)]
 pub struct EvidenceSubstitution {
@@ -1608,15 +1921,8 @@ enum EvidenceNodeData {
 
 #[derive(Debug)]
 struct EvidencePlan {
-    interface: InterfaceId,
-    argument: Type,
+    application: InterfaceApplication,
     nodes: Box<[EvidenceNodeData]>,
-}
-
-impl Drop for EvidencePlan {
-    fn drop(&mut self) {
-        discard_type_iteratively(std::mem::replace(&mut self.argument, Type::Unit));
-    }
 }
 
 /// Read-only view of one structural evidence node.
@@ -1653,13 +1959,13 @@ impl EvidenceSelection {
     /// Returns the checked interface obligation authenticated by this selection.
     #[must_use]
     pub fn interface(&self) -> InterfaceId {
-        self.plan.interface
+        self.plan.application.interface()
     }
 
-    /// Returns the zonked checked obligation argument retained with this selection.
+    /// Returns the zonked checked obligation arguments in declaration order.
     #[must_use]
-    pub fn argument(&self) -> &Type {
-        &self.plan.argument
+    pub fn arguments(&self) -> &[Type] {
+        self.plan.application.arguments()
     }
 
     /// Returns the root node selected for this requirement.
@@ -1779,17 +2085,15 @@ impl EvidenceSelectionBuilder {
     pub(crate) fn finish(
         self,
         root: EvidenceNodeId,
-        interface: InterfaceId,
-        argument: Type,
+        application: InterfaceApplication,
     ) -> Result<EvidenceSelection, ()> {
         if root.0 >= self.nodes.len() {
-            discard_type_iteratively(argument);
+            drop(application);
             return Err(());
         }
         Ok(EvidenceSelection {
             plan: Arc::new(EvidencePlan {
-                interface,
-                argument,
+                application,
                 nodes: self.nodes.into_boxed_slice(),
             }),
             root,
@@ -1812,7 +2116,7 @@ fn try_copy_slice<T: Copy>(values: &[T]) -> Result<Box<[T]>, ()> {
 #[derive(Debug)]
 struct FilledEvidenceSlot {
     checked_method: Option<MethodId>,
-    checked_argument: Type,
+    checked_application: InterfaceApplication,
     method_arguments: Box<[Type]>,
     checked_value_type: Option<Type>,
     selection: EvidenceSelection,
@@ -1820,7 +2124,6 @@ struct FilledEvidenceSlot {
 
 impl Drop for FilledEvidenceSlot {
     fn drop(&mut self) {
-        discard_type_iteratively(std::mem::replace(&mut self.checked_argument, Type::Unit));
         for argument in std::mem::take(&mut self.method_arguments).into_vec() {
             discard_type_iteratively(argument);
         }
@@ -1858,7 +2161,7 @@ impl EvidenceSlot {
             .map_or(&[], |filled| &filled.method_arguments)
     }
 
-    pub(crate) fn filled(&self) -> Option<(&Type, &EvidenceSelection)> {
+    pub(crate) fn filled(&self) -> Option<(&InterfaceApplication, &EvidenceSelection)> {
         let filled = self.filled.get()?;
         if filled.checked_method.is_some()
             || !filled.method_arguments.is_empty()
@@ -1866,16 +2169,22 @@ impl EvidenceSlot {
         {
             return None;
         }
-        Some((&filled.checked_argument, &filled.selection))
+        Some((&filled.checked_application, &filled.selection))
     }
 
     pub(crate) fn filled_method(
         &self,
-    ) -> Option<(MethodId, &Type, &[Type], &Type, &EvidenceSelection)> {
+    ) -> Option<(
+        MethodId,
+        &InterfaceApplication,
+        &[Type],
+        &Type,
+        &EvidenceSelection,
+    )> {
         let filled = self.filled.get()?;
         Some((
             filled.checked_method?,
-            &filled.checked_argument,
+            &filled.checked_application,
             &filled.method_arguments,
             filled.checked_value_type.as_ref()?,
             &filled.selection,
@@ -1966,7 +2275,7 @@ impl PartialEq for EvidenceSlot {
         match (self.filled.get(), other.filled.get()) {
             (None, None) => true,
             (Some(left), Some(right)) => {
-                same_type(&left.checked_argument, &right.checked_argument)
+                left.checked_application == right.checked_application
                     && left.method_arguments.len() == right.method_arguments.len()
                     && left
                         .method_arguments
@@ -2011,7 +2320,7 @@ impl EvidenceSlotHandle {
     pub(crate) fn fill(
         &self,
         checked_method: Option<MethodId>,
-        checked_argument: Type,
+        checked_application: InterfaceApplication,
         method_arguments: Box<[Type]>,
         checked_value_type: Option<Type>,
         selection: EvidenceSelection,
@@ -2019,7 +2328,7 @@ impl EvidenceSlotHandle {
         self.filled
             .set(FilledEvidenceSlot {
                 checked_method,
-                checked_argument,
+                checked_application,
                 method_arguments,
                 checked_value_type,
                 selection,
@@ -2030,7 +2339,7 @@ impl EvidenceSlotHandle {
     pub(crate) fn fill_preflighted(
         &self,
         checked_method: Option<MethodId>,
-        checked_argument: Type,
+        checked_application: InterfaceApplication,
         method_arguments: Box<[Type]>,
         checked_value_type: Option<Type>,
         selection: EvidenceSelection,
@@ -2038,7 +2347,7 @@ impl EvidenceSlotHandle {
         assert!(
             self.fill(
                 checked_method,
-                checked_argument,
+                checked_application,
                 method_arguments,
                 checked_value_type,
                 selection,
@@ -2054,10 +2363,8 @@ impl EvidenceSlotHandle {
 pub struct CheckedRequirement {
     /// Stable occurrence identity under its declaring owner.
     pub id: RequirementId,
-    /// Stable checked interface identity.
-    pub interface: InterfaceId,
-    /// Fully resolved requirement argument.
-    pub(crate) argument: Type,
+    /// Complete checked application in declaration order.
+    pub(crate) application: InterfaceApplication,
     /// Causal declaration provenance.
     pub origin: Origin,
     /// Complete source requirement span.
@@ -2066,7 +2373,6 @@ pub struct CheckedRequirement {
 
 impl Drop for CheckedRequirement {
     fn drop(&mut self) {
-        discard_type_iteratively(std::mem::replace(&mut self.argument, Type::Unit));
         discard_origin_iteratively(std::mem::replace(
             &mut self.origin,
             Origin::Source(self.span),
@@ -2075,10 +2381,20 @@ impl Drop for CheckedRequirement {
 }
 
 impl CheckedRequirement {
-    /// Borrows the fully resolved requirement argument.
+    /// Returns the stable checked interface identity.
     #[must_use]
-    pub const fn argument(&self) -> &Type {
-        &self.argument
+    pub const fn interface(&self) -> InterfaceId {
+        self.application.interface()
+    }
+
+    /// Borrows the complete requirement arguments in declaration order.
+    #[must_use]
+    pub const fn arguments(&self) -> &[Type] {
+        self.application.arguments()
+    }
+
+    pub(crate) const fn application(&self) -> &InterfaceApplication {
+        &self.application
     }
 }
 
@@ -2093,13 +2409,80 @@ pub struct ConstrainedScheme {
     pub(crate) value_type: Type,
 }
 
+/// One checked total determinant key in interface declaration coordinates.
+///
+/// The dependent complement is intentionally derived from the complete
+/// parameter vector. This carrier does not retain the source edge, parameter
+/// identities, or a redundant dependent-position vector.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct DeterminationKey {
+    positions: Box<[usize]>,
+}
+
+impl DeterminationKey {
+    pub(crate) fn new(positions: Box<[usize]>) -> Self {
+        Self { positions }
+    }
+
+    pub(crate) const fn positions(&self) -> &[usize] {
+        &self.positions
+    }
+
+    pub(crate) fn clone_with_budget(
+        &self,
+        budget: &mut InterfaceConstraintBudget,
+    ) -> Result<Self, ()> {
+        budget.charge(self.positions.len())?;
+        let mut positions = Vec::new();
+        positions
+            .try_reserve_exact(self.positions.len())
+            .map_err(|_| ())?;
+        positions.extend_from_slice(&self.positions);
+        Ok(Self::new(positions.into_boxed_slice()))
+    }
+}
+
 /// Authentication token for one successfully checked local interface.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct CheckedInterface {
     /// Source-order index into the owning module's resolved interface list.
     pub source_index: usize,
     /// Stable checked interface identity.
     pub id: InterfaceId,
+    /// Optional checked total determinant key in declaration coordinates.
+    determination: Option<DeterminationKey>,
+}
+
+impl CheckedInterface {
+    pub(crate) fn new(
+        source_index: usize,
+        id: InterfaceId,
+        determination: Option<DeterminationKey>,
+    ) -> Self {
+        Self {
+            source_index,
+            id,
+            determination,
+        }
+    }
+
+    /// Returns the determinant declaration positions when this interface has a key.
+    #[must_use]
+    pub(crate) fn determinant_positions(&self) -> Option<&[usize]> {
+        self.determination.as_ref().map(DeterminationKey::positions)
+    }
+
+    pub(crate) const fn determination(&self) -> Option<&DeterminationKey> {
+        self.determination.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_determination_for_test(
+        &mut self,
+        determination: Option<DeterminationKey>,
+    ) {
+        self.determination = determination;
+    }
 }
 
 /// One exact checked implementation-method membership relation.
@@ -2122,10 +2505,42 @@ pub struct CheckedImplementation {
     pub source_index: usize,
     /// Stable anonymous implementation identity.
     pub id: ImplId,
-    /// Stable implemented interface identity.
-    pub interface: InterfaceId,
+    /// Complete checked implementation-head application.
+    application: InterfaceApplication,
     /// Exact method mappings in interface declaration order.
     pub methods: Box<[CheckedImplMethod]>,
+}
+
+impl CheckedImplementation {
+    pub(crate) const fn new(
+        source_index: usize,
+        id: ImplId,
+        application: InterfaceApplication,
+        methods: Box<[CheckedImplMethod]>,
+    ) -> Self {
+        Self {
+            source_index,
+            id,
+            application,
+            methods,
+        }
+    }
+
+    /// Returns the stable implemented interface identity.
+    #[must_use]
+    pub const fn interface(&self) -> InterfaceId {
+        self.application.interface()
+    }
+
+    /// Returns the complete ordered implementation-head arguments.
+    #[must_use]
+    pub fn arguments(&self) -> &[Type] {
+        self.application.arguments()
+    }
+
+    pub(crate) const fn application(&self) -> &InterfaceApplication {
+        &self.application
+    }
 }
 
 impl ConstrainedScheme {
@@ -2162,8 +2577,7 @@ impl ConstrainedScheme {
         for requirement in &self.requirements {
             requirements.push(CheckedRequirement {
                 id: requirement.id,
-                interface: requirement.interface,
-                argument: clone_type_with_budget(&requirement.argument, budget)?,
+                application: requirement.application.clone_with_budget(budget)?,
                 origin: requirement.origin.clone(),
                 span: requirement.span,
             });
@@ -2202,6 +2616,26 @@ mod tests {
         source::{ByteRange, Origin, SourceFile},
         types::{IterativeTypeOwner, Kind, NominalTypeId, TypeVariableId},
     };
+
+    #[test]
+    fn determination_key_clone_charges_each_retained_position_before_publication() {
+        let key = DeterminationKey::new(Box::new([0, 2]));
+
+        let mut short = InterfaceConstraintBudget::with_limit(1);
+        assert_eq!(key.clone_with_budget(&mut short), Err(()));
+        assert_eq!(
+            short.used(),
+            0,
+            "the key reserves its full charge atomically"
+        );
+
+        let mut exact = InterfaceConstraintBudget::with_limit(2);
+        let cloned = key
+            .clone_with_budget(&mut exact)
+            .expect("the exact determinant-position boundary should fit");
+        assert_eq!(cloned.positions(), [0, 2]);
+        assert_eq!(exact.used(), 2);
+    }
 
     #[test]
     fn rank1_type_binders_retain_their_fixed_kind() {
@@ -2308,19 +2742,38 @@ mod tests {
         ));
 
         pending
-            .fill(None, Type::Int, Box::new([]), None, selection.clone())
+            .fill(
+                None,
+                InterfaceApplication::new(selection.interface(), Box::new([Type::Int])),
+                Box::new([]),
+                None,
+                selection.clone(),
+            )
             .expect("the original empty slot should accept one selection");
 
         assert_eq!(slot.selection(), Some(&selection));
         assert_eq!(handle.selection(), Some(&selection));
-        assert!(matches!(slot.filled(), Some((Type::Int, _))));
+        assert!(
+            matches!(slot.filled(), Some((application, _)) if application.arguments() == [Type::Int])
+        );
         assert!(clone.selection().is_none());
         assert!(
             handle
-                .fill(None, Type::Bool, Box::new([]), None, selection)
+                .fill(
+                    None,
+                    InterfaceApplication::new(
+                        InterfaceId::new(ModuleId::new(41), 0),
+                        Box::new([Type::Bool]),
+                    ),
+                    Box::new([]),
+                    None,
+                    selection,
+                )
                 .is_err()
         );
-        assert!(matches!(slot.filled(), Some((Type::Int, _))));
+        assert!(
+            matches!(slot.filled(), Some((application, _)) if application.arguments() == [Type::Int])
+        );
     }
 
     #[test]
@@ -2331,15 +2784,25 @@ mod tests {
             0,
         ));
         slot.handle()
-            .fill(None, Type::Int, Box::new([]), None, selection)
+            .fill(
+                None,
+                InterfaceApplication::new(selection.interface(), Box::new([Type::Int])),
+                Box::new([]),
+                None,
+                selection,
+            )
             .expect("the empty slot should accept one selection");
 
         let clone = slot.clone();
         let original = slot.selection().expect("the original should be selected");
         let cloned = clone.selection().expect("the clone should be selected");
 
-        assert!(matches!(slot.filled(), Some((Type::Int, _))));
-        assert!(matches!(clone.filled(), Some((Type::Int, _))));
+        assert!(
+            matches!(slot.filled(), Some((application, _)) if application.arguments() == [Type::Int])
+        );
+        assert!(
+            matches!(clone.filled(), Some((application, _)) if application.arguments() == [Type::Int])
+        );
         assert_eq!(original.root(), cloned.root());
         assert!(original.shares_plan_with(cloned));
     }
@@ -2369,12 +2832,15 @@ mod tests {
             .push_abstract(requirement, &methods, &mut exact_budget)
             .expect("one node and two method slots should fit exactly");
         let selection = builder
-            .finish(root, interface, Type::Int)
+            .finish(
+                root,
+                InterfaceApplication::new(interface, Box::new([Type::Int])),
+            )
             .expect("the root should be retained");
         assert_eq!(exact_budget.used(), 3);
         assert_eq!(exact_budget.charge(1), Err(()));
         assert_eq!(selection.interface(), interface);
-        assert_eq!(selection.argument(), &Type::Int);
+        assert_eq!(selection.arguments(), &[Type::Int]);
         assert_eq!(selection.node_count(), 1);
         assert_eq!(
             selection.node(root),
@@ -2416,7 +2882,10 @@ mod tests {
             )
             .expect("one node and its three retained slots should fit exactly");
         let selection = builder
-            .finish(root, interface, Type::Int)
+            .finish(
+                root,
+                InterfaceApplication::new(interface, Box::new([Type::Int])),
+            )
             .expect("the root should exist");
         let Some(EvidenceNode::Implementation {
             implementation: actual,
@@ -3058,6 +3527,86 @@ mod tests {
     }
 
     #[test]
+    fn canonical_goal_capability_rejects_hidden_malformed_roots_and_matches_full_validation() {
+        let module = ModuleId::new(70);
+        let parameter = TypeVariableId::resolved(module, 0);
+        let source = SourceFile::new("canonical-goal-capability.ash", "goal")
+            .expect("the capability source should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the capability range is ordered"))
+            .expect("the capability span should fit");
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+            .with_additional_type_variables([ResolvedTypeVariable {
+                id: parameter,
+                spelling: "A".into(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            }]);
+        let candidate = Type::Variable(parameter);
+        let goal = Type::Int;
+        let goal_roots = [&goal];
+        let mut capability_constraints = InterfaceConstraintBudget::default();
+        let mut capability_types = TypeWorkBudget::default();
+        let canonical_goal = authenticate_implementation_application_goal(
+            &registry,
+            InterfaceOperationWork::new(span, &mut capability_constraints, &mut capability_types),
+            &goal_roots,
+        )
+        .expect("the concrete goal should authenticate once");
+        let capability_result = match_implementation_application_head_against_canonical_goal(
+            &registry,
+            InterfaceOperationWork::new(span, &mut capability_constraints, &mut capability_types),
+            &[parameter],
+            &[&candidate],
+            &canonical_goal,
+        );
+        let full_result = match_implementation_head(
+            &registry,
+            &[parameter],
+            &candidate,
+            &goal,
+            span,
+            &mut InterfaceConstraintBudget::default(),
+            &mut TypeWorkBudget::default(),
+        );
+        assert_eq!(capability_result, full_result);
+
+        for invalid in [
+            Type::Inference(crate::types::InferenceVariableId::new(0)),
+            Type::Forall(Box::new([]), Box::new(Type::Int)),
+        ] {
+            let malformed = Type::Tuple(Box::new([Type::Bool, invalid]));
+            let malformed_roots = [&malformed];
+            assert!(matches!(
+                authenticate_implementation_application_goal(
+                    &registry,
+                    InterfaceOperationWork::new(
+                        span,
+                        &mut InterfaceConstraintBudget::default(),
+                        &mut TypeWorkBudget::default(),
+                    ),
+                    &malformed_roots,
+                ),
+                Err(HeadMatchFailure::InvalidState),
+            ));
+        }
+
+        assert_eq!(
+            match_implementation_head(
+                &registry,
+                &[],
+                &Type::Bool,
+                &Type::Int,
+                span,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            ),
+            Ok(None),
+            "the ordinary full-validation entry point remains available",
+        );
+    }
+
+    #[test]
     fn one_way_head_matcher_has_exact_constraint_and_type_clone_boundaries() {
         let parameter = TypeVariableId::new(0);
         let candidate = Type::Variable(parameter);
@@ -3161,18 +3710,24 @@ mod tests {
                     )
                     .expect("the implementation node should fit");
                 let selection = builder
-                    .finish(root, interface, deep_type)
+                    .finish(
+                        root,
+                        InterfaceApplication::new(interface, Box::new([deep_type])),
+                    )
                     .expect("the root should exist");
                 let clone = selection.clone();
                 assert!(selection.shares_plan_with(&clone));
+                let [selected_argument] = selection.arguments() else {
+                    panic!("the unary fixture should retain one argument");
+                };
                 let checked_argument =
-                    clone_type_with_budget(selection.argument(), &mut TypeWorkBudget::default())
+                    clone_type_with_budget(selected_argument, &mut TypeWorkBudget::default())
                         .expect("the checked occurrence argument should fit");
                 let slot = EvidenceSlot::empty();
                 slot.handle()
                     .fill(
                         None,
-                        checked_argument,
+                        InterfaceApplication::new(interface, Box::new([checked_argument])),
                         Box::new([]),
                         None,
                         selection.clone(),
@@ -3200,7 +3755,10 @@ mod tests {
             )
             .expect("the abstract node should fit");
         builder
-            .finish(root, method.interface(), Type::Int)
+            .finish(
+                root,
+                InterfaceApplication::new(method.interface(), Box::new([Type::Int])),
+            )
             .expect("the root should exist")
     }
 
@@ -3590,11 +4148,11 @@ mod tests {
 
     #[test]
     fn canonical_higher_kinded_overlap_is_first_order_and_exactly_bounded() {
-        // Constraint work: 16 cells discover one environment spanning both
-        // checked heads, and 26 cells perform first-order unification plus one
-        // authenticated/cached F -> Option solution. Complete heads are not
-        // redundantly synthesized here.
-        const CONSTRAINT_WORK: usize = 16 + 26;
+        // Constraint work: two cells retain the aligned application roots, 16
+        // discover one environment spanning both checked heads, and 26 perform
+        // first-order unification plus one authenticated/cached F -> Option
+        // solution. Complete heads are not redundantly synthesized here.
+        const CONSTRAINT_WORK: usize = 2 + 16 + 26;
         // Type work: one left DELTA record and one right XI record retaining
         // the three nodes of Option's derived Type -> Type Kind.
         const TYPE_WORK: usize = 1 + 4;
@@ -3865,7 +4423,9 @@ mod tests {
     fn deep_higher_kinded_overlap_has_exact_atomic_small_stack_boundaries() {
         const DEPTH: usize = 32_768;
         const KIND_NODES: usize = 2 * DEPTH + 1;
-        const OVERLAP_CONSTRAINT_WORK: usize = 2 * KIND_NODES + 22;
+        // Two application-root cells precede the prior environment,
+        // unification, and cached-solution work.
+        const OVERLAP_CONSTRAINT_WORK: usize = 2 + 2 * KIND_NODES + 22;
         const OVERLAP_TYPE_WORK: usize = 2;
 
         std::thread::Builder::new()
