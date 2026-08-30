@@ -251,17 +251,16 @@ pub(crate) fn implementation_prerequisite_terminates(
     Ok(false)
 }
 
-/// Checks the ordinary relational prerequisite measure across a complete
-/// ordered application. A ground application remains exempt; otherwise every
-/// aligned component is equal to or a strict subterm of its head component and
-/// at least one component is strict.
-pub(crate) fn implementation_prerequisite_application_terminates(
-    prerequisite: &[&Type],
-    head: &[&Type],
+/// Checks a generic prerequisite against canonical selection-key tuples while
+/// retaining full-application groundness as the earlier exemption.
+pub(crate) fn implementation_prerequisite_selection_key_terminates(
+    complete_prerequisite: &[&Type],
+    prerequisite_key: &[&Type],
+    head_key: &[&Type],
     budget: &mut InterfaceConstraintBudget,
 ) -> Result<bool, ()> {
     let mut ground = true;
-    for argument in prerequisite {
+    for argument in complete_prerequisite {
         if type_contains_any_variable(argument, budget)? {
             ground = false;
         }
@@ -269,12 +268,13 @@ pub(crate) fn implementation_prerequisite_application_terminates(
     if ground {
         return Ok(true);
     }
-    if prerequisite.len() != head.len() {
+    if prerequisite_key.len() != head_key.len() {
         return Ok(false);
     }
 
     let mut any_strict = false;
-    for (prerequisite, head) in prerequisite.iter().zip(head) {
+    for (prerequisite, head) in prerequisite_key.iter().zip(head_key) {
+        budget.charge(1)?;
         if same_type_with_constraint_budget(prerequisite, head, budget)? {
             continue;
         }
@@ -1476,6 +1476,8 @@ fn overlap_occurs<'a>(
 pub enum InterfaceReason {
     /// An interface application has a different arity from its declaration.
     ArgumentCount,
+    /// An interface determination does not partition its parameters exactly once.
+    DeterminationParameter,
     /// An interface method omits its parameter or introduces another type variable.
     MethodParameter,
     /// An interface method signature does not have a top-level function arrow.
@@ -1498,8 +1500,12 @@ pub enum InterfaceReason {
     ImplOrphan,
     /// An implementation head is a bare type variable.
     ImplVariableHead,
+    /// A determined implementation dependent contains a variable absent from its key.
+    ImplDeterminationCoverage,
     /// Two available implementation heads unify.
     ImplOverlap,
+    /// Two available implementation heads share a key but disagree on dependents.
+    ImplDeterminationConflict,
     /// An implementation prerequisite introduces a variable absent from the head.
     ImplPrerequisiteVariable,
     /// A non-ground implementation prerequisite is not a strict head subterm.
@@ -1516,6 +1522,7 @@ impl fmt::Display for InterfaceReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::ArgumentCount => "interface.argument-count",
+            Self::DeterminationParameter => "interface.determination-parameter",
             Self::MethodParameter => "interface.method-parameter",
             Self::MethodNotFunction => "interface.method-not-function",
             Self::DuplicateRequirement => "constraint.duplicate-requirement",
@@ -1527,7 +1534,9 @@ impl fmt::Display for InterfaceReason {
             Self::ImplPrivateInterface => "impl.private-interface",
             Self::ImplOrphan => "impl.orphan",
             Self::ImplVariableHead => "impl.variable-head",
+            Self::ImplDeterminationCoverage => "impl.determination-coverage",
             Self::ImplOverlap => "impl.overlap",
+            Self::ImplDeterminationConflict => "impl.determination-conflict",
             Self::ImplPrerequisiteVariable => "impl.prerequisite-variable",
             Self::ImplPrerequisiteNotDecreasing => "impl.prerequisite-not-decreasing",
             Self::ImplMissingMethod => "impl.missing-method",
@@ -2318,13 +2327,80 @@ pub struct ConstrainedScheme {
     pub(crate) value_type: Type,
 }
 
+/// One checked total determinant key in interface declaration coordinates.
+///
+/// The dependent complement is intentionally derived from the complete
+/// parameter vector. This carrier does not retain the source edge, parameter
+/// identities, or a redundant dependent-position vector.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct DeterminationKey {
+    positions: Box<[usize]>,
+}
+
+impl DeterminationKey {
+    pub(crate) fn new(positions: Box<[usize]>) -> Self {
+        Self { positions }
+    }
+
+    pub(crate) const fn positions(&self) -> &[usize] {
+        &self.positions
+    }
+
+    pub(crate) fn clone_with_budget(
+        &self,
+        budget: &mut InterfaceConstraintBudget,
+    ) -> Result<Self, ()> {
+        budget.charge(self.positions.len())?;
+        let mut positions = Vec::new();
+        positions
+            .try_reserve_exact(self.positions.len())
+            .map_err(|_| ())?;
+        positions.extend_from_slice(&self.positions);
+        Ok(Self::new(positions.into_boxed_slice()))
+    }
+}
+
 /// Authentication token for one successfully checked local interface.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct CheckedInterface {
     /// Source-order index into the owning module's resolved interface list.
     pub source_index: usize,
     /// Stable checked interface identity.
     pub id: InterfaceId,
+    /// Optional checked total determinant key in declaration coordinates.
+    determination: Option<DeterminationKey>,
+}
+
+impl CheckedInterface {
+    pub(crate) fn new(
+        source_index: usize,
+        id: InterfaceId,
+        determination: Option<DeterminationKey>,
+    ) -> Self {
+        Self {
+            source_index,
+            id,
+            determination,
+        }
+    }
+
+    /// Returns the determinant declaration positions when this interface has a key.
+    #[must_use]
+    pub(crate) fn determinant_positions(&self) -> Option<&[usize]> {
+        self.determination.as_ref().map(DeterminationKey::positions)
+    }
+
+    pub(crate) const fn determination(&self) -> Option<&DeterminationKey> {
+        self.determination.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_determination_for_test(
+        &mut self,
+        determination: Option<DeterminationKey>,
+    ) {
+        self.determination = determination;
+    }
 }
 
 /// One exact checked implementation-method membership relation.
@@ -2458,6 +2534,26 @@ mod tests {
         source::{ByteRange, Origin, SourceFile},
         types::{IterativeTypeOwner, Kind, NominalTypeId, TypeVariableId},
     };
+
+    #[test]
+    fn determination_key_clone_charges_each_retained_position_before_publication() {
+        let key = DeterminationKey::new(Box::new([0, 2]));
+
+        let mut short = InterfaceConstraintBudget::with_limit(1);
+        assert_eq!(key.clone_with_budget(&mut short), Err(()));
+        assert_eq!(
+            short.used(),
+            0,
+            "the key reserves its full charge atomically"
+        );
+
+        let mut exact = InterfaceConstraintBudget::with_limit(2);
+        let cloned = key
+            .clone_with_budget(&mut exact)
+            .expect("the exact determinant-position boundary should fit");
+        assert_eq!(cloned.positions(), [0, 2]);
+        assert_eq!(exact.used(), 2);
+    }
 
     #[test]
     fn rank1_type_binders_retain_their_fixed_kind() {

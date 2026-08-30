@@ -346,6 +346,108 @@ fn ordinary_multi_parameter_method_requires_every_parameter() {
 }
 
 #[test]
+fn total_determination_admits_single_composite_and_non_final_dependents() {
+    let checked = checked_module(concat!(
+        "interface Iterable<I, Item> where I -> Item {\n",
+        "next : I -> Item\n",
+        "}\n\n",
+        "interface Decode<Format, Source, Value> where (Format, Source) -> Value {\n",
+        "decode : (Format, Source) -> Value\n",
+        "}\n\n",
+        "interface Lookup<Key, Value, Context> where (Key, Context) -> Value {\n",
+        "lookup : (Key, Context) -> Value\n",
+        "}\n",
+    ));
+    let [single, composite, non_final] = checked.interface_facts() else {
+        panic!("all three total determinations should reach checked publication");
+    };
+    assert_eq!(
+        single
+            .parameters
+            .iter()
+            .map(|parameter| parameter.spelling.as_str())
+            .collect::<Vec<_>>(),
+        ["I", "Item"],
+    );
+    assert_eq!(
+        composite
+            .parameters
+            .iter()
+            .map(|parameter| parameter.spelling.as_str())
+            .collect::<Vec<_>>(),
+        ["Format", "Source", "Value"],
+    );
+    assert_eq!(
+        non_final
+            .parameters
+            .iter()
+            .map(|parameter| parameter.spelling.as_str())
+            .collect::<Vec<_>>(),
+        ["Key", "Value", "Context"],
+    );
+}
+
+#[test]
+fn rejects_non_partitioning_determination_parameters_uniformly() {
+    let cases = [
+        // Repeated determinant member.
+        "interface Bad<A, B> where (A, A) -> B {\nbad : A -> B\n}\n",
+        // Omitted interface parameter.
+        "interface Bad<A, B, C> where A -> B {\nbad : A -> B\n}\n",
+        // Determinant members do not follow declaration order.
+        "interface Bad<A, B, C> where (B, A) -> C {\nbad : (A, B) -> C\n}\n",
+        // The two sides overlap.
+        "interface Bad<A, B, C> where (A, B) -> (B, C) {\nbad : (A, B) -> C\n}\n",
+        // The written key covers the full parameter list, leaving no dependent complement.
+        "interface Bad<A, B> where (A, B) -> A {\nbad : (A, B) -> A\n}\n",
+        // Dependent members do not follow declaration order.
+        "interface Bad<A, B, C> where A -> (C, B) {\nbad : A -> (B, C)\n}\n",
+    ];
+
+    for source in cases {
+        let error = check_error(source);
+        assert_eq!(reason(&error), "interface.determination-parameter");
+    }
+}
+
+#[test]
+fn determined_methods_require_the_complete_key_only() {
+    check_valid(concat!(
+        "type Wrapper<A> = Wrapper(A)\n\n",
+        "interface Relation<Format, Value, Source> where (Format, Source) -> Value {\n",
+        "dependent_in_domain : (Format, Source, Value) -> Int\n",
+        "dependent_in_result : (Format, Source) -> Value\n",
+        "dependent_nested : (Format, Source) -> Wrapper<Value>\n",
+        "dependent_absent : (Format, Source) -> Int\n",
+        "}\n",
+    ));
+
+    let missing_composite_member = check_error(concat!(
+        "interface Relation<Format, Value, Source> where (Format, Source) -> Value {\n",
+        "bad : Format -> Value\n",
+        "}\n",
+    ));
+    assert_eq!(
+        reason(&missing_composite_member),
+        "interface.method-parameter"
+    );
+
+    let before_outer_shape = check_error(concat!(
+        "interface Relation<Format, Value, Source> where (Format, Source) -> Value {\n",
+        "bad : Format\n",
+        "}\n",
+    ));
+    assert_eq!(reason(&before_outer_shape), "interface.method-parameter");
+
+    let no_edge = check_error(concat!(
+        "interface Ordinary<Left, Right> {\n",
+        "ordinary : Left -> Int\n",
+        "}\n",
+    ));
+    assert_eq!(reason(&no_edge), "interface.method-parameter");
+}
+
+#[test]
 fn rejects_duplicate_global_requirement_before_scheme_construction() {
     let error = check_error(
         "interface Equal<A> {\nequal : (A, A) -> Bool\n}\n\nsame : A -> Bool where Equal<A>, Equal<A>\nsame value = true\n",
@@ -1715,6 +1817,20 @@ fn ground_cross_interface_prerequisite_cycle_has_the_exact_reason() {
         "impl Second<Int> where First<Int> {\nsecond value = value\n}\n\n",
         "main : Unit -> Int\n",
         "main () = first 1\n",
+    ));
+
+    assert_eq!(reason(&error), "constraint.cycle");
+}
+
+#[test]
+fn determined_ground_cycle_tracks_complete_applications_with_different_dependents() {
+    let error = check_error(concat!(
+        "interface First<A, B> where A -> B {\nfirst : (A, B) -> Int\n}\n\n",
+        "interface Second<A, B> where A -> B {\nsecond : (A, B) -> Int\n}\n\n",
+        "impl First<Int, Bool> where Second<Int, Unit> {\nfirst value = 0\n}\n\n",
+        "impl Second<Int, Unit> where First<Int, Bool> {\nsecond value = 0\n}\n\n",
+        "main : Unit -> Int\n",
+        "main () = first((1, true))\n",
     ));
 
     assert_eq!(reason(&error), "constraint.cycle");

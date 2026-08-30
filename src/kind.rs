@@ -36,6 +36,12 @@ pub(crate) trait KindWorkLedger {
     fn charge(&mut self, work: usize) -> Result<(), ()>;
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum BodyFreeInterfaceMethodSeed<'a> {
+    AllInterfaceParameters,
+    Determined(&'a [TypeVariableId]),
+}
+
 impl KindWorkLedger for TypeWorkBudget {
     fn charge(&mut self, work: usize) -> Result<(), ()> {
         TypeWorkBudget::charge(self, work)
@@ -692,14 +698,15 @@ impl<'a> KindEnvironments<'a> {
         }
     }
 
-    /// Checks one body-free interface method in a single type walk. The
-    /// method must be a function, may mention only its owning interface
-    /// parameter and declared method parameters, must mention the interface
-    /// parameter, and must end at kind `Type`.
+    /// Checks one body-free interface method in a single type walk. The method
+    /// must be a function, may mention only its owning interface parameters and
+    /// declared method parameters, must mention every required interface seed
+    /// and method parameter, and must end at kind `Type`.
     pub(crate) fn expect_body_free_interface_method_with_ledger(
         &self,
         ty: &Type,
         interface_parameters: &[TypeVariableId],
+        seed: BodyFreeInterfaceMethodSeed<'_>,
         method_parameters: &[TypeVariableId],
         span: Span,
         budget: &mut impl KindWorkLedger,
@@ -708,6 +715,12 @@ impl<'a> KindEnvironments<'a> {
             return Err(KindFailure::internal(
                 span,
                 "a checked body-free interface method is not a function",
+            ));
+        }
+        if interface_parameters.is_empty() {
+            return Err(KindFailure::internal(
+                span,
+                "a checked body-free interface method has an empty required seed",
             ));
         }
         let parameter_count = method_parameters
@@ -754,6 +767,37 @@ impl<'a> KindEnvironments<'a> {
                 ));
             }
         }
+        if let BodyFreeInterfaceMethodSeed::Determined(required) = seed {
+            if required.is_empty() || required.len() >= interface_parameters.len() {
+                return Err(KindFailure::internal(
+                    span,
+                    "a checked body-free interface has an empty or complete determinant seed",
+                ));
+            }
+            let mut next_interface = 0;
+            for required_parameter in required {
+                let mut found = false;
+                while let Some(parameter) = interface_parameters.get(next_interface) {
+                    budget.charge(1).map_err(|()| {
+                        KindFailure::resource(
+                            span,
+                            "body-free interface determinant authentication exceeded its owning work budget",
+                        )
+                    })?;
+                    next_interface += 1;
+                    if parameter == required_parameter {
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(KindFailure::internal(
+                        span,
+                        "a checked body-free interface seed is not a unique declaration-order subset",
+                    ));
+                }
+            }
+        }
         let mut visited = HashSet::new();
         visited.try_reserve(parameter_count).map_err(|_| {
             KindFailure::resource(
@@ -772,17 +816,35 @@ impl<'a> KindEnvironments<'a> {
             span,
             &mut ledger,
         )?;
-        if visited.len() != parameter_count
-            || interface_parameters
+        let missing_interface_parameter = match seed {
+            BodyFreeInterfaceMethodSeed::AllInterfaceParameters => interface_parameters
                 .iter()
-                .any(|parameter| !visited.contains(parameter))
+                .any(|parameter| !visited.contains(parameter)),
+            BodyFreeInterfaceMethodSeed::Determined(required) => {
+                let mut missing = false;
+                for parameter in required {
+                    ledger.charge(1).map_err(|()| {
+                        KindFailure::resource(
+                            span,
+                            "body-free interface determinant coverage exceeded its owning work budget",
+                        )
+                    })?;
+                    if !visited.contains(parameter) {
+                        missing = true;
+                        break;
+                    }
+                }
+                missing
+            }
+        };
+        if missing_interface_parameter
             || method_parameters
                 .iter()
                 .any(|method_parameter| !visited.contains(method_parameter))
         {
             return Err(KindFailure::internal(
                 span,
-                "a checked body-free interface method does not use exactly its declared parameters",
+                "a checked body-free interface method omits a required parameter",
             ));
         }
         let equal =
@@ -2123,6 +2185,7 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
             budget,
         )?;
     }
+    let mut has_invalid_determination = false;
     for interface in &module.interfaces {
         budget.charge(1).map_err(|()| {
             KindFailure::resource(
@@ -2136,8 +2199,8 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                 "a resolved interface has no type parameters",
             ));
         }
-        if interface.determination.is_some() {
-            continue;
+        if !interface_determination_is_total(interface, budget)? {
+            has_invalid_determination = true;
         }
         authenticate_owner_parameters(&module.registry, &interface.parameters, budget)?;
         environments.insert_interface(
@@ -2149,6 +2212,11 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
     }
 
     authenticate_imported_environments(module, &mut environments, budget)?;
+    let all_application_arities_complete =
+        preflight_interface_application_kinds(module, &mut environments, budget)?;
+    if !all_application_arities_complete || has_invalid_determination {
+        return Ok(());
+    }
 
     for declaration in &module.declaration_order {
         let outcome = match *declaration {
@@ -2244,7 +2312,7 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
             }
         };
         match outcome {
-            DeclarationKindOutcome::Checked | DeclarationKindOutcome::Bypassed => {}
+            DeclarationKindOutcome::Checked => {}
             DeclarationKindOutcome::Deferred => return Ok(()),
         }
     }
@@ -2255,9 +2323,6 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
 enum DeclarationKindOutcome {
     /// This declaration is completely checked by the resolved-kind stage.
     Checked,
-    /// This resolved declaration uses a relational carrier owned by a later
-    /// checkpoint, so unary kind work leaves it untouched and continues.
-    Bypassed,
     /// A later semantic stage owns an earlier source rejection, so kind
     /// checking must not inspect any subsequent declaration.
     Deferred,
@@ -2518,8 +2583,8 @@ fn check_interface<'a>(
             "a resolved interface has no type parameters",
         ));
     }
-    if interface.determination.is_some() {
-        return Ok(DeclarationKindOutcome::Bypassed);
+    if !interface_determination_is_total(interface, budget)? {
+        return Ok(DeclarationKindOutcome::Deferred);
     }
     let mut interface_only = false;
     for method in &interface.methods {
@@ -2554,6 +2619,24 @@ fn check_interface<'a>(
         environments.expect_value_type(&method.annotation, budget)?;
     }
     Ok(DeclarationKindOutcome::Checked)
+}
+
+fn interface_determination_is_total(
+    interface: &ResolvedInterfaceDeclaration,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, KindFailure> {
+    let Some(determination) = &interface.determination else {
+        return Ok(true);
+    };
+    crate::resolved::resolved_determination_is_total(&interface.parameters, determination, |work| {
+        budget.charge(work)
+    })
+    .map_err(|()| {
+        KindFailure::resource(
+            determination.span,
+            "interface determination authentication exceeded its type-work budget",
+        )
+    })
 }
 
 struct CompleteInterfaceApplication<'application, 'kind> {
@@ -2614,6 +2697,173 @@ fn check_interface_application_kinds(
         )?;
     }
     Ok(())
+}
+
+fn preflight_interface_application_kinds<'a>(
+    module: &'a ResolvedModuleParts,
+    environments: &mut KindEnvironments<'a>,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, KindFailure> {
+    let mut saw_application = false;
+    let all_arity_complete =
+        visit_interface_applications(module, budget, |application, budget| {
+            saw_application = true;
+            Ok(authenticate_interface_application(application, environments, budget)?.is_some())
+        })?;
+    if !all_arity_complete {
+        // Elaboration owns the source-facing interface.argument-count
+        // diagnostic. No positional argument kind may preempt it.
+        return Ok(false);
+    }
+    if !saw_application {
+        return Ok(true);
+    }
+
+    check_interface_application_kinds_in_owner_environments(module, environments, budget)?;
+    Ok(true)
+}
+
+fn check_interface_application_kinds_in_owner_environments<'a>(
+    module: &'a ResolvedModuleParts,
+    environments: &mut KindEnvironments<'a>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), KindFailure> {
+    let check = |application: &ResolvedInterfaceApplication,
+                 environments: &KindEnvironments<'a>,
+                 budget: &mut TypeWorkBudget| {
+        let application = authenticate_interface_application(application, environments, budget)?
+            .ok_or_else(|| {
+                KindFailure::internal(
+                    application.span,
+                    "an interface application changed arity between kind preflight passes",
+                )
+            })?;
+        check_interface_application_kinds(application, environments, budget)
+    };
+    for declaration in &module.declaration_order {
+        budget.charge(1).map_err(|()| {
+            KindFailure::resource(
+                module.span,
+                "interface-application kind preflight traversal exceeded its type-work budget",
+            )
+        })?;
+        match *declaration {
+            crate::resolved::ResolvedDeclarationIndex::Type(_)
+            | crate::resolved::ResolvedDeclarationIndex::Interface(_) => {}
+            crate::resolved::ResolvedDeclarationIndex::Global(index) => {
+                let definition = module.definitions.get(index).ok_or_else(|| {
+                    KindFailure::internal(
+                        module.span,
+                        "interface-application kind preflight found an invalid global index",
+                    )
+                })?;
+                let (parameters, requirements) = match &definition.kind {
+                    ResolvedDefinitionKind::Equational(global) => (
+                        &global.interface.type_parameters,
+                        &global.interface.requirements,
+                    ),
+                    ResolvedDefinitionKind::InlineOperational(global) => {
+                        (&global.header.type_parameters, &global.header.requirements)
+                    }
+                };
+                authenticate_owner_parameters(&module.registry, parameters, budget)?;
+                environments.install_owner_parameters(parameters, budget)?;
+                for requirement in requirements.iter() {
+                    check(&requirement.application, environments, budget)?;
+                }
+            }
+            crate::resolved::ResolvedDeclarationIndex::Implementation(index) => {
+                let implementation = module.implementations.get(index).ok_or_else(|| {
+                    KindFailure::internal(
+                        module.span,
+                        "interface-application kind preflight found an invalid implementation index",
+                    )
+                })?;
+                authenticate_owner_parameters(
+                    &module.registry,
+                    &implementation.head_parameters,
+                    budget,
+                )?;
+                authenticate_owner_parameters(
+                    &module.registry,
+                    &implementation.prerequisite_only_parameters,
+                    budget,
+                )?;
+                environments.install_owner_parameters(&implementation.head_parameters, budget)?;
+                check(&implementation.head, environments, budget)?;
+                for parameter in &implementation.prerequisite_only_parameters {
+                    environments.insert_declared(
+                        parameter.id,
+                        &parameter.kind,
+                        parameter.origin.primary_span(),
+                        budget,
+                    )?;
+                }
+                for prerequisite in &implementation.prerequisites {
+                    check(&prerequisite.application, environments, budget)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn visit_interface_applications(
+    module: &ResolvedModuleParts,
+    budget: &mut TypeWorkBudget,
+    mut visit: impl FnMut(
+        &ResolvedInterfaceApplication,
+        &mut TypeWorkBudget,
+    ) -> Result<bool, KindFailure>,
+) -> Result<bool, KindFailure> {
+    for declaration in &module.declaration_order {
+        budget.charge(1).map_err(|()| {
+            KindFailure::resource(
+                module.span,
+                "interface-application preflight traversal exceeded its type-work budget",
+            )
+        })?;
+        match *declaration {
+            crate::resolved::ResolvedDeclarationIndex::Type(_)
+            | crate::resolved::ResolvedDeclarationIndex::Interface(_) => {}
+            crate::resolved::ResolvedDeclarationIndex::Global(index) => {
+                let definition = module.definitions.get(index).ok_or_else(|| {
+                    KindFailure::internal(
+                        module.span,
+                        "interface-application preflight found an invalid global index",
+                    )
+                })?;
+                let requirements = match &definition.kind {
+                    ResolvedDefinitionKind::Equational(global) => &global.interface.requirements,
+                    ResolvedDefinitionKind::InlineOperational(global) => {
+                        &global.header.requirements
+                    }
+                };
+                for requirement in requirements.iter() {
+                    if !visit(&requirement.application, budget)? {
+                        return Ok(false);
+                    }
+                }
+            }
+            crate::resolved::ResolvedDeclarationIndex::Implementation(index) => {
+                let implementation = module.implementations.get(index).ok_or_else(|| {
+                    KindFailure::internal(
+                        module.span,
+                        "interface-application preflight found an invalid implementation index",
+                    )
+                })?;
+                if !visit(&implementation.head, budget)? {
+                    return Ok(false);
+                }
+                for prerequisite in &implementation.prerequisites {
+                    if !visit(&prerequisite.application, budget)? {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+    }
+    Ok(true)
 }
 
 fn check_definition<'a>(
@@ -3620,9 +3870,11 @@ mod tests {
 
         // Declaration order costs three cells. Environment admission then
         // owns one shape cell, two unique-binder cells, two canonical Kind
-        // comparisons, and one IOTA insertion. Declaration consumption owns
-        // one independent shape cell; successful indexed lookup is free.
-        const EXACT_WORK: usize = 3 + (1 + 2 + 2 + 1) + 1;
+        // comparisons, and one IOTA insertion. The global arity preflight
+        // visits the interface declaration once; with no applications, it
+        // skips the positional-kind pass. Ordinary declaration consumption
+        // then visits the interface once more.
+        const EXACT_WORK: usize = 3 + (1 + 2 + 2 + 1) + 1 + 1;
         let mut one_short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
         assert!(matches!(
             check_resolved_module_with_budget(&parts, &[], &mut one_short),
@@ -3630,10 +3882,71 @@ mod tests {
         ));
         assert_eq!(one_short.used(), EXACT_WORK - 1);
 
-        let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
-        check_resolved_module_with_budget(&parts, &[], &mut exact)
-            .expect("the exact two-pass relational shape and binder budget should fit");
-        assert_eq!(exact.used(), EXACT_WORK);
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
+            check_resolved_module_with_budget(&parts, &[], &mut exact)
+                .expect("the exact relational kind boundary should be reusable");
+            assert_eq!(exact.used(), EXACT_WORK);
+        }
+    }
+
+    fn assert_valid_application_preflight_has_an_exact_retryable_boundary() {
+        let span = span();
+        let module = ModuleId::new(0);
+        let binder = BinderId::resolved(module, 0);
+        let (registry, interface) = method_fixture(span, Vec::new());
+        let interface_id = interface.id;
+        let definition = equational_definition(
+            binder,
+            vec![requirement(
+                RequirementOwner::Global(binder),
+                0,
+                interface_id,
+                1,
+                span,
+            )],
+            span,
+        );
+        let mut parts = empty_module_parts(span);
+        parts.registry = Arc::new(registry);
+        parts.interfaces = vec![interface];
+        parts.definitions = vec![definition];
+        parts.declaration_order = vec![
+            ResolvedDeclarationIndex::Interface(0),
+            ResolvedDeclarationIndex::Global(0),
+        ];
+        let preflight = |budget: &mut TypeWorkBudget| {
+            let mut environments = KindEnvironments::new();
+            environments.insert_interface(
+                interface_id,
+                &parts.interfaces[0].parameters,
+                span,
+                &mut TypeWorkBudget::unbounded(),
+            )?;
+            preflight_interface_application_kinds(&parts, &mut environments, budget)
+        };
+
+        // The arity and positional-kind passes each visit two declarations
+        // and authenticate one application shape plus its IOTA membership
+        // (eight). Positional synthesis and exact Type-kind comparison add
+        // three more.
+        const EXACT_WORK: usize = 11;
+        let mut measured = TypeWorkBudget::unbounded();
+        assert_eq!(preflight(&mut measured), Ok(true));
+        assert_eq!(measured.used(), EXACT_WORK);
+
+        let mut short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+        assert!(matches!(
+            preflight(&mut short),
+            Err(KindFailure::Resource(_))
+        ));
+        assert_eq!(short.used(), EXACT_WORK - 1);
+
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
+            assert_eq!(preflight(&mut exact), Ok(true));
+            assert_eq!(exact.used(), EXACT_WORK);
+        }
     }
 
     #[test]
@@ -3771,6 +4084,8 @@ mod tests {
             Ok(DeclarationKindOutcome::Deferred)
         ));
         assert_eq!(exact.used(), arity_work);
+
+        assert_valid_application_preflight_has_an_exact_retryable_boundary();
     }
 
     #[test]
@@ -4365,6 +4680,184 @@ mod tests {
     }
 
     #[test]
+    fn body_free_interface_method_separates_allowed_variables_from_required_seed() {
+        let span = span();
+        let key = TypeVariableId::new(0);
+        let dependent = TypeVariableId::new(1);
+        let method = TypeVariableId::new(2);
+        let undeclared = TypeVariableId::new(3);
+        let type_kind = Kind::Type;
+        let mut environments = KindEnvironments::new();
+        for identity in [key, dependent, method] {
+            environments
+                .insert_declared(identity, &type_kind, span, &mut TypeWorkBudget::unbounded())
+                .expect("the method fixture binder should install");
+        }
+        let function = |variables: &[TypeVariableId]| {
+            Type::Function(
+                Box::new(Type::Tuple(
+                    variables
+                        .iter()
+                        .copied()
+                        .map(Type::Variable)
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                )),
+                Box::new(Type::Int),
+            )
+        };
+        let check =
+            |ty: &Type, seed: BodyFreeInterfaceMethodSeed<'_>, budget: &mut TypeWorkBudget| {
+                environments.expect_body_free_interface_method_with_ledger(
+                    ty,
+                    &[key, dependent],
+                    seed,
+                    &[method],
+                    span,
+                    budget,
+                )
+            };
+
+        let omitted_dependent = function(&[key, method]);
+        let present_dependent = function(&[key, dependent, method]);
+        let missing_method = function(&[key]);
+        let undeclared_variable = function(&[key, method, undeclared]);
+        let mut no_edge_measured = TypeWorkBudget::unbounded();
+        check(
+            &present_dependent,
+            BodyFreeInterfaceMethodSeed::AllInterfaceParameters,
+            &mut no_edge_measured,
+        )
+        .expect("the no-edge predecessor should require and accept every interface parameter");
+        let no_edge_work = no_edge_measured.used();
+        assert_eq!(no_edge_work, 21);
+        let mut no_edge_short = TypeWorkBudget::with_limit(no_edge_work - 1);
+        assert!(matches!(
+            check(
+                &present_dependent,
+                BodyFreeInterfaceMethodSeed::AllInterfaceParameters,
+                &mut no_edge_short,
+            ),
+            Err(KindFailure::Resource(_))
+        ));
+        assert_eq!(no_edge_short.used(), no_edge_work - 1);
+        let mut no_edge_exact = TypeWorkBudget::with_limit(no_edge_work);
+        check(
+            &present_dependent,
+            BodyFreeInterfaceMethodSeed::AllInterfaceParameters,
+            &mut no_edge_exact,
+        )
+        .expect("the exact no-edge predecessor budget should remain unchanged");
+        assert_eq!(no_edge_exact.used(), no_edge_work);
+
+        let mut determined_present_measured = TypeWorkBudget::unbounded();
+        check(
+            &present_dependent,
+            BodyFreeInterfaceMethodSeed::Determined(&[key]),
+            &mut determined_present_measured,
+        )
+        .expect("a dependent may remain present in a determined method");
+        assert_eq!(
+            determined_present_measured.used(),
+            no_edge_work + 2,
+            "one determinant comparison and one determinant coverage lookup are additional work",
+        );
+        let mut determined_present_short =
+            TypeWorkBudget::with_limit(determined_present_measured.used() - 1);
+        assert!(matches!(
+            check(
+                &present_dependent,
+                BodyFreeInterfaceMethodSeed::Determined(&[key]),
+                &mut determined_present_short,
+            ),
+            Err(KindFailure::Resource(_))
+        ));
+        assert_eq!(
+            determined_present_short.used(),
+            determined_present_measured.used() - 1,
+        );
+        let mut determined_present_exact =
+            TypeWorkBudget::with_limit(determined_present_measured.used());
+        check(
+            &present_dependent,
+            BodyFreeInterfaceMethodSeed::Determined(&[key]),
+            &mut determined_present_exact,
+        )
+        .expect("the exact charged determinant-seed budget should fit");
+        assert_eq!(
+            determined_present_exact.used(),
+            determined_present_measured.used(),
+        );
+
+        let mut measured = TypeWorkBudget::unbounded();
+        check(
+            &omitted_dependent,
+            BodyFreeInterfaceMethodSeed::Determined(&[key]),
+            &mut measured,
+        )
+        .expect("a dependent may be absent from a determined method");
+        let exact_work = measured.used();
+        let mut short = TypeWorkBudget::with_limit(exact_work - 1);
+        assert!(matches!(
+            check(
+                &omitted_dependent,
+                BodyFreeInterfaceMethodSeed::Determined(&[key]),
+                &mut short,
+            ),
+            Err(KindFailure::Resource(_))
+        ));
+        assert_eq!(short.used(), exact_work - 1);
+        let mut exact = TypeWorkBudget::with_limit(exact_work);
+        check(
+            &omitted_dependent,
+            BodyFreeInterfaceMethodSeed::Determined(&[key]),
+            &mut exact,
+        )
+        .expect("the exact determined-method kind budget should fit");
+        assert_eq!(exact.used(), exact_work);
+
+        for (seed, ty) in [
+            (
+                BodyFreeInterfaceMethodSeed::Determined(&[]),
+                &omitted_dependent,
+            ),
+            (
+                BodyFreeInterfaceMethodSeed::Determined(&[key, dependent]),
+                &present_dependent,
+            ),
+            (
+                BodyFreeInterfaceMethodSeed::AllInterfaceParameters,
+                &omitted_dependent,
+            ),
+            (
+                BodyFreeInterfaceMethodSeed::Determined(&[key]),
+                &missing_method,
+            ),
+            (
+                BodyFreeInterfaceMethodSeed::Determined(&[key, key]),
+                &omitted_dependent,
+            ),
+            (
+                BodyFreeInterfaceMethodSeed::Determined(&[dependent, key]),
+                &present_dependent,
+            ),
+            (
+                BodyFreeInterfaceMethodSeed::Determined(&[method]),
+                &omitted_dependent,
+            ),
+            (
+                BodyFreeInterfaceMethodSeed::Determined(&[key]),
+                &undeclared_variable,
+            ),
+        ] {
+            assert!(matches!(
+                check(ty, seed, &mut TypeWorkBudget::unbounded()),
+                Err(KindFailure::Internal(_))
+            ));
+        }
+    }
+
+    #[test]
     fn deep_fixed_kind_lookup_is_stack_safe_and_exact() {
         const DEPTH: usize = 32_768;
         std::thread::Builder::new()
@@ -4766,9 +5259,11 @@ mod tests {
         ];
         // Declaration-order authentication visits two retained entries, one
         // final partition fact, and one provenance-cardinality fact. XI then
-        // retains one environment record and one Type root per nominal:
-        // 2 + 1 + 1 + 2 * (1 + 1) = 8.
-        const EXACT_WORK: usize = 8;
+        // retains one environment record and one Type root per nominal. The
+        // unconditional application-arity stage visits both declarations and,
+        // after seeing no applications, skips positional kinding:
+        // 2 + 1 + 1 + 2 * (1 + 1) + 2 = 10.
+        const EXACT_WORK: usize = 10;
         let mut short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
         assert!(matches!(
             check_resolved_module_with_budget(&valid, &provenance, &mut short),
@@ -4777,10 +5272,12 @@ mod tests {
         assert_eq!(valid.declaration_order.len(), 2);
         assert_eq!(valid.registry.nominals().len(), 2);
 
-        let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
-        check_resolved_module_with_budget(&valid, &provenance, &mut exact)
-            .expect("the complete declaration partition should fit exactly");
-        assert_eq!(exact.used(), EXACT_WORK);
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
+            check_resolved_module_with_budget(&valid, &provenance, &mut exact)
+                .expect("the complete declaration partition should fit exactly and retry");
+            assert_eq!(exact.used(), EXACT_WORK);
+        }
     }
 
     #[test]

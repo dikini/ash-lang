@@ -1172,6 +1172,535 @@ fn relational_interface_resolution_diagnostics_retain_exact_parameter_sites() {
 }
 
 #[test]
+fn determination_partition_precedes_method_kind_checking_without_bypassing_valid_edges() {
+    let invalid_partition_text = concat!(
+        "interface Bad<A, B, C> where A -> B {\n",
+        "bad : A<Int> -> B\n",
+        "}\n",
+    );
+    let PipelineFailure::Typing(TypeError::Interface(partition)) = failure(
+        "determination-before-method-kind.ash",
+        invalid_partition_text,
+    ) else {
+        panic!("an invalid partition should retain interface-admission ownership");
+    };
+    assert_eq!(partition.reason, InterfaceReason::DeterminationParameter);
+
+    let valid_partition_text = concat!(
+        "interface Bad<A, B> where A -> B {\n",
+        "bad : A<Int> -> B\n",
+        "}\n",
+    );
+    let PipelineFailure::Kind(KindFailure::Source(kind)) =
+        failure("valid-determination-method-kind.ash", valid_partition_text)
+    else {
+        panic!("a valid partition must not bypass ordinary method kind checking");
+    };
+    assert_eq!(kind.reason, KindReason::NotApplicable);
+    assert_eq!(
+        (
+            kind.primary.span().range().start(),
+            kind.primary.span().range().end(),
+        ),
+        occurrence_range(valid_partition_text, "A<Int>", 0),
+    );
+}
+
+#[test]
+fn determination_partition_precedes_every_interface_method_seed() {
+    let source = concat!(
+        "interface Earlier<A, B> {\n",
+        "earlier : A -> A\n",
+        "}\n\n",
+        "interface Broken<A, B> where A -> A {\n",
+        "broken : A -> A\n",
+        "}\n",
+    );
+    let PipelineFailure::Typing(TypeError::Interface(diagnostic)) =
+        failure("determination-before-earlier-method-seed.ash", source)
+    else {
+        panic!("the later partition should precede every interface method seed");
+    };
+    assert_eq!(diagnostic.reason, InterfaceReason::DeterminationParameter);
+}
+
+#[test]
+fn application_shape_precedes_a_later_invalid_determination_for_every_header_owner() {
+    let arity_cases = [
+        (
+            "forward global requirement",
+            concat!(
+                "use_value<A> : A -> A where Broken<A>\n",
+                "use_value value = value\n\n",
+                "interface Broken<A, B> where A -> A {\n",
+                "broken : A -> A\n",
+                "}\n",
+            ),
+        ),
+        (
+            "later global requirement",
+            concat!(
+                "interface Broken<A, B> where A -> A {\n",
+                "broken : A -> A\n",
+                "}\n\n",
+                "use_value<A> : A -> A where Broken<A>\n",
+                "use_value value = value\n",
+            ),
+        ),
+        (
+            "forward implementation head",
+            concat!(
+                "impl Broken<Int> {\n",
+                "broken value = value\n",
+                "}\n\n",
+                "interface Broken<A, B> where A -> A {\n",
+                "broken : A -> A\n",
+                "}\n",
+            ),
+        ),
+        (
+            "later implementation head",
+            concat!(
+                "interface Broken<A, B> where A -> A {\n",
+                "broken : A -> A\n",
+                "}\n\n",
+                "impl Broken<Int> {\n",
+                "broken value = value\n",
+                "}\n",
+            ),
+        ),
+        (
+            "forward implementation prerequisite",
+            concat!(
+                "interface Keep<A> {\n",
+                "keep : A -> A\n",
+                "}\n\n",
+                "impl Keep<Int> where Broken<Int> {\n",
+                "keep value = value\n",
+                "}\n\n",
+                "interface Broken<A, B> where A -> A {\n",
+                "broken : A -> A\n",
+                "}\n",
+            ),
+        ),
+        (
+            "later implementation prerequisite",
+            concat!(
+                "interface Keep<A> {\n",
+                "keep : A -> A\n",
+                "}\n\n",
+                "interface Broken<A, B> where A -> A {\n",
+                "broken : A -> A\n",
+                "}\n\n",
+                "impl Keep<Int> where Broken<Int> {\n",
+                "keep value = value\n",
+                "}\n",
+            ),
+        ),
+    ];
+    for (name, source) in arity_cases {
+        let actual = failure("determination-arity-owner.ash", source);
+        let PipelineFailure::Typing(TypeError::Interface(diagnostic)) = actual else {
+            panic!("{name} should retain interface checking ownership, found {actual:?}");
+        };
+        assert_eq!(diagnostic.reason, InterfaceReason::ArgumentCount);
+    }
+
+    let kind_cases = [
+        (
+            "forward global requirement",
+            concat!(
+                "use_value<A> : A -> A where Broken<Int, A>\n",
+                "use_value value = value\n\n",
+                "interface Broken<F : Type -> Type, A> where F -> F {\n",
+                "broken : F<A> -> A\n",
+                "}\n",
+            ),
+        ),
+        (
+            "later global requirement",
+            concat!(
+                "interface Broken<F : Type -> Type, A> where F -> F {\n",
+                "broken : F<A> -> A\n",
+                "}\n\n",
+                "use_value<A> : A -> A where Broken<Int, A>\n",
+                "use_value value = value\n",
+            ),
+        ),
+        (
+            "forward implementation head",
+            concat!(
+                "impl Broken<Int, Bool> {\n",
+                "broken value = false\n",
+                "}\n\n",
+                "interface Broken<F : Type -> Type, A> where F -> F {\n",
+                "broken : F<A> -> A\n",
+                "}\n",
+            ),
+        ),
+        (
+            "later implementation head",
+            concat!(
+                "interface Broken<F : Type -> Type, A> where F -> F {\n",
+                "broken : F<A> -> A\n",
+                "}\n\n",
+                "impl Broken<Int, Bool> {\n",
+                "broken value = false\n",
+                "}\n",
+            ),
+        ),
+        (
+            "forward implementation prerequisite",
+            concat!(
+                "interface Keep<A> {\n",
+                "keep : A -> A\n",
+                "}\n\n",
+                "impl Keep<Int> where Broken<Int, Bool> {\n",
+                "keep value = value\n",
+                "}\n\n",
+                "interface Broken<F : Type -> Type, A> where F -> F {\n",
+                "broken : F<A> -> A\n",
+                "}\n",
+            ),
+        ),
+        (
+            "later implementation prerequisite",
+            concat!(
+                "interface Keep<A> {\n",
+                "keep : A -> A\n",
+                "}\n\n",
+                "interface Broken<F : Type -> Type, A> where F -> F {\n",
+                "broken : F<A> -> A\n",
+                "}\n\n",
+                "impl Keep<Int> where Broken<Int, Bool> {\n",
+                "keep value = value\n",
+                "}\n",
+            ),
+        ),
+    ];
+    for (name, source) in kind_cases {
+        let actual = failure("determination-kind-owner.ash", source);
+        let PipelineFailure::Kind(KindFailure::Source(kind)) = actual else {
+            panic!("{name} should retain kind checking ownership, found {actual:?}");
+        };
+        assert_eq!(kind.reason, KindReason::Argument);
+    }
+}
+
+#[test]
+fn application_arity_preflight_precedes_valid_interface_method_seeds_for_every_header_owner() {
+    let arity_cases = [
+        (
+            "implementation head",
+            concat!(
+                "interface Broken<A, B> where A -> B {\n",
+                "broken : B -> B\n",
+                "}\n\n",
+                "interface Target<A, B> {\n",
+                "target : (A, B) -> A\n",
+                "}\n\n",
+                "impl Target<Int> {\n",
+                "target pair = 0\n",
+                "}\n",
+            ),
+        ),
+        (
+            "global requirement",
+            concat!(
+                "interface Broken<A, B> where A -> B {\n",
+                "broken : B -> B\n",
+                "}\n\n",
+                "interface Target<A, B> {\n",
+                "target : (A, B) -> A\n",
+                "}\n\n",
+                "use_value<A> : A -> A where Target<A>\n",
+                "use_value value = value\n",
+            ),
+        ),
+        (
+            "implementation prerequisite",
+            concat!(
+                "interface Broken<A, B> where A -> B {\n",
+                "broken : B -> B\n",
+                "}\n\n",
+                "interface Target<A, B> {\n",
+                "target : (A, B) -> A\n",
+                "}\n\n",
+                "interface Keep<A> {\n",
+                "keep : A -> A\n",
+                "}\n\n",
+                "impl Keep<Int> where Target<Int> {\n",
+                "keep value = value\n",
+                "}\n",
+            ),
+        ),
+    ];
+    for (name, source) in arity_cases {
+        let actual = failure("valid-determination-arity-preflight.ash", source);
+        let PipelineFailure::Typing(TypeError::Interface(diagnostic)) = actual else {
+            panic!("{name} arity should precede the earlier method seed, found {actual:?}");
+        };
+        assert_eq!(diagnostic.reason, InterfaceReason::ArgumentCount);
+    }
+}
+
+#[test]
+fn positional_kind_preflight_precedes_valid_interface_method_kinds_for_every_header_owner() {
+    let kind_cases = [
+        (
+            "global requirement",
+            concat!(
+                "interface Broken<A, B> where A -> B {\n",
+                "broken : A<Int> -> B\n",
+                "}\n\n",
+                "interface Target<F : Type -> Type, A> {\n",
+                "target : F<A> -> A\n",
+                "}\n\n",
+                "use_value<A> : A -> A where Target<Int, A>\n",
+                "use_value value = value\n",
+            ),
+        ),
+        (
+            "implementation head",
+            concat!(
+                "interface Broken<A, B> where A -> B {\n",
+                "broken : A<Int> -> B\n",
+                "}\n\n",
+                "interface Target<F : Type -> Type, A> {\n",
+                "target : F<A> -> A\n",
+                "}\n\n",
+                "impl Target<Int, Bool> {\n",
+                "target value = false\n",
+                "}\n",
+            ),
+        ),
+        (
+            "implementation prerequisite",
+            concat!(
+                "interface Broken<A, B> where A -> B {\n",
+                "broken : A<Int> -> B\n",
+                "}\n\n",
+                "interface Target<F : Type -> Type, A> {\n",
+                "target : F<A> -> A\n",
+                "}\n\n",
+                "interface Keep<A> {\n",
+                "keep : A -> A\n",
+                "}\n\n",
+                "impl Keep<Int> where Target<Int, Bool> {\n",
+                "keep value = value\n",
+                "}\n",
+            ),
+        ),
+    ];
+    for (name, source) in kind_cases {
+        let actual = failure("valid-determination-kind-preflight.ash", source);
+        let PipelineFailure::Kind(KindFailure::Source(kind)) = actual else {
+            panic!("{name} kind should precede the earlier method kind, found {actual:?}");
+        };
+        assert_eq!(kind.reason, KindReason::Argument);
+    }
+}
+
+#[test]
+fn invalid_determination_kind_preflight_installs_each_application_owner() {
+    let cases = [
+        (
+            "global requirement binder",
+            concat!(
+                "interface Broken<F : Type -> Type, A> where F -> F {\n",
+                "broken : F<A> -> A\n",
+                "}\n\n",
+                "use_value<F : Type -> Type, A> : F<A> -> F<A> where Broken<F, A>\n",
+                "use_value value = value\n",
+            ),
+        ),
+        (
+            "implementation head binder",
+            concat!(
+                "interface Broken<F : Type -> Type, A> where F -> F {\n",
+                "broken : F<A> -> A\n",
+                "}\n\n",
+                "impl<F : Type -> Type, A> Broken<F, A> {\n",
+                "broken value = value\n",
+                "}\n",
+            ),
+        ),
+    ];
+    for (name, source) in cases {
+        let actual = failure("determination-kind-owner-binder.ash", source);
+        let PipelineFailure::Typing(TypeError::Interface(diagnostic)) = actual else {
+            panic!("{name} should reach determination admission, found {actual:?}");
+        };
+        assert_eq!(diagnostic.reason, InterfaceReason::DeterminationParameter);
+    }
+
+    let both_implementation_binder_partitions = concat!(
+        "interface Keep<A> {\n",
+        "keep : A -> A\n",
+        "}\n\n",
+        "impl<A> Keep<A> where Broken<A, F, Int, A> {\n",
+        "keep value = value\n",
+        "}\n\n",
+        "interface Broken<A, F, G : Type -> Type, D> where A -> A {\n",
+        "broken : (A, F, G<A>) -> D\n",
+        "}\n",
+    );
+    let actual = failure(
+        "determination-kind-owner-binder-partitions.ash",
+        both_implementation_binder_partitions,
+    );
+    let PipelineFailure::Kind(KindFailure::Source(kind)) = actual else {
+        panic!(
+            "an implementation prerequisite must install both owner-binder partitions, found {actual:?}"
+        );
+    };
+    assert_eq!(kind.reason, KindReason::Argument);
+    assert_eq!(
+        (
+            kind.primary.span().range().start(),
+            kind.primary.span().range().end(),
+        ),
+        occurrence_range(both_implementation_binder_partitions, "Int", 0),
+    );
+}
+
+#[test]
+fn determination_partition_diagnostics_point_to_the_causal_parameters() {
+    struct Case {
+        source: &'static str,
+        primary: &'static str,
+        primary_occurrence: usize,
+        related: &'static str,
+        related_occurrence: usize,
+    }
+
+    let cases = [
+        Case {
+            source: "interface Bad<A, B> where (A, A) -> B {\nbad : A -> B\n}\n",
+            primary: "A",
+            primary_occurrence: 2,
+            related: "A",
+            related_occurrence: 1,
+        },
+        Case {
+            source: "interface Bad<A, B, C> where A -> B {\nbad : A -> B\n}\n",
+            primary: "where A -> B",
+            primary_occurrence: 0,
+            related: "C",
+            related_occurrence: 0,
+        },
+        Case {
+            source: "interface Bad<A, B, C> where (B, A) -> C {\nbad : (A, B) -> C\n}\n",
+            primary: "A",
+            primary_occurrence: 1,
+            related: "B",
+            related_occurrence: 2,
+        },
+        Case {
+            source: "interface Bad<A, B, C> where (A, B) -> (B, C) {\nbad : (A, B) -> C\n}\n",
+            primary: "B",
+            primary_occurrence: 3,
+            related: "B",
+            related_occurrence: 2,
+        },
+        Case {
+            source: "interface Bad<A, B> where (A, B) -> A {\nbad : (A, B) -> A\n}\n",
+            primary: "A",
+            primary_occurrence: 2,
+            related: "A",
+            related_occurrence: 1,
+        },
+        Case {
+            source: "interface Bad<A, B, C> where A -> (C, B) {\nbad : A -> (B, C)\n}\n",
+            primary: "B",
+            primary_occurrence: 2,
+            related: "C",
+            related_occurrence: 1,
+        },
+    ];
+
+    for (index, case) in cases.into_iter().enumerate() {
+        let PipelineFailure::Typing(TypeError::Interface(diagnostic)) =
+            failure(&format!("determination-partition-{index}.ash"), case.source)
+        else {
+            panic!("a malformed total partition should fail during interface admission");
+        };
+        assert_eq!(diagnostic.reason, InterfaceReason::DeterminationParameter);
+        assert_eq!(
+            (
+                diagnostic.primary.span().range().start(),
+                diagnostic.primary.span().range().end(),
+            ),
+            occurrence_range(case.source, case.primary, case.primary_occurrence),
+            "case {index} primary",
+        );
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(
+            (
+                diagnostic.related[0].span().range().start(),
+                diagnostic.related[0].span().range().end(),
+            ),
+            occurrence_range(case.source, case.related, case.related_occurrence),
+            "case {index} related",
+        );
+    }
+}
+
+#[test]
+fn implementation_determination_diagnostics_retain_distinct_causes() {
+    let coverage_text = concat!(
+        "interface Relation<A, B> where A -> B {\n",
+        "relate : A -> Int\n",
+        "}\n\n",
+        "impl<B> Relation<Int, B> {\n",
+        "relate value = 0\n",
+        "}\n",
+    );
+    let PipelineFailure::Typing(TypeError::Interface(coverage)) =
+        failure("implementation-determination-coverage.ash", coverage_text)
+    else {
+        panic!("an uncovered dependent variable should fail implementation admission");
+    };
+    assert_eq!(coverage.reason, InterfaceReason::ImplDeterminationCoverage);
+    assert_eq!(
+        coverage.primary.message(),
+        "this dependent argument contains a variable absent from the determinant key"
+    );
+    assert!(
+        coverage
+            .related
+            .iter()
+            .any(|label| { label.message() == "this dependent variable is bound here" })
+    );
+    assert!(coverage.related.iter().any(|label| {
+        label.message() == "this determinant-key argument does not contain the dependent variable"
+    }));
+
+    let conflict_text = concat!(
+        "interface Relation<A, B> where A -> B {\n",
+        "relate : A -> Int\n",
+        "}\n\n",
+        "impl Relation<Int, Int> {\nrelate value = 0\n}\n\n",
+        "impl Relation<Int, Bool> {\nrelate value = 0\n}\n",
+    );
+    let PipelineFailure::Typing(TypeError::Interface(conflict)) =
+        failure("implementation-determination-conflict.ash", conflict_text)
+    else {
+        panic!("equal keys with unequal complete heads should fail coherence");
+    };
+    assert_eq!(conflict.reason, InterfaceReason::ImplDeterminationConflict);
+    assert_eq!(
+        conflict.primary.message(),
+        "this implementation shares a determinant key with an earlier implementation but disagrees on dependents"
+    );
+    assert!(
+        conflict.related.iter().any(|label| {
+            label.message() == "the earlier conflicting implementation head is here"
+        })
+    );
+}
+
+#[test]
 fn method_type_parameter_diagnostics_retain_boundary_and_spans() {
     let duplicate_text = "interface Bad<A> {\nbad<A> : A -> A\n}\n";
     let PipelineFailure::Resolution(duplicate) =
@@ -1688,8 +2217,8 @@ fn public_kind_failure_precedence_follows_causal_and_owner_order() {
         (
             "kind-precedence-global-value.ash",
             format!("{OPTION}{HIGHER}bad : Option where Higher<Int>\nbad value = None\n"),
-            KindReason::ExpectedType,
-            ("Option", 1),
+            KindReason::Argument,
+            ("Int", 1),
         ),
         (
             "kind-precedence-implementation-head.ash",
@@ -1702,16 +2231,16 @@ fn public_kind_failure_precedence_follows_causal_and_owner_order() {
             format!(
                 "{OPTION}{HIGHER}fn bad(value : Option) -> Option where Higher<Bool> {{\nlet local : Option = None\nvalue\n}}\n"
             ),
-            KindReason::ExpectedType,
-            ("Option", 1),
+            KindReason::Argument,
+            ("Bool", 0),
         ),
         (
             "kind-precedence-inline-result.ash",
             format!(
                 "{OPTION}{HIGHER}fn bad(value : Unit) -> Option where Higher<Bool> {{\nlet local : Option = None\nvalue\n}}\n"
             ),
-            KindReason::ExpectedType,
-            ("Option", 1),
+            KindReason::Argument,
+            ("Bool", 0),
         ),
         (
             "kind-precedence-inline-requirement.ash",

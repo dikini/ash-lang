@@ -455,13 +455,23 @@ Record cumulative reserved use as 30/65 and 35 units remaining.
 
 ## Checkpoint 4: Total-key admission, coherence, ownership, and termination — 10 units
 
+**Status:** Complete in the coherent Checkpoint 4 tree recorded by the commit
+that contains this update. Final semantic and whole Rust/resource reviews
+approve without findings. The specification remains unchanged; this is
+implementation evidence under accepted CP-0011, not current language truth.
+
 **Files:**
 
+- Modify for global application-preflight calibration: `src/driver.rs`
 - Modify: `src/interface.rs`
-- Modify: `src/evidence.rs`
+- Modify for body-free method-seed authentication: `src/kind.rs`
 - Modify: `src/resolved.rs`
+- Modify for source-to-summary publication: `src/resolve.rs`
+- Modify as the detached summary-authentication test owner: `src/resolve/module_tests.rs`
 - Modify: `src/elaborate.rs`
 - Modify: `src/evidence_validation.rs`
+- No modification required: `src/evidence.rs`; determinant metadata uses the
+  existing interface-fact and evidence boundaries.
 - Modify: `tests/interfaces.rs`
 - Modify: `tests/implementations.rs`
 - Modify: `tests/interface_modules.rs`
@@ -469,7 +479,7 @@ Record cumulative reserved use as 30/65 and 35 units remaining.
 - Modify: `tests/interface_generic_summary.rs`
 - Modify: `tests/diagnostics.rs`
 
-### Step 1: Write and witness determinant-admission RED
+### Step 1: Write and witness determinant-admission RED — completed
 
 Add exact positive cases for `I -> Item`, `(Format, Source) -> Value`, and a key
 whose dependent parameter is not last in declaration order. Add repeated,
@@ -492,15 +502,17 @@ cargo test --locked --test interfaces determined_methods_require_the_complete_ke
 Expected RED: the resolved determination has no checked positional metadata or
 method-seed rule.
 
-### Step 2: Admit one validated positional key
+### Step 2: Admit one validated positional key — completed
 
-Validate the source identities as a nonempty proper declaration-order subset
-whose complement is exactly the other parameters. Retain only declaration
-positions in the checked fact and every summary mirror; derive dependents as
-the complement. Add accessors for selection-key and dependent aligned slices.
-Do not store an edge graph or output-last split.
+The implementation validates the source identities as a nonempty proper
+declaration-order subset whose complement is exactly the other parameters. It
+retains only private declaration positions in checked, local, and body-free
+interface facts and derives dependents as the complement. Review removed the
+planned public selection-key and dependent aligned-slice accessors; private
+position-key access is sufficient. No edge graph or output-last split is
+stored.
 
-### Step 3: Write and witness self and pair coherence RED
+### Step 3: Write and witness self and pair coherence RED — completed
 
 Add:
 
@@ -529,7 +541,7 @@ keys. Preserve
 one diamond proves that two routes to the same identity do not self-conflict.
 The first combined effective environment owns a real pair failure.
 
-### Step 4: Generalize orphan ownership and prerequisite decrease
+### Step 4: Generalize orphan ownership and prerequisite decrease — completed
 
 Use the determinant slice as the selection key when present and the full vector
 otherwise. Add a foreign-interface positive case with a local outer nominal in
@@ -544,14 +556,14 @@ different-width rejection, a rejected case where only a dependent shrinks, and
 a ground active-goal cycle over the full application. Retain the rule that
 every prerequisite variable occurs in the complete implementation head.
 
-### Step 5: Authenticate key metadata across summaries
+### Step 5: Authenticate key metadata across summaries — completed
 
 Add summary mutations for missing, extra, duplicate, reordered, out-of-range,
 wrong-interface, and mismatched key positions. Authenticate imported key
 metadata before local header checking and recheck coherence when an import or
 facade first combines implementation closures.
 
-### Step 6: Verify, review, and commit total-key checking
+### Step 6: Verify, review, and retain total-key checking — completed
 
 Run:
 
@@ -570,11 +582,176 @@ git diff --check
 After both reviews and corrections, commit:
 
 ```text
-git add src tests
+git add docs/plans/2026-08-29-multi-parameter-relational-interfaces.md docs/tasks/TASK-0018-implement-multi-parameter-relational-interfaces.md src tests
 git -c commit.gpgsign=false commit -m "feat: enforce total interface determination"
 ```
 
 Record cumulative reserved use as 40/65 and 25 units remaining.
+
+### Checkpoint 4 closure record
+
+The retained implementation evidence has these boundaries:
+
+- Admission authenticates an exact total partition. A no-edge interface
+  requires every parameter in each method; a determined interface requires
+  every determinant and permits dependents in a domain, result, nested type, or
+  nowhere. Body-free checking selects an explicit
+  `AllInterfaceParameters` or `Determined` seed, and imported and linked facts
+  derive and authenticate that seed from key positions.
+- One unconditional global arity preflight precedes partition, method, and
+  implementation-header failures across global requirements, implementation
+  heads, and prerequisites. Positional kind preflight follows only for
+  arity-complete applications, so incomplete arity defers positional kinding.
+  Elaboration independently preflights arity. No production resource limit
+  changed.
+- Header checking iteratively establishes `FV(dependents) subset FV(key)`.
+  All-bare selection and foreign orphan ownership inspect the key alone.
+  Generic prerequisite decrease is pointwise across equal-width keys and keeps
+  the complete active application as cycle identity. Coherence deduplicates
+  stable `ImplId`s, independently matches keys and then complete heads, and
+  lets the first effective combiner own `impl.overlap` or
+  `impl.determination-conflict`.
+- Source-to-summary publication authenticates the source key. Detached summary
+  admission authenticates key structure, method seeds, variable-head,
+  dependent-coverage, orphan, prerequisite-decrease, and pair-coherence
+  relationships. Imports authenticate before local checking, and facade and
+  first-combiner paths authenticate their effective closures.
+- Linked validation indexes the complete registry, authenticates every group's
+  source, token, and fact key in a first phase independent of dependency and
+  group order, and only then authenticates relationships. Generic prerequisite
+  termination uses selection-key tuples while retaining the complete
+  prerequisite for groundness. Honest dependent growth passes, and a coherent
+  dependent-only-shrink tamper fails. Each source occurrence's identity,
+  spelling, origin, and span and the determined linked-method seed remain
+  authenticated. An honest stable-identity re-export diamond passes.
+  Determinant metadata erases before Core.
+- Raw determinant-position and key getters are crate-private. A crate unit test
+  retains exact representation evidence; public integration tests assert
+  admission, coherence, ownership, termination, summary, and linking behavior
+  without observing private positions. CP4 adds no public selection/dependent
+  API, edge graph, Core determinant metadata or node, evaluator state, or
+  runtime metadata.
+
+Exact resource evidence is compactly recorded below. `P` is the complete
+application width and `D` is determinant width.
+
+- The local selection-key helper costs exactly `P` without an edge and `2D`
+  with one. Its one-short failures stop at `0` and `D`, respectively, after the
+  charge-before-reserve correction. The mirrored summary collector has the
+  same staging property. Total formulas did not change.
+- Local determination coverage costs 12, key-variable admission 2, and foreign
+  orphan selection 3. Local and summary prerequisite decrease each cost 23;
+  effective pair coherence costs 46 and summary pair coherence costs 23.
+- A determinant diagnostic's causal declaration label costs 14. A complete
+  non-decreasing header costs 59. The local-interface predecessor boundary
+  remains 92.
+- The local source-to-summary key fixture costs 11. Detached determined-summary
+  relationship authentication costs 77 constraint units and 105 type units;
+  key relationship work accounts for the 17-unit constraint delta.
+- Linked selection-key termination costs exactly 23 constraint units: `2D = 2`
+  for the head key, `P = 2` for the complete prerequisite, `2D = 2` for the
+  prerequisite key, and 17 for groundness and subterm comparison. The complete
+  public linked fixture costs 396 constraint units and 22 type units. Splitting
+  key authentication from remaining relationship validation only reorders
+  existing work and adds zero units.
+- Linked authentication costs 151 constraint and 16 type units for the
+  ordinary fixture and 167 constraint and 16 type units for the determined
+  fixture. Determinant authentication accounts for the 16-unit constraint
+  delta.
+- The linked registry boundary remains exactly 102 constraint units.
+- At calibrated width `W = 4890`, the driver boundaries are entry
+  `64W + 13`, linked `67W + 25 = 327655`, and validation
+  `118W + 80 = 577100`. The unchanged production limit remains 327680, so
+  `327655 < 327680 < 577100`.
+
+Focused verification passes with these counts:
+
+```text
+cargo test --locked --lib                                      # 771 passed
+cargo test --locked --test interfaces                          # 40 passed
+cargo test --locked --test implementations                     # 73 passed
+cargo test --locked --test diagnostics                         # 44 passed
+cargo test --locked --test interface_generic_summary           # 4 passed
+cargo test --locked --test interface_identity_diamond          # 2 passed
+cargo test --locked --test interface_modules                   # 23 passed
+cargo test --locked --lib -- resolved                          # 111 passed
+cargo test --locked --lib -- evidence_validation               # 108 passed
+```
+
+The named exact and one-short resource tests, `cargo fmt --check`,
+`cargo check --locked --all-targets`, strict workspace all-target/all-feature
+Clippy, and `git diff --check` also pass. The controller repeats the complete
+Checkpoint 4 command set after this documentation-only closure edit. CP4 does
+not claim a `cargo xtask verify` run.
+
+Independent review proceeded in stages. The implementation Task A and B
+semantic reviews approved their behavior. Rust/resource review found uncharged
+infallible determinant and header related-label retention; the charged fallible
+fix and its exact 14- and 59-unit tests passed re-review. CP4 Step 5 semantic
+review then found that detached summaries did not recheck full-vector
+variable-head, dependent-coverage, and orphan relationships after a valid
+alternate-key mutation. The correction passed semantic re-review. Step 5
+Rust/resource review found allocate-before-charge ordering in the two mirrored
+selection-key collectors; the corrections and exact staging tests passed
+re-review.
+
+The final whole semantic review then reported one important linked-validation
+finding: generic prerequisite termination still followed complete applications,
+and a relationship could read another group's key before that key was
+authenticated. The correction authenticates all group keys in phase one, uses
+selection-key termination in phase two, accepts honest dependent growth, and
+rejects coherent dependent-only shrink. The same review reported one minor API
+finding: public raw determinant getters exposed representation rather than
+behavior. The getters are now `pub(crate)`, exact representation evidence lives
+in a crate unit test, and public integrations assert behavior. Semantic
+re-review approves both final corrections without findings. A fresh whole
+Rust/resource review independently approves the complete checkpoint without
+findings.
+
+The checkpoint deviated from its evidence plan in these recorded ways:
+
+- The initial file list omitted `src/driver.rs`, `src/kind.rs`,
+  `src/resolve.rs`, and `src/resolve/module_tests.rs`. Existing driver,
+  body-free kind, summary-publication, and detached summary-authentication
+  owners and fixtures required their migrations. The planned `src/evidence.rs`
+  edit was unnecessary because the existing fact/evidence boundary already
+  carries the private metadata.
+- Honest determined-summary accounting adds key-position work at the exact
+  publication, detached-authentication, and linked boundaries recorded above.
+- Semantic review exposed a global failure-precedence defect: an earlier valid
+  edge method seed or kind could preempt a later malformed application. The
+  unconditional arity pass, conditional positional kind pass, and elaboration
+  arity preflight correct it. Narrowing the driver fixture from 4,900 to 4,890
+  preserves the boundary inequality without raising the production limit.
+- The Task B summary-pair test and the Step 5 first-combiner and stable-diamond
+  extensions were immediately GREEN because their shared implementation was
+  already present. They remain evidence; they do not indicate missing
+  behavior.
+- Summary mutation evidence is split by owner. Source-to-summary publication
+  owns the pure source/key mismatch. Detached admission owns structural
+  malformation and relationship-changing valid alternate keys; it does not add
+  a redundant source-edge carrier.
+- Linked token and fact `WrongInterface` determinant rows duplicated position
+  mismatches because position-only keys carry no interface identity. Removing
+  them leaves 21 independent linked mutations. Enclosing token and fact guards
+  continue to authenticate interface identity.
+- The two selection-key collectors initially reserved before their owning
+  charge. Moving aggregate charge before reserve changed staging, not totals.
+- Final whole semantic review found that linked generic prerequisite
+  authentication still used complete-application termination and could consult
+  a group key before authenticating it. The two-phase validation correction
+  authenticates every group key first and then applies selection-key
+  termination. Honest dependent-growth and coherently tampered
+  dependent-only-shrink cases retain the boundary. The phase split adds no
+  resource work.
+- The same review found that raw determinant getters exposed a minor public
+  representation API. They are now crate-private, exact position evidence moved
+  to a crate unit test, and public integration evidence asserts behavior.
+  Semantic re-review approves both final corrections.
+
+Cumulative reserved use is 40/65; 25 units remain. Neither TASK-0018 nor
+lib-ash is complete. `spec/` remains unchanged through Checkpoint 6; Checkpoint
+7 retains the normative reconciliation allocation.
 
 ## Checkpoint 5: Forward improvement and determined requirements — 10 units
 

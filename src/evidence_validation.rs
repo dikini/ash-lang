@@ -18,7 +18,9 @@ use crate::{
         EvidenceSubstitution, ImplId, ImplMethodId, InterfaceApplication,
         InterfaceConstraintBudget, InterfaceId, MethodId, RequirementId, RequirementOwner,
     },
-    kind::{KindEnvironments, KindFailure, canonical_type_variable_kind},
+    kind::{
+        BodyFreeInterfaceMethodSeed, KindEnvironments, KindFailure, canonical_type_variable_kind,
+    },
     module::ModuleId,
     resolved::{
         AvailableImplementation, BinderId, CheckedImplementationFact, CheckedInterfaceFact,
@@ -26,7 +28,7 @@ use crate::{
         ResolvedDeclarationIndex, ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind,
         ResolvedInterfaceApplication, ResolvedLocalDeclaration, ResolvedModuleGroup,
         ResolvedModuleProgram, ResolvedOccurrence, ResolvedRegistry, ResolvedTermName,
-        ResolvedTypeVariable,
+        ResolvedTypeVariable, resolved_determination_positions_match,
     },
     source::{Origin, Span},
     types::{
@@ -413,6 +415,10 @@ impl LinkedInterfaceRegistry {
         budget: &mut InterfaceConstraintBudget,
         type_work: &mut TypeWorkBudget,
     ) -> Result<(), EvidenceValidationFailure> {
+        // Every declaration key is authenticated before any global or
+        // implementation relationship reads determinant positions. This pass
+        // is independent of dependency and group order because registry
+        // indexing for every group has already completed.
         for group_index in 0..program.groups().len() {
             let provisional_span = program
                 .groups()
@@ -423,7 +429,28 @@ impl LinkedInterfaceRegistry {
                 .groups()
                 .get(group_index)
                 .ok_or_else(|| unknown(provisional_span))?;
-            validate_group_consistency(program, self, group, kind_environments, budget, type_work)?;
+            validate_group_interface_consistency(
+                program,
+                group,
+                kind_environments,
+                budget,
+                type_work,
+            )?;
+        }
+
+        for group_index in 0..program.groups().len() {
+            let group = program
+                .groups()
+                .get(group_index)
+                .ok_or_else(|| unknown(program.result().span))?;
+            validate_group_remaining_consistency(
+                program,
+                self,
+                group,
+                kind_environments,
+                budget,
+                type_work,
+            )?;
             for fact_index in 0..group.interface_facts().len() {
                 charge(budget, 1, group.span())?;
                 let fact = group
@@ -501,14 +528,6 @@ impl LinkedInterfaceRegistry {
                         program,
                         budget,
                     )?;
-                    if !prerequisite_application_terminates(
-                        prerequisite.arguments(),
-                        fact.arguments(),
-                        budget,
-                        prerequisite.span,
-                    )? {
-                        return Err(unknown(prerequisite.span));
-                    }
                 }
                 let interface = self
                     .interface(program, fact.interface())
@@ -860,9 +879,8 @@ impl LinkedInterfaceRegistry {
     }
 }
 
-fn validate_group_consistency<'a>(
+fn validate_group_interface_consistency<'a>(
     program: &'a ResolvedModuleProgram,
-    registry: &LinkedInterfaceRegistry,
     group: &'a ResolvedModuleGroup,
     kind_environments: &mut KindEnvironments<'a>,
     budget: &mut InterfaceConstraintBudget,
@@ -894,7 +912,19 @@ fn validate_group_consistency<'a>(
             || token.id != source.id
             || fact.id != source.id
             || fact.spelling != source.spelling
-            || source.determination.is_some()
+        {
+            return Err(unknown(source.span));
+        }
+        if !resolved_determination_positions_match(
+            &source.parameters,
+            source.determination.as_ref(),
+            &[
+                token.determination().map(|key| key.positions()),
+                fact.determination().map(|key| key.positions()),
+            ],
+            |work| budget.charge(work),
+        )
+        .map_err(|()| resource(source.span))?
         {
             return Err(unknown(source.span));
         }
@@ -999,6 +1029,18 @@ fn validate_group_consistency<'a>(
         }
     }
 
+    Ok(())
+}
+
+fn validate_group_remaining_consistency<'a>(
+    program: &'a ResolvedModuleProgram,
+    registry: &LinkedInterfaceRegistry,
+    group: &'a ResolvedModuleGroup,
+    kind_environments: &mut KindEnvironments<'a>,
+    budget: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+) -> Result<(), EvidenceValidationFailure> {
+    let span = group.span();
     for index in 0..group.schemes().len() {
         charge(budget, 1, span)?;
         let definition = group
@@ -1335,6 +1377,34 @@ fn validate_implementation_consistency<'a>(
     let interface = registry
         .interface(program, fact.interface())
         .ok_or_else(|| unknown(span))?;
+    let head_key = if fact.prerequisites.is_empty() {
+        Vec::new()
+    } else {
+        linked_selection_key_types(interface, fact.arguments(), budget, span)?
+    };
+    for prerequisite in &fact.prerequisites {
+        let complete_prerequisite =
+            linked_type_references(prerequisite.arguments(), budget, prerequisite.span)?;
+        let prerequisite_interface = registry
+            .interface(program, prerequisite.interface())
+            .ok_or_else(|| unknown(prerequisite.span))?;
+        let prerequisite_key = linked_selection_key_types(
+            prerequisite_interface,
+            prerequisite.arguments(),
+            budget,
+            prerequisite.span,
+        )?;
+        if !crate::interface::implementation_prerequisite_selection_key_terminates(
+            &complete_prerequisite,
+            &prerequisite_key,
+            &head_key,
+            budget,
+        )
+        .map_err(|()| resource(prerequisite.span))?
+        {
+            return Err(unknown(prerequisite.span));
+        }
+    }
     for method_index in 0..fact.methods.len() {
         charge(budget, 1, span)?;
         let method = fact
@@ -1495,33 +1565,63 @@ fn same_application_parts_charged(
     Ok(true)
 }
 
-fn prerequisite_application_terminates(
-    prerequisite: &[Type],
-    head: &[Type],
+fn linked_type_references<'a>(
+    types: &'a [Type],
     budget: &mut InterfaceConstraintBudget,
     span: Span,
-) -> Result<bool, EvidenceValidationFailure> {
-    let count = prerequisite
-        .len()
-        .checked_add(head.len())
-        .ok_or_else(|| resource(span))?;
-    charge(budget, count, span)?;
-    let mut prerequisite_references = Vec::new();
-    prerequisite_references
-        .try_reserve_exact(prerequisite.len())
+) -> Result<Vec<&'a Type>, EvidenceValidationFailure> {
+    charge(budget, types.len(), span)?;
+    let mut references = Vec::new();
+    references
+        .try_reserve_exact(types.len())
         .map_err(|_| resource(span))?;
-    prerequisite_references.extend(prerequisite.iter());
-    let mut head_references = Vec::new();
-    head_references
-        .try_reserve_exact(head.len())
+    references.extend(types);
+    Ok(references)
+}
+
+fn linked_selection_key_types<'a>(
+    interface: &CheckedInterfaceFact,
+    arguments: &'a [Type],
+    budget: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<Vec<&'a Type>, EvidenceValidationFailure> {
+    if arguments.len() != interface.parameters.len() {
+        return Err(unknown(span));
+    }
+    let selected_count = interface
+        .determination()
+        .map_or(arguments.len(), |determination| {
+            determination.positions().len()
+        });
+    let Some(determination) = interface.determination() else {
+        charge(budget, selected_count, span)?;
+        let mut selected = Vec::new();
+        selected
+            .try_reserve_exact(selected_count)
+            .map_err(|_| resource(span))?;
+        selected.extend(arguments);
+        return Ok(selected);
+    };
+
+    let mut previous_position = None;
+    for &position in determination.positions() {
+        charge(budget, 1, span)?;
+        if position >= arguments.len()
+            || previous_position.is_some_and(|previous| previous >= position)
+        {
+            return Err(unknown(span));
+        }
+        previous_position = Some(position);
+    }
+    charge(budget, selected_count, span)?;
+    let mut selected = Vec::new();
+    selected
+        .try_reserve_exact(selected_count)
         .map_err(|_| resource(span))?;
-    head_references.extend(head.iter());
-    crate::interface::implementation_prerequisite_application_terminates(
-        &prerequisite_references,
-        &head_references,
-        budget,
-    )
-    .map_err(|()| resource(span))
+    for &position in determination.positions() {
+        selected.push(arguments.get(position).ok_or_else(|| unknown(span))?);
+    }
+    Ok(selected)
 }
 
 fn same_source_application_charged(
@@ -1727,6 +1827,29 @@ fn validate_linked_value_schemes<'a>(
                 .interface_facts()
                 .get(fact_index)
                 .ok_or_else(|| unknown(group_span))?;
+            let determinant_parameters = fact
+                .determination()
+                .map(|determination| {
+                    charge(constraint_work, determination.positions().len(), fact.span)?;
+                    let mut parameters = Vec::new();
+                    parameters
+                        .try_reserve_exact(determination.positions().len())
+                        .map_err(|_| resource(fact.span))?;
+                    for &position in determination.positions() {
+                        parameters.push(
+                            fact.parameters
+                                .get(position)
+                                .ok_or_else(|| unknown(fact.span))?
+                                .id,
+                        );
+                    }
+                    Ok::<_, EvidenceValidationFailure>(parameters)
+                })
+                .transpose()?;
+            let method_seed = determinant_parameters.as_deref().map_or(
+                BodyFreeInterfaceMethodSeed::AllInterfaceParameters,
+                BodyFreeInterfaceMethodSeed::Determined,
+            );
             for method_index in 0..fact.methods.len() {
                 charge(constraint_work, 1, fact.span)?;
                 let method = fact
@@ -1762,6 +1885,7 @@ fn validate_linked_value_schemes<'a>(
                     .expect_body_free_interface_method_with_ledger(
                         method.value_type(),
                         &variables[..fact.parameters.len()],
+                        method_seed,
                         &variables[fact.parameters.len()..],
                         method.span,
                         constraint_work,
@@ -5896,7 +6020,8 @@ mod tests {
         resolve::{DependencyExports, resolve_module},
         resolved::{
             CheckedModule, ImplementationRoute, ImplementationRouteHop,
-            LinkedCarrierMutationForTest, LinkedGlobalParameterRowMutationForTest,
+            LinkedCarrierMutationForTest, LinkedDeterminationCarrierForTest,
+            LinkedDeterminationMutationForTest, LinkedGlobalParameterRowMutationForTest,
             ResolvedTypeVariable, same_imported_constructor_fact_with_budget,
         },
         source::{ByteRange, SourceFile},
@@ -7002,6 +7127,22 @@ mod tests {
         let fixture = ValidationFixture::create(source);
         let graph = fixture.graph();
         link_modules(check_graph(&graph), graph.entry()).expect("the entry fixture should link")
+    }
+
+    fn linked_determined_generic_decrease_program() -> ResolvedModuleProgram {
+        entry_program(concat!(
+            "type List<A> =\n",
+            "Nil\n",
+            "| Cons(A, List<A>)\n",
+            "interface Relation<A, B> where A -> B {\n",
+            "relate : A -> Int\n",
+            "}\n",
+            "impl<A> Relation<List<A>, A> where Relation<A, List<A>> {\n",
+            "relate value = 0\n",
+            "}\n",
+            "main : Unit -> Unit\n",
+            "main () = ()\n",
+        ))
     }
 
     fn polymorphic_method_program() -> ResolvedModuleProgram {
@@ -8783,6 +8924,370 @@ mod tests {
                 EvidenceValidationReason::UnknownIdentity,
                 "{mutation:?}",
             );
+        }
+    }
+
+    #[test]
+    fn authenticates_an_honest_determined_linked_program_before_core() {
+        let program = entry_program(concat!(
+            "interface Relation<A, B> where A -> B {\n",
+            "relate : A -> Int\n",
+            "}\n\n",
+            "impl Relation<Int, Bool> {\n",
+            "relate value = 0\n",
+            "}\n\n",
+            "main : Unit -> Unit\n",
+            "main () = ()\n",
+        ));
+
+        validate_interface_evidence(program)
+            .expect("an honest determined relation must authenticate before Core");
+    }
+
+    #[test]
+    fn linked_generic_prerequisite_decrease_uses_determined_selection_keys() {
+        validate_interface_evidence(linked_determined_generic_decrease_program()).expect(
+            "linked generic decrease must compare the determined key and retain the complete prerequisite only for groundness",
+        );
+    }
+
+    #[test]
+    fn linked_generic_prerequisite_selection_key_has_an_exact_public_retry_boundary() {
+        // Generic decrease owns 2D=2 head-key cells, P=2 complete-prerequisite
+        // cells, 2D=2 prerequisite-key cells, and 17 groundness/subterm cells.
+        // The complete public validator owns 373 other structural, mirror,
+        // kind, method, and publication cells.
+        const RELATIONSHIP_WORK: usize = 2 + 2 + 2 + 17;
+        const PUBLIC_WORK_OUTSIDE_RELATIONSHIP: usize = 373;
+        const EXACT_CONSTRAINT_WORK: usize = PUBLIC_WORK_OUTSIDE_RELATIONSHIP + RELATIONSHIP_WORK;
+        const EXACT_TYPE_WORK: usize = 22;
+
+        let relationship_program = linked_determined_generic_decrease_program();
+        let group = &relationship_program.groups()[0];
+        let interface = &group.interface_facts()[0];
+        let fact = &group.implementation_facts()[0];
+        let prerequisite = &fact.prerequisites[0];
+        let exercise_relationship = |work: &mut InterfaceConstraintBudget| {
+            let head_key =
+                linked_selection_key_types(interface, fact.arguments(), work, fact.span)?;
+            let complete =
+                linked_type_references(prerequisite.arguments(), work, prerequisite.span)?;
+            let prerequisite_key = linked_selection_key_types(
+                interface,
+                prerequisite.arguments(),
+                work,
+                prerequisite.span,
+            )?;
+            crate::interface::implementation_prerequisite_selection_key_terminates(
+                &complete,
+                &prerequisite_key,
+                &head_key,
+                work,
+            )
+            .map_err(|()| resource(prerequisite.span))
+        };
+        let mut relationship_short = InterfaceConstraintBudget::with_limit(RELATIONSHIP_WORK - 1);
+        assert_eq!(
+            exercise_relationship(&mut relationship_short)
+                .expect_err("one missing linked relationship cell must reject")
+                .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+        assert_eq!(relationship_short.used(), RELATIONSHIP_WORK - 1);
+        for _ in 0..2 {
+            let mut relationship_exact = InterfaceConstraintBudget::with_limit(RELATIONSHIP_WORK);
+            assert!(
+                exercise_relationship(&mut relationship_exact)
+                    .expect("the exact borrowed linked relationship should fit")
+            );
+            assert_eq!(relationship_exact.used(), RELATIONSHIP_WORK);
+            assert_eq!(fact.arguments().len(), 2);
+            assert_eq!(prerequisite.arguments().len(), 2);
+        }
+
+        let mut constraint_work = InterfaceConstraintBudget::default();
+        let mut type_work = TypeWorkBudget::default();
+        validate_interface_evidence_with_budget(
+            linked_determined_generic_decrease_program(),
+            &mut constraint_work,
+            &mut type_work,
+        )
+        .expect("the measured generic decrease program should authenticate");
+        assert_eq!(constraint_work.used(), EXACT_CONSTRAINT_WORK);
+        assert_eq!(type_work.used(), EXACT_TYPE_WORK);
+
+        let mut constraint_short = InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK - 1);
+        let mut exact_type = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
+        let failure = validate_interface_evidence_with_budget(
+            linked_determined_generic_decrease_program(),
+            &mut constraint_short,
+            &mut exact_type,
+        )
+        .expect_err("one missing constraint unit must reject before publication");
+        assert_eq!(
+            failure.reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+        assert_eq!(constraint_short.used(), EXACT_CONSTRAINT_WORK - 1);
+        assert_eq!(exact_type.used(), EXACT_TYPE_WORK);
+
+        let mut exact_constraint = InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK);
+        let mut type_short = TypeWorkBudget::with_limit(EXACT_TYPE_WORK - 1);
+        let failure = validate_interface_evidence_with_budget(
+            linked_determined_generic_decrease_program(),
+            &mut exact_constraint,
+            &mut type_short,
+        )
+        .expect_err("one missing type unit must reject before publication");
+        assert_eq!(
+            failure.reason(),
+            EvidenceValidationReason::TypeResourceExhausted,
+        );
+        assert_eq!(exact_constraint.used(), 376);
+        assert_eq!(type_short.used(), EXACT_TYPE_WORK - 1);
+
+        for _ in 0..2 {
+            let mut exact_constraint = InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK);
+            let mut exact_type = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
+            validate_interface_evidence_with_budget(
+                linked_determined_generic_decrease_program(),
+                &mut exact_constraint,
+                &mut exact_type,
+            )
+            .expect("the exact linked relationship boundary should remain retryable");
+            assert_eq!(exact_constraint.used(), EXACT_CONSTRAINT_WORK);
+            assert_eq!(exact_type.used(), EXACT_TYPE_WORK);
+        }
+    }
+
+    #[test]
+    fn linked_generic_prerequisite_rejects_dependent_only_strictness_after_coherent_tampering() {
+        let mut program = entry_program(concat!(
+            "type List<A> =\n",
+            "Nil\n",
+            "| Cons(A, List<A>)\n",
+            "interface Relation<A, B> where A -> B {\n",
+            "relate : A -> Int\n",
+            "}\n",
+            "impl<X> Relation<List<X>, List<X>> where Relation<X, X> {\n",
+            "relate value = 0\n",
+            "}\n",
+            "main : Unit -> Unit\n",
+            "main () = ()\n",
+        ));
+        let implementation = program.groups()[0].implementation_facts()[0].id;
+        assert!(
+            program.replace_implementation_prerequisite_argument_with_head_for_test(
+                implementation,
+                0,
+                0,
+            ),
+            "the linked fixture should retain every prerequisite mirror",
+        );
+        let fact = &program.groups()[0].implementation_facts()[0];
+        let prerequisite = &fact.prerequisites[0];
+        assert_eq!(prerequisite.arguments()[0], fact.arguments()[0]);
+        assert_ne!(prerequisite.arguments()[1], fact.arguments()[1]);
+
+        assert_eq!(
+            validate_interface_evidence(program)
+                .expect_err("dependent-only strictness cannot authenticate generic decrease")
+                .reason(),
+            EvidenceValidationReason::UnknownIdentity,
+        );
+    }
+
+    #[test]
+    fn rejects_every_source_token_and_fact_determination_mutation_before_core() {
+        const SOURCE: &str = concat!(
+            "interface Relation<A, B, C> where (A, B) -> C {\n",
+            "relation : (A, B, C) -> Unit\n",
+            "}\n\n",
+            "interface Other<X, Y, Z> where Y -> (X, Z) {\n",
+            "other : (X, Y, Z) -> Unit\n",
+            "}\n\n",
+            "interface Ordinary<L, R, V> {\n",
+            "ordinary : (L, R, V) -> Unit\n",
+            "}\n\n",
+            "main : Unit -> Unit\n",
+            "main () = ()\n",
+        );
+        let mutations = [
+            (
+                LinkedDeterminationCarrierForTest::Source,
+                LinkedDeterminationMutationForTest::Missing,
+            ),
+            (
+                LinkedDeterminationCarrierForTest::Source,
+                LinkedDeterminationMutationForTest::Extra,
+            ),
+            (
+                LinkedDeterminationCarrierForTest::Source,
+                LinkedDeterminationMutationForTest::Duplicate,
+            ),
+            (
+                LinkedDeterminationCarrierForTest::Source,
+                LinkedDeterminationMutationForTest::Reordered,
+            ),
+            (
+                LinkedDeterminationCarrierForTest::Source,
+                LinkedDeterminationMutationForTest::OutOfRange,
+            ),
+            (
+                LinkedDeterminationCarrierForTest::Source,
+                LinkedDeterminationMutationForTest::WrongInterface,
+            ),
+            (
+                LinkedDeterminationCarrierForTest::Source,
+                LinkedDeterminationMutationForTest::MismatchedPositions,
+            ),
+            (
+                LinkedDeterminationCarrierForTest::Source,
+                LinkedDeterminationMutationForTest::WrongSourceSpelling,
+            ),
+            (
+                LinkedDeterminationCarrierForTest::Source,
+                LinkedDeterminationMutationForTest::WrongSourceOrigin,
+            ),
+            (
+                LinkedDeterminationCarrierForTest::Token,
+                LinkedDeterminationMutationForTest::Missing,
+            ),
+            (
+                LinkedDeterminationCarrierForTest::Token,
+                LinkedDeterminationMutationForTest::Extra,
+            ),
+            (
+                LinkedDeterminationCarrierForTest::Token,
+                LinkedDeterminationMutationForTest::Duplicate,
+            ),
+            (
+                LinkedDeterminationCarrierForTest::Token,
+                LinkedDeterminationMutationForTest::Reordered,
+            ),
+            (
+                LinkedDeterminationCarrierForTest::Token,
+                LinkedDeterminationMutationForTest::OutOfRange,
+            ),
+            (
+                LinkedDeterminationCarrierForTest::Token,
+                LinkedDeterminationMutationForTest::MismatchedPositions,
+            ),
+            (
+                LinkedDeterminationCarrierForTest::Fact,
+                LinkedDeterminationMutationForTest::Missing,
+            ),
+            (
+                LinkedDeterminationCarrierForTest::Fact,
+                LinkedDeterminationMutationForTest::Extra,
+            ),
+            (
+                LinkedDeterminationCarrierForTest::Fact,
+                LinkedDeterminationMutationForTest::Duplicate,
+            ),
+            (
+                LinkedDeterminationCarrierForTest::Fact,
+                LinkedDeterminationMutationForTest::Reordered,
+            ),
+            (
+                LinkedDeterminationCarrierForTest::Fact,
+                LinkedDeterminationMutationForTest::OutOfRange,
+            ),
+            (
+                LinkedDeterminationCarrierForTest::Fact,
+                LinkedDeterminationMutationForTest::MismatchedPositions,
+            ),
+        ];
+
+        validate_interface_evidence(entry_program(SOURCE))
+            .expect("the honest three-interface fixture should authenticate");
+        let mut unexpectedly_accepted = Vec::new();
+        for (carrier, mutation) in mutations {
+            let mut program = entry_program(SOURCE);
+            let module = program.groups()[0].module();
+            assert!(
+                program.corrupt_linked_determination_for_test(module, carrier, mutation),
+                "the fixture should retain {carrier:?} {mutation:?}",
+            );
+            match validate_interface_evidence(program) {
+                Err(failure) => assert_eq!(
+                    failure.reason(),
+                    EvidenceValidationReason::UnknownIdentity,
+                    "{carrier:?} {mutation:?}",
+                ),
+                Ok(_) => unexpectedly_accepted.push((carrier, mutation)),
+            }
+        }
+        assert!(
+            unexpectedly_accepted.is_empty(),
+            "linked validation accepted {unexpectedly_accepted:?}",
+        );
+    }
+
+    #[test]
+    fn linked_determination_authentication_has_an_exact_public_retry_boundary() {
+        fn program(determined: bool) -> ResolvedModuleProgram {
+            let interface = if determined {
+                "interface Relation<A, B, C> where (A, B) -> C {\n"
+            } else {
+                "interface Relation<A, B, C> {\n"
+            };
+            entry_program(&format!(
+                "{interface}relation : (A, B, C) -> Unit\n}}\n\nmain : Unit -> Unit\nmain () = ()\n",
+            ))
+        }
+        let measure = |determined| {
+            let mut constraint_work = InterfaceConstraintBudget::default();
+            let mut type_work = TypeWorkBudget::default();
+            validate_interface_evidence_with_budget(
+                program(determined),
+                &mut constraint_work,
+                &mut type_work,
+            )
+            .expect("the measured linked program should authenticate");
+            (constraint_work.used(), type_work.used())
+        };
+
+        const ORDINARY_CONSTRAINT_WORK: usize = 151;
+        const DETERMINED_CONSTRAINT_WORK: usize = 167;
+        const EXACT_TYPE_WORK: usize = 16;
+        const PARAMETER_COUNT: usize = 3;
+        const DETERMINANT_COUNT: usize = 2;
+        const THREE_WAY_AUTH_DELTA: usize = 2 * PARAMETER_COUNT + 2 * DETERMINANT_COUNT;
+        const SEED_RETENTION_DELTA: usize = DETERMINANT_COUNT;
+        const METHOD_SEED_DELTA: usize = 2 * DETERMINANT_COUNT;
+        const TOTAL_KEY_DELTA: usize =
+            THREE_WAY_AUTH_DELTA + SEED_RETENTION_DELTA + METHOD_SEED_DELTA;
+
+        let ordinary = measure(false);
+        let determined = measure(true);
+        assert_eq!(ordinary, (ORDINARY_CONSTRAINT_WORK, EXACT_TYPE_WORK));
+        assert_eq!(determined, (DETERMINED_CONSTRAINT_WORK, EXACT_TYPE_WORK),);
+        assert_eq!(
+            DETERMINED_CONSTRAINT_WORK - ORDINARY_CONSTRAINT_WORK,
+            TOTAL_KEY_DELTA,
+        );
+
+        let mut short = InterfaceConstraintBudget::with_limit(DETERMINED_CONSTRAINT_WORK - 1);
+        let failure = validate_interface_evidence_with_budget(
+            program(true),
+            &mut short,
+            &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
+        )
+        .expect_err("one-short linked key work must not publish a capability");
+        assert_eq!(
+            failure.reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+        assert_eq!(short.used(), DETERMINED_CONSTRAINT_WORK - 1);
+
+        for _ in 0..2 {
+            let mut exact = InterfaceConstraintBudget::with_limit(DETERMINED_CONSTRAINT_WORK);
+            let mut exact_type = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
+            validate_interface_evidence_with_budget(program(true), &mut exact, &mut exact_type)
+                .expect("the exact linked key boundary should remain retryable");
+            assert_eq!(exact.used(), DETERMINED_CONSTRAINT_WORK);
+            assert_eq!(exact_type.used(), EXACT_TYPE_WORK);
         }
     }
 

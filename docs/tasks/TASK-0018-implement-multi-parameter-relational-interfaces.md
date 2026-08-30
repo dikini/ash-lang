@@ -121,6 +121,57 @@ syntax, packages, runtime interface lookup, and evaluator changes.
   Rust/resource review (`gpt-5.6-sol`, `high`) approve Checkpoint 3 after their
   findings were corrected and re-reviewed. Cumulative reserved use is 30/65;
   35 units remain.
+- Checkpoint 4 retains one optional private declaration-position
+  `DeterminationKey` in checked, local, and body-free interface facts and
+  derives dependents as its complement. It adds no public selection-key or
+  dependent API, edge graph, Core metadata, evaluator state, or runtime
+  inventory. Interface admission authenticates an exact total partition. A
+  no-edge method still requires every interface parameter; a determined method
+  requires every determinant and may use each dependent anywhere or nowhere.
+- Global application checking now performs an unconditional arity preflight
+  and then, only for complete applications, positional kind preflight before
+  any partition, method, or implementation-header failure. This covers global
+  requirements, implementation heads, and prerequisites. Header admission
+  iteratively checks dependent free-variable coverage by the key, applies the
+  all-bare and orphan rules to the key alone, uses pointwise key decrease while
+  retaining full applications for active-cycle identity, and keeps stable
+  `ImplId` deduplication before independent key and full-head comparisons. The
+  first effective combiner owns overlap or determination conflict.
+- Source-to-summary publication authenticates the source key. Detached summary
+  admission authenticates structural, method-seed, and header relationships;
+  imports authenticate before local checking; facade and first-combiner paths
+  recheck effective closures. Linked validation indexes the registry,
+  authenticates every group's source, token, and fact key in phase one, and
+  then authenticates relationships with selection-key termination. Honest
+  dependent growth passes, a coherent dependent-only-shrink tamper fails, and
+  an honest stable-identity diamond passes. Source occurrence identity,
+  spelling, origin, span, and the determined method seed remain authenticated.
+  Determinant metadata erases before Core.
+- Exact Checkpoint 4 resource evidence records 23 constraint units for the
+  linked selection-key relationship, 396 constraint and 22 type units for its
+  public linked boundary, and zero added work for the validation-phase split.
+  Ordinary and determined linked fixtures remain 151/16 and 167/16
+  constraint/type units, the linked registry remains 102 constraint units, and
+  the driver inequality remains `327655 < 327680 < 577100`.
+- Raw determinant getters are `pub(crate)`. Exact representation evidence lives
+  in a crate unit test, while public integrations assert behavior.
+- Checkpoint 4 focused verification passes 771 library tests, interfaces 40/40,
+  implementations 73/73, diagnostics 44/44, generic summaries 4/4, identity
+  diamonds 2/2, interface modules 23/23, the resolved filter 111/111, and the
+  evidence-validation filter 108/108. Named exact and one-short resource tests,
+  formatting, all-target checking, strict workspace all-target/all-feature
+  Clippy, and diff hygiene pass. The controller will repeat the whole-checkpoint
+  commands after this documentation-only closure edit; Checkpoint 4 does not
+  claim a `cargo xtask verify` run.
+- Earlier independent semantic and Rust/resource findings were corrected and
+  re-reviewed. The final whole semantic review then reported an important
+  linked-validation finding and a minor public-getter finding. Semantic
+  re-review approves both corrections without findings, and a fresh whole
+  Rust/resource review independently approves the complete checkpoint.
+  Cumulative reserved use is 40/65; 25 units remain.
+  The specification remains unchanged through the later evidence checkpoint;
+  normative reconciliation remains separately allocated. Neither lib-ash nor
+  TASK-0018 is complete.
 
 ## Verification
 
@@ -155,6 +206,26 @@ The total-key restriction removes edge graphs, closure, chained improvement,
 projection normalization, and per-edge coherence. Effects, proofs, and
 existentials pressure complete typed applications and encapsulated evidence
 producers, but do not justify implementing their semantics in this task.
+
+Body-free method admission needs an explicit choice between the predecessor
+`AllInterfaceParameters` seed and a `Determined` seed. Imported and linked facts
+authenticate the latter from declaration positions rather than trusting a
+dependent carrier. Internal position-key access is sufficient for these
+owners. Raw determinant getters remain crate-private; exact representation
+evidence belongs in crate unit tests, while integrations assert public
+behavior.
+
+Summary mutation evidence follows its authority boundaries. Source-to-summary
+publication owns a pure source/key mismatch. Detached summary admission owns
+structural malformation and valid alternate keys that change variable-head,
+coverage, or orphan relationships; it does not retain a redundant source-edge
+carrier. A position-only key has no interface identity, so linked token and fact
+guards, rather than duplicate `WrongInterface` key rows, own interface identity.
+
+Honest determined-summary accounting includes key-position work at publication,
+detached authentication, linking, and wide-driver validation. The execution
+plan records the final exact boundaries. No specification change is part of
+Checkpoint 4; the later normative reconciliation checkpoint remains the owner.
 
 ## Deviations
 
@@ -236,3 +307,54 @@ producers, but do not justify implementing their semantics in this task.
   each ordered argument marker, and architecture guards require that reserve
   and reject the obsolete scalar exceptions. Resource formulas and production
   limits are unchanged.
+- Checkpoint 4's initial file list omitted `src/driver.rs`, `src/kind.rs`,
+  `src/resolve.rs`, and `src/resolve/module_tests.rs`. Existing wide-driver,
+  body-free kind, summary-publication, and summary-authentication owners and
+  fixtures required those migrations. The planned `src/evidence.rs` change was
+  unnecessary because private determinant metadata fits the existing
+  interface-fact and evidence boundaries.
+- Review removed the planned public selection-key and dependent aligned-slice
+  accessors. Private declaration-position key access and locally derived
+  complements cover every Checkpoint 4 owner with less API surface.
+- Semantic review found that an earlier valid edge method seed or method kind
+  could preempt a later malformed global, head, or prerequisite application.
+  The correction adds an unconditional global arity pass, a positional kind
+  pass only for arity-complete applications, and elaboration arity preflight.
+  The wide-driver fixture narrowed from 4,900 to 4,890 so its final boundaries
+  remain `327655 < 327680 < 577100`; no production limit increased.
+- The summary pair test from implementation Task B and the CP4 Step 5
+  first-combiner and stable-diamond extensions were immediately GREEN because
+  the shared implementation already enforced those relationships. They remain
+  retained evidence; this is an evidence-plan deviation, not missing behavior.
+- Rust/resource review found that new determinant and implementation-header
+  related labels used infallible, uncharged `Vec::push`. The fallible charged
+  correction added exact 14-unit declaration-label and 59-unit header tests;
+  both passed re-review.
+- Semantic review of CP4 Step 5 found that detached summary admission checked
+  key structure and method seeds but not the full-vector variable-head,
+  dependent-coverage, and orphan relationships after a valid alternate-key
+  mutation. Detached admission now authenticates those relationships and the
+  focused semantic re-review approves the correction.
+- Linked determinant mutation rows initially included token and fact
+  `WrongInterface` cases that only duplicated mismatched positions because a
+  position-only key carries no interface identity. Removing those rows leaves
+  21 independent linked mutations; enclosing token and fact guards still own
+  interface identity.
+- Final Rust/resource review found that the local and summary selection-key
+  collectors reserved output storage before charging its owner. Both now
+  charge the aggregate before reserve. No-edge and determined exact/one-short
+  staging tests cover the correction, total formulas are unchanged, and the
+  focused re-review approves it.
+- Final whole semantic review found an important linked-validation defect:
+  generic prerequisite authentication still used complete-application
+  termination and could read another group's determinant key before that group
+  authenticated it. Linked validation now authenticates all group keys in
+  phase one and applies selection-key termination in phase two. An honest
+  dependent-growth program passes, a coherent dependent-only-shrink tamper
+  fails, and the phase split adds zero resource units.
+- The same whole semantic review found a minor public API defect: raw
+  determinant getters exposed representation. They are now `pub(crate)`, exact
+  representation evidence moved to a crate unit test, and public integrations
+  assert behavior. Semantic re-review approves both final corrections, and the
+  fresh whole Rust/resource review approves the complete checkpoint without
+  findings.

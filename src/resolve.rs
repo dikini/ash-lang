@@ -2797,14 +2797,26 @@ impl Resolver {
                 "imported interface parameter exceeded its type-work budget",
             )?);
         }
-        let retained = CheckedInterfaceFact {
-            id: exported.id,
-            spelling: exported.spelling.clone(),
-            parameters: parameters.into_boxed_slice(),
-            methods: methods.into_boxed_slice(),
-            origin: exported.origin.clone(),
-            span: exported.span,
-        };
+        let determination = exported
+            .determination()
+            .map(|key| key.clone_with_budget(&mut self.constraint_work))
+            .transpose()
+            .map_err(|()| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    span,
+                    "imported interface determinant key exceeded its work budget",
+                )
+            })?;
+        let retained = CheckedInterfaceFact::new(
+            exported.id,
+            exported.spelling.clone(),
+            parameters.into_boxed_slice(),
+            determination,
+            methods.into_boxed_slice(),
+            exported.origin.clone(),
+            exported.span,
+        );
         self.imported.insert_interface_with_authority_indices(
             retained,
             authority_method_indices.into_boxed_slice(),

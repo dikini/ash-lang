@@ -227,6 +227,74 @@ fn rejects_bare_type_variable_impl_head() {
 }
 
 #[test]
+fn determined_impl_rejects_a_dependent_variable_absent_from_the_key() {
+    let error = check_error(concat!(
+        "interface Relation<A, B> where A -> B {\n",
+        "relate : A -> Int\n",
+        "}\n\n",
+        "impl<B> Relation<Int, B> {\n",
+        "relate value = 0\n",
+        "}\n",
+    ));
+
+    assert_eq!(reason(&error), "impl.determination-coverage");
+}
+
+#[test]
+fn determined_impl_rejects_an_all_bare_key_with_a_constant_dependent() {
+    let error = check_error(concat!(
+        "interface Relation<A, B> where A -> B {\n",
+        "relate : A -> Int\n",
+        "}\n\n",
+        "impl<A> Relation<A, Bool> {\n",
+        "relate value = 0\n",
+        "}\n",
+    ));
+
+    assert_eq!(reason(&error), "impl.variable-head");
+}
+
+#[test]
+fn determined_impl_accepts_constant_and_key_constructed_dependents() {
+    check_valid(concat!(
+        "type List<A> =\nNil\n| Cons(A, List<A>)\n",
+        "interface Relation<A, B> where A -> B {\n",
+        "relate : A -> Int\n",
+        "}\n\n",
+        "impl Relation<Int, Bool> {\nrelate value = 0\n}\n",
+        "impl<A> Relation<List<A>, A> {\nrelate value = 0\n}\n",
+    ));
+}
+
+#[test]
+fn variable_head_precedes_prerequisite_containment_and_determination_coverage() {
+    let error = check_error(concat!(
+        "interface Relation<A, B> where A -> B {\n",
+        "relate : A -> Int\n",
+        "}\n\n",
+        "impl<A, B> Relation<A, B> where Relation<Int, C> {\n",
+        "relate value = 0\n",
+        "}\n",
+    ));
+
+    assert_eq!(reason(&error), "impl.variable-head");
+}
+
+#[test]
+fn prerequisite_containment_precedes_determination_coverage() {
+    let error = check_error(concat!(
+        "interface Relation<A, B> where A -> B {\n",
+        "relate : A -> Int\n",
+        "}\n\n",
+        "impl<B> Relation<Int, B> where Relation<Int, C> {\n",
+        "relate value = 0\n",
+        "}\n",
+    ));
+
+    assert_eq!(reason(&error), "impl.prerequisite-variable");
+}
+
+#[test]
 fn invalid_bare_variable_head_precedes_imported_implementation_overlap() {
     let error = check_error_with_dependencies(
         concat!(
@@ -375,6 +443,68 @@ fn foreign_relational_interface_accepts_local_nominal_ownership_in_the_second_ar
             ),
         )],
     );
+}
+
+#[test]
+fn foreign_determined_interface_rejects_local_nominal_ownership_only_in_a_dependent() {
+    let error = check_error_with_dependencies(
+        concat!(
+            "import owners (Owner, owner)\n",
+            "type Local = Local\n\n",
+            "impl Owner<Int, Local> {\nowner value = 0\n}\n",
+        ),
+        &[(
+            "owners.ash",
+            concat!(
+                "pub interface Owner<Key, Dependent> where Key -> Dependent {\n",
+                "owner : Key -> Int\n",
+                "}\n",
+            ),
+        )],
+    );
+
+    assert_eq!(reason(&error), "impl.orphan");
+}
+
+#[test]
+fn foreign_determined_interface_accepts_a_local_outer_nominal_in_the_key() {
+    check_valid_with_dependencies(
+        concat!(
+            "import owners (Owner, owner)\n",
+            "type Local = Local\n\n",
+            "impl Owner<Local, Bool> {\nowner value = 0\n}\n",
+        ),
+        &[(
+            "owners.ash",
+            concat!(
+                "pub interface Owner<Key, Dependent> where Key -> Dependent {\n",
+                "owner : Key -> Int\n",
+                "}\n",
+            ),
+        )],
+    );
+}
+
+#[test]
+fn foreign_determined_interface_rejects_a_local_nominal_below_the_key_spine() {
+    let error = check_error_with_dependencies(
+        concat!(
+            "import owners (Foreign, Owner, owner)\n",
+            "type Local = Local\n\n",
+            "impl Owner<Foreign<Local>, Bool> {\nowner value = 0\n}\n",
+        ),
+        &[(
+            "owners.ash",
+            concat!(
+                "pub type Foreign<A> = Foreign(A)\n",
+                "pub interface Owner<Key, Dependent> where Key -> Dependent {\n",
+                "owner : Key -> Int\n",
+                "}\n",
+            ),
+        )],
+    );
+
+    assert_eq!(reason(&error), "impl.orphan");
 }
 
 #[test]
@@ -617,6 +747,119 @@ fn relational_prerequisite_rejects_pointwise_equality_without_a_strict_position(
 }
 
 #[test]
+fn determined_prerequisite_rejects_decrease_only_in_a_dependent_argument() {
+    let error = check_error(concat!(
+        "type List<A> =\nNil\n| Cons(A, List<A>)\n",
+        "interface Relation<A, B> where A -> B {\n",
+        "relate : A -> Int\n",
+        "}\n\n",
+        "impl<A> Relation<List<A>, List<A>> where Relation<List<A>, A> {\n",
+        "relate value = 0\n",
+        "}\n",
+    ));
+
+    assert_eq!(reason(&error), "impl.prerequisite-not-decreasing");
+}
+
+#[test]
+fn determined_multi_input_prerequisite_accepts_equal_and_strict_key_components() {
+    check_valid(concat!(
+        "type List<A> =\nNil\n| Cons(A, List<A>)\n",
+        "type Option<A> =\nNone\n| Some(A)\n",
+        "interface Relation<A, B, C> where (A, B) -> C {\n",
+        "relate : (A, B) -> Int\n",
+        "}\n\n",
+        "impl<A, B> Relation<List<A>, Option<B>, (A, B)> ",
+        "where Relation<A, Option<B>, (A, B)> {\n",
+        "relate pair = 0\n",
+        "}\n",
+    ));
+}
+
+#[test]
+fn determined_multi_input_prerequisite_rejects_all_equal_key_components() {
+    let error = check_error(concat!(
+        "type List<A> =\nNil\n| Cons(A, List<A>)\n",
+        "type Option<A> =\nNone\n| Some(A)\n",
+        "interface Relation<A, B, C> where (A, B) -> C {\n",
+        "relate : (A, B) -> Int\n",
+        "}\n\n",
+        "impl<A, B> Relation<List<A>, Option<B>, (A, B)> ",
+        "where Relation<List<A>, Option<B>, (A, B)> {\n",
+        "relate pair = 0\n",
+        "}\n",
+    ));
+
+    assert_eq!(reason(&error), "impl.prerequisite-not-decreasing");
+}
+
+#[test]
+fn determined_multi_input_prerequisite_rejects_a_non_subterm_key_component() {
+    let error = check_error(concat!(
+        "type List<A> =\nNil\n| Cons(A, List<A>)\n",
+        "type Option<A> =\nNone\n| Some(A)\n",
+        "interface Relation<A, B, C> where (A, B) -> C {\n",
+        "relate : (A, B) -> Int\n",
+        "}\n\n",
+        "impl<A, B> Relation<List<A>, Option<B>, (A, B)> ",
+        "where Relation<A, List<B>, (A, B)> {\n",
+        "relate pair = 0\n",
+        "}\n",
+    ));
+
+    assert_eq!(reason(&error), "impl.prerequisite-not-decreasing");
+}
+
+#[test]
+fn determined_generic_prerequisite_rejects_a_different_key_width() {
+    let error = check_error(concat!(
+        "type List<A> =\nNil\n| Cons(A, List<A>)\n",
+        "type Option<A> =\nNone\n| Some(A)\n",
+        "interface Wide<A, B, C> where (A, B) -> C {\n",
+        "wide : (A, B) -> Int\n",
+        "}\n",
+        "interface Narrow<A, B> where A -> B {\n",
+        "narrow : A -> Int\n",
+        "}\n\n",
+        "impl<A, B> Wide<List<A>, Option<B>, (A, B)> where Narrow<A, A> {\n",
+        "wide pair = 0\n",
+        "}\n",
+    ));
+
+    assert_eq!(reason(&error), "impl.prerequisite-not-decreasing");
+}
+
+#[test]
+fn determined_ground_prerequisite_keeps_the_complete_application_exemption() {
+    check_valid(concat!(
+        "type List<A> =\nNil\n| Cons(A, List<A>)\n",
+        "type Option<A> =\nNone\n| Some(A)\n",
+        "interface Wide<A, B, C> where (A, B) -> C {\n",
+        "wide : (A, B) -> Int\n",
+        "}\n",
+        "interface Narrow<A, B> where A -> B {\n",
+        "narrow : A -> Int\n",
+        "}\n\n",
+        "impl<A, B> Wide<List<A>, Option<B>, (A, B)> where Narrow<Int, Bool> {\n",
+        "wide pair = 0\n",
+        "}\n",
+    ));
+}
+
+#[test]
+fn determined_prerequisite_accepts_dependent_growth_when_the_key_strictly_decreases() {
+    check_valid(concat!(
+        "type List<A> =\nNil\n| Cons(A, List<A>)\n",
+        "interface Relation<A, B> where A -> B {\n",
+        "relate : A -> Int\n",
+        "}\n\n",
+        "impl<A> Relation<List<A>, A> where Relation<A, List<A>> {\n",
+        "relate value = 0\n",
+        "}\n",
+    ));
+}
+
+#[test]
 fn invalid_header_precedes_missing_method_membership() {
     let error = check_error("interface Equal<A> {\nequal : A -> A\n}\n\nimpl Equal<A> {\n}\n");
 
@@ -818,6 +1061,46 @@ fn relational_implementation_heads_unifying_only_through_argument_two_overlap() 
     ));
 
     assert_eq!(reason(&error), "impl.overlap");
+}
+
+#[test]
+fn determined_local_generic_and_ground_heads_with_one_key_conflict() {
+    let error = check_error(concat!(
+        "type List<A> =\nNil\n| Cons(A, List<A>)\n",
+        "interface Relation<A, B> where A -> B {\n",
+        "relate : A -> Int\n",
+        "}\n\n",
+        "impl<A> Relation<List<A>, A> {\nrelate value = 0\n}\n",
+        "impl Relation<List<Int>, Bool> {\nrelate value = 0\n}\n",
+    ));
+
+    assert_eq!(reason(&error), "impl.determination-conflict");
+}
+
+#[test]
+fn determined_heads_that_unify_completely_retain_overlap_ownership() {
+    let error = check_error(concat!(
+        "type List<A> =\nNil\n| Cons(A, List<A>)\n",
+        "interface Relation<A, B> where A -> B {\n",
+        "relate : A -> Int\n",
+        "}\n\n",
+        "impl<A> Relation<List<A>, A> {\nrelate value = 0\n}\n",
+        "impl Relation<List<Int>, Int> {\nrelate value = 0\n}\n",
+    ));
+
+    assert_eq!(reason(&error), "impl.overlap");
+}
+
+#[test]
+fn determined_heads_with_nonunifying_keys_are_coherent() {
+    check_valid(concat!(
+        "type List<A> =\nNil\n| Cons(A, List<A>)\n",
+        "interface Relation<A, B> where A -> B {\n",
+        "relate : A -> Int\n",
+        "}\n\n",
+        "impl<A> Relation<List<A>, A> {\nrelate value = 0\n}\n",
+        "impl Relation<Int, Bool> {\nrelate value = 0\n}\n",
+    ));
 }
 
 #[test]

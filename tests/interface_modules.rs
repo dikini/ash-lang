@@ -86,6 +86,45 @@ fn check_graph(graph: &ModuleGraph) -> Result<Vec<CheckedModule>, TypeError> {
     Ok(checked)
 }
 
+#[test]
+fn determined_interface_methods_cross_a_body_free_dependency_summary() {
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import dependency as Dependency\n",
+            "size : Int -> Int where Dependency.Collection<Int, Bool>\n",
+            "size value = value\n\n",
+            "keep : (Int, Bool) -> Bool where Dependency.Collection<Int, Bool>\n",
+            "keep pair = false\n",
+        ),
+        &[(
+            "dependency.ash",
+            concat!(
+                "pub interface Collection<I, Item> where I -> Item {\n",
+                "size : I -> Int\n",
+                "keep : (I, Item) -> Item\n",
+                "}\n",
+            ),
+        )],
+    );
+
+    let checked = check_graph(&graph)
+        .expect("omitted and present dependents should survive body-free summary admission");
+    let entry = checked
+        .iter()
+        .find(|module| module.module() == module_named(&graph, "entry.ash").id())
+        .expect("the separately checked dependent should be published");
+
+    assert_eq!(entry.schemes().len(), 2);
+    assert!(
+        entry
+            .schemes()
+            .iter()
+            .all(|scheme| scheme.scheme.requirements.len() == 1)
+    );
+}
+
 fn resolve_entry_error(graph: &ModuleGraph) -> ash::resolve::ResolveError {
     let entry = module_named(graph, "entry.ash");
     let mut checked: Vec<CheckedModule> = Vec::new();
@@ -710,6 +749,75 @@ fn alternate_direct_routes_to_one_impl_identity_do_not_self_overlap() {
         )],
     );
     check_graph(&graph).expect("alternate routes to one ImplId should deduplicate before overlap");
+}
+
+#[test]
+fn imported_and_local_determined_heads_conflict_at_the_first_combiner() {
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import dependency (Relation, relate, impl Relation)\n",
+            "type Local<A> = Local(A)\n",
+            "impl Relation<Local<Int>, Bool> {\n",
+            "relate value = 0\n",
+            "}\n",
+        ),
+        &[(
+            "dependency.ash",
+            concat!(
+                "pub interface Relation<A, B> where A -> B {\n",
+                "relate : A -> Int\n",
+                "}\n",
+                "pub impl<F : Type -> Type, A> Relation<F<A>, A> {\n",
+                "relate value = 0\n",
+                "}\n",
+            ),
+        )],
+    );
+
+    let TypeError::Interface(diagnostic) =
+        check_graph(&graph).expect_err("the entry first combines the conflicting heads")
+    else {
+        panic!("the determined pair should use an interface diagnostic");
+    };
+    assert_eq!(
+        diagnostic.reason,
+        InterfaceReason::ImplDeterminationConflict
+    );
+}
+
+#[test]
+fn imported_and_local_determined_heads_overlap_at_the_first_combiner() {
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        concat!(
+            "import dependency (Relation, relate, impl Relation)\n",
+            "type Local<A> = Local(A)\n",
+            "impl Relation<Local<Int>, Int> {\n",
+            "relate value = 0\n",
+            "}\n",
+        ),
+        &[(
+            "dependency.ash",
+            concat!(
+                "pub interface Relation<A, B> where A -> B {\n",
+                "relate : A -> Int\n",
+                "}\n",
+                "pub impl<F : Type -> Type, A> Relation<F<A>, A> {\n",
+                "relate value = 0\n",
+                "}\n",
+            ),
+        )],
+    );
+
+    let TypeError::Interface(diagnostic) =
+        check_graph(&graph).expect_err("the entry first combines the overlapping heads")
+    else {
+        panic!("the determined pair should use an interface diagnostic");
+    };
+    assert_eq!(diagnostic.reason, InterfaceReason::ImplOverlap);
 }
 
 #[test]

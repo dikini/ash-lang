@@ -304,3 +304,73 @@ fn preserves_all_interface_identity_families_through_dependency_diamond() {
         .expect("the generic identity diamond should authenticate before Core");
     assert_eq!(validated.entry(), graph.entry());
 }
+
+#[test]
+fn determined_implementation_reexport_diamond_deduplicates_one_stable_identity() {
+    let tree = ModuleTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "import left as Left\n",
+            "import right as Right\n",
+            "import left (impl Relation)\n",
+            "import right (impl Relation)\n",
+            "main : Unit -> Unit\n",
+            "main () = ()\n",
+        ),
+    );
+    tree.write(
+        "base.ash",
+        concat!(
+            "pub type Wrap<A> = Wrap(A)\n",
+            "pub interface Relation<A, B> where A -> B {\n",
+            "relate : A -> Int\n",
+            "}\n",
+            "pub impl<A> Relation<Wrap<A>, A> {\n",
+            "relate value = 0\n",
+            "}\n",
+        ),
+    );
+    tree.write(
+        "left.ash",
+        "pub import base (Relation, relate, impl Relation)\n",
+    );
+    tree.write(
+        "right.ash",
+        "pub import base (Relation, relate, impl Relation)\n",
+    );
+
+    let graph = load_module_graph(&entry, &ModuleRoots::empty()).expect("diamond should load");
+    let mut checked = Vec::new();
+    let mut implementation = None;
+    for module in graph.modules() {
+        let dependencies = dependency_exports(module, &checked);
+        let resolved = resolve_module(module, &dependencies).expect("diamond should resolve");
+        if file_name(module) == Path::new("entry.ash") {
+            let implementation = implementation.expect("the base should check first");
+            assert!(
+                resolved
+                    .imported_facts()
+                    .implementation(implementation)
+                    .is_some(),
+                "both routes should retain one implementation fact",
+            );
+        }
+        let module_checked = ash::elaborate::check_module(resolved)
+            .expect("the stable implementation identity must not conflict with itself");
+        if file_name(module) == Path::new("base.ash") {
+            let [fact] = module_checked.implementation_facts() else {
+                panic!("the base should retain one implementation fact");
+            };
+            implementation = Some(fact.id);
+        }
+        checked.push(module_checked);
+    }
+
+    assert_eq!(checked.len(), 4);
+    let linked = link_modules(checked, graph.entry())
+        .expect("the determined stable-identity diamond should link");
+    let validated = validate_interface_evidence(linked)
+        .expect("the determined stable-identity diamond should authenticate before Core");
+    assert_eq!(validated.entry(), graph.entry());
+}
