@@ -875,6 +875,37 @@ mod tests {
         }
     }
 
+    fn relational_interface_graph_source() -> TestSource {
+        let source = TestSource::write(include_str!(
+            "../tests/fixtures/relational-interfaces/linked-composite/entry.ash"
+        ));
+        for (name, contents) in [
+            (
+                "base.ash",
+                include_str!("../tests/fixtures/relational-interfaces/linked-composite/base.ash"),
+            ),
+            (
+                "short.ash",
+                include_str!("../tests/fixtures/relational-interfaces/linked-composite/short.ash"),
+            ),
+            (
+                "long_one.ash",
+                include_str!(
+                    "../tests/fixtures/relational-interfaces/linked-composite/long_one.ash"
+                ),
+            ),
+            (
+                "long_two.ash",
+                include_str!(
+                    "../tests/fixtures/relational-interfaces/linked-composite/long_two.ash"
+                ),
+            ),
+        ] {
+            source.write_sibling(name, contents);
+        }
+        source
+    }
+
     fn public_route_declarations(width: usize) -> String {
         let mut source = String::new();
         for index in 0..width {
@@ -1215,6 +1246,186 @@ mod tests {
         .expect("the measured cumulative work should fit exactly");
         assert_eq!(observation.value_display(), "42");
         assert_eq!(exact_budget.used(), exact);
+    }
+
+    #[test]
+    fn relational_interface_graph_has_an_exact_cross_stage_boundary() {
+        // Each checked boundary includes the module's body-free summary
+        // publication. The fixed graph order is base, short facade, first long
+        // facade, second long facade, then entry; linking and linked evidence
+        // validation contribute the final two additive boundaries.
+        const EXPECTED_BOUNDARIES: [usize; 13] = [
+            0, 1, 829, 1_374, 1_658, 2_203, 2_487, 3_026, 3_314, 4_282, 4_707, 4_856, 6_516,
+        ];
+        const EXACT_CONSTRAINT_WORK: usize = 6_516;
+        let source = relational_interface_graph_source();
+        let directory = source
+            .0
+            .parent()
+            .expect("the relational fixture should have a directory");
+        let input_paths = [
+            "base.ash",
+            "short.ash",
+            "long_one.ash",
+            "long_two.ash",
+            "entry.ash",
+        ]
+        .map(|name| directory.join(name));
+        let input_before = input_paths
+            .iter()
+            .map(|path| fs::read(path).expect("each relational input should remain readable"))
+            .collect::<Vec<_>>();
+        let graph = load_module_graph(&source.0, &ModuleRoots::empty())
+            .expect("the relational interface graph should load");
+        let mut checked: Vec<crate::resolved::CheckedModule> = Vec::new();
+        let mut checked_by_module: HashMap<ModuleId, usize> = HashMap::new();
+        let mut resolution_type_work = TypeWorkBudget::unbounded();
+        let mut checking_type_work = TypeWorkBudget::unbounded();
+        let mut coverage_work = UsefulnessBudget::default();
+        let mut measured = InterfaceConstraintBudget::with_limit(usize::MAX);
+        let mut boundaries = vec![measured.used()];
+        for module in graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    let index = checked_by_module
+                        .get(&edge.target())
+                        .expect("dependency order should publish each summary first");
+                    DependencyExports::new(edge, checked[*index].exports())
+                        .expect("the retained dependency summary should match its edge")
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module_with_budget(
+                module,
+                &dependencies,
+                &mut resolution_type_work,
+                &mut measured,
+            )
+            .expect("relational resolution should fit");
+            boundaries.push(measured.used());
+            drop(dependencies);
+            let checked_module = check_module_with_budget(
+                resolved,
+                &mut checking_type_work,
+                &mut coverage_work,
+                &mut measured,
+            )
+            .expect("relational checking and summary publication should fit");
+            boundaries.push(measured.used());
+            checked_by_module.insert(module.id(), checked.len());
+            checked.push(checked_module);
+        }
+        let linked = link_modules_with_budget(checked, graph.entry(), &mut measured)
+            .expect("the complete relational graph should link");
+        boundaries.push(measured.used());
+        let validated_interfaces = validate_interface_evidence_with_budget(
+            linked,
+            &mut measured,
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .expect("the complete relational evidence graph should validate");
+        boundaries.push(measured.used());
+        assert_eq!(boundaries, EXPECTED_BOUNDARIES);
+
+        let mut elaborator = Elaborator::for_module_program(&validated_interfaces)
+            .expect("the relational Core namespace should fit");
+        let typed = elaborator
+            .synthesize_module_program(&validated_interfaces)
+            .expect("validated relational evidence should lower to Core");
+        let unchecked = elaborator
+            .finish(typed.node)
+            .expect("the relational Core root should finish");
+        drop(validated_interfaces);
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let module_sources = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        drop(
+            validate_modules(unchecked, &sources, &module_sources)
+                .expect("independent Core validation should accept the exact relational graph"),
+        );
+
+        let validation_prefix = Cell::new(0);
+        let core_validation_called = Cell::new(false);
+        let mut exact = InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK);
+        let observation = run_path_with_consumers_and_constraint_budget(
+            source.configuration(),
+            &mut exact,
+            |linked, budget, type_work| {
+                validation_prefix.set(budget.used());
+                validate_interface_evidence_with_budget(linked, budget, type_work)
+            },
+            |unchecked, sources, module_sources| {
+                core_validation_called.set(true);
+                validate_modules(unchecked, sources, module_sources)
+            },
+            evaluate,
+        )
+        .expect("the exact relational cross-stage boundary should fit");
+        assert_eq!(observation.value_display(), "42");
+        assert_eq!(validation_prefix.get(), EXPECTED_BOUNDARIES[11]);
+        assert!(core_validation_called.get());
+        assert_eq!(exact.used(), EXACT_CONSTRAINT_WORK);
+        drop(observation);
+
+        let one_short_entered_validation = Cell::new(false);
+        let one_short_reached_core = Cell::new(false);
+        let mut one_short = InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK - 1);
+        let failure = run_path_with_consumers_and_constraint_budget(
+            source.configuration(),
+            &mut one_short,
+            |linked, budget, type_work| {
+                one_short_entered_validation.set(true);
+                validate_interface_evidence_with_budget(linked, budget, type_work)
+            },
+            |_, _, _| {
+                one_short_reached_core.set(true);
+                panic!("one-short linked evidence must stop before Core validation")
+            },
+            |_| panic!("one-short linked evidence must stop before evaluation"),
+        )
+        .expect_err("one less relational work unit must reject atomically");
+        let FileFailure::Pipeline(PipelineFailure::EvidenceValidation(error)) = failure else {
+            panic!("the relational one-short boundary should fail in evidence validation");
+        };
+        assert_eq!(
+            error.reason(),
+            crate::evidence_validation::EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+        assert!(one_short_entered_validation.get());
+        assert!(!one_short_reached_core.get());
+        assert_eq!(one_short.used(), EXACT_CONSTRAINT_WORK - 1);
+
+        let retry_reached_core = Cell::new(false);
+        let mut retry = InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK);
+        let observation = run_path_with_consumers_and_constraint_budget(
+            source.configuration(),
+            &mut retry,
+            validate_interface_evidence_with_budget,
+            |unchecked, sources, module_sources| {
+                retry_reached_core.set(true);
+                validate_modules(unchecked, sources, module_sources)
+            },
+            evaluate,
+        )
+        .expect("the immutable relational inputs should retry at the exact boundary");
+        assert_eq!(observation.value_display(), "42");
+        assert!(retry_reached_core.get());
+        assert_eq!(retry.used(), EXACT_CONSTRAINT_WORK);
+        drop(observation);
+
+        let input_after = input_paths
+            .iter()
+            .map(|path| fs::read(path).expect("each relational input should remain readable"))
+            .collect::<Vec<_>>();
+        assert_eq!(input_after, input_before);
     }
 
     #[test]

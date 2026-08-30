@@ -1136,6 +1136,8 @@ pub(crate) enum LinkedCarrierMutationForTest {
     RelationalApplicationArgumentReordered,
     RelationalApplicationArgumentWrongKind,
     RelationalApplicationArgumentWrongIdentity,
+    RelationalApplicationKeyMismatch,
+    RelationalApplicationDependentMismatch,
     ImplementationRegistryKind,
     ImplementationSourceParameterIdentity,
     ImplementationSourceParameterSpelling,
@@ -2206,7 +2208,9 @@ impl ResolvedModuleProgram {
             | LinkedCarrierMutationForTest::RelationalApplicationArgumentExtra
             | LinkedCarrierMutationForTest::RelationalApplicationArgumentReordered
             | LinkedCarrierMutationForTest::RelationalApplicationArgumentWrongKind
-            | LinkedCarrierMutationForTest::RelationalApplicationArgumentWrongIdentity => {
+            | LinkedCarrierMutationForTest::RelationalApplicationArgumentWrongIdentity
+            | LinkedCarrierMutationForTest::RelationalApplicationKeyMismatch
+            | LinkedCarrierMutationForTest::RelationalApplicationDependentMismatch => {
                 let higher_kinded = self
                     .registry
                     .nominals
@@ -2221,7 +2225,18 @@ impl ResolvedModuleProgram {
                 let Some(token) = self.groups[group_index]
                     .checked_implementations
                     .iter_mut()
-                    .find(|token| token.arguments().len() == 2)
+                    .find(|token| {
+                        token.arguments().len()
+                            == if matches!(
+                                mutation,
+                                LinkedCarrierMutationForTest::RelationalApplicationKeyMismatch
+                                    | LinkedCarrierMutationForTest::RelationalApplicationDependentMismatch
+                            ) {
+                                3
+                            } else {
+                                2
+                            }
+                    })
                 else {
                     return false;
                 };
@@ -2258,6 +2273,20 @@ impl ResolvedModuleProgram {
                             discard_type_iteratively(std::mem::replace(
                                 &mut arguments[1],
                                 Type::Nominal(NominalTypeId::new(module, u32::MAX)),
+                            ));
+                            true
+                        }
+                        LinkedCarrierMutationForTest::RelationalApplicationKeyMismatch => {
+                            discard_type_iteratively(std::mem::replace(
+                                &mut arguments[1],
+                                Type::Bool,
+                            ));
+                            true
+                        }
+                        LinkedCarrierMutationForTest::RelationalApplicationDependentMismatch => {
+                            discard_type_iteratively(std::mem::replace(
+                                &mut arguments[2],
+                                Type::Int,
                             ));
                             true
                         }

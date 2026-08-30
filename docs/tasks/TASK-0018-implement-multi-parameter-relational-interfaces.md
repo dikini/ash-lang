@@ -221,6 +221,51 @@ syntax, packages, runtime interface lookup, and evaluator changes.
   Clippy, Rustdoc, Markdown lint, and diff hygiene pass.
   Cumulative reserved use is 50/65; 15 units remain. The specification remains
   unchanged through Checkpoint 6, and neither lib-ash nor TASK-0018 is complete.
+- Checkpoint 6 retains one higher-kinded three-parameter relational program
+  through body-free summaries, an unequal-route facade diamond, linked evidence
+  validation, independent Core validation, both retained transforms, and
+  evaluation. The program observes both abstract and concrete evidence, the
+  complete application and adapter argument order, one stable implementation
+  identity, and the two-hop public authorization route. Its result depends on
+  the relational method and evaluates to `42` before and after both transforms.
+- Separate private-hidden, same-shaped private-twin, and public-opaque dependent
+  identities cross summaries without widening access. Fresh linked mutations
+  reject key-only, dependent-only, abstract-application,
+  implementation-application, and hidden-identity substitutions before Core.
+  Independent Core validation rejects a head-versus-method type-argument swap.
+  Existing closed inventories confirm that no effect, proof, existential, common
+  evidence, Core, or evaluator mechanism entered.
+- Exact Checkpoint 6 boundaries include `3P/2P` constraint/type work for
+  method-free interface ingress, `7P+5/2P` for a leaf complete application,
+  `17/2` imported and `18/2` local generic unary implementation ingress,
+  `12L+11I/2(L+I)` for mixed zero-parameter implementation closures,
+  `6W+11/6` for a wide improvement candidate scan, and 11 type units for one
+  lowered constrained relational scheme. The fixed relational graph records 13
+  additive boundaries and completes at 6,516 constraint units; one short stops
+  before Core or evaluation and an exact retry succeeds from unchanged inputs.
+- Resource REDs found allocation before the owning interface and elaboration
+  charges, repeated validation of an already canonical improvement goal, and
+  under-ownership of the simultaneous vector and index retained by each
+  implementation candidate. The corrections charge every owner before
+  allocation, validate the goal once through a private exact-root capability,
+  retain candidate validation, and do not change a production limit. The full
+  gate then exposed an avoidable duplicate index for interface parameters;
+  constant-state validation now proves module qualification, uniqueness, and
+  declaration order before publishing the one retained vector. Current snapshot
+  boundaries are `17/6` and `3W+14/6`. The wide driver coefficients are 37, 53,
+  64, 67, and 116; at `W = 4890`, linked work is 327,655 and validation work is
+  567,320 around the unchanged 327,680 constraint limit.
+- Independent semantic/security review approves Checkpoint 6 without findings.
+  Rust/resource review found the implementation candidate's two-record owner
+  gap, missing exact elaboration probe, and an unbound prevalidated-goal API.
+  The full gate then exposed the avoidable interface index. All corrections pass
+  re-review without remaining findings. Focused verification passes 801 library
+  tests, evidence 56/56, interface matching 46/46, architecture 28/28, Core
+  validation 64/64, interface modules 24/24, and method-parameter resources
+  4/4, plus formatting, all-target checking, strict Clippy, and diff hygiene.
+  Cumulative reserved use is 58/65; 7 units remain for normative reconciliation
+  and lifecycle closure. The specification remains unchanged until Checkpoint 7,
+  so neither lib-ash nor TASK-0018 is complete.
 
 ## Verification
 
@@ -430,3 +475,22 @@ Checkpoint 4; the later normative reconciliation checkpoint remains the owner.
   the already authenticated canonical-variable owner index once per charged
   variable. A narrow source guard and a `4W` exact/`3W` one-short wide test
   prevent recurrence.
+- Checkpoint 6 audits showed that most requested matrix rows were already
+  retained by Checkpoints 2 through 5. The checkpoint therefore added one
+  compositional program and only the missing relationship mutations rather
+  than duplicating existing summary, route, prerequisite, transform, and Core
+  vector evidence.
+- A proposed `8P+3` complete-application boundary did not match the accountable
+  operations. The retained `7P+5` formula charges the header, mirror comparison,
+  candidate carrier, interface authentication, scope, and structural traversal
+  exactly; adding another `P` would double-count a visit. Generic implementation
+  candidate ingress did omit one simultaneous vector/index owner and now
+  charges `2P` before both allocations. Interface ingress instead retains only
+  its vector and validates module qualification, uniqueness, and declaration
+  order in constant state, restoring the predecessor capacity boundary.
+- Improvement candidate scanning initially revalidated the identical canonical
+  goal for every candidate. A private capability now binds the exact validated
+  roots to their canonical environments, so the goal is validated once while
+  every candidate and comparison remains independently checked. This changes
+  only current accounting (`17/6` and `3W+14/6`), not improvement eligibility,
+  matching, or failure ownership.

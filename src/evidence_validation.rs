@@ -8889,6 +8889,39 @@ mod tests {
         ))
     }
 
+    fn relational_application_program() -> ResolvedModuleProgram {
+        entry_program(concat!(
+            "type Wrap<A> = Wrap(A)\n\n",
+            "interface Relation<F : Type -> Type, Key, Dep> where (F, Key) -> Dep {\n",
+            "relate<X> : (F<Key>, X) -> F<Dep>\n",
+            "}\n\n",
+            "impl Relation<Wrap, Int, Bool> {\n",
+            "relate pair = Wrap(true)\n",
+            "}\n\n",
+            "relay<F : Type -> Type, Key, Dep, X> : (F<Key>, X) -> F<Dep> ",
+            "where Relation<F, Key, Dep>\n",
+            "relay pair = relate(pair)\n\n",
+            "main : Unit -> Wrap<Bool>\n",
+            "main () = relate((Wrap(1), ()))\n",
+        ))
+    }
+
+    fn hidden_relational_application_program() -> ResolvedModuleProgram {
+        entry_program(concat!(
+            "type Hidden = HiddenValue(Int)\n",
+            "type HiddenTwin = HiddenTwinValue(Int)\n",
+            "type Wrap<A> = Wrap(A)\n\n",
+            "interface Relation<F : Type -> Type, Key, Dep> where (F, Key) -> Dep {\n",
+            "relate<X> : (F<Key>, X) -> F<Dep>\n",
+            "}\n\n",
+            "hidden<F : Type -> Type, Key, X> : (F<Key>, X) -> F<Hidden> ",
+            "where Relation<F, Key, Hidden>\n",
+            "hidden pair = relate(pair)\n\n",
+            "main : Unit -> Unit\n",
+            "main () = ()\n",
+        ))
+    }
+
     fn implementation_selection_for_application(
         fact: &CheckedImplementationFact,
         arguments: Box<[Type]>,
@@ -8910,6 +8943,28 @@ mod tests {
         builder
             .finish(root, InterfaceApplication::new(fact.interface(), arguments))
             .expect("a forged application root should remain representable")
+    }
+
+    fn abstract_selection_for_application(
+        requirement: RequirementId,
+        interface: &CheckedInterfaceFact,
+        arguments: Box<[Type]>,
+    ) -> EvidenceSelection {
+        let mut builder = EvidenceSelectionBuilder::new();
+        let root = builder
+            .push_abstract(
+                requirement,
+                &interface
+                    .methods
+                    .iter()
+                    .map(|method| method.id)
+                    .collect::<Vec<_>>(),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .expect("the abstract node should fit");
+        builder
+            .finish(root, InterfaceApplication::new(interface.id, arguments))
+            .expect("a forged abstract application should remain representable")
     }
 
     fn two_prerequisite_program() -> ResolvedModuleProgram {
@@ -9105,6 +9160,133 @@ mod tests {
                     .expect_err("the forged relational linked carrier must fail before Core")
                     .reason(),
                 EvidenceValidationReason::UnknownIdentity,
+                "{mutation:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_relational_application_relationship_tampering_before_core() {
+        #[derive(Clone, Copy, Debug)]
+        enum Mutation {
+            KeyCarrier,
+            DependentCarrier,
+            AbstractSelection,
+            ImplementationSelection,
+            SameShapedHiddenDependent,
+        }
+
+        for mutation in [
+            Mutation::KeyCarrier,
+            Mutation::DependentCarrier,
+            Mutation::AbstractSelection,
+            Mutation::ImplementationSelection,
+            Mutation::SameShapedHiddenDependent,
+        ] {
+            let mut program = match mutation {
+                Mutation::SameShapedHiddenDependent => hidden_relational_application_program(),
+                _ => relational_application_program(),
+            };
+            let module = program.groups()[0].module();
+            match mutation {
+                Mutation::KeyCarrier => assert!(program.corrupt_linked_carrier_for_test(
+                    module,
+                    LinkedCarrierMutationForTest::RelationalApplicationKeyMismatch,
+                )),
+                Mutation::DependentCarrier => assert!(program.corrupt_linked_carrier_for_test(
+                    module,
+                    LinkedCarrierMutationForTest::RelationalApplicationDependentMismatch,
+                )),
+                Mutation::AbstractSelection => {
+                    let group = &program.groups()[0];
+                    let interface = &group.interface_facts()[0];
+                    let requirement = group
+                        .schemes()
+                        .iter()
+                        .find(|scheme| scheme.spelling == "relay")
+                        .and_then(|scheme| scheme.scheme.requirements.first())
+                        .expect("relay should retain its relational requirement");
+                    let mut arguments = requirement.arguments().to_vec();
+                    arguments[2] = Type::Int;
+                    let forged = abstract_selection_for_application(
+                        requirement.id,
+                        interface,
+                        arguments.into_boxed_slice(),
+                    );
+                    assert!(
+                        program.replace_nth_direct_method_occurrence_selection_for_test(
+                            module, 0, forged,
+                        )
+                    );
+                }
+                Mutation::ImplementationSelection => {
+                    let group = &program.groups()[0];
+                    let fact = &group.implementation_facts()[0];
+                    let mut arguments = fact.arguments().to_vec();
+                    arguments[1] = Type::Bool;
+                    let forged = implementation_selection_for_application(
+                        fact,
+                        arguments.into_boxed_slice(),
+                    );
+                    assert!(
+                        program.replace_nth_direct_method_occurrence_selection_for_test(
+                            module, 1, forged,
+                        )
+                    );
+                }
+                Mutation::SameShapedHiddenDependent => {
+                    let group = &program.groups()[0];
+                    let interface = &group.interface_facts()[0];
+                    let requirement = group
+                        .schemes()
+                        .iter()
+                        .find(|scheme| scheme.spelling == "hidden")
+                        .and_then(|scheme| scheme.scheme.requirements.first())
+                        .expect("hidden should retain its relational requirement");
+                    let hidden = program
+                        .registry()
+                        .nominals()
+                        .iter()
+                        .find(|nominal| nominal.spelling == "Hidden")
+                        .expect("Hidden should retain its nominal identity");
+                    let twin = program
+                        .registry()
+                        .nominals()
+                        .iter()
+                        .find(|nominal| nominal.spelling == "HiddenTwin")
+                        .expect("HiddenTwin should retain its distinct nominal identity");
+                    assert_ne!(hidden.id, twin.id);
+                    let mut arguments = requirement.arguments().to_vec();
+                    assert_eq!(arguments[2], Type::Nominal(hidden.id));
+                    arguments[2] = Type::Nominal(twin.id);
+                    let forged = abstract_selection_for_application(
+                        requirement.id,
+                        interface,
+                        arguments.into_boxed_slice(),
+                    );
+                    assert!(
+                        program.replace_nth_direct_method_occurrence_selection_for_test(
+                            module, 0, forged,
+                        )
+                    );
+                }
+            }
+
+            let expected = match mutation {
+                Mutation::KeyCarrier | Mutation::DependentCarrier => {
+                    EvidenceValidationReason::UnknownIdentity
+                }
+                Mutation::AbstractSelection
+                | Mutation::ImplementationSelection
+                | Mutation::SameShapedHiddenDependent => {
+                    EvidenceValidationReason::InvalidEvidenceRoot
+                }
+            };
+            assert_eq!(
+                validate_interface_evidence(program)
+                    .expect_err("each fresh relational relationship forgery must fail before Core")
+                    .reason(),
+                expected,
                 "{mutation:?}",
             );
         }

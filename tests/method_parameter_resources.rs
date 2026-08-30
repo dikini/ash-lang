@@ -424,6 +424,12 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "2_284 + PRECHARGED_CARRIER_ROWS + EXACT_IDENTITY_WORK + CHECKED_STACK_CAPACITY_WORK;",
         ),
         (
+            "lowered requirement-row and replacement-entry owners",
+            ELABORATE_SOURCE,
+            "fn lowered_requirement_rows_and_replacements_have_an_exact_retryable_type_boundary()",
+            "const EXACT_TYPE_WORK: usize = 1 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1;",
+        ),
+        (
             "checked type worklist",
             ELABORATE_SOURCE,
             "fn checked_type_worklist_capacity_has_an_exact_boundary_and_fresh_retry()",
@@ -457,6 +463,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
         "fn wide_conditional_method_rigidity_ingress_is_exact_and_atomic()",
         "fn evidence_scope_entry_has_an_exact_carrier_boundary_and_fresh_retry()",
         "fn selected_method_rigidity_has_exact_retryable_traversal_boundary()",
+        "fn lowered_requirement_rows_and_replacements_have_an_exact_retryable_type_boundary()",
         "fn monomorphic_adapter_edge_identity_has_an_exact_validation_boundary()",
         "fn generic_implementation_validation_excludes_discarded_head_scope_buffer_work()",
         "fn pending_method_payload_zonk_failure_discards_staged_types_on_a_small_stack()",
@@ -488,6 +495,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
     assert_eq!(4 * 1_024 + 8, 4_104);
     assert_eq!(4 + 2, 6);
     assert_eq!(1 + 2, 3);
+    assert_eq!(1 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1, 11);
     assert_eq!(7 - 1, 6);
     assert_eq!(85 + 2 * 2, 89);
     assert_eq!(122 + 8 + 1 + 1 + 2 + 1 + 1 + 5 * 4, 156);

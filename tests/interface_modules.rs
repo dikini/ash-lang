@@ -9,7 +9,11 @@ use ash::{
     interface::{InterfaceReason, MethodId, RequirementOwner},
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, ResolveError, ResolveModuleError, ResolveReason, resolve_module},
-    resolved::{CheckedModule, ResolvedDefinitionKind, ResolvedExprKind, ResolvedTermName},
+    resolved::{
+        CheckedModule, ImportedTypeAccess, ResolvedDefinitionKind, ResolvedExprKind,
+        ResolvedTermName,
+    },
+    types::Type,
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -123,6 +127,158 @@ fn determined_interface_methods_cross_a_body_free_dependency_summary() {
             .iter()
             .all(|scheme| scheme.scheme.requirements.len() == 1)
     );
+}
+
+#[test]
+fn hidden_and_opaque_dependents_cross_summaries_without_access_widening() {
+    let fixture_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/relational-interfaces/linked-composite");
+    let graph = load_module_graph(&fixture_root.join("entry.ash"), &ModuleRoots::empty())
+        .expect("the shared relational fixture should load");
+    let checked = check_graph(&graph).expect("the shared relational fixture should check");
+    let base = checked
+        .iter()
+        .find(|module| module.module() == module_named(&graph, "base.ash").id())
+        .expect("the checked graph should retain the relational base");
+    let dependent = |spelling: &str| {
+        let scheme = base
+            .schemes()
+            .iter()
+            .find(|scheme| scheme.spelling == spelling)
+            .unwrap_or_else(|| panic!("the base should retain {spelling}"));
+        let [requirement] = scheme.scheme.requirements.as_ref() else {
+            panic!("{spelling} should retain one relational requirement");
+        };
+        let [_, _, Type::Nominal(dependent)] = requirement.arguments() else {
+            panic!("{spelling} should retain one nominal dependent in position three");
+        };
+        (*dependent, scheme.binder)
+    };
+    let (hidden, hidden_marker) = dependent("hidden_marker");
+    let (twin, twin_marker) = dependent("twin_marker");
+    let (opaque, opaque_marker) = dependent("opaque_marker");
+    assert_ne!(
+        hidden, twin,
+        "same-shaped private declarations remain nominally distinct"
+    );
+    assert_ne!(hidden, opaque);
+    assert_ne!(twin, opaque);
+    for nominal in [hidden, twin] {
+        let nominal = base
+            .registry()
+            .nominal(nominal)
+            .expect("the defining registry should retain the private nominal");
+        let [constructor] = nominal.constructors.as_ref() else {
+            panic!("each private twin should retain one constructor");
+        };
+        assert_eq!(
+            base.registry()
+                .constructor(*constructor)
+                .and_then(|constructor| constructor.payload.as_ref()),
+            Some(&Type::Int),
+            "the private twins should be shape-equal but identity-distinct",
+        );
+    }
+
+    let entry = module_named(&graph, "entry.ash");
+    let dependencies = entry
+        .dependencies()
+        .iter()
+        .map(|edge| {
+            let dependency = checked
+                .iter()
+                .find(|module| module.module() == edge.target())
+                .expect("the body-free dependency should already be checked");
+            DependencyExports::new(edge, dependency.exports())
+                .expect("the entry edge should authenticate its detached summary")
+        })
+        .collect::<Vec<_>>();
+    let resolved_entry = resolve_module(entry, &dependencies)
+        .expect("hidden and opaque dependents should cross the entry summaries");
+    for (identity, access) in [
+        (hidden, ImportedTypeAccess::Hidden),
+        (twin, ImportedTypeAccess::Hidden),
+        (opaque, ImportedTypeAccess::Opaque),
+    ] {
+        assert_eq!(
+            resolved_entry
+                .imported_facts()
+                .nominal(identity)
+                .map(|fact| fact.access),
+            Some(access),
+        );
+    }
+    for (binder, dependent) in [
+        (hidden_marker, hidden),
+        (twin_marker, twin),
+        (opaque_marker, opaque),
+    ] {
+        let imported = resolved_entry
+            .imported_facts()
+            .global(binder)
+            .expect("the marker scheme should cross both facade summaries");
+        let [requirement] = imported.scheme.requirements.as_ref() else {
+            panic!("the imported marker should retain one requirement");
+        };
+        assert_eq!(requirement.arguments()[2], Type::Nominal(dependent));
+    }
+
+    let base_source = fs::read_to_string(fixture_root.join("base.ash"))
+        .expect("the shared base fixture should be readable");
+    let tree = ModuleTree::create();
+    let hidden_graph = load(
+        &tree,
+        "import base (Hidden)\n",
+        &[("base.ash", base_source.as_str())],
+    );
+    let base_module = module_named(&hidden_graph, "base.ash");
+    let base_checked = check_module(
+        resolve_module(base_module, &[]).expect("the shared base should resolve independently"),
+    )
+    .expect("the shared base should check independently");
+    let hidden_entry = module_named(&hidden_graph, "entry.ash");
+    let hidden_dependencies = hidden_entry
+        .dependencies()
+        .iter()
+        .map(|edge| DependencyExports::new(edge, base_checked.exports()).unwrap())
+        .collect::<Vec<_>>();
+    let error = expect_resolution_error(
+        resolve_module(hidden_entry, &hidden_dependencies)
+            .expect_err("the private dependent spelling must remain unavailable"),
+    );
+    assert_eq!(error.reason, ResolveReason::UnavailableExport);
+
+    for denied in [
+        concat!(
+            "import base as Base\n",
+            "make : Int -> Base.Opaque\n",
+            "make value = Base.OpaqueValue(value)\n",
+        ),
+        concat!(
+            "import base as Base\n",
+            "read : Base.Opaque -> Int\n",
+            "read Base.OpaqueValue(value) = value\n",
+        ),
+    ] {
+        let tree = ModuleTree::create();
+        let opaque_graph = load(&tree, denied, &[("base.ash", base_source.as_str())]);
+        let base_module = module_named(&opaque_graph, "base.ash");
+        let base_checked = check_module(
+            resolve_module(base_module, &[]).expect("the shared base should resolve independently"),
+        )
+        .expect("the shared base should check independently");
+        let opaque_entry = module_named(&opaque_graph, "entry.ash");
+        let opaque_dependencies = opaque_entry
+            .dependencies()
+            .iter()
+            .map(|edge| DependencyExports::new(edge, base_checked.exports()).unwrap())
+            .collect::<Vec<_>>();
+        let error = expect_resolution_error(
+            resolve_module(opaque_entry, &opaque_dependencies)
+                .expect_err("the public opaque dependent constructor must remain inaccessible"),
+        );
+        assert_eq!(error.reason, ResolveReason::OpaqueConstructor);
+    }
 }
 
 fn resolve_entry_error(graph: &ModuleGraph) -> ash::resolve::ResolveError {

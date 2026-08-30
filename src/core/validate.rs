@@ -9932,6 +9932,77 @@ mod tests {
         }
     }
 
+    #[test]
+    fn linked_core_rejects_head_method_argument_swap() {
+        let mut fixture = method_evidence_validation_fixture();
+        let (source_application, head_argument_count) = fixture
+            .program
+            .method_evidence_anchors
+            .iter()
+            .find_map(|anchor| {
+                let MethodEvidenceAnchorRole::Adapter {
+                    implementation,
+                    selection_node,
+                } = anchor.role
+                else {
+                    return None;
+                };
+                let row = fixture
+                    .program
+                    .method_evidence
+                    .adapters()
+                    .iter()
+                    .find(|row| {
+                        row.implementation == implementation
+                            && row.selection_node == selection_node
+                            && !row.head_arguments.is_empty()
+                    })?;
+                let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                    &fixture.program.nodes[anchor.node.index().ok()?].kind
+                else {
+                    return None;
+                };
+                if abstraction.parameters().is_empty() {
+                    return None;
+                }
+                let mut current = abstraction.body();
+                while let PureExprKind::Computation(PureComputation::Apply(application)) =
+                    &fixture.program.nodes[current.index().ok()?].kind
+                {
+                    current = application.function();
+                }
+                Some((current, row.head_arguments.len()))
+            })
+            .expect("the generic implementation adapter should retain head and method arguments");
+        let application_index = source_application
+            .index()
+            .expect("the adapter source application should belong to the linked arena");
+        let PureExprKind::Computation(PureComputation::TypeApplication(application)) =
+            &fixture.program.nodes[application_index].kind
+        else {
+            panic!("the adapter should instantiate its implementation method");
+        };
+        let function = application.function();
+        let mut arguments = application.arguments().to_vec();
+        assert!(arguments.len() > head_argument_count);
+        let last_head = head_argument_count - 1;
+        let first_method = head_argument_count;
+        assert_ne!(arguments[last_head], arguments[first_method]);
+        arguments.swap(last_head, first_method);
+        fixture.program.nodes[application_index].kind = PureExprKind::Computation(
+            PureComputation::TypeApplication(TypeApplicationNode::new(function, arguments)),
+        );
+
+        let error = fixture
+            .validate()
+            .expect_err("Core must authenticate the head prefix before method-local arguments");
+        assert!(matches!(
+            error.reason(),
+            ValidationReason::NodeType | ValidationReason::ApplicationType
+        ));
+        assert!(error.node().is_some());
+    }
+
     #[derive(Clone, Copy, Debug)]
     struct LinkedGeneratedAbstractions {
         outer: NodeId,

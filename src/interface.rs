@@ -628,6 +628,81 @@ pub(crate) fn match_implementation_application_head_in_environment(
     candidate: &[&Type],
     goal: &[&Type],
 ) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
+    match_implementation_application_head_with_goal_validation(
+        registry,
+        operation,
+        goal_environments,
+        candidate_parameters,
+        candidate,
+        goal,
+        true,
+    )
+}
+
+/// Capability for one exact goal vector whose complete roots have already
+/// been authenticated against its canonical kind environments.
+pub(crate) struct CanonicalImplementationGoal<'registry, 'goal> {
+    environments: KindEnvironments<'registry>,
+    roots: &'goal [&'goal Type],
+}
+
+/// Authenticates one exact goal vector and binds the roots to the resulting
+/// canonical environments. Private fields prevent a later caller from pairing
+/// those environments with a different goal.
+pub(crate) fn authenticate_implementation_application_goal<'registry, 'goal>(
+    registry: &'registry ResolvedRegistry,
+    operation: InterfaceOperationWork<'_>,
+    roots: &'goal [&'goal Type],
+) -> Result<CanonicalImplementationGoal<'registry, 'goal>, HeadMatchFailure> {
+    let InterfaceOperationWork {
+        span,
+        constraint_budget,
+        type_budget,
+    } = operation;
+    let environments = canonical_body_free_environments(
+        registry,
+        &[],
+        roots,
+        span,
+        constraint_budget,
+        type_budget,
+    )
+    .map_err(map_match_environment_failure)?;
+    Ok(CanonicalImplementationGoal {
+        environments,
+        roots,
+    })
+}
+
+/// Matches one candidate against the exact goal roots bound into a canonical
+/// goal capability.
+pub(crate) fn match_implementation_application_head_against_canonical_goal(
+    registry: &ResolvedRegistry,
+    operation: InterfaceOperationWork<'_>,
+    candidate_parameters: &[TypeVariableId],
+    candidate: &[&Type],
+    goal: &CanonicalImplementationGoal<'_, '_>,
+) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
+    match_implementation_application_head_with_goal_validation(
+        registry,
+        operation,
+        &goal.environments,
+        candidate_parameters,
+        candidate,
+        goal.roots,
+        false,
+    )
+}
+
+fn match_implementation_application_head_with_goal_validation(
+    registry: &ResolvedRegistry,
+    operation: InterfaceOperationWork<'_>,
+    goal_environments: &KindEnvironments<'_>,
+    candidate_parameters: &[TypeVariableId],
+    candidate: &[&Type],
+    goal: &[&Type],
+    validate_goal: bool,
+) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure> {
     if candidate.len() != goal.len() {
         return Err(HeadMatchFailure::InvalidState);
     }
@@ -642,6 +717,7 @@ pub(crate) fn match_implementation_application_head_in_environment(
         goal,
         constraint_budget,
         type_budget,
+        validate_goal,
         |parameter, binding, constraint_budget, _type_budget| {
             let expected =
                 canonical_type_variable_kind(registry, parameter, span, constraint_budget)
@@ -653,7 +729,6 @@ pub(crate) fn match_implementation_application_head_in_environment(
     )
 }
 
-#[cfg(test)]
 fn map_match_environment_failure(failure: CanonicalEnvironmentFailure) -> HeadMatchFailure {
     match failure {
         CanonicalEnvironmentFailure::ConstraintResource => HeadMatchFailure::ConstraintResource,
@@ -686,6 +761,7 @@ where
         &[goal],
         constraint_budget,
         type_budget,
+        true,
         |_, _, _, _| Ok(()),
     )
 }
@@ -696,6 +772,7 @@ fn match_implementation_head_with<I, F>(
     goal: &[&Type],
     constraint_budget: &mut InterfaceConstraintBudget,
     type_budget: &mut TypeWorkBudget,
+    validate_goal: bool,
     mut authenticate_binding: F,
 ) -> Result<Option<Box<[EvidenceSubstitution]>>, HeadMatchFailure>
 where
@@ -735,8 +812,10 @@ where
     for candidate in candidate {
         validate_match_type(candidate, Some(&positions), constraint_budget)?;
     }
-    for goal in goal {
-        validate_match_type(goal, None, constraint_budget)?;
+    if validate_goal {
+        for goal in goal {
+            validate_match_type(goal, None, constraint_budget)?;
+        }
     }
 
     constraint_budget
@@ -3445,6 +3524,86 @@ mod tests {
                 Err(HeadMatchFailure::InvalidState)
             );
         }
+    }
+
+    #[test]
+    fn canonical_goal_capability_rejects_hidden_malformed_roots_and_matches_full_validation() {
+        let module = ModuleId::new(70);
+        let parameter = TypeVariableId::resolved(module, 0);
+        let source = SourceFile::new("canonical-goal-capability.ash", "goal")
+            .expect("the capability source should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the capability range is ordered"))
+            .expect("the capability span should fit");
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+            .with_additional_type_variables([ResolvedTypeVariable {
+                id: parameter,
+                spelling: "A".into(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            }]);
+        let candidate = Type::Variable(parameter);
+        let goal = Type::Int;
+        let goal_roots = [&goal];
+        let mut capability_constraints = InterfaceConstraintBudget::default();
+        let mut capability_types = TypeWorkBudget::default();
+        let canonical_goal = authenticate_implementation_application_goal(
+            &registry,
+            InterfaceOperationWork::new(span, &mut capability_constraints, &mut capability_types),
+            &goal_roots,
+        )
+        .expect("the concrete goal should authenticate once");
+        let capability_result = match_implementation_application_head_against_canonical_goal(
+            &registry,
+            InterfaceOperationWork::new(span, &mut capability_constraints, &mut capability_types),
+            &[parameter],
+            &[&candidate],
+            &canonical_goal,
+        );
+        let full_result = match_implementation_head(
+            &registry,
+            &[parameter],
+            &candidate,
+            &goal,
+            span,
+            &mut InterfaceConstraintBudget::default(),
+            &mut TypeWorkBudget::default(),
+        );
+        assert_eq!(capability_result, full_result);
+
+        for invalid in [
+            Type::Inference(crate::types::InferenceVariableId::new(0)),
+            Type::Forall(Box::new([]), Box::new(Type::Int)),
+        ] {
+            let malformed = Type::Tuple(Box::new([Type::Bool, invalid]));
+            let malformed_roots = [&malformed];
+            assert!(matches!(
+                authenticate_implementation_application_goal(
+                    &registry,
+                    InterfaceOperationWork::new(
+                        span,
+                        &mut InterfaceConstraintBudget::default(),
+                        &mut TypeWorkBudget::default(),
+                    ),
+                    &malformed_roots,
+                ),
+                Err(HeadMatchFailure::InvalidState),
+            ));
+        }
+
+        assert_eq!(
+            match_implementation_head(
+                &registry,
+                &[],
+                &Type::Bool,
+                &Type::Int,
+                span,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            ),
+            Ok(None),
+            "the ordinary full-validation entry point remains available",
+        );
     }
 
     #[test]

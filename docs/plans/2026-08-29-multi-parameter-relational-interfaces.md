@@ -930,24 +930,22 @@ lib-ash is complete. `spec/` remains unchanged through Checkpoint 6; Checkpoint
 
 **Files:**
 
+- Modify: `src/interface.rs`
 - Modify: `src/resolved.rs`
 - Modify: `src/evidence.rs`
-- Modify: `src/evidence_audit.rs`
 - Modify: `src/evidence_validation.rs`
 - Modify: `src/elaborate.rs`
-- Modify: `src/core/dialect.rs`
 - Modify: `src/core/validate.rs`
-- Modify: `src/core/transform.rs`
 - Modify: `src/driver.rs`
-- Modify: `tests/interface_generic_summary.rs`
 - Modify: `tests/interface_modules.rs`
-- Modify: `tests/interface_identity_diamond.rs`
-- Modify: `tests/interface_validation.rs`
 - Modify: `tests/core_validation.rs`
-- Modify: `tests/interface_resources.rs`
-- Modify: `tests/method_parameter_resources.rs`
 - Modify: `tests/architecture.rs`
-- Modify: `tests/interface_corpus.rs`
+- Modify: `tests/method_parameter_resources.rs`
+- Create: `tests/fixtures/relational-interfaces/linked-composite/base.ash`
+- Create: `tests/fixtures/relational-interfaces/linked-composite/short.ash`
+- Create: `tests/fixtures/relational-interfaces/linked-composite/long_one.ash`
+- Create: `tests/fixtures/relational-interfaces/linked-composite/long_two.ash`
+- Create: `tests/fixtures/relational-interfaces/linked-composite/entry.ash`
 
 ### Step 1: Retain one complete linked relational program
 
@@ -1033,18 +1031,67 @@ git diff --check
 After both reviews and corrections, commit:
 
 ```text
-git add src tests
+git add docs/tasks/TASK-0018-implement-multi-parameter-relational-interfaces.md docs/plans/2026-08-29-multi-parameter-relational-interfaces.md src tests
 git -c commit.gpgsign=false commit -m "test: retain relational interface evidence"
 ```
 
 Record cumulative reserved use as 58/65 and preserve all 7 remaining units for
 specification and closure.
 
+### Checkpoint 6 result
+
+- One shared fixture retains a public higher-kinded three-parameter relation,
+  composite total key, polymorphic method, generic public implementation,
+  abstract helper, concrete entry selection, and unequal-route facade diamond.
+  Detached summaries preserve exact identities and access; linking selects the
+  stable implementation over the shortest route. Independent Core validation,
+  identity traversal, literal folding, and evaluation all preserve the
+  relational result `42` and the head-before-method type-argument order.
+- Fresh linked mutations independently reject key, dependent, abstract-root,
+  implementation-root, and same-shaped hidden-identity disagreement. Core
+  rejects a head/method argument swap. Existing complete-vector, determinant,
+  route, prerequisite, substitution, transform, and stale-authority matrices
+  remain the retained evidence for rows that CP6 did not duplicate.
+- Hidden and opaque dependents cross body-free summaries as exact nominal
+  identities without exposing a hidden spelling or an opaque constructor.
+  Direct closed-inventory review confirms that no effect, proof, existential,
+  common evidence, Core, evaluator, or runtime mechanism was added.
+- Exact current formulas are `3P/2P` for method-free interface ingress,
+  `7P+5/2P` for a leaf complete application, `17/2` imported and `18/2` local
+  generic unary ingress, `12L+11I/2(L+I)` for mixed zero-parameter closures,
+  `6W+11/6` for candidate scanning, and 11 type units for the constrained
+  relational lowering owner. The fixed cross-stage graph completes at 6,516
+  constraint units and rejects atomically at 6,515 before Core or evaluation.
+  Current determination snapshots are `17/6` and `3W+14/6`.
+- Resource REDs corrected charge-before-allocation in interface ingress and
+  constrained lowering, the simultaneous parameter-record owners retained by
+  implementation candidates, and repeated canonical-goal validation. A
+  private exact-root capability makes the amortized goal-validation path
+  unforgeable by other callers. The final gate then exposed an avoidable
+  duplicate interface-parameter index; constant-state validation of module
+  qualification, uniqueness, and declaration order removed it while preserving
+  the one retained vector. No production limit changed. The wide graph uses
+  coefficients 37, 53, 64, 67, and 116 at `W = 4890`, retaining
+  `327655 < 327680 < 567320`.
+- Semantic/security review approves the complete checkpoint without findings.
+  Rust/resource review required the implementation candidate's second parameter
+  owner, an exact lowering probe, and capability-bound goal validation; the
+  full gate exposed the avoidable interface index, and re-review approves every
+  correction without remaining findings. Focused gates pass 801 library tests,
+  architecture 28/28, Core validation 64/64, interface modules 24/24, evidence
+  56/56, interface matching 46/46, method-parameter resources 4/4, formatting,
+  all-target checking, strict Clippy, and diff hygiene.
+
+Cumulative reserved use is 58/65; 7 units remain. Neither TASK-0018 nor lib-ash
+is complete. `spec/` remains unchanged until Checkpoint 7 performs normative
+reconciliation and lifecycle closure.
+
 ## Checkpoint 7: Specification, retained evidence, and transition closure — 7 units
 
 **Files:**
 
 - Modify: `spec/README.md`
+- Modify: `spec/lexical-structure.md`
 - Modify: `spec/syntax.md`
 - Modify: `spec/name-resolution.md`
 - Modify: `spec/static-semantics.md`
@@ -1052,6 +1099,7 @@ specification and closure.
 - Modify: `spec/dynamic-semantics.md`
 - Modify: `docs/design/DN-0025-library-and-package-milestones.md`
 - Create: `docs/design/lib-ash/relational-interfaces-evidence.md`
+- Modify: `docs/design/README.md`
 - Modify: `docs/trajectory.md`
 - Modify: `tests/spec_examples.rs`
 - Modify: `tests/corpus.rs`

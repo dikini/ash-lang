@@ -198,6 +198,7 @@ define_kind_site_profiles! {
     FieldMixedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTreeAndTransientWork => (Field, Mixed, Transient, CarrierRetention, PreservedCarrier, CoreValidation, CoreType, CoreTreeAndTransientWork),
     FieldMixedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTreeAndTransientWork => (Field, Mixed, Transient, CarrierRetention, PreservedCarrier, Elaboration, InferenceType, ResolvedTreeAndTransientWork),
     FieldMixedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTreeAndTransientWork => (Field, Mixed, Transient, CarrierRetention, PreservedCarrier, EvidenceSelection, EvidenceType, EvidenceTreeAndTransientWork),
+    FieldMixedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork => (Field, Mixed, Transient, CarrierRetention, PreservedCarrier, EvidenceSelection, EvidenceType, TransientWork),
     FieldMixedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeCoreTreeAndRegistryTree => (Field, Mixed, Transient, CarrierRetention, PreservedCarrier, Elaboration, InferenceType, CoreTreeAndRegistryTree),
     FieldMixedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeEvidenceTreeAndTransientWork => (Field, Mixed, Transient, CarrierRetention, PreservedCarrier, Elaboration, InferenceType, EvidenceTreeAndTransientWork),
     FieldBorrowedEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree => (Field, Borrowed, Evidence, CarrierRetention, PreservedCarrier, EvidenceSelection, EvidenceType, EvidenceTree),
@@ -791,6 +792,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/interface.rs::$impl_InterfaceConstraintBudget::$fn_charge_equal_types::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationInterfaceTypeTypeTree),
     kind_site!("src/interface.rs::$local.charge_equal_kinds.pending", TransientBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/interface.rs::CheckedImplementation.application", FieldCheckedInterfaceArgumentInterfaceParameterInterfaceValidationInterfaceTypeCheckedTree),
+    kind_site!("src/interface.rs::CanonicalImplementationGoal.environments", FieldMixedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTransientWork),
+    kind_site!("src/interface.rs::CanonicalImplementationGoal.roots", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTypeTree),
     kind_site!("src/interface.rs::CheckedRequirement.application", FieldCheckedInterfaceArgumentInterfaceParameterInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/interface.rs::ConstrainedScheme.requirements", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/interface.rs::ConstrainedScheme.type_parameters", FieldCheckedDeclaredKindDeclaredInterfaceValidationInterfaceTypeCheckedTree),
@@ -4838,6 +4841,180 @@ fn determination_snapshot_has_no_uncharged_pending_prescan() {
             .windows(ITERATOR_PRESCAN.len())
             .any(|window| window == ITERATOR_PRESCAN),
         "determination snapshot eligibility must use the captured pending marker instead of an uncharged suffix pre-scan",
+    );
+}
+
+#[test]
+fn relational_vector_owners_charge_before_allocation() {
+    fn function_body<'a>(tokens: &'a [&str], function: &[&str]) -> &'a [&'a str] {
+        let function = tokens
+            .windows(function.len())
+            .position(|window| window == function)
+            .expect("the guarded function should exist");
+        let body_open = tokens[function..]
+            .iter()
+            .position(|token| *token == "{")
+            .map(|offset| function + offset)
+            .expect("the guarded function should have a body");
+        let body_close = matching_token(tokens, body_open, "{", "}");
+        &tokens[body_open + 1..body_close]
+    }
+
+    fn position(tokens: &[&str], pattern: &[&str]) -> usize {
+        tokens
+            .windows(pattern.len())
+            .position(|window| window == pattern)
+            .unwrap_or_else(|| panic!("missing ownership operation {pattern:?}"))
+    }
+
+    let evidence = production_rust_code_tokens(EVIDENCE_SOURCE);
+    let ingress = function_body(&evidence, &["fn", "add_interface_fact_parts", "("]);
+    let parameter_constraint_charge = position(
+        ingress,
+        &[
+            "constraint_work",
+            ".",
+            "charge",
+            "(",
+            "fact",
+            ".",
+            "parameters",
+            ".",
+            "len",
+            "(",
+            ")",
+            ")",
+        ],
+    );
+    let parameter_type_charge = position(
+        ingress,
+        &[
+            "type_work",
+            ".",
+            "charge",
+            "(",
+            "fact",
+            ".",
+            "parameters",
+            ".",
+            "len",
+            "(",
+            ")",
+            ")",
+        ],
+    );
+    let parameter_reserve = position(
+        ingress,
+        &[
+            "parameters",
+            ".",
+            "try_reserve_exact",
+            "(",
+            "fact",
+            ".",
+            "parameters",
+            ".",
+            "len",
+            "(",
+            ")",
+            ")",
+        ],
+    );
+    assert!(
+        parameter_constraint_charge < parameter_reserve
+            && parameter_type_charge < parameter_reserve,
+        "interface-parameter constraint and type owners must charge before retained-row allocation",
+    );
+    assert!(
+        !ingress.contains(&"interface_parameter_ids"),
+        "strict source-identity order must avoid a redundant duplicate-index allocation",
+    );
+
+    let elaboration_source =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/elaborate.rs"))
+            .expect("elaboration source should be readable");
+    let elaboration = production_rust_code_tokens(&elaboration_source);
+    let lowering = function_body(&elaboration, &["fn", "lower_constrained_scheme", "("]);
+    let method_row_charge = position(
+        lowering,
+        &[
+            "self",
+            ".",
+            "type_work",
+            ".",
+            "charge",
+            "(",
+            "lowered_interface",
+            ".",
+            "methods",
+            ".",
+            "len",
+            "(",
+            ")",
+            ")",
+        ],
+    );
+    let method_row_reserve = position(
+        lowering,
+        &[
+            "methods",
+            ".",
+            "try_reserve",
+            "(",
+            "lowered_interface",
+            ".",
+            "methods",
+            ".",
+            "len",
+            "(",
+            ")",
+            ")",
+        ],
+    );
+    assert!(
+        method_row_charge < method_row_reserve,
+        "method-row ownership must charge before allocation",
+    );
+
+    let substitution_charge = position(
+        lowering,
+        &[
+            "self",
+            ".",
+            "type_work",
+            ".",
+            "charge",
+            "(",
+            "method_fact",
+            ".",
+            "parameters",
+            ".",
+            "len",
+            "(",
+            ")",
+            ")",
+        ],
+    );
+    let substitution_reserve = position(
+        lowering,
+        &[
+            "replacement",
+            ".",
+            "try_reserve",
+            "(",
+            "method_fact",
+            ".",
+            "parameters",
+            ".",
+            "len",
+            "(",
+            ")",
+            ")",
+        ],
+    );
+    assert!(
+        substitution_charge < substitution_reserve,
+        "substitution-entry ownership must charge before allocation",
     );
 }
 

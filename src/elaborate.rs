@@ -1885,6 +1885,9 @@ impl Elaborator {
                 .interfaces
                 .get(&requirement.interface())
                 .ok_or_else(invalid_state)?;
+            self.type_work
+                .charge(lowered_interface.methods.len())
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             let mut methods = Vec::new();
             methods
                 .try_reserve(lowered_interface.methods.len())
@@ -1899,6 +1902,9 @@ impl Elaborator {
                 {
                     return Err(invalid_state());
                 }
+                self.type_work
+                    .charge(method_fact.parameters.len())
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 let mut replacement = TypeReplacementBuffer::new();
                 replacement
                     .try_reserve(method_fact.parameters.len())
@@ -20043,6 +20049,86 @@ mod tests {
             .expect("the constrained-scheme budget thread should start")
             .join()
             .expect("constrained-scheme construction must fit the small stack");
+    }
+
+    #[test]
+    fn lowered_requirement_rows_and_replacements_have_an_exact_retryable_type_boundary() {
+        // One requirement-row owner + one source value clone + one method-row
+        // owner + one replacement-entry owner + one replacement argument +
+        // one substituted result + two application cells + one Core value
+        // clone + one evidence-function cell + one evidence-domain clone.
+        const EXACT_TYPE_WORK: usize = 1 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1;
+
+        let resolved = resolved_module_fixture("lowered-row-budget.ash", "", "Unit", "()");
+        let span = fixture_result(&resolved).span;
+        let module = ModuleId::new(777);
+        let owner = BinderId::resolved(module, 0);
+        let interface = InterfaceId::new(module, 0);
+        let parameter = TypeVariableId::resolved(module, 0);
+        let method = MethodId::new(interface, 0);
+        let requirement = RequirementId::new(RequirementOwner::Global(owner), 0);
+        let scheme = ConstrainedScheme {
+            type_parameters: Box::new([]),
+            requirements: Box::new([CheckedRequirement {
+                id: requirement,
+                application: InterfaceApplication::new(interface, Box::new([Type::Unit])),
+                origin: Origin::Source(span),
+                span,
+            }]),
+            value_type: Type::Unit,
+        };
+        let lowering = EvidenceLowering {
+            interfaces: HashMap::from([(
+                interface,
+                LoweredInterface {
+                    methods: Box::new([method]),
+                    determination: None,
+                },
+            )]),
+            interface_methods: HashMap::from([(
+                method,
+                LoweredInterfaceMethod {
+                    interface,
+                    parameters: Box::new([parameter]),
+                    type_parameters: Box::new([]),
+                    value_type: Type::Variable(parameter),
+                    declaration_span: span,
+                },
+            )]),
+            global_schemes: HashMap::new(),
+            implementation_methods: HashMap::new(),
+            active_binders: HashMap::new(),
+        };
+        let mut elaborator =
+            Elaborator::for_module(&resolved).expect("the lowering fixture namespace should fit");
+
+        elaborator.type_work = TypeWorkBudget::with_limit(EXACT_TYPE_WORK - 1);
+        assert!(matches!(
+            elaborator.lower_constrained_scheme(
+                &scheme,
+                &lowering,
+                MethodEvidenceOwner::Global(owner),
+                false,
+                span,
+            ),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            )),
+        ));
+
+        elaborator.type_work = TypeWorkBudget::with_limit(EXACT_TYPE_WORK);
+        let lowered = elaborator
+            .lower_constrained_scheme(
+                &scheme,
+                &lowering,
+                MethodEvidenceOwner::Global(owner),
+                false,
+                span,
+            )
+            .expect("a fresh exact budget should retry the unpublished lowered scheme");
+        assert_eq!(elaborator.type_work.used(), EXACT_TYPE_WORK);
+        assert_eq!(lowered.requirements.len(), 1);
+        assert_eq!(lowered.requirements[0].methods.len(), 1);
     }
 
     #[test]
