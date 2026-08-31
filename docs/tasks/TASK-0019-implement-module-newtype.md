@@ -73,7 +73,16 @@ Execute the linked plan to:
   unsigned commits `9b483ce`, `d542103`, `a0996d1`, `487ed30`, and `686011c`.
   It contains exactly five commits after `d1e323d`, has no `src/` or `spec/`
   delta, and is clean before product implementation.
-- No product Rust or normative specification file has changed.
+- Checkpoint 2 is complete at unsigned commit `be4e2e5`. The retained RED showed
+  `newtype` lexing as an ordinary identifier. The GREEN boundary reserves the
+  keyword, projects one explicit nominal declaration kind through the existing
+  type-declaration order, owns malformed one-constructor/one-field recovery,
+  defers constructor-name equality to resolution, and proves exact cumulative
+  syntax work, one-short failure, retry, and identifier-position migration.
+  Focused lexer, parser, projection, formatting, all-target check, and diff
+  hygiene pass. Independent semantic/Core and Rust/resource reviews approve
+  the checkpoint with no remaining finding.
+- No normative specification file has changed.
 
 ## Verification
 
