@@ -93,6 +93,16 @@ Execute the linked plan to:
   facade-diamond, malformed-summary, cycle, and stack-safe teardown evidence
   passes. Independent semantic/Core and Rust/resource reviews approve the
   corrected checkpoint with no remaining finding.
+- Checkpoint 4 is complete at unsigned commit `7bc8d2d`. The retained RED showed
+  that the checker had no explicit wrapping path and could not isolate nominal
+  interface evidence from representation evidence. The GREEN boundary types
+  first-class and parameterized constructor values, lowers explicit wrapping
+  and nested irrefutable matching through one-child conversion carriers, keeps
+  nominal evidence separate, and still refuses every unauthenticated conversion
+  before publication. Exact, one-short, retry, wide-family, selective-shadow,
+  rollback, and stack-safe teardown evidence passes. Independent semantic/Core
+  and Rust/resource reviews approve the corrected checkpoint with no remaining
+  Critical or Important finding.
 - No normative specification file has changed.
 
 ## Verification
