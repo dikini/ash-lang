@@ -23,7 +23,4 @@ No proposed change is currently awaiting a decision.
 
 ## Accepted changes
 
-- [CP-0012: Module `newtype`](CP-0012-module-newtype.md) authorizes one
-  allocation-free module-level nominal representation declaration with
-  explicit wrapping and matching, existing visibility, independently validated
-  Core conversion, and no representation-derived interface evidence.
+No accepted change is currently awaiting implementation.

@@ -9,8 +9,4 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-- [TASK-0019: Implement Module `newtype`](TASK-0019-implement-module-newtype.md)
-  implements accepted [CP-0012](../proposals/CP-0012-module-newtype.md) through
-  isolated TDD checkpoints, independent review, exact resource evidence,
-  specification reconciliation, and transition cleanup without merging the
-  Effects Ash milestone.
+No task is currently active.
