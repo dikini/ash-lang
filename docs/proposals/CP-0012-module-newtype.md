@@ -1,7 +1,7 @@
 # CP-0012: Module `newtype`
 
 - ID: `CP-0012`
-- Status: proposed
+- Status: accepted
 - Related:
   - [DN-0026](../design/DN-0026-effect-ash-resource-first-milestones.md)
   - [DN-0027](../design/DN-0027-effect-ash-program-design.md)
