@@ -103,6 +103,16 @@ Execute the linked plan to:
   rollback, and stack-safe teardown evidence passes. Independent semantic/Core
   and Rust/resource reviews approve the corrected checkpoint with no remaining
   Critical or Important finding.
+- Checkpoint 5 is complete at unsigned commit `15224fc`. The retained RED showed
+  that independent Core validation refused an otherwise explicit canonical
+  conversion. The GREEN boundary authenticates the linked representation
+  relation in both registry modes, preserves conversions through both Core
+  transforms, and evaluates them by entering the child directly without a
+  wrapper cell, runtime lookup, tag, frame, or new failure. Tamper, exact,
+  one-short, retry, allocation, deterministic-trace, runtime-shape, and
+  stack-safe accepted and rejected evidence passes. Independent semantic/Core
+  and Rust/resource reviews approve the corrected checkpoint with no remaining
+  Critical or Important finding.
 - No normative specification file has changed.
 
 ## Verification
