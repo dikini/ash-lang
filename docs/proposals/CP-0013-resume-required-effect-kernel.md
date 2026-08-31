@@ -1,7 +1,7 @@
 # CP-0013: Resume-required effect kernel
 
 - ID: `CP-0013`
-- Status: proposed
+- Status: accepted
 - Related:
   - [DN-0009](../design/DN-0009-effects-handlers-and-continuations.md)
   - [DN-0026](../design/DN-0026-effect-ash-resource-first-milestones.md)

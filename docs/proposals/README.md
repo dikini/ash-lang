@@ -19,8 +19,8 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-- [CP-0013: Resume-required effect kernel](CP-0013-resume-required-effect-kernel.md)
+No proposed change is currently awaiting a decision.
 
 ## Accepted changes
 
-No accepted change is currently awaiting implementation.
+- [CP-0013: Resume-required effect kernel](CP-0013-resume-required-effect-kernel.md)
