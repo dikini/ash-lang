@@ -19960,7 +19960,7 @@ mod tests {
             )));
         }
         let error = crate::core::validate(unchecked, &[&source])
-            .expect_err("CP4 must refuse the one reachable conversion");
+            .expect_err("a conversion without a canonical registry relation must reject");
         assert_eq!(
             error.reason(),
             crate::core::ValidationReason::NewtypeConversion
@@ -20051,13 +20051,8 @@ mod tests {
         assert_eq!(generated_wrap_functions, 1);
 
         let source = loaded.source();
-        let error =
-            crate::core::validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
-                .expect_err("CP4 validation must refuse the locally retained wrap conversion");
-        assert_eq!(
-            error.reason(),
-            crate::core::ValidationReason::NewtypeConversion
-        );
+        crate::core::validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
+            .expect("the canonical local wrap conversion should independently authenticate");
     }
 
     #[test]
@@ -20151,13 +20146,8 @@ mod tests {
         }
 
         let source = loaded.source();
-        let error =
-            crate::core::validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
-                .expect_err("CP4 validation must refuse the explicit unwrap conversions");
-        assert_eq!(
-            error.reason(),
-            crate::core::ValidationReason::NewtypeConversion
-        );
+        crate::core::validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
+            .expect("the canonical nested conversions should independently authenticate");
     }
 
     fn assert_nested_newtype_patterns_lower_to_conversions(display_path: &str, text: &str) {
@@ -20227,14 +20217,8 @@ mod tests {
         }
 
         let source = loaded.source();
-        let error =
-            crate::core::validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
-                .expect_err("CP4 validation must refuse the explicit unwrap conversions");
-        assert_eq!(
-            error.reason(),
-            crate::core::ValidationReason::NewtypeConversion,
-            "independent validation must reach the temporary conversion refusal: {error}",
-        );
+        crate::core::validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
+            .expect("the canonical nested conversions should independently authenticate");
     }
 
     #[test]

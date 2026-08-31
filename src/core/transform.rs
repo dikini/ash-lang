@@ -98,8 +98,6 @@ pub enum TransformError {
     Build(BuildError),
     /// A supposedly validated graph did not satisfy a traversal invariant.
     InvalidValidatedInput,
-    /// A module-newtype conversion reached the transform before CP5 authentication.
-    NewtypeConversionUnavailable,
 }
 
 impl fmt::Display for TransformError {
@@ -109,9 +107,6 @@ impl fmt::Display for TransformError {
             Self::InvalidValidatedInput => {
                 formatter.write_str("validated Core transformation state is inconsistent")
             }
-            Self::NewtypeConversionUnavailable => {
-                formatter.write_str("module newtype conversion is unavailable to Core transforms")
-            }
         }
     }
 }
@@ -120,7 +115,7 @@ impl Error for TransformError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Build(error) => Some(error),
-            Self::InvalidValidatedInput | Self::NewtypeConversionUnavailable => None,
+            Self::InvalidValidatedInput => None,
         }
     }
 }
@@ -440,8 +435,19 @@ fn rebuild_node(
                 .match_expression(scrutinee, arms, ty.into_inner(), origin)
                 .map_err(TransformError::from)
         }
-        PureExprKind::Computation(PureComputation::NewtypeConversion(_)) => {
-            Err(TransformError::NewtypeConversionUnavailable)
+        PureExprKind::Computation(PureComputation::NewtypeConversion(node)) => {
+            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let child = remap(remapped, node.child())?;
+            let origin = expression.origin.clone();
+            builder
+                .newtype_conversion(
+                    node.owner(),
+                    node.direction(),
+                    child,
+                    ty.into_inner(),
+                    origin,
+                )
+                .map_err(TransformError::from)
         }
         PureExprKind::Computation(PureComputation::TypeAbstraction(node)) => {
             let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
@@ -605,12 +611,6 @@ fn postorder(
                 let expression = program
                     .node(id)
                     .ok_or(TransformError::InvalidValidatedInput)?;
-                if matches!(
-                    &expression.kind,
-                    PureExprKind::Computation(PureComputation::NewtypeConversion(_))
-                ) {
-                    return Err(TransformError::NewtypeConversionUnavailable);
-                }
                 let child_count = if fold_literal_primitives
                     && matches!(
                             &expression.kind,
@@ -1827,7 +1827,7 @@ mod tests {
     }
 
     #[test]
-    fn transforms_structurally_refuse_forged_validated_newtype_conversions() {
+    fn transforms_rebuild_validated_newtype_conversions() {
         let source = SourceFile::new("transform-conversion.ash", "()").expect("test source");
         let origin = Origin::Source(
             source
@@ -1852,29 +1852,33 @@ mod tests {
             builder.finish(root).expect("the conversion should finish"),
         );
 
-        assert_eq!(
-            identity_traversal(&program).expect_err("identity must refuse the conversion"),
-            TransformError::NewtypeConversionUnavailable,
-        );
-        assert_eq!(
-            fold_literal_primitives(&program).expect_err("folding must refuse the conversion"),
-            TransformError::NewtypeConversionUnavailable,
-        );
+        let identity = identity_traversal(&program).expect("identity must rebuild the conversion");
+        let folded =
+            fold_literal_primitives(&program).expect("folding must rebuild the conversion");
+        for rebuilt in [&identity, &folded] {
+            assert!(matches!(
+                rebuilt.expression_kinds_for_test().nth(1),
+                Some(PureExprKind::Computation(PureComputation::NewtypeConversion(
+                    conversion,
+                ))) if conversion.owner() == owner
+                    && conversion.direction() == NewtypeConversionDirection::Wrap
+            ));
+        }
         for fold_literal_primitives in [false, true] {
             assert_eq!(
                 rebuild_with_initial_type_work(&program, fold_literal_primitives, TYPE_WORK_LIMIT,)
-                    .expect_err("conversion refusal must precede all builder resource work"),
-                TransformError::NewtypeConversionUnavailable,
+                    .expect_err("conversion rebuilding must retain its type-work boundary"),
+                TransformError::Build(BuildError::TypeWorkExceeded),
             );
         }
     }
 
     #[test]
-    fn transform_conversion_refusal_and_teardown_fit_a_small_stack() {
+    fn transform_conversion_rebuild_and_teardown_fit_a_small_stack() {
         const DEPTH: usize = 32_768;
 
         std::thread::Builder::new()
-            .name("transform-newtype-conversion-refusal".to_owned())
+            .name("transform-newtype-conversion-rebuild".to_owned())
             .stack_size(256 * 1024)
             .spawn(|| {
                 let source =
@@ -1907,19 +1911,15 @@ mod tests {
                 let program = super::super::dialect::forge_validated_for_test(
                     builder.finish(root).expect("the conversion should finish"),
                 );
-                assert_eq!(
-                    identity_traversal(&program)
-                        .expect_err("identity must refuse the conversion chain"),
-                    TransformError::NewtypeConversionUnavailable,
-                );
-                assert_eq!(
-                    fold_literal_primitives(&program)
-                        .expect_err("folding must refuse the conversion chain"),
-                    TransformError::NewtypeConversionUnavailable,
-                );
+                let identity = identity_traversal(&program)
+                    .expect("identity must rebuild the conversion chain");
+                let folded = fold_literal_primitives(&program)
+                    .expect("folding must rebuild the conversion chain");
+                drop(identity);
+                drop(folded);
             })
-            .expect("the transform refusal thread should start")
+            .expect("the transform rebuild thread should start")
             .join()
-            .expect("transform conversion refusal must fit a small stack");
+            .expect("transform conversion rebuilding must fit a small stack");
     }
 }

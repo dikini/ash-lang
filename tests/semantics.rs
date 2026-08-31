@@ -513,6 +513,104 @@ fn arbitrary_precision_observations_and_traces_exceed_unsigned_machine_width() {
 }
 
 #[test]
+fn module_newtypes_execute_as_their_representations_with_nominal_observation_types() {
+    for (name, text, expected_value, expected_type, expected_conversions) in [
+        (
+            "scalar",
+            concat!(
+                "newtype UserId = UserId(Int)\n",
+                "main : Unit -> UserId\n",
+                "main () = UserId(42)\n",
+            ),
+            "42",
+            "UserId",
+            1,
+        ),
+        (
+            "tuple",
+            concat!(
+                "newtype Pair = Pair((Int, Bool))\n",
+                "main : Unit -> Pair\n",
+                "main () = Pair((42, true))\n",
+            ),
+            "(42, true)",
+            "Pair",
+            1,
+        ),
+        (
+            "ordinary nominal",
+            concat!(
+                "type Carrier = Carrier(Int)\n",
+                "newtype Wrapped = Wrapped(Carrier)\n",
+                "main : Unit -> Wrapped\n",
+                "main () = Wrapped(Carrier(42))\n",
+            ),
+            "Carrier(42)",
+            "Wrapped",
+            1,
+        ),
+        (
+            "parameterized",
+            concat!(
+                "newtype Box<A> = Box(A)\n",
+                "main : Unit -> Box<Int>\n",
+                "main () = Box(42)\n",
+            ),
+            "42",
+            "Box<Int>",
+            1,
+        ),
+        (
+            "nested",
+            concat!(
+                "newtype Inner = Inner(Int)\n",
+                "newtype Outer = Outer(Inner)\n",
+                "main : Unit -> Outer\n",
+                "main () = Outer(Inner(42))\n",
+            ),
+            "42",
+            "Outer",
+            2,
+        ),
+    ] {
+        let fixture = ModuleFixture::load(text);
+        let observation = fixture.run();
+        assert_eq!(observation.value().to_string(), expected_value, "{name}");
+        assert_eq!(observation.type_display(), expected_type, "{name}");
+        assert_eq!(
+            render::observation(&observation),
+            format!("{expected_value} : {expected_type}\n"),
+            "{name}",
+        );
+
+        let module = elaborated(text);
+        let first = evaluate(&module.program).expect("validated newtype Core should evaluate");
+        let second = evaluate(&module.program).expect("repeated newtype evaluation should succeed");
+        assert_eq!(first.value.to_string(), expected_value, "{name}");
+        assert_eq!(first.trace, second.trace, "{name}");
+        let direct_conversion_entries = first
+            .trace
+            .windows(2)
+            .filter(|window| {
+                let [TraceEvent::Enter(current), TraceEvent::Enter(next)] = window else {
+                    unreachable!("the evaluator trace has one event family")
+                };
+                matches!(
+                    &module
+                        .program
+                        .node(*current)
+                        .expect("entered newtype Core node should exist")
+                        .kind,
+                    PureExprKind::Computation(PureComputation::NewtypeConversion(conversion))
+                        if conversion.child() == *next
+                )
+            })
+            .count();
+        assert_eq!(direct_conversion_entries, expected_conversions, "{name}");
+    }
+}
+
+#[test]
 fn literal_addition_folds_with_exact_type_and_causal_generated_origin() {
     let before = elaborated("main : Unit -> Int\nmain () = 20 + 22\n");
     let operation_origin = before

@@ -125,6 +125,103 @@ fn reachable_nodes(program: &ValidatedProgram) -> Vec<ash::core::NodeId> {
     nodes
 }
 
+fn assert_authenticated_user_id_wrap(program: &ValidatedProgram, owner: NominalTypeId) {
+    let mut wraps = 0;
+    for id in reachable_nodes(program) {
+        let node = program
+            .node(id)
+            .expect("every reachable Core node should remain validated");
+        match &node.kind {
+            PureExprKind::Computation(PureComputation::NewtypeConversion(conversion)) => {
+                assert_eq!(conversion.owner(), owner);
+                assert_eq!(
+                    conversion.direction(),
+                    ash::core::NewtypeConversionDirection::Wrap,
+                );
+                let child = program
+                    .node(conversion.child())
+                    .expect("the conversion child should remain reachable");
+                assert_eq!(child.ty, Type::Int);
+                assert_eq!(node.ty, Type::Nominal(owner));
+                wraps += 1;
+            }
+            PureExprKind::Value(PureValue::Constructor(constructor)) => {
+                let fact = program
+                    .registry()
+                    .constructor(constructor.constructor())
+                    .expect("an ordinary constructor node should remain registered");
+                assert_ne!(
+                    fact.owner, owner,
+                    "UserId must not lower through an allocating constructor node",
+                );
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(wraps, 1);
+}
+
+#[test]
+fn module_newtype_conversion_authenticates_representation() {
+    let fixture = InterfaceCoreFixture::create(concat!(
+        "newtype UserId = UserId(Int)\n",
+        "main : Unit -> UserId\n",
+        "main () = UserId(42)\n",
+    ));
+    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
+        .expect("the module-newtype Core fixture should load");
+    let module = graph
+        .module(graph.entry())
+        .expect("the module-newtype entry should remain loaded");
+    let checked = check_module(
+        resolve_module(module, &[]).expect("the module-newtype fixture should resolve"),
+    )
+    .expect("the module-newtype fixture should check");
+    let linked =
+        link_modules(vec![checked], graph.entry()).expect("the module-newtype fixture should link");
+    let linked = validate_interface_evidence(linked)
+        .expect("the module-newtype fixture has no unauthenticated interface evidence");
+    let mut elaborator =
+        Elaborator::for_module_program(&linked).expect("the linked Core namespace should fit");
+    let typed = elaborator
+        .synthesize_module_program(&linked)
+        .expect("the module-newtype fixture should lower");
+    let unchecked = elaborator
+        .finish(typed.node)
+        .expect("the module-newtype Core root should finish");
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+
+    let original = ash::core::validate_modules(unchecked, &sources, &module_sources)
+        .expect("the canonical newtype conversion should independently authenticate");
+    let owner = original
+        .registry()
+        .nominals()
+        .iter()
+        .find(|nominal| nominal.spelling == "UserId")
+        .expect("the UserId registry fact should remain linked")
+        .id;
+    assert_authenticated_user_id_wrap(&original, owner);
+
+    let identity = identity_traversal(&original).expect("identity traversal should rebuild");
+    let identity = ash::core::validate_modules(identity, &sources, &module_sources)
+        .expect("identity traversal should independently reauthenticate the conversion");
+    assert_authenticated_user_id_wrap(&identity, owner);
+
+    let folded = fold_literal_primitives(&original).expect("literal folding should rebuild");
+    let folded = ash::core::validate_modules(folded, &sources, &module_sources)
+        .expect("literal folding should independently reauthenticate the conversion");
+    assert_authenticated_user_id_wrap(&folded, owner);
+}
+
 fn linked_product_entry() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/explicit-kinds/linked-product/entry.ash")

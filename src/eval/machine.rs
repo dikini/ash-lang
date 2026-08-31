@@ -294,8 +294,6 @@ pub enum RuntimeFailure {
     AliasLoop,
     /// Independently validated coverage selected no arm.
     ImpossibleMatch,
-    /// A module-newtype conversion reached evaluation before CP5 authentication.
-    NewtypeConversionUnavailable,
 }
 
 impl RuntimeFailure {
@@ -315,7 +313,6 @@ impl RuntimeFailure {
             Self::UninitializedLocation => "runtime.uninitialized-location",
             Self::AliasLoop => "runtime.alias-loop",
             Self::ImpossibleMatch => "runtime.impossible-match",
-            Self::NewtypeConversionUnavailable => "runtime.newtype-conversion-unavailable",
         }
     }
 }
@@ -341,9 +338,6 @@ impl fmt::Display for RuntimeFailure {
             Self::UninitializedLocation => "runtime heap location is uninitialized",
             Self::AliasLoop => "runtime heap aliases form a loop",
             Self::ImpossibleMatch => "validated exhaustive match selected no arm",
-            Self::NewtypeConversionUnavailable => {
-                "module newtype conversion is unavailable to the evaluator"
-            }
         })
     }
 }
@@ -520,8 +514,8 @@ fn dispatch_entry(
         PureExprKind::Computation(PureComputation::Match(match_node)) => {
             enter_match(match_node, environment)
         }
-        PureExprKind::Computation(PureComputation::NewtypeConversion(_)) => {
-            return Err(RuntimeFailure::NewtypeConversionUnavailable);
+        PureExprKind::Computation(PureComputation::NewtypeConversion(operation)) => {
+            Transition::direct(Control::Evaluate(operation.child(), environment))
         }
         PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
             enter_type_abstraction(operation, environment)
@@ -1060,7 +1054,10 @@ mod tests {
             variable::VariableNode,
         },
         integer::Integer,
-        resolved::{ResolvedConstructor, ResolvedNominalType, ResolvedRegistry},
+        resolved::{
+            ResolvedConstructor, ResolvedNominalType, ResolvedRegistry, ResolvedTypeProvenance,
+            ResolvedTypeProvenanceNode,
+        },
         source::{ByteRange, Origin, SourceFile},
         types::{ConstructorId, NominalTypeId, Type, TypeVariableId},
     };
@@ -1906,7 +1903,7 @@ mod tests {
     }
 
     #[test]
-    fn evaluator_structurally_refuses_a_forged_validated_newtype_conversion() {
+    fn evaluator_enters_a_validated_newtype_conversion_child_directly() {
         let source = SourceFile::new("runtime-conversion.ash", "()").expect("test source");
         let origin = Origin::Source(
             source
@@ -1933,24 +1930,144 @@ mod tests {
         let shared = program.shared();
         let mut heap = Vec::new();
 
-        let error = match dispatch_entry(&shared, root, Environment::new(), &mut heap) {
-            Err(error) => error,
-            Ok(_) => panic!("dispatch must refuse before entering the child"),
+        let transition = dispatch_entry(&shared, root, Environment::new(), &mut heap)
+            .expect("dispatch should enter the conversion child");
+        let Control::Evaluate(entered, _) = transition.control else {
+            panic!("conversion dispatch should directly evaluate its child");
         };
-        assert_eq!(error, RuntimeFailure::NewtypeConversionUnavailable);
+        assert_eq!(entered, child);
+        assert!(transition.frame.is_none());
         assert!(heap.is_empty());
+        let evaluation = evaluate(&program).expect("evaluation should erase the conversion");
+        assert!(matches!(evaluation.value, Value::Unit));
+        assert_eq!(evaluation.heap.cell_count(), 0);
+        assert_eq!(evaluation.max_frame_depth, 0);
+    }
+
+    #[test]
+    fn module_newtype_wrapper_allocates_no_constructor_cell() {
+        let source = SourceFile::new(
+            "runtime-newtype-allocation.ash",
+            "type Box = Box(Int)\nnewtype Wrapped = Wrapped(Box)\n",
+        )
+        .expect("test source");
+        let span = |start, end| {
+            source
+                .span(ByteRange::new(start, end).expect("ordered range"))
+                .expect("source span")
+        };
+        let origin = Origin::Source(span(0, 50));
+        let box_declaration_origin = Origin::Source(span(0, 19));
+        let box_constructor_origin = Origin::Source(span(11, 19));
+        let wrapped_declaration_origin = Origin::Source(span(20, 50));
+        let wrapped_constructor_origin = Origin::Source(span(38, 50));
+        let wrapped_representation_span = span(46, 49);
+        let module = source.id();
+        let box_owner = NominalTypeId::new(module, 0);
+        let wrapped_owner = NominalTypeId::new(module, 1);
+        let box_constructor = ConstructorId::new(box_owner, 0);
+        let wrapped_constructor = ConstructorId::new(wrapped_owner, 0);
+        let registry = Arc::new(
+            ResolvedRegistry::new(
+                vec![
+                    ResolvedNominalType {
+                        id: box_owner,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                        spelling: "Box".to_owned(),
+                        constructors: Box::new([box_constructor]),
+                        representation: None,
+                        representation_provenance: None,
+                        origin: box_declaration_origin,
+                    },
+                    ResolvedNominalType {
+                        id: wrapped_owner,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Newtype,
+                        spelling: "Wrapped".to_owned(),
+                        constructors: Box::new([wrapped_constructor]),
+                        representation: Some(Type::Nominal(box_owner)),
+                        representation_provenance: Some(ResolvedTypeProvenance::new(
+                            vec![ResolvedTypeProvenanceNode::Fact(
+                                wrapped_representation_span,
+                            )],
+                            0,
+                        )),
+                        origin: wrapped_declaration_origin,
+                    },
+                ],
+                vec![
+                    ResolvedConstructor {
+                        id: box_constructor,
+                        owner: box_owner,
+                        spelling: "Box".to_owned(),
+                        payload: Some(Type::Int),
+                        origin: box_constructor_origin,
+                    },
+                    ResolvedConstructor {
+                        id: wrapped_constructor,
+                        owner: wrapped_owner,
+                        spelling: "Wrapped".to_owned(),
+                        payload: None,
+                        origin: wrapped_constructor_origin,
+                    },
+                ],
+            )
+            .with_type_parameters(vec![(box_owner, Vec::new()), (wrapped_owner, Vec::new())]),
+        );
+        let mut builder = CoreBuilder::with_registry(registry);
+        let constructor = builder
+            .constructor(
+                box_constructor,
+                Type::Function(Box::new(Type::Int), Box::new(Type::Nominal(box_owner))),
+                origin.clone(),
+            )
+            .expect("the ordinary constructor should fit");
+        let payload = builder
+            .integer(
+                Integer::parse_decimal("42").expect("42 should parse"),
+                Type::Int,
+                origin.clone(),
+            )
+            .expect("the representation payload should fit");
+        let representation = builder
+            .application(
+                constructor,
+                payload,
+                Type::Nominal(box_owner),
+                origin.clone(),
+            )
+            .expect("the ordinary representation should fit");
+        let root = builder
+            .newtype_conversion(
+                wrapped_owner,
+                NewtypeConversionDirection::Wrap,
+                representation,
+                Type::Nominal(wrapped_owner),
+                origin,
+            )
+            .expect("the newtype wrapper should fit");
+        let program = validate(
+            builder
+                .finish(root)
+                .expect("the wrapped value should finish"),
+            &[&source],
+        )
+        .expect("the canonical conversion should independently authenticate");
+
+        let evaluation = evaluate(&program).expect("the validated conversion should erase");
+        assert!(matches!(evaluation.value, Value::Data(_)));
         assert_eq!(
-            evaluate(&program).expect_err("evaluation must refuse the conversion"),
-            RuntimeFailure::NewtypeConversionUnavailable,
+            evaluation.heap.cell_count(),
+            1,
+            "only the ordinary representation constructor may allocate",
         );
     }
 
     #[test]
-    fn evaluator_conversion_refusal_and_teardown_fit_a_small_stack() {
+    fn evaluator_conversion_erasure_and_teardown_fit_a_small_stack() {
         const DEPTH: usize = 32_768;
 
         std::thread::Builder::new()
-            .name("runtime-newtype-conversion-refusal".to_owned())
+            .name("runtime-newtype-conversion-erasure".to_owned())
             .stack_size(256 * 1024)
             .spawn(|| {
                 let source =
@@ -1983,13 +2100,15 @@ mod tests {
                 let program = crate::core::dialect::forge_validated_for_test(
                     builder.finish(root).expect("the conversion should finish"),
                 );
-                assert_eq!(
-                    evaluate(&program).expect_err("evaluation must refuse the conversion chain"),
-                    RuntimeFailure::NewtypeConversionUnavailable,
-                );
+                let evaluation =
+                    evaluate(&program).expect("evaluation must erase the conversion chain");
+                assert!(matches!(evaluation.value, Value::Unit));
+                assert_eq!(evaluation.trace.len(), DEPTH + 1);
+                assert_eq!(evaluation.max_frame_depth, 0);
+                assert_eq!(evaluation.heap.cell_count(), 0);
             })
-            .expect("the evaluator refusal thread should start")
+            .expect("the evaluator erasure thread should start")
             .join()
-            .expect("evaluator conversion refusal must fit a small stack");
+            .expect("evaluator conversion erasure must fit a small stack");
     }
 }

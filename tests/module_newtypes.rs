@@ -5,8 +5,9 @@ use std::{
 };
 
 use ash::{
-    core::{ValidationReason, validate_modules},
+    core::validate_modules,
     elaborate::{Elaborator, TypeError, TypeReason, check_module, link_modules},
+    eval::{Value, evaluate},
     evidence_validation::validate_interface_evidence,
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, ResolveModuleError, ResolveReason, resolve_module},
@@ -405,9 +406,13 @@ fn transparent_newtype_constructor_pattern_unwraps_its_representation() {
         .finish(typed.node)
         .expect("the explicit unwrap should finish as unvalidated Core");
     let source = module_named(&graph, "entry.ash").source();
-    let error = validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
-        .expect_err("CP4 validation must refuse the unauthenticated unwrap conversion");
-    assert_eq!(error.reason(), ValidationReason::NewtypeConversion);
+    let program = validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
+        .expect("the canonical unwrap conversion should independently authenticate");
+    let evaluation = evaluate(&program).expect("the authenticated conversions should erase");
+    let Value::Integer(value) = evaluation.value else {
+        panic!("the unwrapped representation should remain an integer");
+    };
+    assert_eq!(value.to_string(), "42");
 }
 
 #[test]

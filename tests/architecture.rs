@@ -3,12 +3,13 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use ash::{
     core::{
-        AshPureDialect, CoreBuilder, NodeId, Primitive, PureComputation, PureExprKind, PureValue,
-        TypedExpr, ValidatedProgram,
+        AshPureDialect, CoreBuilder, NewtypeConversionDirection, NodeId, Primitive,
+        PureComputation, PureExprKind, PureValue, TypedExpr, ValidatedProgram,
         binding::BindingNode,
         data::{ConstructorNode, MatchNode, TupleNode},
         function::{ApplicationNode, FunctionNode},
@@ -19,8 +20,12 @@ use ash::{
         validate,
         variable::VariableNode,
     },
+    elaborate::{Elaborator, check_module, link_modules},
+    evidence_validation::validate_interface_evidence,
     integer::Integer,
-    resolved::BinderId,
+    module::{ModuleRoots, load_module_graph},
+    resolve::resolve_module,
+    resolved::{BinderId, ResolvedNominalDeclarationKind},
     source::{ByteRange, Origin, SourceFile, Span},
     types::{Kind, Type},
 };
@@ -6895,8 +6900,23 @@ fn validate_shadow_computation(
                     .all(|arm| facts.node_type(arm.body()) == Some(ty))
         }
         ShadowPureComputation::NewtypeConversion(node) => {
-            let _ = (node.owner(), node.direction(), node.child());
-            false
+            let Some(owner) = facts.program.registry().nominal(node.owner()) else {
+                return false;
+            };
+            let Some(representation) = owner.representation.as_ref() else {
+                return false;
+            };
+            owner.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+                && match node.direction() {
+                    NewtypeConversionDirection::Wrap => {
+                        facts.node_type(node.child()) == Some(representation)
+                            && ty == &Type::Nominal(owner.id)
+                    }
+                    NewtypeConversionDirection::Unwrap => {
+                        facts.node_type(node.child()) == Some(&Type::Nominal(owner.id))
+                            && ty == representation
+                    }
+                }
         }
         ShadowPureComputation::TypeAbstraction(node) => {
             matches!(ty, Type::Forall(parameters, body)
@@ -6944,7 +6964,6 @@ fn traverse_shadow(expression: &ShadowTypedExpr) -> Vec<NodeId> {
 enum ShadowTransformPlan {
     Preserve(Vec<NodeId>),
     ReplaceWithMockUnit,
-    RefuseNewtypeConversion,
 }
 
 fn transform_shadow(expression: &ShadowTypedExpr) -> ShadowTransformPlan {
@@ -6982,8 +7001,8 @@ fn transform_shadow(expression: &ShadowTypedExpr) -> ShadowTransformPlan {
                     .chain(node.arms().iter().map(|arm| arm.body()))
                     .collect(),
             ),
-            ShadowPureComputation::NewtypeConversion(_) => {
-                ShadowTransformPlan::RefuseNewtypeConversion
+            ShadowPureComputation::NewtypeConversion(node) => {
+                ShadowTransformPlan::Preserve(vec![node.child()])
             }
             ShadowPureComputation::TypeAbstraction(node) => {
                 ShadowTransformPlan::Preserve(vec![node.body()])
@@ -7149,6 +7168,66 @@ fn representative_program() -> Representative {
     }
 }
 
+static NEWTYPE_SHADOW_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
+
+fn validated_newtype_shadow_program() -> ValidatedProgram {
+    let directory = loop {
+        let id = NEWTYPE_SHADOW_FIXTURE_IDS.fetch_add(1, Ordering::Relaxed);
+        let candidate =
+            std::env::temp_dir().join(format!("ash-newtype-shadow-{}-{id}", std::process::id(),));
+        match fs::create_dir(&candidate) {
+            Ok(()) => break candidate,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("newtype shadow fixture should be creatable: {error}"),
+        }
+    };
+    let entry = directory.join("entry.ash");
+    fs::write(
+        &entry,
+        concat!(
+            "newtype Wrapped = Wrapped(Int)\n",
+            "main : Unit -> Wrapped\n",
+            "main () = Wrapped(42)\n",
+        ),
+    )
+    .expect("newtype shadow fixture should be writable");
+    let graph = load_module_graph(&entry, &ModuleRoots::empty())
+        .expect("newtype shadow fixture should load");
+    let module = graph
+        .module(graph.entry())
+        .expect("newtype shadow entry should remain loaded");
+    let checked =
+        check_module(resolve_module(module, &[]).expect("newtype shadow fixture should resolve"))
+            .expect("newtype shadow fixture should check");
+    let linked =
+        link_modules(vec![checked], graph.entry()).expect("newtype shadow fixture should link");
+    let linked = validate_interface_evidence(linked)
+        .expect("newtype shadow fixture has no interface evidence");
+    let mut elaborator =
+        Elaborator::for_module_program(&linked).expect("newtype shadow namespace should fit");
+    let typed = elaborator
+        .synthesize_module_program(&linked)
+        .expect("newtype shadow fixture should lower");
+    let unchecked = elaborator
+        .finish(typed.node)
+        .expect("newtype shadow Core should finish");
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let program = ash::core::validate_modules(unchecked, &sources, &module_sources)
+        .expect("newtype shadow conversion should authenticate");
+    drop(graph);
+    fs::remove_dir_all(directory).expect("newtype shadow fixture should clean up");
+    program
+}
+
 #[test]
 fn pure_dialect_is_named_and_has_no_inhabited_operation_family() {
     assert_eq!(AshPureDialect::NAME, "ash.pure");
@@ -7237,6 +7316,37 @@ fn one_mock_pure_feature_changes_only_the_recorded_closed_sites() {
         );
         assert_eq!(consume_shadow(&shadow), label);
     }
+
+    let newtype_program = validated_newtype_shadow_program();
+    let newtype_facts = ShadowFacts {
+        program: &newtype_program,
+        binders: &HashMap::new(),
+    };
+    let mut pending = vec![newtype_program.root()];
+    let mut conversion_count = 0;
+    while let Some(id) = pending.pop() {
+        let expression = newtype_program
+            .node(id)
+            .expect("newtype shadow node should remain validated");
+        pending.extend(
+            (0..expression.kind.child_count()).filter_map(|index| expression.kind.child_at(index)),
+        );
+        if !matches!(
+            expression.kind,
+            PureExprKind::Computation(PureComputation::NewtypeConversion(_))
+        ) {
+            continue;
+        }
+        let shadow = assemble_shadow(expression);
+        assert!(validate_shadow(&shadow, &newtype_facts));
+        assert_eq!(
+            transform_shadow(&shadow),
+            ShadowTransformPlan::Preserve(traverse_shadow(&shadow))
+        );
+        assert_eq!(consume_shadow(&shadow), "newtype conversion");
+        conversion_count += 1;
+    }
+    assert_eq!(conversion_count, 1);
 
     let mock = mock_shadow();
     assert!(validate_shadow(&mock, &facts));
