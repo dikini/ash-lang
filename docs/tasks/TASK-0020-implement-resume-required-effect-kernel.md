@@ -22,10 +22,12 @@ The planning baseline `65b339c`, which adds only DN-0027 and DN-0028 to that
 predecessor, passes `cargo xtask verify`.
 
 Product work uses `.worktree/cp0013-effect-kernel` on
-`feature/cp0013-effect-kernel`, rooted at then-current verified `main`. It
-carries the design, proposal, acceptance, and authorization commits without
-merging a planning branch. Those artifacts authorize a prospective product
-transition; they do not make effects current Ash.
+`feature/cp0013-effect-kernel`, rooted at verified `main` commit `d1e323d`. It
+carries the design, proposal, acceptance, authorization, and refined execution
+map without merging a planning branch. Planning authorization commit
+`b29c238` is carried as product commit `ffb94a2`; planning refinement commit
+`e5f7340` is carried as product commit `32e4b1c`. Those artifacts authorize a
+prospective product transition; they do not make effects current Ash.
 
 Stop and return to CP-0013 if implementation needs a source, row, inference,
 handler, continuation, Core, dynamic-semantics, failure, or resource rule
@@ -78,6 +80,8 @@ milestone capacity when that forecast is exhausted.
 - Explicit acceptance is recorded in unsigned commit `41be641`.
 - The proposal contains no experiment and no later effects-ash milestone work.
 - The pure planning baseline passes the complete verifier.
+- Product commit `32e4b1c` has no `src/`, `tests/`, or `spec/` delta from base
+  `d1e323d`, and `cargo xtask verify` passes there.
 - No product Rust, test, or normative specification file has changed.
 
 ## Verification
