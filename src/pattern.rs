@@ -889,6 +889,9 @@ mod tests {
             .collect();
         let registry = ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: owner,
                 spelling: "Wide".to_owned(),
                 constructors: vec![constructor].into_boxed_slice(),

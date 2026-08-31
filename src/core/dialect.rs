@@ -4053,7 +4053,10 @@ mod tests {
                     .collect::<Vec<_>>();
                 let registry = ResolvedRegistry::new(
                     vec![ResolvedNominalType {
+                        representation_provenance: None,
                         id: owner,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                        representation: None,
                         spelling: "Wide".to_owned(),
                         constructors: vec![constructor].into_boxed_slice(),
                         origin: origin.clone(),

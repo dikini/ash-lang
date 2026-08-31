@@ -46,8 +46,9 @@ use crate::{
         CheckedModule, CheckedModuleParts, ExportSummary, ResolvedBinding, ResolvedBlock,
         ResolvedBuildFailure, ResolvedDeclarationIndex, ResolvedDefinitionKind, ResolvedExpr,
         ResolvedExprKind, ResolvedLocalDeclaration, ResolvedModule, ResolvedModuleGroup,
-        ResolvedModuleProgram, ResolvedPattern, ResolvedPatternKind, ResolvedRecursiveGroup,
-        ResolvedRegistry, ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
+        ResolvedModuleProgram, ResolvedNominalDeclarationKind, ResolvedPattern,
+        ResolvedPatternKind, ResolvedRecursiveGroup, ResolvedRegistry, ResolvedType,
+        ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
         clone_resolved_type_variable_with_budget,
     },
     source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
@@ -105,6 +106,8 @@ pub enum TypeReason {
     AmbiguousType,
     /// A recursive use requires distinct instantiations.
     PolymorphicRecursion,
+    /// A module newtype representation reaches itself through newtype declarations.
+    NewtypeRecursiveRepresentation,
 }
 
 impl fmt::Display for TypeReason {
@@ -135,6 +138,9 @@ impl fmt::Display for TypeReason {
             Self::InfiniteType => formatter.write_str("type.infinite"),
             Self::AmbiguousType => formatter.write_str("type.ambiguous"),
             Self::PolymorphicRecursion => formatter.write_str("type.polymorphic-recursion"),
+            Self::NewtypeRecursiveRepresentation => {
+                formatter.write_str("newtype.recursive-representation")
+            }
         }
     }
 }
@@ -6468,6 +6474,13 @@ impl Elaborator {
                             .registry
                             .constructor(occurrence.constructor)
                             .ok_or_else(invalid_state)?;
+                        let owner = self
+                            .registry
+                            .nominal(constructor.owner)
+                            .ok_or_else(invalid_state)?;
+                        if owner.declaration_kind == ResolvedNominalDeclarationKind::Newtype {
+                            return Err(invalid_state());
+                        }
                         let declaration_span = constructor.origin.primary_span();
                         let parameters = self
                             .registry
@@ -7826,6 +7839,13 @@ impl Elaborator {
         let Some(info) = self.registry.constructor(constructor) else {
             return Err(invalid_state());
         };
+        let owner = self
+            .registry
+            .nominal(info.owner)
+            .ok_or_else(invalid_state)?;
+        if owner.declaration_kind == ResolvedNominalDeclarationKind::Newtype {
+            return Err(invalid_state());
+        }
         let info_owner = info.owner;
         if let Some(payload) = &info.payload {
             charge_type_cells(payload, &mut self.type_work)
@@ -10620,6 +10640,12 @@ where
     Ok(false)
 }
 
+#[derive(Clone, Copy)]
+struct NewtypeRepresentationEdge {
+    target: usize,
+    occurrence: Span,
+}
+
 /// Checks every local definition and publishes an immutable dependency summary.
 ///
 /// No Core program escapes this phase. A summary is created only after all
@@ -10629,6 +10655,257 @@ where
 ///
 /// Returns the first source typing error or bounded internal elaboration
 /// failure. Failed modules do not produce a [`CheckedModule`].
+fn check_newtype_representation_cycles(
+    resolved: &ResolvedModule,
+    type_work: &mut TypeWorkBudget,
+) -> Result<(), TypeError> {
+    let registry = resolved.registry();
+    let vertex_count = registry
+        .nominals()
+        .iter()
+        .filter(|nominal| nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype)
+        .count();
+    // The graph owns two retained records per vertex before traversal begins:
+    // its declaration index and its identity-to-position index entry.  Charge
+    // both before either allocation can retain capacity.
+    type_work
+        .charge(
+            vertex_count
+                .checked_mul(2)
+                .ok_or_else(|| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+        )
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    let mut vertices = Vec::new();
+    vertices
+        .try_reserve(vertex_count)
+        .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    let mut vertex_positions = HashMap::new();
+    vertex_positions
+        .try_reserve(vertex_count)
+        .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    for (index, nominal) in registry.nominals().iter().enumerate() {
+        if nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype {
+            let position = vertices.len();
+            vertices.push(index);
+            if vertex_positions.insert(nominal.id, position).is_some() {
+                return Err(TypeError::Internal(ElaborationFailure::InvalidState));
+            }
+        }
+    }
+
+    // One outer adjacency row is retained for every newtype, including rows
+    // with no outgoing representation edge.
+    type_work
+        .charge(vertex_count)
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    let mut edges = Vec::new();
+    edges
+        .try_reserve(vertices.len())
+        .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    for &owner in &vertices {
+        type_work
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let nominal = &registry.nominals()[owner];
+        let representation = nominal
+            .representation
+            .as_ref()
+            .ok_or_else(|| TypeError::Internal(ElaborationFailure::InvalidState))?;
+        let representation_provenance = nominal
+            .representation_provenance
+            .as_ref()
+            .ok_or_else(|| TypeError::Internal(ElaborationFailure::InvalidState))?;
+        let mut outgoing = Vec::new();
+        let mut pending = Vec::new();
+        type_work
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        pending
+            .try_reserve(1)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        pending.push((representation, representation_provenance.root()));
+        while let Some((ty, provenance_index)) = pending.pop() {
+            type_work
+                .charge(1)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let provenance = representation_provenance
+                .nodes()
+                .get(provenance_index)
+                .ok_or_else(|| TypeError::Internal(ElaborationFailure::InvalidState))?;
+            let provenance_span = match provenance {
+                ResolvedTypeProvenanceNode::Fact(span)
+                | ResolvedTypeProvenanceNode::Tuple { span, .. }
+                | ResolvedTypeProvenanceNode::Function { span, .. }
+                | ResolvedTypeProvenanceNode::Application { span, .. } => *span,
+            };
+            match ty {
+                Type::Nominal(identity) => {
+                    let Some(target) = vertex_positions.get(identity).copied() else {
+                        continue;
+                    };
+                    type_work.charge(1).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    outgoing.try_reserve(1).map_err(|_| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    outgoing.push(NewtypeRepresentationEdge {
+                        target,
+                        occurrence: provenance_span,
+                    });
+                }
+                Type::Application(function, argument) | Type::Function(function, argument) => {
+                    type_work.charge(2).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    pending.try_reserve(2).map_err(|_| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    let (function_provenance, argument_provenance) = match provenance {
+                        ResolvedTypeProvenanceNode::Application {
+                            function, argument, ..
+                        } => (*function, *argument),
+                        ResolvedTypeProvenanceNode::Function {
+                            domain, codomain, ..
+                        } => (*domain, *codomain),
+                        _ => return Err(TypeError::Internal(ElaborationFailure::InvalidState)),
+                    };
+                    pending.push((argument, argument_provenance));
+                    pending.push((function, function_provenance));
+                }
+                Type::Tuple(elements) => {
+                    type_work.charge(elements.len()).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    pending.try_reserve(elements.len()).map_err(|_| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    let ResolvedTypeProvenanceNode::Tuple {
+                        elements: provenance_elements,
+                        ..
+                    } = provenance
+                    else {
+                        return Err(TypeError::Internal(ElaborationFailure::InvalidState));
+                    };
+                    if elements.len() != provenance_elements.len() {
+                        return Err(TypeError::Internal(ElaborationFailure::InvalidState));
+                    }
+                    pending.extend(
+                        elements
+                            .iter()
+                            .zip(provenance_elements.iter())
+                            .rev()
+                            .map(|(element, provenance)| (element, *provenance)),
+                    );
+                }
+                Type::Int | Type::Bool | Type::Unit | Type::Variable(_) => {}
+                Type::Inference(_) | Type::Forall(_, _) => {
+                    return Err(TypeError::Internal(ElaborationFailure::InvalidState));
+                }
+            }
+        }
+        edges.push(outgoing);
+    }
+
+    type_work
+        .charge(
+            vertices
+                .len()
+                .checked_mul(3)
+                .ok_or_else(|| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+        )
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    let mut state = Vec::new();
+    state
+        .try_reserve_exact(vertices.len())
+        .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    state.resize(vertices.len(), 0_u8);
+    let mut stack = Vec::new();
+    let mut active_path = Vec::new();
+    stack
+        .try_reserve(vertices.len())
+        .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    active_path
+        .try_reserve(vertices.len())
+        .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    for root in 0..vertices.len() {
+        if state[root] != 0 {
+            continue;
+        }
+        type_work
+            .charge(2)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        state[root] = 1;
+        stack.push((root, 0_usize));
+        active_path.push(root);
+        while let Some((vertex, edge_index)) = stack.pop() {
+            type_work
+                .charge(1)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let Some(edge) = edges[vertex].get(edge_index).copied() else {
+                state[vertex] = 2;
+                let completed = active_path
+                    .pop()
+                    .ok_or_else(|| TypeError::Internal(ElaborationFailure::InvalidState))?;
+                if completed != vertex {
+                    return Err(TypeError::Internal(ElaborationFailure::InvalidState));
+                }
+                continue;
+            };
+            type_work
+                .charge(1)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            stack.push((vertex, edge_index + 1));
+            match state[edge.target] {
+                0 => {
+                    type_work.charge(2).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    state[edge.target] = 1;
+                    stack.push((edge.target, 0));
+                    active_path.push(edge.target);
+                }
+                1 => {
+                    let cycle_start = active_path
+                        .iter()
+                        .position(|candidate| *candidate == edge.target)
+                        .ok_or_else(|| TypeError::Internal(ElaborationFailure::InvalidState))?;
+                    let mut diagnostic = Diagnostic::new(
+                        TypeReason::NewtypeRecursiveRepresentation,
+                        SourceLabel::new(
+                            edge.occurrence,
+                            "this newtype representation closes a recursive representation cycle",
+                        ),
+                    );
+                    type_work.charge(1).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    diagnostic
+                        .related
+                        .try_reserve(active_path.len() - cycle_start)
+                        .map_err(|_| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                    for vertex in &active_path[cycle_start..] {
+                        type_work.charge(1).map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                        let declaration = &registry.nominals()[vertices[*vertex]];
+                        diagnostic.related.push(SourceLabel::new(
+                            declaration.origin.primary_span(),
+                            "this declaration participates in the recursive representation cycle",
+                        ));
+                    }
+                    return Err(TypeError::Source(Box::new(diagnostic)));
+                }
+                2 => {}
+                _ => unreachable!("newtype representation traversal state is ternary"),
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn check_module(resolved: ResolvedModule) -> Result<CheckedModule, TypeError> {
     let mut type_work = TypeWorkBudget::default();
     let mut coverage_work = UsefulnessBudget::default();
@@ -10648,6 +10925,7 @@ pub(crate) fn check_module_with_budget(
     coverage_work: &mut UsefulnessBudget,
     constraint_work: &mut InterfaceConstraintBudget,
 ) -> Result<CheckedModule, TypeError> {
+    check_newtype_representation_cycles(&resolved, type_work)?;
     let checked_interfaces = check_interface_declarations(&resolved, constraint_work)?;
     check_global_requirements(&resolved, &checked_interfaces, constraint_work)?;
     let registry = Arc::new(
@@ -14154,6 +14432,102 @@ mod tests {
         resolved
     }
 
+    #[test]
+    fn newtype_representation_graph_has_an_isolated_retryable_type_work_boundary() {
+        fn fixture() -> ResolvedModule {
+            resolved_module_fixture(
+                "newtype-representation-work.ash",
+                "newtype UserId = UserId(Int)",
+                "Unit",
+                "()",
+            )
+        }
+
+        let resolved = fixture();
+        let mut measured_type_work = TypeWorkBudget::unbounded();
+        check_newtype_representation_cycles(&resolved, &mut measured_type_work)
+            .expect("the isolated newtype representation graph should check");
+        let exact_work = measured_type_work.used();
+        assert!(exact_work > 0);
+
+        let mut short_type_work = TypeWorkBudget::with_limit(exact_work - 1);
+        let failure = check_newtype_representation_cycles(&resolved, &mut short_type_work)
+            .expect_err("one graph work cell short must not admit a graph");
+        let TypeError::Internal(failure) = failure else {
+            panic!("graph budget exhaustion must remain an internal resource failure");
+        };
+        assert_eq!(failure.reason_code(), "internal.resource.type-work");
+
+        let mut exact_type_work = TypeWorkBudget::with_limit(exact_work);
+        check_newtype_representation_cycles(&resolved, &mut exact_type_work)
+            .expect("the exact isolated graph budget should be retryable");
+        assert_eq!(exact_type_work.used(), exact_work);
+
+        let ordinary = resolved_module_fixture(
+            "ordinary-data-does-not-build-newtype-graph.ash",
+            "type UserId = UserId(Int)",
+            "Unit",
+            "()",
+        );
+        let mut ordinary_work = TypeWorkBudget::with_limit(0);
+        check_newtype_representation_cycles(&ordinary, &mut ordinary_work)
+            .expect("ordinary data must not allocate a newtype representation graph");
+        assert_eq!(ordinary_work.used(), 0);
+    }
+
+    #[test]
+    fn newtype_representation_graph_is_stack_safe_for_wide_accepted_and_rejected_modules() {
+        const WIDTH: usize = 2_048;
+
+        std::thread::Builder::new()
+            .name("newtype-representation-graph-wide".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let declarations = |closes_cycle: bool| {
+                    let mut source = String::new();
+                    for index in 0..WIDTH {
+                        let representation = if index + 1 == WIDTH {
+                            if closes_cycle { "N0" } else { "Int" }.to_owned()
+                        } else {
+                            format!("N{}", index + 1)
+                        };
+                        source
+                            .push_str(&format!("newtype N{index} = N{index}({representation})\n"));
+                    }
+                    source
+                };
+
+                let accepted = resolved_module_fixture(
+                    "wide-newtype-graph-accepted.ash",
+                    &declarations(false),
+                    "Unit",
+                    "()",
+                );
+                check_newtype_representation_cycles(&accepted, &mut TypeWorkBudget::unbounded())
+                    .expect("the wide acyclic newtype graph should check");
+                drop(accepted);
+
+                let rejected = resolved_module_fixture(
+                    "wide-newtype-graph-rejected.ash",
+                    &declarations(true),
+                    "Unit",
+                    "()",
+                );
+                assert!(matches!(
+                    check_newtype_representation_cycles(
+                        &rejected,
+                        &mut TypeWorkBudget::unbounded(),
+                    ),
+                    Err(TypeError::Source(error))
+                        if error.reason == TypeReason::NewtypeRecursiveRepresentation
+                ));
+                drop(rejected);
+            })
+            .expect("wide graph thread should start")
+            .join()
+            .expect("wide graph checking and teardown must fit the small stack");
+    }
+
     fn fixture_result(module: &ResolvedModule) -> &ResolvedExpr {
         let wrapper = module
             .definitions()
@@ -15736,6 +16110,9 @@ mod tests {
         let second_id = ImplId::new(module, 1);
         let registry = ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: option,
                 spelling: "Option".into(),
                 constructors: Box::new([]),
@@ -16945,6 +17322,9 @@ mod tests {
         imported
             .merge_nominal(
                 ImportedNominalFact {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: nominal,
                     parameter_count: parameters.len(),
                     constructor_count: 1,
@@ -17068,6 +17448,9 @@ mod tests {
         };
         let base = ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: option,
                 spelling: "Option".to_owned(),
                 constructors: Box::new([]),
@@ -17083,6 +17466,9 @@ mod tests {
         imported
             .merge_nominal(
                 ImportedNominalFact {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: abstract_nominal,
                     parameter_count: 1,
                     constructor_count: 1,
@@ -18101,6 +18487,9 @@ mod tests {
             .collect::<Vec<_>>();
         let registry = ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: owner,
                 spelling: "Wide".to_owned(),
                 constructors: Box::new([]),
@@ -19899,6 +20288,9 @@ mod tests {
                 let registry = Arc::new(
                     ResolvedRegistry::new(
                         vec![crate::resolved::ResolvedNominalType {
+                            representation_provenance: None,
+                            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                            representation: None,
                             id: nominal,
                             spelling: "Deep".to_owned(),
                             constructors: Box::new([]),

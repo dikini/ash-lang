@@ -11314,12 +11314,18 @@ mod tests {
             crate::resolved::ResolvedRegistry::new(
                 vec![
                     crate::resolved::ResolvedNominalType {
+                        representation_provenance: None,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                        representation: None,
                         id: first_nominal,
                         spelling: "Shared".into(),
                         constructors: vec![first_constructor].into_boxed_slice(),
                         origin: range_origin(first_source, 0, 13),
                     },
                     crate::resolved::ResolvedNominalType {
+                        representation_provenance: None,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                        representation: None,
                         id: second_nominal,
                         spelling: "Shared".into(),
                         constructors: vec![second_constructor].into_boxed_slice(),
@@ -11516,6 +11522,9 @@ mod tests {
     ) {
         (
             crate::resolved::ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: owner,
                 spelling: spelling.into(),
                 constructors: Box::new([]),
@@ -12435,6 +12444,9 @@ mod tests {
             .collect();
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![crate::resolved::ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: owner,
                 spelling: "Wide".into(),
                 constructors: vec![constructor].into_boxed_slice(),
@@ -12613,6 +12625,9 @@ mod tests {
             .collect::<Vec<_>>()
             .into_boxed_slice();
         let owner = crate::resolved::ResolvedNominalType {
+            representation_provenance: None,
+            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             id: nominal,
             spelling: "Wide".into(),
             constructors,
@@ -12649,6 +12664,9 @@ mod tests {
             .collect::<Vec<_>>();
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![crate::resolved::ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: nominal,
                 spelling: "Wide".into(),
                 constructors: constructors.clone().into_boxed_slice(),
@@ -12745,6 +12763,9 @@ mod tests {
             );
             let registry = crate::resolved::ResolvedRegistry::new(
                 vec![crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: nominal,
                     spelling: "Holder".into(),
                     constructors: Box::new([constructor]),
@@ -12888,6 +12909,9 @@ mod tests {
             let parameter = crate::types::TypeVariableId::new(0);
             let registry = crate::resolved::ResolvedRegistry::new(
                 vec![crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: owner,
                     spelling: "Holder".into(),
                     constructors: Box::new([constructor]),
@@ -12972,6 +12996,9 @@ mod tests {
         let parameter = crate::types::TypeVariableId::new(0);
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![crate::resolved::ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: owner,
                 spelling: "Holder".into(),
                 constructors: Box::new([]),
@@ -13024,18 +13051,27 @@ mod tests {
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![
                 crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: pair,
                     spelling: "Pair".into(),
                     constructors: Box::new([]),
                     origin: origin(&file),
                 },
                 crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: higher,
                     spelling: "Higher".into(),
                     constructors: Box::new([]),
                     origin: origin(&file),
                 },
                 crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: owner,
                     spelling: "Use".into(),
                     constructors: Box::new([]),
@@ -13105,6 +13141,9 @@ mod tests {
         let parameter = crate::types::TypeVariableId::new(0);
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![crate::resolved::ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: owner,
                 spelling: "Holder".into(),
                 constructors: Box::new([]),
@@ -13342,6 +13381,9 @@ mod tests {
         let malformed_constructor = NodeId::new(arena, 4);
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![crate::resolved::ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: nominal,
                 spelling: "Wide".into(),
                 constructors: vec![constructor_id].into_boxed_slice(),
@@ -13488,12 +13530,18 @@ mod tests {
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![
                 crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: monomorphic,
                     spelling: "Mono".into(),
                     constructors: vec![mono_nullary, mono_payload].into_boxed_slice(),
                     origin: node_origin.clone(),
                 },
                 crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: parameterized,
                     spelling: "Poly".into(),
                     constructors: vec![poly_nullary, poly_payload].into_boxed_slice(),
@@ -13610,6 +13658,9 @@ mod tests {
                 let constructor_node = NodeId::new(arena, 2);
                 let registry = crate::resolved::ResolvedRegistry::new(
                     vec![crate::resolved::ResolvedNominalType {
+                        representation_provenance: None,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                        representation: None,
                         id: nominal,
                         spelling: "Deep".into(),
                         constructors: vec![constructor].into_boxed_slice(),
@@ -13970,6 +14021,9 @@ mod tests {
                 let registry = crate::resolved::ResolvedRegistry::new(
                     vec![
                         crate::resolved::ResolvedNominalType {
+                            representation_provenance: None,
+                            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                            representation: None,
                             id: owner,
                             spelling: "Deep".into(),
                             constructors: vec![constructor].into_boxed_slice(),
@@ -14062,6 +14116,9 @@ mod tests {
                 let registry = crate::resolved::ResolvedRegistry::new(
                     vec![
                         crate::resolved::ResolvedNominalType {
+                            representation_provenance: None,
+                            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                            representation: None,
                             id: owner,
                             spelling: "Deep".into(),
                             constructors: vec![constructor].into_boxed_slice(),

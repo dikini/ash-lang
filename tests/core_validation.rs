@@ -1498,7 +1498,10 @@ fn structurally_validates_higher_kinded_outer_instantiation() {
     let registry = Arc::new(
         ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
                 id: pair,
+                declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 spelling: "Pair".into(),
                 constructors: vec![pair_value].into_boxed_slice(),
                 origin: range_origin(&file, 0, 15),
@@ -1752,7 +1755,10 @@ fn rejects_non_type_ordinary_core_annotation() {
     };
     let registry = ResolvedRegistry::new(
         vec![ResolvedNominalType {
+            representation_provenance: None,
             id: option,
+            declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             spelling: "Option".into(),
             constructors: Box::new([option_value]),
             origin: range_origin(&file, 0, 12),
@@ -2058,7 +2064,10 @@ fn validates_registry_tuples_constructors_and_structured_matches() {
     let empty = ConstructorId::new(nominal, 0);
     let registry = Arc::new(ResolvedRegistry::new(
         vec![ResolvedNominalType {
+            representation_provenance: None,
             id: nominal,
+            declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             spelling: "Choice".into(),
             constructors: vec![empty].into_boxed_slice(),
             origin: nominal_origin,
@@ -2103,7 +2112,10 @@ fn rejects_malformed_data_registries_and_constructor_annotations() {
     let nominal = NominalTypeId::new(file.id(), 0);
     let empty_registry = Arc::new(ResolvedRegistry::new(
         vec![ResolvedNominalType {
+            representation_provenance: None,
             id: nominal,
+            declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             spelling: "Empty".into(),
             constructors: Box::new([]),
             origin: origin.clone(),
@@ -2119,7 +2131,10 @@ fn rejects_malformed_data_registries_and_constructor_annotations() {
     let constructor = ConstructorId::new(nominal, 0);
     let registry = Arc::new(ResolvedRegistry::new(
         vec![ResolvedNominalType {
+            representation_provenance: None,
             id: nominal,
+            declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             spelling: "One".into(),
             constructors: vec![constructor].into_boxed_slice(),
             origin: origin.clone(),
@@ -2152,7 +2167,10 @@ fn rejects_constructor_payload_variables_outside_the_owner_parameters() {
     let registry = Arc::new(
         ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
                 id: nominal,
+                declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 spelling: "Wrap".into(),
                 constructors: vec![constructor].into_boxed_slice(),
                 origin: origin.clone(),
@@ -2194,7 +2212,10 @@ fn rejects_higher_kinded_constructor_payload_as_a_value_type() {
     let registry = Arc::new(
         ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
                 id: nominal,
+                declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 spelling: "Holder".into(),
                 constructors: Box::new([constructor]),
                 origin: origin.clone(),
@@ -2235,7 +2256,10 @@ fn rejects_polymorphic_constructor_payloads_in_the_registry() {
     let parameter = TypeVariableId::new(0);
     let registry = Arc::new(ResolvedRegistry::new(
         vec![ResolvedNominalType {
+            representation_provenance: None,
             id: nominal,
+            declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             spelling: "Wrap".into(),
             constructors: vec![constructor].into_boxed_slice(),
             origin: origin.clone(),
@@ -2269,7 +2293,10 @@ fn rejects_registry_type_parameter_identities_out_of_source_order() {
     let registry = Arc::new(
         ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
                 id: nominal,
+                declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 spelling: "Pair".into(),
                 constructors: vec![constructor].into_boxed_slice(),
                 origin: origin.clone(),
@@ -2319,7 +2346,10 @@ fn rejects_nominal_parameters_reused_as_type_abstraction_binders() {
     let registry = Arc::new(
         ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
                 id: nominal,
+                declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 spelling: "Box".into(),
                 constructors: vec![constructor].into_boxed_slice(),
                 origin: origin.clone(),
@@ -2390,7 +2420,10 @@ fn validates_ten_thousand_constructor_owner_links_without_pairwise_scanning() {
         .collect();
     let registry = Arc::new(ResolvedRegistry::new(
         vec![ResolvedNominalType {
+            representation_provenance: None,
             id: nominal,
+            declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             spelling: "Wide".into(),
             constructors: ids.into_boxed_slice(),
             origin: whole_origin(&file),
@@ -2424,7 +2457,10 @@ fn rejects_registry_identity_order_spelling_and_source_forgery() {
     let skipped_constructor = ConstructorId::new(skipped, 0);
     reject(ResolvedRegistry::new(
         vec![ResolvedNominalType {
+            representation_provenance: None,
             id: skipped,
+            declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             spelling: "Skipped".into(),
             constructors: vec![skipped_constructor].into_boxed_slice(),
             origin: origin.clone(),
@@ -2442,7 +2478,10 @@ fn rejects_registry_identity_order_spelling_and_source_forgery() {
     let first = ConstructorId::new(nominal, 0);
     let second = ConstructorId::new(nominal, 1);
     let nominal_entry = ResolvedNominalType {
+        representation_provenance: None,
         id: nominal,
+        declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+        representation: None,
         spelling: "Choice".into(),
         constructors: vec![first, second].into_boxed_slice(),
         origin: origin.clone(),
@@ -2463,6 +2502,9 @@ fn rejects_registry_identity_order_spelling_and_source_forgery() {
     ));
     reject(ResolvedRegistry::new(
         vec![ResolvedNominalType {
+            representation_provenance: None,
+            declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             spelling: "lowercase".into(),
             ..nominal_entry.clone()
         }],
@@ -2486,13 +2528,19 @@ fn rejects_registry_identity_order_spelling_and_source_forgery() {
     reject(ResolvedRegistry::new(
         vec![
             ResolvedNominalType {
+                representation_provenance: None,
                 id: first_nominal,
+                declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 spelling: "FirstType".into(),
                 constructors: vec![first_constructor].into_boxed_slice(),
                 origin: range_origin(&file, 6, 7),
             },
             ResolvedNominalType {
+                representation_provenance: None,
                 id: second_nominal,
+                declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 spelling: "SecondType".into(),
                 constructors: vec![second_constructor].into_boxed_slice(),
                 origin: range_origin(&file, 0, 1),
@@ -2535,7 +2583,10 @@ fn rejects_and_destroys_overdeep_registry_payloads_on_a_small_stack() {
                 }
                 let registry = Arc::new(ResolvedRegistry::new(
                     vec![ResolvedNominalType {
+                        representation_provenance: None,
                         id: nominal,
+                        declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+                        representation: None,
                         spelling: "Bounded".into(),
                         constructors: vec![constructor].into_boxed_slice(),
                         origin: nominal_origin.clone(),
@@ -2565,7 +2616,10 @@ fn rejects_and_destroys_overdeep_registry_payloads_on_a_small_stack() {
                 }
                 let registry = Arc::new(ResolvedRegistry::new(
                     vec![ResolvedNominalType {
+                        representation_provenance: None,
                         id: nominal,
+                        declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+                        representation: None,
                         spelling: "Bounded".into(),
                         constructors: vec![constructor].into_boxed_slice(),
                         origin: deep_origin,
@@ -2613,7 +2667,10 @@ fn rejects_and_destroys_overdeep_registry_parameter_origins_on_a_small_stack() {
                 let registry = Arc::new(
                     ResolvedRegistry::new(
                         vec![ResolvedNominalType {
+                            representation_provenance: None,
                             id: nominal,
+                            declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+                            representation: None,
                             spelling: "Bounded".into(),
                             constructors: vec![constructor].into_boxed_slice(),
                             origin: origin.clone(),
@@ -2663,7 +2720,10 @@ fn rejects_and_destroys_replaced_registry_parameter_ids_on_a_small_stack() {
                 let registry = Arc::new(
                     ResolvedRegistry::new(
                         vec![ResolvedNominalType {
+                            representation_provenance: None,
                             id: nominal,
+                            declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+                            representation: None,
                             spelling: "Bounded".into(),
                             constructors: vec![constructor].into_boxed_slice(),
                             origin: origin.clone(),
@@ -2728,7 +2788,10 @@ fn rejects_and_destroys_replaced_registry_parameter_owners_on_a_small_stack() {
                 let registry = Arc::new(
                     ResolvedRegistry::new(
                         vec![ResolvedNominalType {
+                            representation_provenance: None,
                             id: nominal,
+                            declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+                            representation: None,
                             spelling: "Bounded".into(),
                             constructors: vec![constructor].into_boxed_slice(),
                             origin: origin.clone(),
@@ -2856,7 +2919,10 @@ fn oversized_unchecked_match_maps_coverage_exhaustion_to_resource() {
         .collect();
     let registry = Arc::new(ResolvedRegistry::new(
         vec![ResolvedNominalType {
+            representation_provenance: None,
             id: nominal,
+            declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             spelling: "TooWide".into(),
             constructors: constructors.clone().into_boxed_slice(),
             origin: origin.clone(),
@@ -3059,7 +3125,10 @@ fn validates_a_deep_guarded_initializer_on_a_small_stack() {
                 let step = ConstructorId::new(nominal, 0);
                 let registry = Arc::new(ResolvedRegistry::new(
                     vec![ResolvedNominalType {
+                        representation_provenance: None,
                         id: nominal,
+                        declaration_kind: ash::resolved::ResolvedNominalDeclarationKind::Data,
+                        representation: None,
                         spelling: "Chain".into(),
                         constructors: vec![step].into_boxed_slice(),
                         origin: nominal_origin,

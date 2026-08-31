@@ -32,10 +32,10 @@ use crate::{
         ResolvedInlineOperationalHeader, ResolvedInterfaceApplication,
         ResolvedInterfaceDeclaration, ResolvedInterfaceDetermination, ResolvedInterfaceMethod,
         ResolvedInterfaceOccurrence, ResolvedLocalDeclaration, ResolvedMatchArm, ResolvedMatchExpr,
-        ResolvedModule, ResolvedModuleParts, ResolvedNominalType, ResolvedOccurrence,
-        ResolvedPattern, ResolvedPatternKind, ResolvedRecursiveGroup, ResolvedRecursiveMember,
-        ResolvedRegistry, ResolvedRequirement, ResolvedTermName, ResolvedType,
-        ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResolvedTypeVariable,
+        ResolvedModule, ResolvedModuleParts, ResolvedNominalDeclarationKind, ResolvedNominalType,
+        ResolvedOccurrence, ResolvedPattern, ResolvedPatternKind, ResolvedRecursiveGroup,
+        ResolvedRecursiveMember, ResolvedRegistry, ResolvedRequirement, ResolvedTermName,
+        ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResolvedTypeVariable,
         ResolvedTypedPattern, ValidatedImportedNominalMerge, WithheldExport, WithheldExportKind,
         WithheldNamespace, clone_resolved_type_variable_with_budget,
         clone_resolved_type_variables_with_budget, discard_resolved_definition_iteratively,
@@ -55,9 +55,10 @@ use crate::{
         SurfaceDefinitionKind, SurfaceExpr, SurfaceExprKind, SurfaceImplementation,
         SurfaceImportItem, SurfaceImportSelection, SurfaceInterfaceApplication,
         SurfaceInterfaceDeclaration, SurfaceInterfaceDetermination, SurfaceKind, SurfaceKindKind,
-        SurfaceLocalDeclaration, SurfaceModule, SurfaceName, SurfacePattern, SurfacePatternKind,
-        SurfaceRecursiveGroup, SurfaceReference, SurfaceRequirement, SurfaceType,
-        SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypeParameter, SurfaceTypeVisibility,
+        SurfaceLocalDeclaration, SurfaceModule, SurfaceName, SurfaceNominalDeclarationKind,
+        SurfacePattern, SurfacePatternKind, SurfaceRecursiveGroup, SurfaceReference,
+        SurfaceRequirement, SurfaceType, SurfaceTypeDeclaration, SurfaceTypeKind,
+        SurfaceTypeParameter, SurfaceTypeVisibility,
     },
     types::{
         ConstructorId, IterativeTypeOwner, Kind, NominalTypeId, Type, TypeVariableId,
@@ -572,6 +573,8 @@ pub enum ResolveReason {
     DuplicateType,
     /// A file contains a second constructor spelling.
     DuplicateConstructor,
+    /// A newtype constructor does not repeat its nominal spelling.
+    NewtypeConstructorName,
     /// Two complete imports bind the same module alias.
     DuplicateModuleAlias,
     /// An imported spelling is private or otherwise unavailable.
@@ -616,6 +619,7 @@ impl fmt::Display for ResolveReason {
             Self::DuplicateGlobal => "resolve.duplicate-global",
             Self::DuplicateType => "resolve.duplicate-type",
             Self::DuplicateConstructor => "resolve.duplicate-constructor",
+            Self::NewtypeConstructorName => "resolve.newtype-constructor-name",
             Self::DuplicateModuleAlias => "resolve.duplicate-module-alias",
             Self::UnavailableExport => "resolve.unavailable-export",
             Self::ImportConflict => "resolve.import-conflict",
@@ -3743,16 +3747,36 @@ impl Resolver {
             }
         }
         for id in seen {
-            let Some(exported) = summary.nominal_fact(id) else {
-                return Err(error(
-                    ResolveReason::InternalState,
-                    span,
-                    "an exported scheme references missing nominal metadata",
-                ));
-            };
+            let exported = Self::scheme_nominal_fact(summary, id, span)?;
             self.retain_scheme_nominal_fact(exported, span)?;
         }
         Ok(())
+    }
+
+    fn scheme_nominal_fact<'a>(
+        summary: &'a ExportSummary,
+        id: NominalTypeId,
+        span: crate::source::Span,
+    ) -> Result<crate::resolved::ImportedNominalFactRef<'a>, ResolveError> {
+        let exported = summary.nominal_fact(id).ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                span,
+                "an exported scheme references missing nominal metadata",
+            )
+        })?;
+        if exported.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+            && exported.access == ImportedTypeAccess::Opaque
+        {
+            return summary.canonical_nominal_fact(id).ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "an opaque newtype scheme is missing its canonical representation",
+                )
+            });
+        }
+        Ok(exported)
     }
 
     fn compare_retained_nominal_closure(
@@ -3769,13 +3793,7 @@ impl Resolver {
                     "an alternate route lost its retained nominal closure",
                 )
             })?;
-            let candidate = summary.nominal_fact(*id).ok_or_else(|| {
-                error(
-                    ResolveReason::InternalState,
-                    span,
-                    "an alternate route references missing nominal metadata",
-                )
-            })?;
+            let candidate = Self::scheme_nominal_fact(summary, *id, span)?;
             let matches = same_imported_nominal_closure_with_constraint_budget(
                 existing,
                 candidate,
@@ -3825,9 +3843,16 @@ impl Resolver {
     ) -> Result<(), ResolveError> {
         let candidate = crate::resolved::ImportedNominalFactRef {
             id: exported.id,
+            declaration_kind: exported.declaration_kind,
             parameter_count: exported.parameter_count,
             constructor_count: exported.constructor_count,
             parameters: &exported.parameters,
+            representation: (exported.access == ExportedTypeAccess::Transparent)
+                .then_some(exported.representation.as_ref())
+                .flatten(),
+            representation_provenance: (exported.access == ExportedTypeAccess::Transparent)
+                .then_some(exported.representation_provenance.as_ref())
+                .flatten(),
             constructors: &exported.constructors,
             access: exported.access.into(),
             display_spelling,
@@ -3842,10 +3867,42 @@ impl Resolver {
                 retained_constructor_owners,
             )
         } else {
+            let canonical_representation = summary
+                .canonical_nominal_fact(exported.id)
+                .and_then(|fact| Some((fact.representation?, fact.representation_provenance?)));
+            if exported.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+                && canonical_representation.is_none()
+            {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "an opaque newtype export is missing its canonical representation",
+                ));
+            }
+            if exported.declaration_kind == ResolvedNominalDeclarationKind::Data
+                && canonical_representation.is_some()
+            {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "an ordinary opaque type cannot retain a canonical representation",
+                ));
+            }
             let prepared = self
                 .imported
                 .prepare_nominal_merge(candidate, &mut self.type_work, &mut self.constraint_work)
                 .map_err(|failure| imported_nominal_merge_error(failure, span))?;
+            if let Some((representation, provenance)) = canonical_representation {
+                self.imported
+                    .retain_canonical_representation(
+                        exported.id,
+                        representation,
+                        provenance,
+                        &mut self.type_work,
+                        &mut self.constraint_work,
+                    )
+                    .map_err(|failure| imported_nominal_merge_error(failure, span))?;
+            }
             self.imported
                 .commit_nominal_merge(prepared)
                 .map_err(|failure| imported_nominal_merge_error(failure, span))
@@ -5391,6 +5448,29 @@ impl Resolver {
         let mut first_constructors = HashMap::new();
         let mut identities = Vec::with_capacity(type_declarations.len());
         for (declaration, owner) in type_declarations.iter().zip(&nominal_ids) {
+            if declaration.declaration_kind == SurfaceNominalDeclarationKind::Newtype {
+                let [constructor] = declaration.constructors.as_slice() else {
+                    return Err(error(
+                        ResolveReason::InternalState,
+                        declaration.span,
+                        "a projected newtype does not retain exactly one constructor",
+                    ));
+                };
+                if constructor.name.text != declaration.name.text {
+                    let mut diagnostic = Diagnostic::new(
+                        ResolveReason::NewtypeConstructorName,
+                        SourceLabel::new(
+                            constructor.name.span,
+                            "this newtype constructor must use the nominal type's spelling",
+                        ),
+                    );
+                    diagnostic.related.push(SourceLabel::new(
+                        declaration.name.span,
+                        "this nominal declaration defines the required spelling",
+                    ));
+                    return Err(diagnostic.into());
+                }
+            }
             let mut owned = Vec::with_capacity(declaration.constructors.len());
             for (index, constructor) in declaration.constructors.iter().enumerate() {
                 if let Some(first) =
@@ -5494,16 +5574,32 @@ impl Resolver {
                 .map(|(owner, parameters)| (*owner, parameters.len())),
         );
 
-        let nominals = type_declarations
+        let mut nominals = type_declarations
             .iter()
             .zip(&identities)
             .map(|(declaration, identity)| ResolvedNominalType {
                 id: identity.id,
+                declaration_kind: match declaration.declaration_kind {
+                    SurfaceNominalDeclarationKind::Data => ResolvedNominalDeclarationKind::Data,
+                    SurfaceNominalDeclarationKind::Newtype => {
+                        ResolvedNominalDeclarationKind::Newtype
+                    }
+                },
                 spelling: declaration.name.text.clone(),
                 constructors: identity.constructors.clone().into_boxed_slice(),
+                representation: None,
+                representation_provenance: None,
                 origin: Origin::Source(declaration.span),
             })
             .collect::<Vec<_>>();
+        let discard_nominals = |nominals: &mut Vec<ResolvedNominalType>| {
+            for nominal in nominals.drain(..) {
+                if let Some(representation) = nominal.representation {
+                    discard_type_iteratively(representation);
+                }
+                discard_origin_iteratively(nominal.origin);
+            }
+        };
         let mut constructors = ResolvedConstructorOwnerBuffer(Vec::new());
         let mut constructor_payload_provenance = Vec::new();
         if let Some(last) = type_declarations.last() {
@@ -5526,10 +5622,11 @@ impl Resolver {
                     )
                 })?;
         }
-        for ((declaration, identity), (_, parameters)) in type_declarations
+        for (nominal_index, ((declaration, identity), (_, parameters))) in type_declarations
             .iter()
             .zip(&identities)
             .zip(&nominal_parameters)
+            .enumerate()
         {
             let mut nominal_payload_provenance = Vec::new();
             self.type_work
@@ -5627,11 +5724,36 @@ impl Resolver {
                             )))
                         }
                     };
+                    let payload = payload.map(IterativeTypeOwner::into_inner);
+                    let constructor_payload =
+                        if declaration.declaration_kind == SurfaceNominalDeclarationKind::Newtype {
+                            let representation = payload.ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    constructor.span,
+                                    "a resolved newtype has no representation",
+                                )
+                            })?;
+                            let representation_provenance =
+                                field_provenance.first().cloned().ok_or_else(|| {
+                                    error(
+                                        ResolveReason::InternalState,
+                                        constructor.span,
+                                        "a resolved newtype has no representation provenance",
+                                    )
+                                })?;
+                            nominals[nominal_index].representation = Some(representation);
+                            nominals[nominal_index].representation_provenance =
+                                Some(representation_provenance);
+                            None
+                        } else {
+                            payload
+                        };
                     constructors.0.push(ResolvedConstructor {
                         id: *id,
                         owner: identity.id,
                         spelling: constructor.name.text.clone(),
-                        payload: payload.map(IterativeTypeOwner::into_inner),
+                        payload: constructor_payload,
                         origin: Origin::Source(constructor.span),
                     });
                     nominal_payload_provenance.push(ConstructorPayloadProvenance {
@@ -5642,7 +5764,10 @@ impl Resolver {
                 Ok(())
             })();
             let _ = self.type_scopes.pop();
-            result?;
+            if let Err(error) = result {
+                discard_nominals(&mut nominals);
+                return Err(error);
+            }
             constructor_payload_provenance.push(nominal_payload_provenance);
         }
         let registry = ResolvedRegistry::new(nominals, constructors.into_vec())
@@ -7361,6 +7486,93 @@ mod tests {
     };
 
     static IMPORT_BUDGET_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn opaque_newtype_value_scheme_retains_canonical_closure_without_constructor_access() {
+        let source = SourceFile::new("opaque-newtype-scheme.ash", "Token")
+            .expect("the source fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 5).expect("the Token span should be ordered"))
+            .expect("the Token span should fit");
+        let module = ModuleId::new(9_089);
+        let owner = NominalTypeId::new(module, 0);
+        let summary = || {
+            let mut summary = ExportSummary::test_fixture_with_access(
+                module,
+                Vec::new(),
+                vec![(
+                    "Token",
+                    owner,
+                    ExportedTypeAccess::Opaque,
+                    Origin::Source(span),
+                )],
+                Vec::new(),
+                Vec::new(),
+                vec![("Token", Origin::Source(span))],
+                Vec::new(),
+            );
+            assert!(
+                summary.configure_first_public_nominal_as_opaque_newtype_for_test(
+                    Type::Int,
+                    ResolvedTypeProvenance::new(vec![ResolvedTypeProvenanceNode::Fact(span)], 0),
+                )
+            );
+            summary
+                .authenticate(
+                    &mut TypeWorkBudget::default(),
+                    &mut InterfaceConstraintBudget::default(),
+                )
+                .expect("the opaque source summary should authenticate");
+            summary
+        };
+        let scheme = Type::Function(Box::new(Type::Unit), Box::new(Type::Nominal(owner)));
+
+        let mut measured = Resolver::new(ModuleId::new(9_090));
+        measured
+            .retain_type_nominals(&scheme, &summary(), span)
+            .expect("a selected value scheme should retain the opaque newtype closure");
+        let exact_work = measured.type_work.used();
+        let retained = measured
+            .imported
+            .nominal(owner)
+            .expect("the hidden closure should retain Token");
+        assert_eq!(retained.access, ImportedTypeAccess::Hidden);
+        assert!(retained.constructors.is_empty());
+        assert_eq!(retained.representation, Some(Type::Int));
+        assert!(
+            measured
+                .imported
+                .constructor(ConstructorId::new(owner, 0))
+                .is_none()
+        );
+
+        let mut short = Resolver::with_type_work(
+            ModuleId::new(9_091),
+            TypeWorkBudget::with_limit(exact_work - 1),
+        );
+        let error = short
+            .retain_type_nominals(&scheme, &summary(), span)
+            .expect_err("one missing closure-retention cell should fail atomically");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert!(short.imported.nominal(owner).is_none());
+
+        for _ in 0..2 {
+            let mut exact = Resolver::with_type_work(
+                ModuleId::new(9_092),
+                TypeWorkBudget::with_limit(exact_work),
+            );
+            exact
+                .retain_type_nominals(&scheme, &summary(), span)
+                .expect("a fresh exact retry should retain the same hidden canonical closure");
+            assert_eq!(exact.type_work.used(), exact_work);
+            assert!(exact.imported.nominal(owner).is_some_and(|fact| {
+                fact.access == ImportedTypeAccess::Hidden
+                    && fact.representation == Some(Type::Int)
+                    && fact.representation_provenance.is_some()
+                    && fact.constructors.is_empty()
+            }));
+        }
+    }
 
     #[test]
     fn nullary_constructor_family_transaction_and_route_cache_are_exact_atomic_and_reusable() {
@@ -11065,6 +11277,36 @@ mod tests {
             .expect("the registry-disposal thread should start")
             .join()
             .expect("late registry and export errors must dispose deep declarations iteratively");
+    }
+
+    #[test]
+    fn late_registry_error_discards_an_installed_deep_newtype_representation_on_a_small_stack() {
+        std::thread::Builder::new()
+            .name("deep-newtype-representation-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut fixture = declaration_fixture(
+                    "late-newtype.ash",
+                    concat!(
+                        "newtype First = First(Int)\n\n",
+                        "type Later = Later(Int, Int)\n",
+                    ),
+                );
+                let span = fixture.span;
+                fixture.type_declarations[0].constructors[0].fields[0] =
+                    deep_declaration_type(span);
+                fixture.type_declarations[1].constructors[0].fields[1] =
+                    declaration_named_type("Missing", span);
+                let error = declaration_resolver(&fixture)
+                    .resolve_registry(&fixture.type_declarations)
+                    .expect_err(
+                        "the later declaration should fail after retaining First's representation",
+                    );
+                assert_eq!(error.reason, ResolveReason::UnknownType);
+            })
+            .expect("deep newtype disposal thread should start")
+            .join()
+            .expect("installed deep newtype representations must drop iteratively");
     }
 
     #[test]

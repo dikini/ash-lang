@@ -1443,6 +1443,9 @@ mod tests {
         let second_constructor = ConstructorId::new(nominal, 1);
         let registry = Arc::new(ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: nominal,
                 spelling: "Flag".into(),
                 constructors: vec![first_constructor, second_constructor].into_boxed_slice(),

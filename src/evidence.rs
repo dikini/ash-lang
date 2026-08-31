@@ -3426,6 +3426,9 @@ impl EvidenceSelector {
                 });
             }
             nominals.push(crate::resolved::ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id,
                 spelling: "Nominal".to_owned(),
                 constructors: Box::new([]),
@@ -7336,6 +7339,9 @@ mod tests {
         let setup = || {
             let registry = ResolvedRegistry::new(
                 vec![ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: option,
                     spelling: "Option".into(),
                     constructors: Box::new([]),
@@ -9413,6 +9419,9 @@ mod tests {
         let dependent_parameter = TypeVariableId::resolved(module, 1);
         let nominals = (0..WIDTH - 1)
             .map(|index| ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: NominalTypeId::new(
                     module,
                     u32::try_from(index).expect("the nominal index should fit"),
