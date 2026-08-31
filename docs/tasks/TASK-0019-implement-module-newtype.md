@@ -82,6 +82,17 @@ Execute the linked plan to:
   Focused lexer, parser, projection, formatting, all-target check, and diff
   hygiene pass. Independent semantic/Core and Rust/resource reviews approve
   the checkpoint with no remaining finding.
+- Checkpoint 3 is complete at unsigned commit `c7c2fa1`. The retained RED showed
+  that resolved declarations and summaries had no `newtype` identity or
+  representation carrier. The GREEN boundary preserves one authenticated
+  canonical representation and its provenance through transparent, opaque,
+  hidden, imported, and re-exported routes; validates owner-scoped parameters
+  and declaration origins; kind-checks representations before an iterative,
+  newtype-only cycle pass; and refuses constructor expressions and patterns
+  until Checkpoint 4 can lower explicit conversions. Exact, one-short, retry,
+  facade-diamond, malformed-summary, cycle, and stack-safe teardown evidence
+  passes. Independent semantic/Core and Rust/resource reviews approve the
+  corrected checkpoint with no remaining finding.
 - No normative specification file has changed.
 
 ## Verification
