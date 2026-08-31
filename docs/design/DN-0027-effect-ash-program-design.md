@@ -280,16 +280,19 @@ without weakening authority separation or downstream extension seams.
 
 ## Open questions
 
-The current direction leaves each checkpoint's detailed semantics to its
-proposal. In particular, it does not yet choose `newtype` grammar or escape,
-row algebra or inference, handler syntax or forwarding rules, capture
-classification, resource acquisition syntax, hook-chain mutation observation,
-cleanup order or failure combination, or the foreign representation.
+At this design note's original planning boundary, the programme had not chosen
+`newtype` grammar or escape, row algebra or inference, handler syntax or
+forwarding rules, capture classification, resource acquisition syntax,
+hook-chain mutation observation, cleanup order or failure combination, or the
+foreign representation. Accepted CP-0012 and the product-branch specification
+now choose module-`newtype` grammar and semantics without choosing local or
+runtime-fresh identity.
 
-The first planning question is therefore narrower: which exact module
-`newtype` semantics and evidence are sufficient to authorize the first product
-increment without importing local identity, resources, effects, or
-existentials?
+After separately authorized integration, the next planning question is which
+exact local-`newtype` identity, scope, and escape semantics provide useful
+evidence for resource scope without importing runtime identity, resources,
+effects, or existentials. The later questions remain owned by their proposal
+capsules.
 
 ## Supporting evidence
 

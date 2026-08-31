@@ -93,6 +93,8 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 - [DN-0028: Effect Ash Milestone Plan](DN-0028-effect-ash-milestone-plan.md) —
   proposal-gated execution protocol, relative budget forecast, exact first
   proposal work, post-acceptance TDD skeleton, and later checkpoint gates.
+- [Module `newtype` evidence](effect-ash/module-newtype-evidence.md) — retained
+  cross-stage product evidence for the first bounded `effect-ash` input.
 - [DN-0009: Effects, Handlers, and Continuations](DN-0009-effects-handlers-and-continuations.md) — effect APIs and rows, handler composition, and continuation contracts.
 - [DN-0010: Identities and Resource Lifetimes](DN-0010-identities-and-resource-lifetimes.md) — static/runtime identity, ownership, withdrawal, and captured resources.
 - [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md) — passive modules and typed composition at static-link and runtime-load stages.

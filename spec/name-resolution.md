@@ -154,6 +154,17 @@ through the summary, and does not export a hidden spelling or constructor.
 Privacy and opacity therefore remain properties of source access even when a
 public scheme or implementation route carries the hidden identity.
 
+For a `newtype`, that authenticated closure also retains the declaration kind,
+owner, ordered parameter identities and kinds, sole same-spelled constructor,
+canonical representation and provenance, and constructor access. A transparent
+projection exposes the constructor and representation facts needed for source
+wrapping and matching. An opaque projection exposes the nominal identity and
+parameters but withholds the constructor and representation. A private
+declaration exposes no name. The hidden canonical fact remains available to
+linking for all three modes, but it creates no source name, constructor access,
+coercion, or interface evidence. Alias and diamond routes must agree on the
+same defining fact.
+
 The following three sibling modules demonstrate a targeted public name
 re-export. `arithmetic.ash` defines the original binder:
 
@@ -350,10 +361,19 @@ main () = 42
 
 ## Type and constructor scope
 
-All nominal type declarations in one module are mutually visible, including in
-their own and earlier constructor payloads. Resolution allocates each nominal
-identity in source order before resolving any payload type. Two local type
+All nominal data and `newtype` declarations in one module are mutually visible,
+including in their own and earlier constructor payloads or representations.
+Resolution allocates each nominal identity in cross-declaration source order
+before resolving any payload or representation type. Two local nominal
 declarations cannot share a spelling.
+
+A `newtype` receives the same module-owned nominal and constructor identity forms
+as ordinary data. It has exactly one constructor under its owner. Resolution
+requires that constructor's spelling to equal the nominal spelling; a mismatch
+is `resolve.newtype-constructor-name` at the constructor spelling. Imports,
+renames, re-exports, and facade diamonds preserve both defining identities.
+Equal spellings or equal representations from separate declarations do not
+make their identities equal.
 
 Every constructor receives a stable identity under its owning nominal type.
 Local constructors form one module-wide term namespace and must have distinct
@@ -364,9 +384,10 @@ in-scope type parameter, or one of `Int`, `Bool`, and `Unit`. An uppercase term
 or pattern occurrence must name an accessible local or imported constructor.
 
 A parameterized nominal declaration makes its distinct kinded parameters
-visible throughout that declaration's constructor payloads and nowhere else.
-A declaration cannot repeat a parameter spelling. A parameter shadows a
-same-spelled unqualified nominal type inside its declaration.
+visible throughout that declaration's constructor payloads or representation
+and nowhere else. A declaration cannot repeat a parameter spelling. A
+parameter shadows a same-spelled unqualified nominal type inside its
+declaration.
 
 The source tree retains a named type application with its argument vector and
 spans. Resolution admits a nominal constructor or in-scope type parameter as
@@ -382,7 +403,7 @@ saturated result and owns any application-kind failure.
 ## Public, private, and opaque declarations
 
 Declaration visibility affects access from other modules, not scope inside the
-defining module. The three nominal visibility modes are:
+defining module. The three ordinary-data visibility modes are:
 
 - `type` exports neither the nominal name nor any constructor;
 - `pub opaque type` exports the nominal name, identity, arity, and parameters,
@@ -391,6 +412,16 @@ defining module. The three nominal visibility modes are:
 
 All three modes leave the type name and constructors available inside the
 defining module. Individual constructors cannot have separate visibility.
+
+The corresponding `newtype` modes are:
+
+- `newtype` exports neither the nominal name nor its constructor;
+- `pub opaque newtype` exports the nominal name, identity, arity, and
+  parameters but withholds the constructor; and
+- `pub newtype` exports the nominal name and its sole constructor.
+
+All three leave the constructor available in the defining module. Its
+visibility is not independent of the declaration.
 
 An `interface` declaration without `pub` is private. Its interface spelling and
 method spellings remain local to the defining module. `pub interface` exports
@@ -404,17 +435,19 @@ dependent obtains that fact only through an explicit implementation item. A
 targeted public implementation item may authorize later dependents to select
 the same fact transitively.
 
-A public opaque type can appear by name in an importing module's annotations
+A public opaque nominal can appear by name in an importing module's annotations
 and global signatures. Its constructors cannot occur there as values or
 patterns, whether targeted or qualified. Importers may define new functions
-over the named type and obtain values from exported smart constructors without
-inspecting its representation.
+over the named type and obtain values from exported operations without
+inspecting its data or newtype representation.
 
-A public transparent type makes its constructors available as values and
-patterns. Constructor identities and payload types remain those of the defining
-module. Renaming or reaching the same declaration through another route
-preserves those identities. Equal spellings or representations from different
-declarations do not make their nominal or constructor identities equal.
+A public transparent data type makes its constructors available as values and
+patterns. A public transparent `newtype` likewise makes its sole constructor
+available for explicit wrapping and matching. Constructor identities and
+payload or representation types remain those of the defining module. Renaming
+or reaching the same declaration through another route preserves those
+identities. Equal spellings or representations from different declarations do
+not make their nominal or constructor identities equal.
 
 A public global scheme may contain a private nominal identity from its defining
 module. The identity remains the same wherever it occurs in that module's

@@ -73,6 +73,22 @@ are authoritative; any retained nominal-kind cache must equal this derivation.
 Imported nominal and interface kinds come from authenticated body-free summary
 facts and retain their defining identities.
 
+A `newtype` representation is one monotype template under its declaration's
+ordered parameter environment. The fully applied template must synthesize
+`Type`; this check adds no kind inference or higher-rank representation. A
+representation may contain primitives, parameters, ordinary nominals, and
+other `newtype` nominals under the ordinary scope and kind rules.
+
+After every ordinary constructor payload and every `newtype` representation in
+one module is kind-correct, static nominal admission constructs the directed
+graph whose vertices are the module's `newtype` declarations and whose edges
+are `newtype` identities occurring anywhere in another representation. The directed graph containing only `newtype` representation edges must be acyclic.
+Traversal follows declaration and structural type order; the first closing edge
+owns `newtype.recursive-representation`. Its primary label identifies the
+rejected representation occurrence, and its related labels identify the
+declarations that complete the cycle. An ordinary data declaration ends this
+graph traversal even if its payload refers back to the originating `newtype`.
+
 The total synthesis judgment
 `DELTA; OMEGA; XI |- monotype => kind` assigns a kind to every well-formed
 monotype. `all_type` means that each listed monotype synthesizes `Type` under
@@ -307,11 +323,19 @@ family data-typing:
     instantiate(parameters, Function(payload, owner<parameters>)) = constructor_type
     ===>
     GAMMA |- constructor ⇒ constructor_type
+
+  T-Newtype-Constructor :=
+    constructor : forall parameters. Newtype(owner<parameters>, representation)
+    instantiate(parameters, Function(representation, owner<parameters>))
+      = constructor_type
+    ===>
+    GAMMA |- constructor ⇒ constructor_type
 ```
 
 The constructor premises consult the immutable registry produced by name
-resolution. Constructor application then follows `T-Apply`; it does not have a
-special call rule.
+resolution. `T-Newtype-Constructor` defines explicit wrapping and does not make
+the representation and nominal types equal. Every constructor application then
+follows `T-Apply`; it does not have a special call rule.
 
 ## Functions and application
 
@@ -358,6 +382,12 @@ require equal tuple arity. A constructor pattern must belong to the expected
 nominal type and must agree with the constructor's payload shape. Pattern
 binders are pairwise distinct.
 
+An accessible `newtype` constructor pattern has exactly one subpattern, checks
+that subpattern against the substituted representation, and explicitly unwraps
+the nominal value. It is irrefutable for its owner. The constructor remains
+unavailable through an opaque or hidden source route, and no pattern matches a
+representation value as though it had the nominal type.
+
 A match synthesizes its scrutinee once, checks every arm pattern against that
 type, and gives the resulting bindings only to that arm body. All arm bodies
 have one type. The typed usefulness relation over closed nominal sums, tuples,
@@ -366,10 +396,12 @@ no witness outside all arms. A useless arm is rejected with
 `coverage.redundant-case`; a remaining witness is reported with
 `coverage.non-exhaustive`.
 
-For a local or imported transparent nominal, coverage uses its complete
-constructor family. An imported opaque or hidden nominal has no accessible
-constructor pattern and is not treated as an empty sum. A binder or wildcard
-can cover such a value without inspecting its representation.
+For a local or imported transparent ordinary nominal, coverage uses its
+complete constructor family. For a transparent `newtype`, coverage treats its
+sole constructor as complete without requiring a runtime tag test. An imported
+opaque or hidden nominal has no accessible constructor pattern and is not
+treated as an empty sum. A binder or wildcard can cover such a value without
+inspecting its representation.
 
 ```sequent
 family match-typing:
@@ -882,6 +914,7 @@ or an outer nominal constructor of one selection-key argument. A nominal nested
 below a foreign outer constructor does not establish ownership. Primitive and
 structural key arguments have no nominal owner, so only the interface owner can
 implement such a key. Dependent arguments do not contribute orphan ownership.
+An outer `newtype` is nominal for this rule exactly like ordinary data.
 
 After freshening and alpha-normalizing a generic implementation, compare the
 current selection-key tuple with each non-ground prerequisite selection-key
@@ -1050,6 +1083,11 @@ WF-Effective-Implementations :=
 ```
 
 ## Constraint satisfaction and checked evidence
+
+Evidence selection uses exact nominal identities. A `newtype` representation
+supplies no interface evidence for its owner: an implementation for the
+representation does not satisfy a goal for the `newtype`, and wrapping or
+unwrapping does not copy, lift, or select evidence.
 
 Instantiating a constrained term creates one evidence obligation for each
 requirement in source order. A method occurrence creates one obligation with a
@@ -1371,11 +1409,14 @@ defining kind.
 
 After resolution allocates all local nominal and parameter identities, kind
 checking derives and freezes every local nominal constructor kind and every
-canonical local interface parameter vector and determinant record before
-entering declaration-order checking. It then checks constructor payloads, global signatures, interface
-methods, implementation heads, and prerequisites in deterministic dependency,
+canonical local interface parameter vector and determinant record. It then
+checks every ordinary constructor payload and every `newtype` representation
+in combined cross-declaration source and structural type order. Only after all
+those types are kind-correct does it construct and traverse the newtype-only
+representation graph. It then checks global signatures, interfaces,
+implementation heads, and prerequisites in deterministic dependency,
 declaration, binder, and type traversal order. No body or public summary can
-observe a partially admitted kind registry.
+observe a partially admitted kind registry or representation graph.
 
 The remaining static stages check interface declarations and admit
 implementation headers, build and check the effective implementation
@@ -1393,7 +1434,9 @@ family module-and-program-typing:
     XI = imported nominal kinds plus derived local nominal kinds
     IOTA = imported interface parameter vectors and determinant positions
       plus pre-frozen local interface parameter vectors and determinant positions
-    for each local constructor payload, DELTA; empty_OMEGA; XI |- value payload ok
+    for each ordinary constructor payload and newtype representation in combined order,
+      DELTA; empty_OMEGA; XI |- value type ok
+    the newtype-only representation graph is acyclic
     GAMMA_D = checked kinded schemes imported from direct dependency summaries
     for each local interface, |-interface interface ok
     admitted_impls = admitted local implementation headers
@@ -1457,6 +1500,12 @@ positional kinds before classifying detached prerequisite pairs. It then uses
 the same current-then-earlier source order and complete-before-key identity
 precedence as source header admission.
 
+For every retained `newtype` identity, the canonical hidden closure includes
+its declaration kind, ordered parameters, sole constructor identity and owner,
+representation template, access, origin, and representation provenance. A
+transparent projection exposes the source facts authorized by visibility;
+opaque and private projections do not expose the representation or constructor.
+
 The filled occurrence fields and checked modules become inputs to
 [module linking and linked interface-evidence validation](elaboration.md#module-linking-and-entry-generation).
 That specification owns their retention through linking and the validator's
@@ -1491,8 +1540,12 @@ main () = add(20, 22)
 ## Failure ownership and constraint resources
 
 The first judgment that can establish a failure owns it. Parsing owns malformed
-parameter lists and determination syntax. Resolution owns duplicate interface
-binders and unknown names in a determination side. Interface-application
+`newtype` shape, parameter lists, and determination syntax. Resolution owns
+duplicate names, `resolve.newtype-constructor-name`, inaccessible constructors,
+duplicate interface binders, and unknown names in a determination side. Kind
+checking owns invalid ordinary payload and newtype representation kinds.
+Static nominal admission owns `newtype.recursive-representation` only after all
+those payload and representation kind checks succeed. Interface-application
 checking owns missing or extra arguments as `interface.argument-count` before
 kind checking owns an arity-correct positional failure. Interface admission
 owns an invalid partition as `interface.determination-parameter` and an
@@ -1529,19 +1582,22 @@ Within one source unit, causal precedence is:
 
 1. parsing and recovery;
 2. name resolution;
-3. interface-application arity, then positional argument kinds;
-4. determination partition admission;
-5. method-binder and method-kind checks, then method seed and function shape;
-6. implementation prerequisites in current-then-earlier source order with
+3. ordinary constructor-payload and `newtype`-representation kinds in combined
+   declaration and structural type order;
+4. the newtype-only representation-cycle pass;
+5. interface-application arity, then positional argument kinds;
+6. determination partition admission;
+7. method-binder and method-kind checks, then method seed and function shape;
+8. implementation prerequisites in current-then-earlier source order with
    complete identity before key identity, then variable-head, containment,
    determination coverage, orphan, decrease, and privacy;
-7. effective-environment pair coherence;
-8. implementation method membership and bodies;
-9. per-occurrence ordinary unification, unresolved-key ambiguity, atomic
+9. effective-environment pair coherence;
+10. implementation method membership and bodies;
+11. per-occurrence ordinary unification, unresolved-key ambiguity, atomic
    improvement and dependent conflict, remaining dependent ambiguity,
    full-application selection, active-goal cycle detection, and unsatisfied
    evidence; and
-10. whole-module method ambiguity and publication, then summary admission,
+12. whole-module method ambiguity and publication, then summary admission,
     linking, elaboration, and Core validation.
 
 An earlier failure prevents publication to later boundaries. Existing
@@ -1580,6 +1636,19 @@ Method binder records, schemes, instantiation arguments, substitutions,
 adapters, and Core types also charge their owning type-work ledger; binder-list
 syntax charges the syntax budget. Core construction and independent Core
 validation retain separate cumulative ledgers.
+Newtype declaration and constructor records, representation types and
+substitutions, summary and linked facts, conversion nodes, generated binders
+and functions, transform copies, and Core validation facts charge their
+existing owning syntax, type-work, graph-wide, Core-construction, or
+Core-validation ledgers. Every proportional allocation or traversal charges
+before publication.
+The module type-work ledger also owns newtype representation substitution and
+graph construction and traversal. Each discovered representation occurrence,
+retained edge or owner-index entry, pending-stack entry, and visited or active
+entry charges before retention or traversal. This is not interface constraint
+work. Exhaustion is `internal.resource.type-work`; it publishes no checked
+module or summary. The partial graph is released iteratively, and the same
+logical input may be retried with a replenished type-work budget.
 Interface, implementation, evidence, and linked-authentication traversal or
 comparison charge the graph-wide constraint budget; retaining a structural
 type, substitution, kind, or binder-kind record additionally charges the
@@ -1590,8 +1659,8 @@ charges one comparison unit in the traversal's owning ledger. A failed
 operation publishes no partial checked fact or summary.
 
 These ledgers are bounded compiler-resource policy. They do not add runtime kind
-values or evaluator work, and this specification transition does not change
-evaluation behavior or make a resource ceiling part of Ash value semantics.
+values or evaluator work. This resource accounting does not change evaluation
+behavior or make a resource ceiling part of Ash value semantics.
 
 Ash has no kind polymorphism, general higher-rank source values, explicit
 source term type application, type lambdas, higher-order unification, broad
@@ -1602,8 +1671,9 @@ associated declarations, associated-output projections or equations, multiple
 or partial edges, neutral parameters, reverse or injective determination,
 specialization, priority, default or negative implementations, inferred global
 requirements, first-class dictionaries, runtime implementation lookup, or
-interface-specific Core mechanism. Nominal declarations may refer to
-themselves and to other nominal declarations in the same module. Recursive
+interface-specific Core mechanism. Ordinary data declarations may refer to
+themselves and to other nominal declarations in the same module; `newtype`
+representations retain the narrower acyclic rule above. Recursive
 global visibility does not cross a module boundary. The interface evidence
 family is not effect-handler or provider authority, proof or proposition
 evidence, common universal evidence, or an existential package. Effects,

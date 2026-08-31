@@ -113,7 +113,20 @@ Execute the linked plan to:
   stack-safe accepted and rejected evidence passes. Independent semantic/Core
   and Rust/resource reviews approve the corrected checkpoint with no remaining
   Critical or Important finding.
-- No normative specification file has changed.
+- Checkpoint 6 product evidence is complete at unsigned commit `7ae578b`. It
+  retains the ten-category resource matrix, final semantic corpus, mixed-error
+  precedence case, exact formulas, predecessor-stability probes, and the
+  correction that limits substitution shadow state to actual `forall`
+  overlap. Independent resource, semantic/specification, compiler/Core,
+  runtime, documentation, downstream-pressure, and simplification reviews
+  approve the corrected checkpoint with no remaining Critical or Important
+  finding.
+- The normative specification, executable examples, tool documentation,
+  trajectory, and retained module-newtype evidence report are reconciled in
+  the documentation checkpoint containing this final task record.
+- The pre-cleanup final gate passes formatting, metadata, build, Clippy, 855
+  library tests, 10 CLI unit tests, every integration target, 67 executable
+  specification examples, Rustdoc, Markdown lint, and diff hygiene.
 
 ## Verification
 
@@ -152,6 +165,11 @@ authority and are never rebound.
 The representation graph belongs to module type work after all payload and
 representation kind checking and before interfaces. Core validation retains
 its separate resource ledger and failure reason.
+
+The full predecessor manifest exposed eager substitution shadow accounting
+outside any overlapping `forall`. Retaining shadow state only for actual
+overlap preserves fallible capture avoidance while restoring the four prior
+Core-validation boundaries. The correction changes no accepted semantic rule.
 
 ## Deviations
 

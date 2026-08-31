@@ -19,9 +19,12 @@ slice?
 ## Planning boundary
 
 Current Ash remains the behavior in [the specification](../../spec/README.md).
-No effect or `newtype` proposal is accepted and no implementation task is
-active. This note therefore cannot be a task-owned execution plan. It is exact
-through preparation and acceptance of the first change proposal, then records
+At this note's planning checkpoint, no effect or `newtype` proposal was
+accepted and no implementation task was active. That statement records the
+input to this informative plan, not current artifact state. The specification,
+trajectory, accepted proposals, and active tasks own later state. This note
+therefore cannot be a task-owned execution plan. It is exact through
+preparation and acceptance of the first change proposal, then records
 checkpoint gates and likely implementation pressure at decreasing detail.
 
 After each proposal is accepted, create one active task and one temporary
@@ -711,7 +714,9 @@ known.
 
 ## Open questions
 
-The immediate open questions are the module-`newtype` decision matrix and
-whether independent Core validation can authenticate a zero-cost conversion
-without retaining a new evaluator-visible node. Later questions remain owned
-by their proposal capsules and must not be answered during the first increment.
+The module-`newtype` decision matrix and independently validated zero-cost
+conversion were the immediate open questions when this plan was written.
+Accepted CP-0012 and the product-branch specification resolve them for module
+scope. After separately authorized integration, local `newtype` identity and
+escape are the next programme question; resource-scope composition remains a
+later proposal-owned question. This informative plan authorizes neither.

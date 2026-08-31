@@ -73,9 +73,35 @@ value : Type
 Integers, Booleans, and unit use their Ash spellings. Function values render as
 `<function>` because function identity and captured bindings are not observable
 Ash values. Function types use right-associated arrows and parenthesize a
-function-valued domain. Tuples and nominal data render structurally. Rendering
-uses `<cycle>` only when a heap location repeats on the active structural path.
-Nominal result types use their source declaration spelling.
+function-valued domain. Tuples and ordinary nominal data render structurally.
+A module `newtype` renders its representation value because its wrapper erases,
+while the separately reported result type retains the nominal declaration
+spelling. Rendering uses `<cycle>` only when a heap location repeats on the
+active structural path.
+
+The executable test `tool_module_newtype_observation_has_exact_cli_output`
+runs this complete module:
+
+```ash
+newtype UserId = UserId(Int)
+
+increment : UserId -> UserId
+increment (UserId value) = UserId(value + 1)
+
+main : Unit -> UserId
+main () = increment(UserId(41))
+```
+
+Its exact standard output is:
+
+```text
+42 : UserId
+```
+
+The integer is the representation value; `UserId` is the statically retained
+source result type. The executable performs no conversion-time registry lookup
+and allocates no wrapper cell. This statement does not expose heap inspection
+or promise a general ABI representation.
 
 The executable test `tool_success_example_has_exact_cli_observation` runs this
 module:

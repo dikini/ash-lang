@@ -7,7 +7,7 @@ describes exactly the implemented language and runtime behavior.
 
 Ash is a pure, rank-1 language whose programs are acyclic graphs of passive
 source modules. Each `.ash` source file defines one unnamed module containing
-imports followed by nominal type declarations, method-only interface
+imports followed by nominal data or `newtype` declarations, method-only interface
 declarations, anonymous implementation declarations, and global function
 definitions. Global signatures may state explicit interface constraints, and
 implementation heads may state explicit prerequisite constraints. A module has
@@ -28,7 +28,16 @@ facades can select them transitively without changing their defining
 identities. Private nominal identities may flow through public schemes and
 implementation facts without becoming nameable. A `pub opaque type` exports a
 name without constructors, and a `pub type` exports its name and complete
-constructor family.
+constructor family. The corresponding `newtype` visibility modes use the same
+name and constructor access rules.
+
+A module `newtype` introduces a nominal type over one representation. It has
+exactly one same-spelled, one-field constructor. Construction and matching are
+explicit, and the nominal type remains distinct from its representation.
+After independent Core validation, wrapping and unwrapping erase without a
+wrapper allocation or runtime tag. Interface evidence remains nominal: an
+implementation for the representation does not satisfy a requirement for the
+`newtype`.
 
 An interface declares one or more ordered, fixed-kinded type parameters and an
 ordered set of method signatures. It may declare one total forward
@@ -79,8 +88,15 @@ partial edges, effect row or handler authority, proposition or proof evidence,
 common universal evidence, or existential pack and unpack form. Those future
 features require separate source, Core, authentication, and dynamic rules.
 
+Module `newtype` adds no local type declaration, runtime-fresh identity,
+implicit coercion, general representational equality, local implementation,
+effect or resource mechanism, existential package, dynamic loading, runtime
+nominal registry, heap-inspection API, special value rendering, or general ABI
+or foreign-representation guarantee. Its canonical conversion establishes no
+interface, proof, provider, handler, or hook authority.
+
 Within a module, Ash provides global and explicit local recursion, rank-1
-polymorphism, nominal data, structural tuples, constructor values, typed
+polymorphism, nominal data, allocation-free module `newtype`, structural tuples, constructor values, typed
 patterns, exhaustive matches and equations, sequential bindings, method-only
 interfaces, explicit constraints, anonymous implementations, and pure
 expressions.
@@ -149,6 +165,26 @@ import arithmetic (answer as imported_answer)
 main : Unit -> Int
 main () = imported_answer(())
 ```
+
+### Module newtypes
+
+This complete module wraps and unwraps a distinct nominal `UserId`. The wrapper
+has the integer representation at runtime, so the program observes the value
+`42` while retaining the result type `UserId`:
+
+```ash
+newtype UserId = UserId(Int)
+
+increment : UserId -> UserId
+increment (UserId value) = UserId(value + 1)
+
+main : Unit -> UserId
+main () = increment(UserId(41))
+```
+
+The executable test `overview_module_newtype_example_is_executable` checks this
+example. Neither constructor use is an implicit conversion, and an importer
+may use the constructor only through a transparent authorized route.
 
 ### Interfaces and selected evidence
 

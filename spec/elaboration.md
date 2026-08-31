@@ -16,6 +16,15 @@ constructor occurrences, typed patterns, and matches remain structured semantic
 terms. Their nominal and constructor references use registry identities rather
 than source spellings.
 
+An accessible `newtype` constructor occurrence becomes an ordinary unary
+function whose body contains an explicit typed representation conversion.
+Applying that function wraps the substituted representation as the applied
+nominal; matching introduces the reverse conversion before lowering the
+representation subpattern. The conversion records the nominal identity,
+direction, one child, and causal source origin. It is neither an ordinary
+allocating constructor nor an unchecked cast, and it authenticates no
+interface, proof, provider, handler, or hook authority.
+
 Module paths, imports, aliases, targeted bindings, public re-export spellings,
 declaration visibility, and opacity are source-only forms and do not become
 Core terms. Resolution has already authenticated each cross-module name
@@ -82,6 +91,14 @@ owner, payload, and origin needed by Core, but it does not retain another copy
 of the physical constructor scheme. The scheme therefore has the lifecycle
 summary to imported fact to disposal before linked Core, rather than a
 redundant linked carrier.
+
+For a `newtype`, the combined nominal registry instead retains one canonical
+hidden fact containing the declaration kind and identity, owner, ordered
+parameter records, sole same-spelled constructor, representation template,
+access, origin, and representation provenance. Linking authenticates these
+facts across direct, aliased, opaque, re-exported, and diamond routes. Hidden
+facts authorize later Core validation but create no source name, constructor
+access, coercion, or interface evidence.
 
 Each checked module also contributes its local implementation inventory, its
 effective imported implementation inventory, and a lightweight public
@@ -306,6 +323,16 @@ operation is not a curried sequence of unary expression operations.
 Parameterized constructors use the same Core instantiation form as
 polymorphic value names.
 
+A newtype constructor occurrence lowers to an ordinary unary function whose body is a wrap conversion.
+For a parameterized declaration, the function uses fresh generated type
+binders in declared order, applies the nominal to those binders, and derives
+the function domain by substituting them into the canonical representation.
+Validation matches generated binders with canonical parameters by position and
+kind; it does not bind or replace the canonical parameter identities. A
+newtype pattern lowers through an unwrap conversion before ordinary pattern
+structure. Neither path emits an ordinary constructor Core node for the
+`newtype`.
+
 An explicit global binder list establishes abstraction order. A global that
 omits the list preserves implicit first-occurrence order, with every such
 binder fixed to kind `Type`. An eligible unannotated local anonymous-function
@@ -495,6 +522,16 @@ missing, duplicate, unconsumed, wrong-owner, wrong-position, wrong-order,
 wrong-kind, wrong-method, capture-producing, or mismatched authentication
 relation fails Core validation before evaluation.
 
+For every newtype conversion, independent validation derives the expected
+relation from the linked canonical fact and the child and enclosing expression
+types. It checks a newtype owner, complete nominal application, positional
+argument kinds, declared-order representation substitution, direction,
+child/result agreement, and declaration and source provenance. It rejects an
+ordinary constructor used as a conversion and a newtype constructor or pattern
+lowered through ordinary allocating Core. Resolution and linked-summary
+validation remain the exclusive authorities for source access and import
+routes.
+
 Validation distinguishes unary structural monotype applications from Core
 type applications. A Core type application supplies one argument per quantified
 binder in order, each argument synthesizes that binder's kind, and the annotated
@@ -511,3 +548,7 @@ failure, not a source-language typing result.
 
 This requirement does not prescribe a Rust representation, storage strategy,
 or evaluator mechanism.
+
+Identity traversal and primitive folding preserve or rebuild conversions,
+their types, identities, direction, child, and origin. A transformed program
+returns to this independent validation boundary before evaluation.

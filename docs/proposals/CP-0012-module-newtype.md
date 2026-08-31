@@ -505,3 +505,20 @@ This proposal does not add:
 - Audit the result against local and runtime generativity, existential identity
   escape, proof-authority separation, and the later resource-scope composition.
   Record residual risk without importing those later semantics.
+
+## Final evidence
+
+The product checkpoint retains implementation and resource evidence at
+unsigned commit `7ae578b`. The following documentation checkpoint reconciles
+the normative specification, executable examples, tool documentation,
+trajectory, and retained evidence report. Independent semantic/specification,
+compiler/Core, runtime, Rust/resource, documentation, downstream-pressure, and
+simplification reviews found no remaining Critical or Important issue after
+correction.
+
+The pre-cleanup gate passes `cargo xtask verify`, Markdown lint, diff hygiene,
+and status inspection. That run includes formatting, metadata, build, Clippy,
+855 library tests, 10 CLI unit tests, every integration target, 67 executable
+specification examples, and Rustdoc. The accepted proposal has therefore
+served its transition purpose and can leave the product branch after the
+retained documentation checkpoint; Git history preserves this record.

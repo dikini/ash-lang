@@ -46,6 +46,13 @@ const TREE_PRESENTATIONS_MODULE: &str = "type Tree =\n    Tip(Int)\n    | Fork(T
 const HIGHER_ORDER_CONSTRUCTOR_MODULE: &str = "type Wrapped =\n    Wrap(Int)\n\nfn build(make : Int -> Wrapped) -> Wrapped {\n    make 42\n}\n\nmain : Unit -> Int\nmain () = match build Wrap {\n    Wrap(value) => value\n}\n";
 const CYCLIC_STREAM_MODULE: &str = "type Stream =\n    Next(Int, Stream)\n\nmain : Unit -> Stream\nmain () = {\n    let rec ones : Stream = Next(1, ones)\n    ones\n}\n";
 const RANK_ONE_POLYMORPHISM_MODULE: &str = "type Option<A> =\n    None\n    | Some(A)\n\nid : A -> A\nid value = value\n\nmain : Unit -> (Option<Int>, Bool)\nmain () = {\n    let local = fn(value) {\n        value\n    }\n    (id(Some(42)), local(false))\n}\n";
+const MODULE_NEWTYPE_MODULE: &str = concat!(
+    "newtype UserId = UserId(Int)\n\n",
+    "increment : UserId -> UserId\n",
+    "increment (UserId value) = UserId(value + 1)\n\n",
+    "main : Unit -> UserId\n",
+    "main () = increment(UserId(41))\n",
+);
 
 const MAIN_MODULE: &str = "main : Unit -> Int\nmain () = 42\n";
 const SIBLING_ENTRY_MODULE: &str =
@@ -453,6 +460,34 @@ const RELATIONAL_INTERFACE_RULE_FRAGMENTS: &[(&str, &str)] = &[
     ),
 ];
 
+const NEWTYPE_RULE_FRAGMENTS: &[(&str, &str)] = &[
+    (
+        "spec/README.md",
+        "A module `newtype` introduces a nominal type over one representation",
+    ),
+    (
+        "spec/lexical-structure.md",
+        "The reserved words `fn`, `let`, `rec`, `and`, `type`, `newtype`",
+    ),
+    (
+        "spec/syntax.md",
+        "newtype_declaration ::=\n  [ \"pub\" [ \"opaque\" ] ]",
+    ),
+    (
+        "spec/name-resolution.md",
+        "A `newtype` receives the same module-owned nominal and constructor identity forms",
+    ),
+    (
+        "spec/static-semantics.md",
+        "The directed graph containing only `newtype` representation edges must be acyclic.",
+    ),
+    (
+        "spec/elaboration.md",
+        "A newtype constructor occurrence lowers to an ordinary unary function whose body is a wrap conversion.",
+    ),
+    ("spec/dynamic-semantics.md", "E-Newtype-Conversion :="),
+];
+
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
 struct TempDirectory(PathBuf);
@@ -638,6 +673,12 @@ fn overview_sibling_import_example_is_executable() {
     assert_eq!(observation.type_display(), "Int");
     assert_documented("spec/README.md", SIBLING_ENTRY_MODULE);
     assert_documented("spec/README.md", SIBLING_ARITHMETIC_MODULE);
+}
+
+#[test]
+fn overview_module_newtype_example_is_executable() {
+    assert_observation("module-newtype.ash", MODULE_NEWTYPE_MODULE, "42", "UserId");
+    assert_documented("spec/README.md", MODULE_NEWTYPE_MODULE);
 }
 
 #[test]
@@ -1594,6 +1635,20 @@ fn tool_success_example_has_exact_cli_observation() {
 }
 
 #[test]
+fn tool_module_newtype_observation_has_exact_cli_output() {
+    let source = TempFile::write(MODULE_NEWTYPE_MODULE);
+    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .arg(source.path())
+        .output()
+        .expect("the documented module-newtype executable should start");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"42 : UserId\n");
+    assert!(output.stderr.is_empty());
+    assert_documented("docs/tools/ash.md", MODULE_NEWTYPE_MODULE);
+}
+
+#[test]
 fn tool_example_temp_source_requires_exclusive_directory_ownership() {
     let harness = include_str!("spec_examples.rs");
     let exclusive_creation = ["match fs::", "create_dir(&path)"].concat();
@@ -1790,6 +1845,13 @@ fn relational_interface_overview_example_is_executable() {
 #[test]
 fn relational_interface_normative_rule_manifest_is_complete() {
     for &(path, fragment) in RELATIONAL_INTERFACE_RULE_FRAGMENTS {
+        assert_normative_fragment(path, fragment);
+    }
+}
+
+#[test]
+fn module_newtype_normative_rule_manifest_is_complete() {
+    for &(path, fragment) in NEWTYPE_RULE_FRAGMENTS {
         assert_normative_fragment(path, fragment);
     }
 }
