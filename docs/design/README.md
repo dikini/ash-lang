@@ -87,6 +87,9 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
   — a partial-order decomposition through shared generative identity, scoped
   evidence, resources, synchronous hooks, foreign providers, suspension, and
   concurrency.
+- [DN-0027: Effect Ash Program Design](DN-0027-effect-ash-program-design.md) —
+  the current informative closure boundary, causal checkpoint program,
+  authority gates, implementation seams, and downstream extension pressures.
 - [DN-0009: Effects, Handlers, and Continuations](DN-0009-effects-handlers-and-continuations.md) — effect APIs and rows, handler composition, and continuation contracts.
 - [DN-0010: Identities and Resource Lifetimes](DN-0010-identities-and-resource-lifetimes.md) — static/runtime identity, ownership, withdrawal, and captured resources.
 - [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md) — passive modules and typed composition at static-link and runtime-load stages.
