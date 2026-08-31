@@ -123,6 +123,7 @@ implementation review. Keep `spec/` unchanged until final closure.
 - Modify: `src/types.rs`
 - Modify: `src/kind.rs`
 - Modify: `src/elaborate.rs`
+- Modify: `src/interface.rs`
 - Modify as required: `src/resolved.rs`
 - Modify as required: `src/core/type_ops.rs`
 - Create: `tests/effect_rows.rs`
@@ -188,12 +189,16 @@ git -c commit.gpgsign=false commit -m "feat: add effect row algebra"
 
 - Modify: `src/lexer/token.rs`
 - Modify: `src/lexer/mod.rs`
+- Modify: `src/module.rs`
 - Modify: `src/parser/mod.rs`
 - Modify: `src/parser/grammar.rs`
+- Modify: `src/parser/expression.rs`
 - Modify: `src/parser/project.rs`
 - Modify: `src/surface.rs`
+- Modify: `src/interface.rs`
 - Modify: `src/resolve.rs`
 - Modify: `src/resolved.rs`
+- Modify: `src/evidence_validation.rs`
 - Create: `tests/effects_syntax.rs`
 - Create: `tests/effect_modules.rs`
 - Modify: `tests/lexer.rs`
@@ -246,6 +251,7 @@ git -c commit.gpgsign=false commit -m "feat: resolve effect declarations"
 - Modify: `src/resolved.rs`
 - Modify: `src/resolve.rs`
 - Modify: `src/elaborate.rs`
+- Modify: `src/driver.rs`
 - Modify: `src/pattern.rs`
 - Modify as required: `src/interface.rs`
 - Modify as required: `src/evidence.rs`
@@ -256,6 +262,7 @@ git -c commit.gpgsign=false commit -m "feat: resolve effect declarations"
 - Modify: `tests/data_and_adts.rs`
 - Modify: `tests/polymorphism.rs`
 - Modify: `tests/diagnostics.rs`
+- Modify: `tests/module_entry.rs`
 
 Write `closed_handler_discharges_exact_effect_and_keeps_main_pure` first using
 the accepted `Cell` example. Expected RED: the resolved forms have no effectful
@@ -290,7 +297,7 @@ Run:
 ```text
 cargo test --locked --test effect_typing --test effect_diagnostics
 cargo test --locked --test functions --test bindings --test data_and_adts
-cargo test --locked --test polymorphism --test diagnostics
+cargo test --locked --test polymorphism --test diagnostics --test module_entry
 cargo test --locked --lib -- elaborate
 cargo fmt --check
 cargo check --locked --all-targets
@@ -361,6 +368,7 @@ git -c commit.gpgsign=false commit -m "feat: validate effect core"
 **Files:**
 
 - Modify: `src/eval/machine.rs`
+- Modify: `src/eval/value.rs`
 - Modify as required: `src/driver.rs`
 - Create: `tests/effect_runtime.rs`
 - Modify: `tests/semantics.rs`
@@ -425,6 +433,7 @@ git -c commit.gpgsign=false commit -m "feat: evaluate effect handlers"
 - Modify: `tests/spec_examples.rs`
 - Modify: `tests/corpus.rs`
 - Modify: `tests/architecture.rs`
+- Modify: `tests/module_cli.rs`
 - Modify: `docs/trajectory.md`
 
 ### Step 1: Retain the combined evidence
