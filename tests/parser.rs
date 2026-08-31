@@ -284,7 +284,7 @@ fn malformed_public_imports_and_implementation_selectors_recover_at_the_line_end
 
 #[test]
 fn data_and_pattern_forms_build_one_token_complete_concrete_tree() {
-    let source = "type Tree =\n    Tip(Int)\n    | Fork(Tree, Tree)\n\ntype Choice =\n    Choice((Bool, Tree))\n\nsize : Tree -> Int\nsize (Tip value) = 1\nsize (Fork(left, right)) = size left + size right\n\nfn choose(flag : Bool, tree : Tree) -> Int {\n    match (flag, tree) {\n        (true, Tip(value)) => value\n        (_, Fork(left, right)) => size left + size right\n        (_, Tip(value)) => value\n    }\n}\n\nchoose(true, Tip(42))\n";
+    let source = "type Tree =\n    Tip(Int)\n    | Fork(Tree, Tree)\n\ntype Choice =\n    Choice((Bool, Tree))\n\nnewtype UserId = UserId(Int)\n\nsize : Tree -> Int\nsize (Tip value) = 1\nsize (Fork(left, right)) = size left + size right\n\nfn choose(flag : Bool, tree : Tree) -> Int {\n    match (flag, tree) {\n        (true, Tip(value)) => value\n        (_, Fork(left, right)) => size left + size right\n        (_, Tip(value)) => value\n    }\n}\n\nchoose(true, Tip(42))\n";
     let (_source, tree) = parse_tree(source);
 
     assert!(tree.lexical_diagnostics().is_empty());
@@ -296,6 +296,7 @@ fn data_and_pattern_forms_build_one_token_complete_concrete_tree() {
     let kinds = concrete_kinds(&tree);
     for expected in [
         NodeKind::TypeDeclaration,
+        NodeKind::NewtypeDeclaration,
         NodeKind::ConstructorDeclaration,
         NodeKind::Pattern,
         NodeKind::TuplePattern,

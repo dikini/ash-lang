@@ -370,6 +370,7 @@ fn expect_upper_identifier(parser: &mut Parser<'_>) {
 
 fn starts_module_declaration(parser: &Parser<'_>) -> bool {
     parser.at(&TokenKind::Type)
+        || parser.at(&TokenKind::Newtype)
         || parser.at(&TokenKind::Interface)
         || parser.at(&TokenKind::Impl)
         || starts_global(parser)
@@ -378,6 +379,7 @@ fn starts_module_declaration(parser: &Parser<'_>) -> bool {
                 parser.nth(1),
                 Some(
                     TokenKind::Type
+                        | TokenKind::Newtype
                         | TokenKind::Opaque
                         | TokenKind::Interface
                         | TokenKind::Impl
@@ -388,7 +390,9 @@ fn starts_module_declaration(parser: &Parser<'_>) -> bool {
 }
 
 fn module_declaration(parser: &mut Parser<'_>) -> TypeParametersOutcome {
-    if parser.at(&TokenKind::Type)
+    if starts_newtype_declaration(parser) {
+        newtype_declaration(parser)
+    } else if parser.at(&TokenKind::Type)
         || parser.at(&TokenKind::Pub)
             && matches!(parser.nth(1), Some(TokenKind::Type | TokenKind::Opaque))
     {
@@ -404,6 +408,14 @@ fn module_declaration(parser: &mut Parser<'_>) -> TypeParametersOutcome {
     } else {
         global_definition(parser)
     }
+}
+
+fn starts_newtype_declaration(parser: &Parser<'_>) -> bool {
+    parser.at(&TokenKind::Newtype)
+        || parser.at(&TokenKind::Pub)
+            && (parser.nth(1) == Some(&TokenKind::Newtype)
+                || parser.nth(1) == Some(&TokenKind::Opaque)
+                    && parser.nth(2) == Some(&TokenKind::Newtype))
 }
 
 #[derive(Clone, Copy)]
@@ -1016,6 +1028,129 @@ fn type_declaration(parser: &mut Parser<'_>) -> TypeParametersOutcome {
     }
     parser.finish();
     TypeParametersOutcome::Complete
+}
+
+fn newtype_declaration(parser: &mut Parser<'_>) -> TypeParametersOutcome {
+    parser.start(NodeKind::NewtypeDeclaration);
+    if parser.at(&TokenKind::Pub) {
+        let _ = parser.bump();
+        if parser.at(&TokenKind::Opaque) {
+            let _ = parser.bump();
+        }
+    }
+    let _ = parser.expect(&TokenKind::Newtype, ExpectedForm::Type);
+    if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+        let _ = parser.bump();
+    } else {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+    if parser.at(&TokenKind::Less) {
+        let outcome = type_parameters(parser, TypeParameterOwnerBoundary::TypeDeclaration);
+        if outcome.stops_declaration() {
+            parser.finish();
+            return outcome;
+        }
+    }
+    let _ = parser.expect(&TokenKind::Equal, ExpectedForm::Equal);
+    newtype_constructor_declaration(parser);
+    while parser.at(&TokenKind::LineEnd)
+        && parser
+            .nth(1)
+            .is_some_and(|kind| matches!(kind, TokenKind::Pipe))
+    {
+        let _ = parser.bump();
+        reject_newtype_extra_constructor(parser);
+    }
+    if parser.at(&TokenKind::Pipe) {
+        reject_newtype_extra_constructor(parser);
+    }
+    parser.finish();
+    TypeParametersOutcome::Complete
+}
+
+fn newtype_constructor_declaration(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::ConstructorDeclaration);
+    if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+        let _ = parser.bump();
+    } else {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+        parser.finish();
+        return;
+    }
+    let opening = parser.current_span();
+    if !parser.expect(&TokenKind::LeftParen, ExpectedForm::LeftParen) {
+        parser.finish();
+        return;
+    }
+    type_expression(parser);
+    if parser.at(&TokenKind::Comma) {
+        reject_newtype_constructor_tail(parser);
+    } else if parser.at(&TokenKind::RightParen) {
+        let _ = parser.bump();
+    } else {
+        expression::report_unclosed_group(parser, opening);
+    }
+    parser.finish();
+}
+
+fn reject_newtype_extra_constructor(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::Error);
+    let recovery_start = parser.pending_recovery_count();
+    if let Some(primary) = parser.current_span()
+        && let Some(diagnostic) = parser.report_at(
+            ParseReason::ExpectedForm,
+            ExpectedForm::LineEnd,
+            primary,
+            None,
+        )
+    {
+        parser.mark_pending_recovery(diagnostic);
+    }
+    while !matches!(
+        parser.current(),
+        Some(TokenKind::LineEnd | TokenKind::EndOfFile) | None
+    ) {
+        let _ = parser.bump();
+    }
+    if parser.at(&TokenKind::LineEnd) {
+        parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::LogicalLineEnd);
+    } else {
+        parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::EndOfFile);
+    }
+    parser.finish();
+}
+
+fn reject_newtype_constructor_tail(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::Error);
+    let recovery_start = parser.pending_recovery_count();
+    if let Some(primary) = parser.current_span()
+        && let Some(diagnostic) = parser.report_at(
+            ParseReason::ExpectedForm,
+            ExpectedForm::RightParen,
+            primary,
+            None,
+        )
+    {
+        parser.mark_pending_recovery(diagnostic);
+    }
+    while !matches!(
+        parser.current(),
+        Some(TokenKind::RightParen | TokenKind::LineEnd | TokenKind::EndOfFile) | None
+    ) {
+        let _ = parser.bump();
+    }
+    if parser.at(&TokenKind::RightParen) {
+        parser.resolve_pending_at_current(
+            recovery_start,
+            SynchronizationBoundary::ParenthesisClosing,
+        );
+        let _ = parser.bump();
+    } else if parser.at(&TokenKind::LineEnd) {
+        parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::LogicalLineEnd);
+    } else {
+        parser.resolve_pending_at_current(recovery_start, SynchronizationBoundary::EndOfFile);
+    }
+    parser.finish();
 }
 
 fn constructor_declaration(parser: &mut Parser<'_>) {
@@ -2083,7 +2218,12 @@ fn starts_expression(parser: &Parser<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::{lexer::lex, source::SourceFile};
+    use crate::{
+        lexer::{lex, lex_with_budget},
+        parser::{Event, ResourceFailure, parse_with_budget},
+        source::SourceFile,
+        syntax_resource::SyntaxBudget,
+    };
 
     use super::*;
 
@@ -2161,5 +2301,50 @@ mod tests {
             .find(|diagnostic| diagnostic.expected.as_deref() == Some("an expression"))
             .expect("the missing block result should require an expression");
         assert_eq!(diagnostic.reason, ParseReason::ExpectedForm);
+    }
+
+    #[test]
+    fn newtype_declaration_consumes_exact_cumulative_syntax_work_and_retries_cleanly() {
+        let source = SourceFile::new("newtype-resource.ash", "newtype Exact = Exact(Int)\n")
+            .expect("the parser fixture should fit");
+        let baseline = super::super::parse(lex(&source).expect("the parser fixture should lex"));
+        let exact_work = baseline.tokens().len() + baseline.events().len();
+
+        assert!(
+            baseline.parse_diagnostics().is_empty(),
+            "{:?}",
+            baseline.parse_diagnostics()
+        );
+        assert!(exact_work > baseline.tokens().len());
+
+        let exact = parse_newtype_with_limit(&source, exact_work);
+        assert_eq!(exact.resource_failure(), None);
+        assert!(
+            exact
+                .events()
+                .iter()
+                .any(|event| matches!(event, Event::Start(NodeKind::NewtypeDeclaration)))
+        );
+
+        let one_short_limit = exact_work - 1;
+        let one_short = parse_newtype_with_limit(&source, one_short_limit);
+        assert_eq!(
+            one_short.resource_failure(),
+            Some(ResourceFailure::SyntaxWork {
+                limit: one_short_limit
+            })
+        );
+        assert!(one_short.root().is_none());
+
+        let retry = parse_newtype_with_limit(&source, exact_work);
+        assert_eq!(retry.resource_failure(), None);
+        assert_eq!(retry.tokens().len(), baseline.tokens().len());
+        assert_eq!(retry.events().len(), baseline.events().len());
+    }
+
+    fn parse_newtype_with_limit(source: &SourceFile, limit: usize) -> super::super::ConcreteTree {
+        let mut budget = SyntaxBudget::with_limit(limit);
+        let lexed = lex_with_budget(source, &mut budget).expect("limited lexing should fit spans");
+        parse_with_budget(lexed, &mut budget)
     }
 }

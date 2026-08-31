@@ -12,10 +12,11 @@ use crate::{
         SurfaceImportItem, SurfaceImportSelection, SurfaceInlineOperationalHeader,
         SurfaceInterfaceDeclaration, SurfaceInterfaceDetermination, SurfaceInterfaceMethod,
         SurfaceKind, SurfaceKindKind, SurfaceLocalDeclaration, SurfaceMatchArm, SurfaceMatchExpr,
-        SurfaceModule, SurfaceModulePath, SurfaceName, SurfacePattern, SurfacePatternKind,
-        SurfaceQualifiedName, SurfaceRecursiveGroup, SurfaceRecursiveMember, SurfaceReference,
-        SurfaceRequirement, SurfaceType, SurfaceTypeDeclaration, SurfaceTypeKind,
-        SurfaceTypeParameter, SurfaceTypeVisibility, SurfaceTypedPattern,
+        SurfaceModule, SurfaceModulePath, SurfaceName, SurfaceNominalDeclarationKind,
+        SurfacePattern, SurfacePatternKind, SurfaceQualifiedName, SurfaceRecursiveGroup,
+        SurfaceRecursiveMember, SurfaceReference, SurfaceRequirement, SurfaceType,
+        SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypeParameter, SurfaceTypeVisibility,
+        SurfaceTypedPattern,
     },
 };
 
@@ -214,6 +215,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                 shape.token(&TokenKind::LineEnd)?;
             }
             while shape.peek_node_is(NodeKind::TypeDeclaration)
+                || shape.peek_node_is(NodeKind::NewtypeDeclaration)
                 || shape.peek_node_is(NodeKind::InterfaceDeclaration)
                 || shape.peek_node_is(NodeKind::ImplementationDeclaration)
                 || shape.peek_node_is(NodeKind::EquationalGlobal)
@@ -302,6 +304,19 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                 shape.token(&TokenKind::Pipe)?;
                 shape.node(NodeKind::ConstructorDeclaration)?;
             }
+        }
+        NodeKind::NewtypeDeclaration => {
+            if shape.peek_token_is(&TokenKind::Pub) {
+                shape.token(&TokenKind::Pub)?;
+                shape.optional_token(&TokenKind::Opaque)?;
+            }
+            shape.token(&TokenKind::Newtype)?;
+            shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            if shape.peek_node_is(NodeKind::TypeParameters) {
+                shape.node(NodeKind::TypeParameters)?;
+            }
+            shape.token(&TokenKind::Equal)?;
+            shape.node(NodeKind::ConstructorDeclaration)?;
         }
         NodeKind::TypeParameters => {
             shape.token(&TokenKind::Less)?;
@@ -887,6 +902,10 @@ fn project_surface_module(
                 declaration_order.push(SurfaceDeclarationIndex::Type(type_declarations.len()));
                 type_declarations.push(project_type_declaration(source, child, tokens)?);
             }
+            NodeKind::NewtypeDeclaration => {
+                declaration_order.push(SurfaceDeclarationIndex::Type(type_declarations.len()));
+                type_declarations.push(project_newtype_declaration(source, child, tokens)?);
+            }
             NodeKind::InterfaceDeclaration => {
                 declaration_order.push(SurfaceDeclarationIndex::Interface(interfaces.len()));
                 interfaces.push(project_interface_declaration(source, child, tokens)?);
@@ -1157,7 +1176,27 @@ fn project_type_declaration(
     node: &ConcreteNode,
     tokens: &[Token],
 ) -> Result<SurfaceTypeDeclaration, ProjectionError> {
-    require_kind(node, NodeKind::TypeDeclaration)?;
+    project_nominal_declaration(source, node, tokens, SurfaceNominalDeclarationKind::Data)
+}
+
+fn project_newtype_declaration(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<SurfaceTypeDeclaration, ProjectionError> {
+    project_nominal_declaration(source, node, tokens, SurfaceNominalDeclarationKind::Newtype)
+}
+
+fn project_nominal_declaration(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+    declaration_kind: SurfaceNominalDeclarationKind,
+) -> Result<SurfaceTypeDeclaration, ProjectionError> {
+    match declaration_kind {
+        SurfaceNominalDeclarationKind::Data => require_kind(node, NodeKind::TypeDeclaration)?,
+        SurfaceNominalDeclarationKind::Newtype => require_kind(node, NodeKind::NewtypeDeclaration)?,
+    }
     let public = direct_tokens(node, tokens).any(|token| token.kind == TokenKind::Pub);
     let opaque = direct_tokens(node, tokens).any(|token| token.kind == TokenKind::Opaque);
     let visibility = match (public, opaque) {
@@ -1181,11 +1220,17 @@ fn project_type_declaration(
     if constructors.is_empty() {
         return malformed(InternalReason::UnexpectedShape);
     }
+    if declaration_kind == SurfaceNominalDeclarationKind::Newtype
+        && !matches!(constructors.as_slice(), [constructor] if constructor.fields.len() == 1)
+    {
+        return malformed(InternalReason::UnexpectedShape);
+    }
     if names.next().is_some() {
         return malformed(InternalReason::UnexpectedShape);
     }
     let parameters = project_optional_type_parameters(source, node, tokens)?.unwrap_or_default();
     Ok(SurfaceTypeDeclaration {
+        declaration_kind,
         visibility,
         name: SurfaceName {
             text: name.clone(),

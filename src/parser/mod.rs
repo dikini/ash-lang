@@ -46,6 +46,8 @@ pub enum NodeKind {
     ImportItem,
     /// A nominal type declaration.
     TypeDeclaration,
+    /// A representation-preserving nominal declaration.
+    NewtypeDeclaration,
     /// One nonempty declaration-level type-parameter list.
     TypeParameters,
     /// One declaration-level type parameter and its optional kind annotation.
@@ -704,6 +706,7 @@ fn token_name(kind: &TokenKind) -> &'static str {
         TokenKind::Rec => "rec",
         TokenKind::And => "and",
         TokenKind::Type => "type",
+        TokenKind::Newtype => "newtype",
         TokenKind::Match => "match",
         TokenKind::Import => "import",
         TokenKind::As => "as",

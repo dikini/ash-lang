@@ -2,14 +2,14 @@ use ash::{
     integer::Integer,
     lexer::{TokenKind, lex},
     parser::{
-        ConcreteElement, Event, ExpectedForm, NodeKind, ParseReason, ProjectionError, parse,
-        project_module,
+        ConcreteElement, Event, ExpectedForm, NodeKind, ParseContext, ParseReason, ProjectionError,
+        SynchronizationBoundary, parse, project_module,
     },
     source::{ByteRange, SourceFile},
     surface::{
-        SurfaceDefinitionKind, SurfaceExprKind, SurfaceImportItem, SurfaceImportSelection,
-        SurfaceModulePath, SurfacePatternKind, SurfaceReference, SurfaceTypeKind,
-        SurfaceTypeVisibility,
+        SurfaceDeclarationIndex, SurfaceDefinitionKind, SurfaceExprKind, SurfaceImportItem,
+        SurfaceImportSelection, SurfaceKindKind, SurfaceModulePath, SurfaceNominalDeclarationKind,
+        SurfacePatternKind, SurfaceReference, SurfaceTypeKind, SurfaceTypeVisibility,
     },
 };
 
@@ -77,11 +77,40 @@ fn assert_exact_parser_diagnostics(
     }
 }
 
+fn assert_token_complete(case: &str, tree: &ash::parser::ConcreteTree) {
+    assert_eq!(
+        tree.events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::Token(index) => Some(*index),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        (0..tree.tokens().len()).collect::<Vec<_>>(),
+        "{case} should retain every lexer token exactly once"
+    );
+}
+
+fn assert_balanced_events(case: &str, tree: &ash::parser::ConcreteTree) {
+    let mut depth = 0_u32;
+    for event in tree.events() {
+        match event {
+            Event::Start(_) => depth += 1,
+            Event::Finish => {
+                assert!(depth > 0, "{case} has an unmatched finish");
+                depth -= 1;
+            }
+            Event::Token(_) | Event::Missing { .. } | Event::Error(_) => {}
+        }
+    }
+    assert_eq!(depth, 0, "{case} should retain balanced events");
+}
+
 #[test]
 fn modular_reserved_words_and_path_punctuation_are_closed_tokens() {
     let source = SourceFile::new(
         "tokens.ash",
-        "import @std.collections.list as List\npub opaque type T = T(Int)\ninterface impl where\n",
+        "import @std.collections.list as List\npub opaque type T = T(Int)\nnewtype N = N(Int)\ninterface impl where\n",
     )
     .expect("token source should fit");
     let lexed = lex(&source).expect("token source should lex");
@@ -117,6 +146,12 @@ fn modular_reserved_words_and_path_punctuation_are_closed_tokens() {
         lexed
             .tokens
             .iter()
+            .any(|token| token.kind == TokenKind::Newtype)
+    );
+    assert!(
+        lexed
+            .tokens
+            .iter()
             .any(|token| token.kind == TokenKind::Interface)
     );
     assert!(
@@ -130,6 +165,376 @@ fn modular_reserved_words_and_path_punctuation_are_closed_tokens() {
             .tokens
             .iter()
             .any(|token| token.kind == TokenKind::Where)
+    );
+}
+
+#[test]
+fn module_newtype_projects_same_spelled_one_field_representation() {
+    let text = "pub opaque newtype UserId = UserId(Int)\n";
+    let source = SourceFile::new("newtype.ash", text).expect("newtype source should fit");
+    let lexed = lex(&source).expect("newtype source should lex");
+
+    assert!(lexed.diagnostics.is_empty());
+    assert!(
+        lexed
+            .tokens
+            .iter()
+            .any(|token| token.kind == TokenKind::Newtype
+                && spanned_text(&source, token.span) == "newtype"),
+        "{:?}",
+        lexed.tokens
+    );
+
+    let tree = parse(lexed);
+    assert!(
+        tree.parse_diagnostics().is_empty(),
+        "{:?}",
+        tree.parse_diagnostics()
+    );
+    assert!(
+        tree.events()
+            .iter()
+            .any(|event| matches!(event, Event::Start(NodeKind::NewtypeDeclaration))),
+        "{:?}",
+        tree.events()
+    );
+
+    let module = project_module(&source, &tree).expect("newtype source should project");
+    assert!(module.imports.is_empty());
+    assert_eq!(
+        module.declaration_order,
+        vec![SurfaceDeclarationIndex::Type(0)]
+    );
+    let [declaration] = module.type_declarations.as_slice() else {
+        panic!("expected one projected nominal declaration");
+    };
+    assert_eq!(
+        declaration.declaration_kind,
+        SurfaceNominalDeclarationKind::Newtype
+    );
+    assert_eq!(declaration.visibility, SurfaceTypeVisibility::PublicOpaque);
+    assert_eq!(declaration.name.text, "UserId");
+    assert_eq!(spanned_text(&source, declaration.name.span), "UserId");
+    assert!(declaration.parameters.is_empty());
+    let [constructor] = declaration.constructors.as_slice() else {
+        panic!("expected one newtype constructor");
+    };
+    assert_eq!(constructor.name.text, "UserId");
+    assert_eq!(spanned_text(&source, constructor.name.span), "UserId");
+    let [field] = constructor.fields.as_slice() else {
+        panic!("expected one representation field");
+    };
+    assert!(matches!(field.kind, SurfaceTypeKind::Int));
+    assert_eq!(spanned_text(&source, field.span), "Int");
+    assert_eq!(spanned_text(&source, declaration.span), text.trim_end());
+}
+
+#[test]
+fn reserved_newtype_spelling_cannot_be_used_as_a_value_identifier() {
+    let text = "main : Unit -> Int\nmain () = newtype\n";
+    let source =
+        SourceFile::new("reserved-newtype.ash", text).expect("reserved-newtype source should fit");
+    let lexed = lex(&source).expect("reserved-newtype source should lex");
+    assert!(lexed.diagnostics.is_empty(), "{:?}", lexed.diagnostics);
+    assert!(lexed.tokens.iter().any(|token| {
+        token.kind == TokenKind::Newtype && spanned_text(&source, token.span) == "newtype"
+    }));
+
+    let tree = parse(lexed);
+    let [diagnostic] = tree.parse_diagnostics() else {
+        panic!(
+            "the reserved spelling should have one owned parser diagnostic: {:?}",
+            tree.parse_diagnostics()
+        );
+    };
+    assert_eq!(diagnostic.reason, ParseReason::ExpectedForm);
+    assert_eq!(diagnostic.expected.as_deref(), Some("an expression"));
+    assert_eq!(diagnostic.found.as_deref(), Some("newtype"));
+    assert_eq!(spanned_text(&source, diagnostic.primary.span()), "newtype");
+    assert_token_complete("reserved newtype value identifier", &tree);
+    assert_balanced_events("reserved newtype value identifier", &tree);
+    assert_eq!(
+        project_module(&source, &tree),
+        Err(ProjectionError::RecoveryNodesPresent)
+    );
+}
+
+#[test]
+fn module_newtype_projects_visibility_kinded_parameters_and_distinct_constructor_spelling() {
+    let text = "newtype PrivateId = PrivateId(Int)\n\npub newtype PublicId = PublicId(Int)\n\npub opaque newtype OpaqueId = OpaqueId(Int)\n\npub newtype Wrapped<F : Type -> Type, A> = Wraps(F<A>)\n\npub type Box = Box(Int)\n";
+    let source = SourceFile::new("newtypes.ash", text).expect("newtype source should fit");
+    let module = parse_valid_source(&source);
+
+    assert_eq!(
+        module.declaration_order,
+        vec![
+            SurfaceDeclarationIndex::Type(0),
+            SurfaceDeclarationIndex::Type(1),
+            SurfaceDeclarationIndex::Type(2),
+            SurfaceDeclarationIndex::Type(3),
+            SurfaceDeclarationIndex::Type(4),
+        ]
+    );
+    assert_eq!(
+        module
+            .type_declarations
+            .iter()
+            .map(|declaration| declaration.declaration_kind)
+            .collect::<Vec<_>>(),
+        vec![
+            SurfaceNominalDeclarationKind::Newtype,
+            SurfaceNominalDeclarationKind::Newtype,
+            SurfaceNominalDeclarationKind::Newtype,
+            SurfaceNominalDeclarationKind::Newtype,
+            SurfaceNominalDeclarationKind::Data,
+        ]
+    );
+    assert_eq!(
+        module
+            .type_declarations
+            .iter()
+            .map(|declaration| declaration.visibility)
+            .collect::<Vec<_>>(),
+        vec![
+            SurfaceTypeVisibility::Private,
+            SurfaceTypeVisibility::PublicTransparent,
+            SurfaceTypeVisibility::PublicOpaque,
+            SurfaceTypeVisibility::PublicTransparent,
+            SurfaceTypeVisibility::PublicTransparent,
+        ]
+    );
+
+    let wrapped = &module.type_declarations[3];
+    assert_eq!(wrapped.name.text, "Wrapped");
+    assert_eq!(
+        spanned_text(&source, wrapped.span),
+        "pub newtype Wrapped<F : Type -> Type, A> = Wraps(F<A>)"
+    );
+    let [constructor] = wrapped.constructors.as_slice() else {
+        panic!("expected one projected constructor");
+    };
+    assert_eq!(constructor.name.text, "Wraps");
+    assert_eq!(spanned_text(&source, constructor.span), "Wraps(F<A>)");
+    let [higher, element] = wrapped.parameters.as_slice() else {
+        panic!("expected two newtype type parameters");
+    };
+    assert_eq!(higher.name.text, "F");
+    let kind = higher
+        .kind
+        .as_ref()
+        .expect("F should have a kind annotation");
+    let SurfaceKindKind::Function { domain, codomain } = &kind.kind else {
+        panic!("expected a function kind");
+    };
+    assert!(matches!(domain.kind, SurfaceKindKind::Type));
+    assert!(matches!(codomain.kind, SurfaceKindKind::Type));
+    assert_eq!(element.name.text, "A");
+    assert!(element.kind.is_none());
+    let [field] = constructor.fields.as_slice() else {
+        panic!("expected the one representation field");
+    };
+    let SurfaceTypeKind::Application {
+        constructor: representation_constructor,
+        arguments,
+    } = &field.kind
+    else {
+        panic!("expected the representation field to retain F<A>");
+    };
+    assert_eq!(representation_constructor.member().text, "F");
+    let [argument] = arguments.as_slice() else {
+        panic!("expected one type argument");
+    };
+    assert!(matches!(
+        &argument.kind,
+        SurfaceTypeKind::Named(SurfaceReference::Unqualified(name)) if name.text == "A"
+    ));
+
+    let ordinary = &module.type_declarations[4];
+    assert_eq!(ordinary.name.text, "Box");
+    assert_eq!(
+        ordinary.declaration_kind,
+        SurfaceNominalDeclarationKind::Data
+    );
+}
+
+#[test]
+fn malformed_module_newtypes_recover_with_token_complete_following_declarations() {
+    let cases = [
+        (
+            "missing constructor",
+            "newtype Missing =\nmain : Unit -> Int\nmain () = 0\n",
+            ParseReason::ExpectedForm,
+            Some("an identifier"),
+            Some("line end"),
+            17,
+            18,
+            "\n",
+            None,
+        ),
+        (
+            "nullary constructor",
+            "newtype Empty = Empty\nmain : Unit -> Int\nmain () = 0\n",
+            ParseReason::ExpectedForm,
+            Some("("),
+            Some("line end"),
+            21,
+            22,
+            "\n",
+            None,
+        ),
+        (
+            "missing representation field",
+            "newtype Empty = Empty()\nmain : Unit -> Int\nmain () = 0\n",
+            ParseReason::ExpectedForm,
+            Some("a type"),
+            Some(")"),
+            22,
+            23,
+            ")",
+            None,
+        ),
+        (
+            "second field",
+            "newtype Pair = Pair(Int, Int)\nmain : Unit -> Int\nmain () = 0\n",
+            ParseReason::ExpectedForm,
+            Some(")"),
+            Some(","),
+            23,
+            24,
+            ",",
+            Some((SynchronizationBoundary::ParenthesisClosing, 28, 29)),
+        ),
+        (
+            "second constructor",
+            "newtype Choice = Choice(Int)\n| Other(Int)\nmain : Unit -> Int\nmain () = 0\n",
+            ParseReason::ExpectedForm,
+            Some("a logical line end"),
+            Some("|"),
+            29,
+            30,
+            "|",
+            Some((SynchronizationBoundary::LogicalLineEnd, 41, 42)),
+        ),
+    ];
+
+    for (case, text, reason, expected, found, start, end, offending, synchronization) in cases {
+        let source = SourceFile::new("malformed-newtype.ash", text)
+            .expect("malformed newtype source should fit");
+        let lexed = lex(&source).expect("malformed newtype source should lex");
+        assert!(
+            lexed.diagnostics.is_empty(),
+            "{case}: {:?}",
+            lexed.diagnostics
+        );
+        let tree = parse(lexed);
+
+        let [diagnostic] = tree.parse_diagnostics() else {
+            panic!(
+                "{case} should retain exactly one parser diagnostic: {:?}",
+                tree.parse_diagnostics()
+            );
+        };
+        assert_eq!(diagnostic.reason, reason, "{case}");
+        assert_eq!(diagnostic.expected.as_deref(), expected, "{case}");
+        assert_eq!(diagnostic.found.as_deref(), found, "{case}");
+        assert_eq!(diagnostic.primary.span().range().start(), start, "{case}");
+        assert_eq!(diagnostic.primary.span().range().end(), end, "{case}");
+        assert_eq!(
+            spanned_text(&source, diagnostic.primary.span()),
+            offending,
+            "{case}"
+        );
+        if let Some((boundary, sync_start, sync_end)) = synchronization {
+            let [
+                ParseContext::Synchronization {
+                    boundary: actual,
+                    span,
+                },
+            ] = diagnostic.context.as_slice()
+            else {
+                panic!("{case} should retain one synchronization context");
+            };
+            assert_eq!(*actual, boundary, "{case}");
+            assert_eq!(span.source(), source.id(), "{case}");
+            assert_eq!(span.range().start(), sync_start, "{case}");
+            assert_eq!(span.range().end(), sync_end, "{case}");
+            let [related] = diagnostic.related.as_slice() else {
+                panic!("{case} should retain one synchronization label");
+            };
+            assert_eq!(related.span().source(), source.id(), "{case}");
+            assert_eq!(related.span().range().start(), sync_start, "{case}");
+            assert_eq!(related.span().range().end(), sync_end, "{case}");
+        }
+        assert!(
+            tree.events()
+                .iter()
+                .any(|event| matches!(event, Event::Start(NodeKind::NewtypeDeclaration))),
+            "{case} should enter the newtype declaration grammar"
+        );
+        assert!(
+            tree.events()
+                .iter()
+                .any(|event| matches!(event, Event::Start(NodeKind::EquationalGlobal))),
+            "{case} should parse the following valid declaration"
+        );
+        assert_token_complete(case, &tree);
+        assert_balanced_events(case, &tree);
+        assert_eq!(
+            project_module(&source, &tree),
+            Err(ProjectionError::RecoveryNodesPresent),
+            "{case} should stop at parser recovery before projection"
+        );
+    }
+}
+
+#[test]
+fn module_newtype_missing_right_delimiter_reports_causal_opening_and_retains_tokens() {
+    let text = "newtype Broken = Broken(Int\nmain : Unit -> Int\nmain () = 0\n";
+    let source = SourceFile::new("malformed-newtype.ash", text)
+        .expect("malformed newtype source should fit");
+    let lexed = lex(&source).expect("malformed newtype source should lex");
+    assert!(lexed.diagnostics.is_empty(), "{:?}", lexed.diagnostics);
+    let tree = parse(lexed);
+
+    let [unclosed, boundary] = tree.parse_diagnostics() else {
+        panic!(
+            "missing right delimiter should retain two parser diagnostics: {:?}",
+            tree.parse_diagnostics()
+        );
+    };
+    assert_eq!(unclosed.reason, ParseReason::UnclosedGroup);
+    assert_eq!(unclosed.expected.as_deref(), Some(")"));
+    assert_eq!(unclosed.found.as_deref(), Some("identifier"));
+    assert_eq!(spanned_text(&source, unclosed.primary.span()), "(");
+    assert_eq!(unclosed.primary.span().range().start(), 23);
+    assert_eq!(unclosed.primary.span().range().end(), 24);
+    let [related] = unclosed.related.as_slice() else {
+        panic!("the unclosed group should point at the next retained token");
+    };
+    assert_eq!(spanned_text(&source, related.span()), "main");
+    assert_eq!(related.span().range().start(), 28);
+    assert_eq!(related.span().range().end(), 32);
+    assert!(unclosed.context.is_empty());
+
+    assert_eq!(boundary.reason, ParseReason::ExpectedForm);
+    assert_eq!(boundary.expected.as_deref(), Some("a logical line end"));
+    assert_eq!(boundary.found.as_deref(), Some("identifier"));
+    assert_eq!(spanned_text(&source, boundary.primary.span()), "main");
+    assert_eq!(boundary.primary.span().range().start(), 28);
+    assert_eq!(boundary.primary.span().range().end(), 32);
+    assert!(boundary.related.is_empty());
+    assert!(boundary.context.is_empty());
+
+    assert!(
+        tree.events()
+            .iter()
+            .any(|event| matches!(event, Event::Start(NodeKind::NewtypeDeclaration)))
+    );
+    assert_token_complete("missing right delimiter", &tree);
+    assert_balanced_events("missing right delimiter", &tree);
+    assert_eq!(
+        project_module(&source, &tree),
+        Err(ProjectionError::RecoveryNodesPresent)
     );
 }
 

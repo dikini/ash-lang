@@ -440,6 +440,7 @@ fn classify_word(word: &str) -> Option<TokenKind> {
         "rec" => Some(TokenKind::Rec),
         "and" => Some(TokenKind::And),
         "type" => Some(TokenKind::Type),
+        "newtype" => Some(TokenKind::Newtype),
         "match" => Some(TokenKind::Match),
         "import" => Some(TokenKind::Import),
         "as" => Some(TokenKind::As),
