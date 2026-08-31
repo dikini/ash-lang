@@ -15,7 +15,8 @@ use crate::{
     },
     core::{
         BuildError, CORE_PAYLOAD_DEPTH_LIMIT, CoreBuilder, CoreMatchArm, CorePattern,
-        CorePatternKind, NodeId, Primitive, TypedBinder, UnvalidatedProgram,
+        CorePatternKind, NewtypeConversionDirection, NodeId, Primitive, TypedBinder,
+        UnvalidatedProgram,
     },
     diagnostic::{Diagnostic, SourceLabel},
     evidence::{
@@ -1158,21 +1159,20 @@ fn substitute_fresh_type_variables_in_order(
     if replacements.is_empty() {
         return clone_type_with_budget(ty, type_work);
     }
-    let mut current: Option<IterativeTypeOwner> = None;
+    type_work.charge(replacements.len())?;
+    let mut replacement = TypeReplacementBuffer::new();
+    replacement
+        .try_reserve(replacements.len())
+        .map_err(|_| ())?;
     for (source, fresh) in replacements {
-        let mut replacement = TypeReplacementBuffer::new();
-        replacement.try_reserve(1).map_err(|_| ())?;
         replacement.try_insert_unique(*source, Type::Variable(*fresh))?;
-        let input = current.as_deref().unwrap_or(ty);
-        let renamed = substitute_type_variables_with(input, replacement.as_map(), |cells| {
-            type_work.charge(cells)
-        })?;
-        match current.as_mut() {
-            Some(current) => current.replace(renamed),
-            None => current = Some(IterativeTypeOwner::new(renamed)),
-        }
     }
-    Ok(current.expect("non-empty fresh substitutions").into_inner())
+    substitute_type_variables_with(
+        ty,
+        replacement.as_map(),
+        |cells| type_work.charge(cells),
+        || (),
+    )
 }
 
 #[derive(Debug, Default, Eq, PartialEq)]
@@ -1927,6 +1927,7 @@ impl Elaborator {
                         &method_fact.value_type,
                         replacement.as_map(),
                         |cells| self.type_work.charge(cells),
+                        || (),
                     )
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
                 );
@@ -2379,6 +2380,7 @@ impl Elaborator {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     })
                 },
+                || TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
             )?);
             let provenance = self.at_span_provenance(&method_type, method.annotation_span())?;
             let presentation = implementation_method_origin(
@@ -2763,6 +2765,122 @@ impl Elaborator {
         Ok(identity)
     }
 
+    fn lower_newtype_constructor_value(
+        &mut self,
+        owner: crate::types::NominalTypeId,
+        source_scheme: Type,
+        origin: &Origin,
+        span: Span,
+    ) -> Result<NodeId, TypeError> {
+        let source_scheme = IterativeTypeOwner::new(source_scheme);
+        let (source_parameters, source_body) = match &*source_scheme {
+            Type::Forall(parameters, body) => (parameters.as_ref(), body.as_ref()),
+            body => (&[][..], body),
+        };
+        let generated_marker = self.generated_type_variables.len();
+        let next_generated_type_variable = self.next_generated_type_variable;
+        let builder_checkpoint = self.builder.checkpoint();
+        let result = (|| {
+            let scratch_work = source_parameters
+                .len()
+                .checked_mul(2)
+                .ok_or_else(|| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            self.type_work
+                .charge(scratch_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let mut generated_parameters = Vec::new();
+            generated_parameters
+                .try_reserve(source_parameters.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let mut replacements = TypeReplacementBuffer::new();
+            replacements
+                .try_reserve(source_parameters.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            for (source, kind) in source_parameters {
+                let generated = self.fresh_type_variable(kind, span)?;
+                replacements
+                    .try_insert_unique(*source, Type::Variable(generated))
+                    .map_err(|()| invalid_state())?;
+                generated_parameters.push((
+                    generated,
+                    clone_kind_with_budget(kind, &mut self.type_work).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?,
+                ));
+            }
+            let body = IterativeTypeOwner::new(
+                substitute_type_variables_with(
+                    source_body,
+                    replacements.as_map(),
+                    |cells| self.type_work.charge(cells),
+                    || (),
+                )
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+            );
+            let body = body.into_inner();
+            let Type::Function(domain, codomain) = body else {
+                discard_type_iteratively(body);
+                return Err(invalid_state());
+            };
+            let domain = IterativeTypeOwner::new(*domain);
+            let codomain = IterativeTypeOwner::new(*codomain);
+            let parameter_type = self.clone_type(&domain)?;
+            let parameter = self.builder.binder(parameter_type, origin.clone())?;
+            let child_type = self.clone_type(&domain)?;
+            let child = self
+                .builder
+                .variable(parameter.id(), child_type, origin.clone())?;
+            let conversion_type = self.clone_type(&codomain)?;
+            let conversion = self.builder.newtype_conversion(
+                owner,
+                NewtypeConversionDirection::Wrap,
+                child,
+                conversion_type,
+                origin.clone(),
+            )?;
+            let function_type = IterativeTypeOwner::new(Type::Function(
+                Box::new(domain.into_inner()),
+                Box::new(codomain.into_inner()),
+            ));
+            if generated_parameters.is_empty() {
+                return self
+                    .builder
+                    .function(
+                        parameter,
+                        conversion,
+                        function_type.into_inner(),
+                        origin.clone(),
+                    )
+                    .map_err(Into::into);
+            }
+            let retained_function_type = self.clone_type(&function_type)?;
+            let function = self.builder.function(
+                parameter,
+                conversion,
+                retained_function_type,
+                origin.clone(),
+            )?;
+            let scheme_parameters = clone_kinded_type_parameters_with_budget(
+                &generated_parameters,
+                &mut self.type_work,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let scheme = Type::Forall(
+                scheme_parameters.into_boxed_slice(),
+                Box::new(function_type.into_inner()),
+            );
+            self.builder
+                .type_abstraction(generated_parameters, function, scheme, origin.clone())
+                .map_err(Into::into)
+        })();
+        if result.is_err() {
+            self.builder.rollback(builder_checkpoint);
+            self.generated_type_variables.truncate(generated_marker);
+            self.next_generated_type_variable = next_generated_type_variable;
+        }
+        result
+    }
+
     fn generalize_inference_variables(
         &mut self,
         variables: &[InferenceVariableId],
@@ -2859,9 +2977,12 @@ impl Elaborator {
                 replacements.insert(*binder, argument.clone());
                 arguments.push(argument);
             }
-            let instantiated = substitute_type_variables_with(&fact.ty, &replacements, |cells| {
-                self.type_work.charge(cells)
-            })
+            let instantiated = substitute_type_variables_with(
+                &fact.ty,
+                &replacements,
+                |cells| self.type_work.charge(cells),
+                || (),
+            )
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             Ok((instantiated, arguments))
         })();
@@ -3372,6 +3493,7 @@ impl Elaborator {
                                 argument,
                                 replacements.as_map(),
                                 |cells| self.type_work.charge(cells),
+                                || (),
                             )
                             .map_err(|()| {
                                 TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
@@ -4004,9 +4126,12 @@ impl Elaborator {
                 return Err(invalid_state());
             }
         }
-        substitute_type_variables_with(body, replacements.as_map(), |cells| {
-            self.type_work.charge(cells)
-        })
+        substitute_type_variables_with(
+            body,
+            replacements.as_map(),
+            |cells| self.type_work.charge(cells),
+            || (),
+        )
         .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
     }
 
@@ -4034,9 +4159,12 @@ impl Elaborator {
                 return Err(invalid_state());
             }
         }
-        substitute_type_variables_with(ty, replacements.as_map(), |cells| {
-            self.type_work.charge(cells)
-        })
+        substitute_type_variables_with(
+            ty,
+            replacements.as_map(),
+            |cells| self.type_work.charge(cells),
+            || (),
+        )
         .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
     }
 
@@ -4402,9 +4530,12 @@ impl Elaborator {
             }
         }
         let renamed = IterativeTypeOwner::new(
-            substitute_type_variables_with(expected_body, replacements.as_map(), |cells| {
-                self.type_work.charge(cells)
-            })
+            substitute_type_variables_with(
+                expected_body,
+                replacements.as_map(),
+                |cells| self.type_work.charge(cells),
+                || (),
+            )
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
         );
         same_type_with_budget(&renamed, actual_body, &mut self.type_work)
@@ -6474,17 +6605,22 @@ impl Elaborator {
                             .registry
                             .constructor(occurrence.constructor)
                             .ok_or_else(invalid_state)?;
+                        let constructor_owner = constructor.owner;
                         let owner = self
                             .registry
-                            .nominal(constructor.owner)
+                            .nominal(constructor_owner)
                             .ok_or_else(invalid_state)?;
-                        if owner.declaration_kind == ResolvedNominalDeclarationKind::Newtype {
-                            return Err(invalid_state());
-                        }
+                        let is_newtype =
+                            owner.declaration_kind == ResolvedNominalDeclarationKind::Newtype;
+                        let declared_payload = if is_newtype {
+                            Some(owner.representation.as_ref().ok_or_else(invalid_state)?)
+                        } else {
+                            constructor.payload.as_ref()
+                        };
                         let declaration_span = constructor.origin.primary_span();
                         let parameters = self
                             .registry
-                            .nominal_parameters(constructor.owner)
+                            .nominal_parameters(constructor_owner)
                             .ok_or_else(invalid_state)?;
                         let parameter_count = parameters.len();
                         let result_cells = if parameters.is_empty() {
@@ -6497,7 +6633,7 @@ impl Elaborator {
                             .map_err(|()| {
                                 TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                             })?;
-                        let payload = if let Some(payload) = &constructor.payload {
+                        let payload = if let Some(payload) = declared_payload {
                             self.type_work.charge(1).map_err(|()| {
                                 TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                             })?;
@@ -6529,7 +6665,7 @@ impl Elaborator {
                             ));
                         }
                         let result = if parameters.is_empty() {
-                            Type::Nominal(constructor.owner)
+                            Type::Nominal(constructor_owner)
                         } else {
                             let mut arguments = Vec::new();
                             arguments.try_reserve(parameter_count).map_err(|_| {
@@ -6540,7 +6676,7 @@ impl Elaborator {
                                     .iter()
                                     .map(|parameter| Type::Variable(parameter.id)),
                             );
-                            Type::apply_arguments(Type::Nominal(constructor.owner), arguments)
+                            Type::apply_arguments(Type::Nominal(constructor_owner), arguments)
                         };
                         let scheme = IterativeTypeOwner::new(if let Some(payload) = payload {
                             Type::Function(Box::new(payload.into_inner()), Box::new(result))
@@ -6571,11 +6707,20 @@ impl Elaborator {
                             })?;
                             Type::Forall(quantified, Box::new(fact_ty.into_inner()))
                         };
-                        let mut node = self.builder.constructor(
-                            occurrence.constructor,
-                            core_scheme,
-                            occurrence.origin.clone(),
-                        )?;
+                        let mut node = if is_newtype {
+                            self.lower_newtype_constructor_value(
+                                constructor_owner,
+                                core_scheme,
+                                &occurrence.origin,
+                                current.span,
+                            )?
+                        } else {
+                            self.builder.constructor(
+                                occurrence.constructor,
+                                core_scheme,
+                                occurrence.origin.clone(),
+                            )?
+                        };
                         if !arguments.is_empty() {
                             let core_ty = clone_type_with_budget(&ty, &mut self.type_work)
                                 .map_err(|()| {
@@ -6830,6 +6975,8 @@ impl Elaborator {
                     ty,
                     origin,
                     provenance,
+                    contains_newtype,
+                    pattern_count,
                 } => {
                     let origin = OriginOwner::new(origin);
                     let mut pattern = CorePatternOwner::new(pattern);
@@ -6875,7 +7022,7 @@ impl Elaborator {
                             domain.into_inner(),
                             scrutinee_origin.into_inner(),
                         )?;
-                        let match_node = self.builder.match_expression(
+                        let match_node = self.lower_match_expression(
                             scrutinee,
                             vec![CoreMatchArm::new(
                                 pattern.take().ok_or_else(invalid_state)?,
@@ -6884,6 +7031,8 @@ impl Elaborator {
                             )],
                             core_body_type.into_inner(),
                             match_origin.into_inner(),
+                            contains_newtype,
+                            pattern_count,
                         )?;
                         body.set_node(match_node);
                     }
@@ -7180,6 +7329,8 @@ impl Elaborator {
                         &mut binder_ids,
                         GeneratedReason::BindingLowering,
                     )?;
+                    let contains_newtype = checked.contains_newtype;
+                    let pattern_count = checked.pattern_count;
                     let mut pattern = CorePatternOwner::new(Some(checked.pattern));
                     if checked.inference_changed {
                         let rewritten = clone_type_with_budget(&pattern.ty, &mut self.type_work)
@@ -7289,6 +7440,8 @@ impl Elaborator {
                                 pattern,
                                 initializer: initializer.node,
                                 origin,
+                                contains_newtype,
+                                pattern_count,
                             });
                         }
                     }
@@ -7405,6 +7558,8 @@ impl Elaborator {
                         next_arm: 0,
                         matrix,
                         arm_bodies,
+                        contains_newtype: false,
+                        pattern_count: 0,
                         result_type: expected.map(|(expected, kind)| {
                             let ProvenancedType { ty, provenance } = expected.into_inner();
                             (ty, provenance, kind)
@@ -7466,11 +7621,13 @@ impl Elaborator {
                         ));
                     }
                     let core_ty = self.clone_type(&result_type.ty)?;
-                    let node = self.builder.match_expression(
+                    let node = self.lower_match_expression(
                         progress.scrutinee.node,
                         arms,
                         core_ty,
                         Origin::Source(progress.span),
+                        progress.contains_newtype,
+                        progress.pattern_count,
                     )?;
                     let ProvenancedType { ty, provenance } = result_type.into_inner();
                     values.push(TypedNode {
@@ -7509,12 +7666,15 @@ impl Elaborator {
                                 pattern,
                                 initializer,
                                 origin,
-                                ..
-                            } => self.builder.match_expression(
+                                contains_newtype,
+                                pattern_count,
+                            } => self.lower_match_expression(
                                 initializer,
                                 vec![CoreMatchArm::new(pattern, body.node, origin.clone())],
                                 core_body_type,
                                 origin,
+                                contains_newtype,
+                                pattern_count,
                             )?,
                             ElaboratedDeclaration::Recursive { members, origin } => self
                                 .builder
@@ -7628,6 +7788,7 @@ impl Elaborator {
             &mut binders,
             GeneratedReason::BindingLowering,
         )?;
+        progress.record_pattern_decision(checked.contains_newtype, checked.pattern_count)?;
         let mut pattern = CorePatternOwner::new(Some(checked.pattern));
         if checked.inference_changed {
             let rewritten = clone_type_with_budget(&pattern.ty, &mut self.type_work)
@@ -7683,6 +7844,1402 @@ impl Elaborator {
         Ok(())
     }
 
+    fn lower_match_expression(
+        &mut self,
+        scrutinee: NodeId,
+        arms: Vec<CoreMatchArm>,
+        result_type: Type,
+        origin: Origin,
+        contains_newtype: bool,
+        pattern_count: usize,
+    ) -> Result<NodeId, TypeError> {
+        if !contains_newtype {
+            return self
+                .builder
+                .match_expression(scrutinee, arms, result_type, origin)
+                .map_err(Into::into);
+        }
+        self.lower_newtype_pattern_decision(scrutinee, arms, result_type, origin, pattern_count)
+    }
+
+    fn flatten_pattern_decision(
+        &mut self,
+        pattern: CorePattern,
+        arena: &mut PatternDecisionPatternArena,
+        scratch: &mut PatternDecisionFlattenScratch,
+    ) -> Result<(usize, PatternDecisionBinderBuffer), TypeError> {
+        if !scratch.work.0.is_empty() || !scratch.roots.is_empty() {
+            pattern.discard_iteratively();
+            return Err(invalid_state());
+        }
+        let mut binders = PatternDecisionBinderBuffer(Vec::new());
+        scratch
+            .work
+            .0
+            .push(PatternDecisionFlattenTask::Visit(pattern));
+        while let Some(task) = scratch.work.0.pop() {
+            match task {
+                PatternDecisionFlattenTask::Visit(pattern) => {
+                    let CorePattern { ty, origin, kind } = pattern;
+                    match kind {
+                        CorePatternKind::Binder(binder) => {
+                            binders.0.try_reserve(1).map_err(|_| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?;
+                            let slot = binders.0.len();
+                            binders.0.push(binder);
+                            let id = arena.0.len();
+                            arena.0.push(PatternDecisionPattern {
+                                ty,
+                                origin,
+                                kind: PatternDecisionKind::Binder(slot),
+                            });
+                            scratch.roots.push(id);
+                        }
+                        CorePatternKind::Wildcard => {
+                            let id = arena.0.len();
+                            arena.0.push(PatternDecisionPattern {
+                                ty,
+                                origin,
+                                kind: PatternDecisionKind::Wildcard,
+                            });
+                            scratch.roots.push(id);
+                        }
+                        CorePatternKind::Boolean(value) => {
+                            let id = arena.0.len();
+                            arena.0.push(PatternDecisionPattern {
+                                ty,
+                                origin,
+                                kind: PatternDecisionKind::Boolean(value),
+                            });
+                            scratch.roots.push(id);
+                        }
+                        CorePatternKind::Unit => {
+                            let id = arena.0.len();
+                            arena.0.push(PatternDecisionPattern {
+                                ty,
+                                origin,
+                                kind: PatternDecisionKind::Unit,
+                            });
+                            scratch.roots.push(id);
+                        }
+                        CorePatternKind::Tuple(elements) => {
+                            let elements = elements.into_vec();
+                            let count = elements.len();
+                            scratch
+                                .work
+                                .0
+                                .try_reserve(count.saturating_add(1))
+                                .map_err(|_| {
+                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                                })?;
+                            scratch
+                                .work
+                                .0
+                                .push(PatternDecisionFlattenTask::FinishTuple {
+                                    ty,
+                                    origin,
+                                    count,
+                                });
+                            for element in elements.into_iter().rev() {
+                                scratch
+                                    .work
+                                    .0
+                                    .push(PatternDecisionFlattenTask::Visit(element));
+                            }
+                        }
+                        CorePatternKind::Constructor {
+                            constructor,
+                            payload,
+                        } => {
+                            let has_payload = payload.is_some();
+                            scratch
+                                .work
+                                .0
+                                .try_reserve(usize::from(has_payload) + 1)
+                                .map_err(|_| {
+                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                                })?;
+                            scratch
+                                .work
+                                .0
+                                .push(PatternDecisionFlattenTask::FinishConstructor {
+                                    ty,
+                                    origin,
+                                    constructor,
+                                    has_payload,
+                                });
+                            if let Some(payload) = payload {
+                                scratch
+                                    .work
+                                    .0
+                                    .push(PatternDecisionFlattenTask::Visit(*payload));
+                            }
+                        }
+                    }
+                }
+                PatternDecisionFlattenTask::FinishTuple { ty, origin, count } => {
+                    if scratch.roots.len() < count {
+                        discard_type_iteratively(ty);
+                        discard_origin_iteratively(origin);
+                        return Err(invalid_state());
+                    }
+                    let start = scratch.roots.len() - count;
+                    let mut children = Vec::new();
+                    children.try_reserve(count).map_err(|_| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    children.extend(scratch.roots.drain(start..));
+                    let id = arena.0.len();
+                    arena.0.push(PatternDecisionPattern {
+                        ty,
+                        origin,
+                        kind: PatternDecisionKind::Tuple(children.into_boxed_slice()),
+                    });
+                    scratch.roots.push(id);
+                }
+                PatternDecisionFlattenTask::FinishConstructor {
+                    ty,
+                    origin,
+                    constructor,
+                    has_payload,
+                } => {
+                    let payload = if has_payload {
+                        Some(scratch.roots.pop().ok_or_else(invalid_state)?)
+                    } else {
+                        None
+                    };
+                    let id = arena.0.len();
+                    arena.0.push(PatternDecisionPattern {
+                        ty,
+                        origin,
+                        kind: PatternDecisionKind::Constructor {
+                            constructor,
+                            payload,
+                        },
+                    });
+                    scratch.roots.push(id);
+                }
+            }
+        }
+        let root = scratch.roots.pop().ok_or_else(invalid_state)?;
+        if scratch.roots.is_empty() {
+            Ok((root, binders))
+        } else {
+            Err(invalid_state())
+        }
+    }
+
+    fn build_pattern_decision_continuation(
+        &mut self,
+        mut body: NodeId,
+        mut binders: PatternDecisionBinderBuffer,
+        result_type: &Type,
+        origin: &Origin,
+    ) -> Result<PatternDecisionContinuation, TypeError> {
+        self.type_work
+            .charge(binders.0.len())
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut application_types = OwnedTypeBuffer(Vec::new());
+        application_types
+            .try_reserve(binders.0.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut function_type = IterativeTypeOwner::new(self.clone_type(result_type)?);
+        while let Some(binder) = binders.0.pop() {
+            application_types.push(self.clone_type(&function_type)?);
+            let domain = self.clone_type(binder.ty())?;
+            self.type_work
+                .charge(1)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let next_type = IterativeTypeOwner::new(Type::Function(
+                Box::new(domain),
+                Box::new(function_type.into_inner()),
+            ));
+            let core_type = self.clone_type(&next_type)?;
+            body = self.builder.function(
+                binder,
+                body,
+                core_type,
+                Origin::Generated {
+                    cause: Box::new(origin.clone()),
+                    reason: GeneratedReason::FunctionLowering,
+                },
+            )?;
+            function_type = next_type;
+        }
+        application_types.0.reverse();
+        Ok(PatternDecisionContinuation {
+            function: body,
+            application_types,
+            origin: origin.clone(),
+        })
+    }
+
+    fn clone_pattern_decision_row(
+        &mut self,
+        row: &PatternDecisionRow,
+    ) -> Result<PatternDecisionRow, TypeError> {
+        let work = row
+            .cells
+            .len()
+            .checked_add(row.arguments.len())
+            .and_then(|work| work.checked_add(1))
+            .ok_or_else(|| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        self.type_work
+            .charge(work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut cells = Vec::new();
+        cells
+            .try_reserve(row.cells.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        cells.extend_from_slice(&row.cells);
+        let mut arguments = Vec::new();
+        arguments
+            .try_reserve(row.arguments.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        arguments.extend_from_slice(&row.arguments);
+        Ok(PatternDecisionRow {
+            cells,
+            continuation: row.continuation,
+            arguments,
+        })
+    }
+
+    fn apply_pattern_decision_continuation(
+        &mut self,
+        row: &PatternDecisionRow,
+        continuations: &PatternDecisionContinuationArena,
+    ) -> Result<NodeId, TypeError> {
+        let continuation = continuations
+            .0
+            .get(row.continuation)
+            .ok_or_else(invalid_state)?;
+        if continuation.application_types.len() != row.arguments.len() {
+            return Err(invalid_state());
+        }
+        let mut node = continuation.function;
+        for (argument, ty) in row
+            .arguments
+            .iter()
+            .zip(continuation.application_types.iter())
+        {
+            let argument = argument.ok_or_else(invalid_state)?;
+            let application_type = self.clone_type(ty)?;
+            node = self.builder.application(
+                node,
+                argument,
+                application_type,
+                continuation.origin.clone(),
+            )?;
+        }
+        Ok(node)
+    }
+
+    fn replace_pattern_decision_cell(
+        &mut self,
+        row: &mut PatternDecisionRow,
+        index: usize,
+        replacements: &[PatternDecisionCell],
+    ) -> Result<(), TypeError> {
+        let additional = replacements.len().saturating_sub(1);
+        self.type_work
+            .charge(replacements.len().saturating_add(1))
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        row.cells
+            .try_reserve(additional)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        row.cells
+            .splice(index..=index, replacements.iter().copied());
+        Ok(())
+    }
+
+    fn replace_pattern_decision_column(
+        &mut self,
+        columns: &[usize],
+        index: usize,
+        replacements: &[usize],
+    ) -> Result<Vec<usize>, TypeError> {
+        let capacity = columns
+            .len()
+            .checked_sub(1)
+            .and_then(|len| len.checked_add(replacements.len()))
+            .ok_or_else(|| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        self.type_work
+            .charge(capacity.saturating_add(1))
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut rebuilt = Vec::new();
+        rebuilt
+            .try_reserve(capacity)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        rebuilt.extend_from_slice(&columns[..index]);
+        rebuilt.extend_from_slice(replacements);
+        rebuilt.extend_from_slice(&columns[index + 1..]);
+        Ok(rebuilt)
+    }
+
+    fn lower_newtype_pattern_decision(
+        &mut self,
+        scrutinee: NodeId,
+        arms: Vec<CoreMatchArm>,
+        result_type: Type,
+        origin: Origin,
+        pattern_count: usize,
+    ) -> Result<NodeId, TypeError> {
+        let Some(first) = arms.first() else {
+            return Err(invalid_state());
+        };
+        let scrutinee_type = IterativeTypeOwner::new(self.clone_type(&first.pattern().ty)?);
+        let retained_binder_type = self.clone_type(&scrutinee_type)?;
+        let retained_binder = self.builder.binder(retained_binder_type, origin.clone())?;
+        let retained_variable_type = self.clone_type(&scrutinee_type)?;
+        let retained_value =
+            self.builder
+                .variable(retained_binder.id(), retained_variable_type, origin.clone())?;
+
+        self.type_work
+            .charge(
+                pattern_count
+                    .checked_mul(4)
+                    .and_then(|work| work.checked_add(arms.len().saturating_mul(3)))
+                    .ok_or_else(|| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut patterns = PatternDecisionPatternArena(Vec::new());
+        patterns
+            .0
+            .try_reserve(pattern_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut flatten_scratch =
+            PatternDecisionFlattenScratch::try_new(pattern_count, &mut self.type_work)?;
+        let mut continuations = PatternDecisionContinuationArena(Vec::new());
+        continuations
+            .0
+            .try_reserve(arms.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut rows = Vec::new();
+        rows.try_reserve(arms.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for arm in arms {
+            let (pattern, body, arm_origin) = arm.into_parts();
+            let (root, binders) =
+                self.flatten_pattern_decision(pattern, &mut patterns, &mut flatten_scratch)?;
+            let argument_count = binders.0.len();
+            let continuation =
+                self.build_pattern_decision_continuation(body, binders, &result_type, &arm_origin)?;
+            let continuation_id = continuations.0.len();
+            continuations.0.push(continuation);
+            let mut arguments = Vec::new();
+            arguments
+                .try_reserve(argument_count)
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            arguments.resize(argument_count, None);
+            rows.push(PatternDecisionRow {
+                cells: vec![PatternDecisionCell::Pattern(root)],
+                continuation: continuation_id,
+                arguments,
+            });
+        }
+
+        let mut columns = PatternDecisionColumnArena(Vec::new());
+        columns
+            .0
+            .try_reserve(pattern_count.saturating_add(1))
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        columns.0.push(PatternDecisionColumn {
+            value: retained_value,
+            ty: self.clone_type(&scrutinee_type)?,
+            origin: origin.clone(),
+        });
+        let result = self.compile_pattern_decision(
+            PatternDecisionMatrix {
+                columns: vec![0],
+                rows,
+            },
+            &patterns,
+            &continuations,
+            &mut columns,
+            &result_type,
+            &origin,
+        )?;
+        self.builder
+            .binding(retained_binder, scrutinee, result, result_type, origin)
+            .map_err(Into::into)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile_pattern_decision(
+        &mut self,
+        matrix: PatternDecisionMatrix,
+        patterns: &PatternDecisionPatternArena,
+        continuations: &PatternDecisionContinuationArena,
+        columns: &mut PatternDecisionColumnArena,
+        result_type: &Type,
+        origin: &Origin,
+    ) -> Result<NodeId, TypeError> {
+        let mut tasks = PatternDecisionWork(Vec::new());
+        let mut values = Vec::new();
+        self.type_work
+            .charge(2)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        tasks
+            .0
+            .try_reserve(1)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        values
+            .try_reserve(1)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        tasks.0.push(PatternDecisionTask::Compile(matrix));
+        while let Some(task) = tasks.0.pop() {
+            match task {
+                PatternDecisionTask::FinishBinding {
+                    binder,
+                    initializer,
+                    result_type,
+                    origin,
+                } => {
+                    let body = values.pop().ok_or_else(invalid_state)?;
+                    values.push(self.builder.binding(
+                        binder,
+                        initializer,
+                        body,
+                        result_type,
+                        origin,
+                    )?);
+                }
+                PatternDecisionTask::FinishMatch {
+                    scrutinee,
+                    patterns: branch_patterns,
+                    arm_origins,
+                    result_type: match_type,
+                    origin: match_origin,
+                } => {
+                    let count = branch_patterns.len();
+                    if count == 0 || count != arm_origins.len() || values.len() < count {
+                        for pattern in branch_patterns {
+                            pattern.discard_iteratively();
+                        }
+                        for arm_origin in arm_origins {
+                            discard_origin_iteratively(arm_origin);
+                        }
+                        discard_type_iteratively(match_type);
+                        discard_origin_iteratively(match_origin);
+                        return Err(invalid_state());
+                    }
+                    let bodies = values.split_off(values.len() - count);
+                    let arms = branch_patterns
+                        .into_iter()
+                        .zip(bodies)
+                        .zip(arm_origins)
+                        .map(|((pattern, body), arm_origin)| {
+                            CoreMatchArm::new(pattern, body, arm_origin)
+                        })
+                        .collect();
+                    values.push(self.builder.match_expression(
+                        scrutinee,
+                        arms,
+                        match_type,
+                        match_origin,
+                    )?);
+                }
+                PatternDecisionTask::Compile(mut matrix) => {
+                    if matrix.rows.is_empty()
+                        || matrix
+                            .rows
+                            .iter()
+                            .any(|row| row.cells.len() != matrix.columns.len())
+                    {
+                        return Err(invalid_state());
+                    }
+                    for row in &mut matrix.rows {
+                        for (index, cell) in row.cells.iter_mut().enumerate() {
+                            let PatternDecisionCell::Pattern(pattern_id) = *cell else {
+                                continue;
+                            };
+                            let pattern = patterns.0.get(pattern_id).ok_or_else(invalid_state)?;
+                            match pattern.kind {
+                                PatternDecisionKind::Binder(slot) => {
+                                    let column = columns
+                                        .0
+                                        .get(matrix.columns[index])
+                                        .ok_or_else(invalid_state)?;
+                                    let argument =
+                                        row.arguments.get_mut(slot).ok_or_else(invalid_state)?;
+                                    if argument.replace(column.value).is_some() {
+                                        return Err(invalid_state());
+                                    }
+                                    *cell = PatternDecisionCell::Wildcard;
+                                }
+                                PatternDecisionKind::Wildcard => {
+                                    *cell = PatternDecisionCell::Wildcard;
+                                }
+                                PatternDecisionKind::Boolean(_)
+                                | PatternDecisionKind::Unit
+                                | PatternDecisionKind::Tuple(_)
+                                | PatternDecisionKind::Constructor { .. } => {}
+                            }
+                        }
+                    }
+                    let selected = matrix.rows.first().and_then(|row| {
+                        row.cells.iter().enumerate().find_map(|(index, cell)| {
+                            matches!(cell, PatternDecisionCell::Pattern(_)).then_some(index)
+                        })
+                    });
+                    let Some(selected) = selected else {
+                        let row = matrix.rows.first().ok_or_else(invalid_state)?;
+                        values.push(self.apply_pattern_decision_continuation(row, continuations)?);
+                        continue;
+                    };
+                    let first_pattern_id = matrix
+                        .rows
+                        .iter()
+                        .find_map(|row| match row.cells[selected] {
+                            PatternDecisionCell::Pattern(id) => Some(id),
+                            PatternDecisionCell::Wildcard => None,
+                        })
+                        .ok_or_else(invalid_state)?;
+                    let first_pattern =
+                        patterns.0.get(first_pattern_id).ok_or_else(invalid_state)?;
+                    match &first_pattern.kind {
+                        PatternDecisionKind::Binder(_) | PatternDecisionKind::Wildcard => {
+                            return Err(invalid_state());
+                        }
+                        PatternDecisionKind::Unit => {
+                            let columns = self.replace_pattern_decision_column(
+                                &matrix.columns,
+                                selected,
+                                &[],
+                            )?;
+                            for row in &mut matrix.rows {
+                                match row.cells[selected] {
+                                    PatternDecisionCell::Wildcard => {}
+                                    PatternDecisionCell::Pattern(id)
+                                        if matches!(
+                                            patterns.0.get(id).map(|pattern| &pattern.kind),
+                                            Some(PatternDecisionKind::Unit)
+                                        ) => {}
+                                    _ => return Err(invalid_state()),
+                                }
+                                self.replace_pattern_decision_cell(row, selected, &[])?;
+                            }
+                            tasks
+                                .0
+                                .push(PatternDecisionTask::Compile(PatternDecisionMatrix {
+                                    columns,
+                                    rows: matrix.rows,
+                                }));
+                        }
+                        PatternDecisionKind::Boolean(_) => {
+                            self.compile_boolean_pattern_decision(
+                                matrix,
+                                selected,
+                                patterns,
+                                columns,
+                                result_type,
+                                origin,
+                                &mut tasks,
+                            )?;
+                        }
+                        PatternDecisionKind::Tuple(elements) => {
+                            self.compile_tuple_pattern_decision(
+                                matrix,
+                                selected,
+                                elements.len(),
+                                patterns,
+                                columns,
+                                result_type,
+                                origin,
+                                &mut tasks,
+                            )?;
+                        }
+                        PatternDecisionKind::Constructor {
+                            constructor,
+                            payload,
+                        } => {
+                            let info = self
+                                .registry
+                                .constructor(*constructor)
+                                .ok_or_else(invalid_state)?;
+                            let owner = self
+                                .registry
+                                .nominal(info.owner)
+                                .ok_or_else(invalid_state)?;
+                            if owner.declaration_kind == ResolvedNominalDeclarationKind::Newtype {
+                                let payload = payload.ok_or_else(invalid_state)?;
+                                self.compile_newtype_pattern_decision(
+                                    matrix,
+                                    selected,
+                                    *constructor,
+                                    payload,
+                                    owner.id,
+                                    patterns,
+                                    columns,
+                                    result_type,
+                                    &mut tasks,
+                                )?;
+                            } else {
+                                self.compile_data_pattern_decision(
+                                    matrix,
+                                    selected,
+                                    info.owner,
+                                    patterns,
+                                    columns,
+                                    result_type,
+                                    origin,
+                                    &mut tasks,
+                                )?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let result = values.pop().ok_or_else(invalid_state)?;
+        if values.is_empty() {
+            Ok(result)
+        } else {
+            Err(invalid_state())
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn schedule_pattern_decision_match(
+        &mut self,
+        scrutinee: NodeId,
+        branch_patterns: CorePatternBuffer,
+        arm_origins: PatternDecisionOriginBuffer,
+        branch_matrices: Vec<PatternDecisionMatrix>,
+        result_type: &Type,
+        origin: &Origin,
+        tasks: &mut PatternDecisionWork,
+    ) -> Result<(), TypeError> {
+        let count = branch_matrices.len();
+        if count == 0 || branch_patterns.len() != count || arm_origins.0.len() != count {
+            return Err(invalid_state());
+        }
+        self.type_work
+            .charge(count.saturating_add(1))
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        tasks
+            .0
+            .try_reserve(count.saturating_add(1))
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        tasks.0.push(PatternDecisionTask::FinishMatch {
+            scrutinee,
+            patterns: branch_patterns.into_vec(),
+            arm_origins: arm_origins.into_vec(),
+            result_type: self.clone_type(result_type)?,
+            origin: origin.clone(),
+        });
+        for matrix in branch_matrices.into_iter().rev() {
+            tasks.0.push(PatternDecisionTask::Compile(matrix));
+        }
+        Ok(())
+    }
+
+    fn schedule_pattern_decision_binding(
+        &mut self,
+        binder: TypedBinder,
+        initializer: NodeId,
+        matrix: PatternDecisionMatrix,
+        result_type: Type,
+        origin: Origin,
+        tasks: &mut PatternDecisionWork,
+    ) -> Result<(), TypeError> {
+        let result_type = IterativeTypeOwner::new(result_type);
+        let origin = OriginOwner::new(origin);
+        self.type_work
+            .charge(2)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        tasks
+            .0
+            .try_reserve(2)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        tasks.0.push(PatternDecisionTask::FinishBinding {
+            binder,
+            initializer,
+            result_type: result_type.into_inner(),
+            origin: origin.into_inner(),
+        });
+        tasks.0.push(PatternDecisionTask::Compile(matrix));
+        Ok(())
+    }
+
+    fn prepare_tuple_pattern_projection_scratch(
+        &mut self,
+        arity: usize,
+        demand_count: usize,
+        columns: &mut PatternDecisionColumnArena,
+    ) -> Result<(Vec<usize>, CorePatternBuffer, Vec<PatternDecisionCell>), TypeError> {
+        let work =
+            arity
+                .checked_add(demand_count.checked_mul(3).ok_or_else(|| {
+                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                })?)
+                .ok_or_else(|| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        self.type_work
+            .charge(work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut projected_columns = Vec::new();
+        projected_columns
+            .try_reserve(demand_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut projected_patterns = CorePatternBuffer(Vec::new());
+        projected_patterns
+            .try_reserve(arity)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        columns
+            .0
+            .try_reserve(demand_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut wildcards = Vec::new();
+        wildcards
+            .try_reserve(demand_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        wildcards.resize(demand_count, PatternDecisionCell::Wildcard);
+        Ok((projected_columns, projected_patterns, wildcards))
+    }
+
+    fn newtype_payload_is_demanded(
+        &mut self,
+        matrix: &PatternDecisionMatrix,
+        selected: usize,
+        constructor: crate::types::ConstructorId,
+        patterns: &PatternDecisionPatternArena,
+    ) -> Result<bool, TypeError> {
+        self.type_work
+            .charge(matrix.rows.len())
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        matrix.rows.iter().try_fold(false, |demanded, row| {
+            let demand = match row.cells[selected] {
+                PatternDecisionCell::Wildcard => false,
+                PatternDecisionCell::Pattern(id) => {
+                    let pattern = patterns.0.get(id).ok_or_else(invalid_state)?;
+                    let PatternDecisionKind::Constructor {
+                        constructor: candidate,
+                        payload: Some(payload),
+                    } = pattern.kind
+                    else {
+                        return Err(invalid_state());
+                    };
+                    if candidate != constructor {
+                        return Err(invalid_state());
+                    }
+                    !matches!(
+                        patterns.0.get(payload).map(|pattern| &pattern.kind),
+                        Some(PatternDecisionKind::Wildcard)
+                    )
+                }
+            };
+            Ok(demanded || demand)
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile_newtype_pattern_decision(
+        &mut self,
+        mut matrix: PatternDecisionMatrix,
+        selected: usize,
+        constructor: crate::types::ConstructorId,
+        payload: usize,
+        owner: crate::types::NominalTypeId,
+        patterns: &PatternDecisionPatternArena,
+        columns: &mut PatternDecisionColumnArena,
+        result_type: &Type,
+        tasks: &mut PatternDecisionWork,
+    ) -> Result<(), TypeError> {
+        let payload_pattern = patterns.0.get(payload).ok_or_else(invalid_state)?;
+        let payload_is_demanded =
+            self.newtype_payload_is_demanded(&matrix, selected, constructor, patterns)?;
+        let source_column = columns
+            .0
+            .get(matrix.columns[selected])
+            .ok_or_else(invalid_state)?;
+        let conversion_type = self.clone_type(&payload_pattern.ty)?;
+        let unwrapped = self.builder.newtype_conversion(
+            owner,
+            NewtypeConversionDirection::Unwrap,
+            source_column.value,
+            conversion_type,
+            payload_pattern.origin.clone(),
+        )?;
+        let binder_type = self.clone_type(&payload_pattern.ty)?;
+        let binder = self.builder.binder(
+            binder_type,
+            Origin::Generated {
+                cause: Box::new(payload_pattern.origin.clone()),
+                reason: GeneratedReason::BindingLowering,
+            },
+        )?;
+        let payload_column = if payload_is_demanded {
+            let variable_type = self.clone_type(&payload_pattern.ty)?;
+            let variable = self.builder.variable(
+                binder.id(),
+                variable_type,
+                payload_pattern.origin.clone(),
+            )?;
+            self.type_work
+                .charge(1)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            columns
+                .0
+                .try_reserve(1)
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let column = columns.0.len();
+            columns.0.push(PatternDecisionColumn {
+                value: variable,
+                ty: self.clone_type(&payload_pattern.ty)?,
+                origin: payload_pattern.origin.clone(),
+            });
+            Some(column)
+        } else {
+            None
+        };
+        let rebuilt_columns = if let Some(payload_column) = payload_column {
+            self.replace_pattern_decision_column(&matrix.columns, selected, &[payload_column])?
+        } else {
+            self.replace_pattern_decision_column(&matrix.columns, selected, &[])?
+        };
+        for row in &mut matrix.rows {
+            let replacement = match (payload_column, row.cells[selected]) {
+                (Some(_), PatternDecisionCell::Wildcard) => Some(PatternDecisionCell::Wildcard),
+                (None, PatternDecisionCell::Wildcard) => None,
+                (_, PatternDecisionCell::Pattern(id)) => {
+                    let pattern = patterns.0.get(id).ok_or_else(invalid_state)?;
+                    match pattern.kind {
+                        PatternDecisionKind::Constructor {
+                            constructor: candidate,
+                            payload: Some(payload),
+                        } if candidate == constructor => {
+                            payload_column.map(|_| PatternDecisionCell::Pattern(payload))
+                        }
+                        _ => return Err(invalid_state()),
+                    }
+                }
+            };
+            if let Some(replacement) = replacement {
+                self.replace_pattern_decision_cell(row, selected, &[replacement])?;
+            } else {
+                self.replace_pattern_decision_cell(row, selected, &[])?;
+            }
+        }
+        let retained_result_type = self.clone_type(result_type)?;
+        self.schedule_pattern_decision_binding(
+            binder,
+            unwrapped,
+            PatternDecisionMatrix {
+                columns: rebuilt_columns,
+                rows: matrix.rows,
+            },
+            retained_result_type,
+            payload_pattern.origin.clone(),
+            tasks,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile_tuple_pattern_decision(
+        &mut self,
+        mut matrix: PatternDecisionMatrix,
+        selected: usize,
+        arity: usize,
+        patterns: &PatternDecisionPatternArena,
+        columns: &mut PatternDecisionColumnArena,
+        result_type: &Type,
+        origin: &Origin,
+        tasks: &mut PatternDecisionWork,
+    ) -> Result<(), TypeError> {
+        let first_id = matrix
+            .rows
+            .iter()
+            .find_map(|row| match row.cells[selected] {
+                PatternDecisionCell::Pattern(id) => Some(id),
+                PatternDecisionCell::Wildcard => None,
+            })
+            .ok_or_else(invalid_state)?;
+        let first = patterns.0.get(first_id).ok_or_else(invalid_state)?;
+        let PatternDecisionKind::Tuple(first_elements) = &first.kind else {
+            return Err(invalid_state());
+        };
+        if first_elements.len() != arity {
+            return Err(invalid_state());
+        }
+        self.type_work
+            .charge(
+                arity
+                    .checked_add(matrix.rows.len().checked_mul(arity).ok_or_else(|| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?)
+                    .ok_or_else(|| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut demanded = Vec::new();
+        demanded
+            .try_reserve(arity)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        demanded.resize(arity, false);
+        for row in &matrix.rows {
+            let PatternDecisionCell::Pattern(id) = row.cells[selected] else {
+                continue;
+            };
+            let pattern = patterns.0.get(id).ok_or_else(invalid_state)?;
+            let PatternDecisionKind::Tuple(elements) = &pattern.kind else {
+                return Err(invalid_state());
+            };
+            if elements.len() != arity {
+                return Err(invalid_state());
+            }
+            for (is_demanded, child) in demanded.iter_mut().zip(elements) {
+                *is_demanded |= !matches!(
+                    patterns.0.get(*child).map(|pattern| &pattern.kind),
+                    Some(PatternDecisionKind::Wildcard)
+                );
+            }
+        }
+        let demand_count = demanded.iter().filter(|demanded| **demanded).count();
+        let source_column = columns
+            .0
+            .get(matrix.columns[selected])
+            .ok_or_else(invalid_state)?;
+        let scrutinee = source_column.value;
+        let source_type = IterativeTypeOwner::new(self.clone_type(&source_column.ty)?);
+        let (mut projected_columns, mut projected_patterns, wildcards) =
+            self.prepare_tuple_pattern_projection_scratch(arity, demand_count, columns)?;
+        for (element, is_demanded) in first_elements.iter().zip(&demanded) {
+            let element = patterns.0.get(*element).ok_or_else(invalid_state)?;
+            if *is_demanded {
+                let binder_type = self.clone_type(&element.ty)?;
+                let binder = self.builder.binder(
+                    binder_type,
+                    Origin::Generated {
+                        cause: Box::new(element.origin.clone()),
+                        reason: GeneratedReason::BindingLowering,
+                    },
+                )?;
+                let variable_type = self.clone_type(&element.ty)?;
+                let variable =
+                    self.builder
+                        .variable(binder.id(), variable_type, element.origin.clone())?;
+                let column = columns.0.len();
+                columns.0.push(PatternDecisionColumn {
+                    value: variable,
+                    ty: self.clone_type(&element.ty)?,
+                    origin: element.origin.clone(),
+                });
+                projected_columns.push(column);
+                projected_patterns.push(CorePattern::new(
+                    self.clone_type(&element.ty)?,
+                    element.origin.clone(),
+                    CorePatternKind::Binder(binder),
+                ));
+            } else {
+                projected_patterns.push(CorePattern::new(
+                    self.clone_type(&element.ty)?,
+                    element.origin.clone(),
+                    CorePatternKind::Wildcard,
+                ));
+            }
+        }
+        let rebuilt_columns =
+            self.replace_pattern_decision_column(&matrix.columns, selected, &projected_columns)?;
+        for row in &mut matrix.rows {
+            let replacements = match row.cells[selected] {
+                PatternDecisionCell::Wildcard => wildcards.as_slice(),
+                PatternDecisionCell::Pattern(id) => {
+                    let pattern = patterns.0.get(id).ok_or_else(invalid_state)?;
+                    let PatternDecisionKind::Tuple(elements) = &pattern.kind else {
+                        return Err(invalid_state());
+                    };
+                    if elements.len() != arity {
+                        return Err(invalid_state());
+                    }
+                    self.type_work.charge(demand_count).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    let mut cells = Vec::new();
+                    cells.try_reserve(demand_count).map_err(|_| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    for (element, is_demanded) in elements.iter().zip(&demanded) {
+                        if *is_demanded {
+                            cells.push(PatternDecisionCell::Pattern(*element));
+                        }
+                    }
+                    self.replace_pattern_decision_cell(row, selected, &cells)?;
+                    continue;
+                }
+            };
+            self.replace_pattern_decision_cell(row, selected, replacements)?;
+        }
+        let tuple_pattern = CorePattern::new(
+            self.clone_type(&source_type)?,
+            first.origin.clone(),
+            CorePatternKind::Tuple(projected_patterns.into_boxed_slice()),
+        );
+        self.schedule_pattern_decision_match(
+            scrutinee,
+            CorePatternBuffer(vec![tuple_pattern]),
+            PatternDecisionOriginBuffer(vec![first.origin.clone()]),
+            vec![PatternDecisionMatrix {
+                columns: rebuilt_columns,
+                rows: matrix.rows,
+            }],
+            result_type,
+            origin,
+            tasks,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile_boolean_pattern_decision(
+        &mut self,
+        matrix: PatternDecisionMatrix,
+        selected: usize,
+        patterns: &PatternDecisionPatternArena,
+        columns: &PatternDecisionColumnArena,
+        result_type: &Type,
+        origin: &Origin,
+        tasks: &mut PatternDecisionWork,
+    ) -> Result<(), TypeError> {
+        let classification =
+            classify_boolean_pattern_decision(&mut self.type_work, &matrix, selected, patterns)?;
+        let source_column = columns
+            .0
+            .get(matrix.columns[selected])
+            .ok_or_else(invalid_state)?;
+        let mut branch_patterns = CorePatternBuffer(Vec::new());
+        let mut arm_origins = PatternDecisionOriginBuffer(Vec::new());
+        let mut branch_matrices = Vec::new();
+        self.type_work
+            .charge(6)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        branch_patterns
+            .try_reserve(2)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        arm_origins
+            .0
+            .try_reserve(2)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        branch_matrices
+            .try_reserve(2)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut missing = false;
+        for expected in [false, true] {
+            let explicit_rows = &classification.explicit_rows[usize::from(expected)];
+            let Some(first_row) = explicit_rows.first().copied() else {
+                missing = true;
+                continue;
+            };
+            let first_row = matrix.rows.get(first_row).ok_or_else(invalid_state)?;
+            let PatternDecisionCell::Pattern(first_pattern) = first_row.cells[selected] else {
+                return Err(invalid_state());
+            };
+            let first_pattern = patterns.0.get(first_pattern).ok_or_else(invalid_state)?;
+            let PatternDecisionKind::Boolean(value) = first_pattern.kind else {
+                return Err(invalid_state());
+            };
+            if value != expected {
+                return Err(invalid_state());
+            }
+            let pattern_origin = first_pattern.origin.clone();
+            let mut rows = Vec::new();
+            for row_index in
+                MergedPatternDecisionRowIndices::new(explicit_rows, &classification.wildcard_rows)
+            {
+                self.type_work
+                    .charge(1)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                rows.try_reserve(1)
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let row = matrix.rows.get(row_index).ok_or_else(invalid_state)?;
+                let mut row = self.clone_pattern_decision_row(row)?;
+                self.replace_pattern_decision_cell(&mut row, selected, &[])?;
+                rows.push(row);
+            }
+            branch_patterns.push(CorePattern::new(
+                self.clone_type(&source_column.ty)?,
+                pattern_origin.clone(),
+                CorePatternKind::Boolean(expected),
+            ));
+            arm_origins.0.push(pattern_origin);
+            branch_matrices.push(PatternDecisionMatrix {
+                columns: self.replace_pattern_decision_column(&matrix.columns, selected, &[])?,
+                rows,
+            });
+        }
+        if missing {
+            let mut rows = Vec::new();
+            for row_index in &classification.wildcard_rows {
+                self.type_work
+                    .charge(1)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                rows.try_reserve(1)
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let row = matrix.rows.get(*row_index).ok_or_else(invalid_state)?;
+                let mut row = self.clone_pattern_decision_row(row)?;
+                self.replace_pattern_decision_cell(&mut row, selected, &[])?;
+                rows.push(row);
+            }
+            if rows.is_empty() {
+                return Err(invalid_state());
+            }
+            branch_patterns.push(CorePattern::new(
+                self.clone_type(&source_column.ty)?,
+                origin.clone(),
+                CorePatternKind::Wildcard,
+            ));
+            arm_origins.0.push(origin.clone());
+            branch_matrices.push(PatternDecisionMatrix {
+                columns: self.replace_pattern_decision_column(&matrix.columns, selected, &[])?,
+                rows,
+            });
+        }
+        self.schedule_pattern_decision_match(
+            source_column.value,
+            branch_patterns,
+            arm_origins,
+            branch_matrices,
+            result_type,
+            origin,
+            tasks,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile_data_pattern_decision(
+        &mut self,
+        matrix: PatternDecisionMatrix,
+        selected: usize,
+        owner: crate::types::NominalTypeId,
+        patterns: &PatternDecisionPatternArena,
+        columns: &mut PatternDecisionColumnArena,
+        result_type: &Type,
+        origin: &Origin,
+        tasks: &mut PatternDecisionWork,
+    ) -> Result<(), TypeError> {
+        let family = &self
+            .registry
+            .nominal(owner)
+            .ok_or_else(invalid_state)?
+            .constructors;
+        if family.is_empty() {
+            return Err(invalid_state());
+        }
+        let classification = classify_data_pattern_decision(
+            &mut self.type_work,
+            family,
+            &matrix,
+            selected,
+            patterns,
+        )?;
+        let missing_family_member = classification.present_count < classification.buckets.len();
+        let branch_count = classification
+            .present_count
+            .checked_add(usize::from(missing_family_member))
+            .ok_or_else(|| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        if branch_count == 0 {
+            return Err(invalid_state());
+        }
+        let branch_work = branch_count
+            .checked_mul(3)
+            .ok_or_else(|| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        self.type_work
+            .charge(branch_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let source_column = columns
+            .0
+            .get(matrix.columns[selected])
+            .ok_or_else(invalid_state)?;
+        let source_value = source_column.value;
+        let source_type = IterativeTypeOwner::new(self.clone_type(&source_column.ty)?);
+        let mut branch_patterns = CorePatternBuffer(Vec::new());
+        let mut arm_origins = PatternDecisionOriginBuffer(Vec::new());
+        let mut branch_matrices = Vec::new();
+        branch_patterns
+            .try_reserve(branch_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        arm_origins
+            .0
+            .try_reserve(branch_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        branch_matrices
+            .try_reserve(branch_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for bucket in &classification.buckets {
+            self.type_work
+                .charge(1)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let Some(explicit_id) = bucket.first_pattern else {
+                continue;
+            };
+            let explicit_pattern = patterns.0.get(explicit_id).ok_or_else(invalid_state)?;
+            let PatternDecisionKind::Constructor {
+                constructor,
+                payload,
+            } = explicit_pattern.kind
+            else {
+                return Err(invalid_state());
+            };
+            if constructor != bucket.constructor {
+                return Err(invalid_state());
+            }
+            let payload_is_demanded = bucket.payload_is_demanded;
+            let (payload_column, payload_core_pattern) = if let Some(payload) = payload {
+                let payload_pattern = patterns.0.get(payload).ok_or_else(invalid_state)?;
+                if payload_is_demanded {
+                    let binder_type = self.clone_type(&payload_pattern.ty)?;
+                    let binder = self.builder.binder(
+                        binder_type,
+                        Origin::Generated {
+                            cause: Box::new(payload_pattern.origin.clone()),
+                            reason: GeneratedReason::BindingLowering,
+                        },
+                    )?;
+                    let variable_type = self.clone_type(&payload_pattern.ty)?;
+                    let variable = self.builder.variable(
+                        binder.id(),
+                        variable_type,
+                        payload_pattern.origin.clone(),
+                    )?;
+                    self.type_work.charge(1).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    columns.0.try_reserve(1).map_err(|_| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    let column = columns.0.len();
+                    columns.0.push(PatternDecisionColumn {
+                        value: variable,
+                        ty: self.clone_type(&payload_pattern.ty)?,
+                        origin: payload_pattern.origin.clone(),
+                    });
+                    let core_pattern = CorePattern::new(
+                        self.clone_type(&payload_pattern.ty)?,
+                        payload_pattern.origin.clone(),
+                        CorePatternKind::Binder(binder),
+                    );
+                    (Some(column), Some(Box::new(core_pattern)))
+                } else {
+                    let core_pattern = CorePattern::new(
+                        self.clone_type(&payload_pattern.ty)?,
+                        payload_pattern.origin.clone(),
+                        CorePatternKind::Wildcard,
+                    );
+                    (None, Some(Box::new(core_pattern)))
+                }
+            } else {
+                (None, None)
+            };
+            let replacement_column = payload_column;
+            let replacement_columns = match &replacement_column {
+                Some(column) => std::slice::from_ref(column),
+                None => &[],
+            };
+            let mut rows = Vec::new();
+            for row_index in MergedPatternDecisionRowIndices::new(
+                &bucket.explicit_rows,
+                &classification.wildcard_rows,
+            ) {
+                let row = matrix.rows.get(row_index).ok_or_else(invalid_state)?;
+                let replacement = match row.cells[selected] {
+                    PatternDecisionCell::Wildcard => {
+                        payload_column.map(|_| PatternDecisionCell::Wildcard)
+                    }
+                    PatternDecisionCell::Pattern(id) => {
+                        let pattern = patterns.0.get(id).ok_or_else(invalid_state)?;
+                        match pattern.kind {
+                            PatternDecisionKind::Constructor {
+                                constructor: candidate,
+                                payload,
+                            } if candidate == bucket.constructor => match (payload_column, payload)
+                            {
+                                (Some(_), Some(payload)) => {
+                                    Some(PatternDecisionCell::Pattern(payload))
+                                }
+                                (None, Some(_)) if !payload_is_demanded => None,
+                                (None, None) => None,
+                                _ => return Err(invalid_state()),
+                            },
+                            PatternDecisionKind::Constructor { .. } => return Err(invalid_state()),
+                            _ => return Err(invalid_state()),
+                        }
+                    }
+                };
+                self.type_work
+                    .charge(1)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                rows.try_reserve(1)
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let mut row = self.clone_pattern_decision_row(row)?;
+                let replacements = match &replacement {
+                    Some(cell) => std::slice::from_ref(cell),
+                    None => &[],
+                };
+                self.replace_pattern_decision_cell(&mut row, selected, replacements)?;
+                rows.push(row);
+            }
+            if rows.is_empty() {
+                return Err(invalid_state());
+            }
+            branch_patterns.push(CorePattern::new(
+                self.clone_type(&source_type)?,
+                explicit_pattern.origin.clone(),
+                CorePatternKind::Constructor {
+                    constructor: bucket.constructor,
+                    payload: payload_core_pattern,
+                },
+            ));
+            arm_origins.0.push(explicit_pattern.origin.clone());
+            branch_matrices.push(PatternDecisionMatrix {
+                columns: self.replace_pattern_decision_column(
+                    &matrix.columns,
+                    selected,
+                    replacement_columns,
+                )?,
+                rows,
+            });
+        }
+        if missing_family_member {
+            let mut rows = Vec::new();
+            for row_index in &classification.wildcard_rows {
+                self.type_work
+                    .charge(1)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                rows.try_reserve(1)
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let row = matrix.rows.get(*row_index).ok_or_else(invalid_state)?;
+                let mut row = self.clone_pattern_decision_row(row)?;
+                self.replace_pattern_decision_cell(&mut row, selected, &[])?;
+                rows.push(row);
+            }
+            if rows.is_empty() {
+                return Err(invalid_state());
+            }
+            branch_patterns.push(CorePattern::new(
+                self.clone_type(&source_type)?,
+                origin.clone(),
+                CorePatternKind::Wildcard,
+            ));
+            arm_origins.0.push(origin.clone());
+            branch_matrices.push(PatternDecisionMatrix {
+                columns: self.replace_pattern_decision_column(&matrix.columns, selected, &[])?,
+                rows,
+            });
+        }
+        self.schedule_pattern_decision_match(
+            source_value,
+            branch_patterns,
+            arm_origins,
+            branch_matrices,
+            result_type,
+            origin,
+            tasks,
+        )
+    }
+
     fn check_core_pattern(
         &mut self,
         pattern: &ResolvedPattern,
@@ -7701,6 +9258,8 @@ impl Elaborator {
         };
         let mut expected = IterativeTypeOwner::new(expected);
         let mut rebuild_expected = false;
+        let mut contains_newtype = false;
+        let mut pattern_count = 1usize;
         let kind = match &pattern.kind {
             ResolvedPatternKind::Binder(binder) => {
                 charge_pattern_binder_storage(&expected, &mut self.type_work)
@@ -7790,6 +9349,12 @@ impl Elaborator {
                         self.check_core_pattern(pattern, ty, context, binders, binder_reason)?;
                     rebuild_expected |= outcome.inference_changed;
                     inference_changed |= outcome.inference_changed;
+                    contains_newtype |= outcome.contains_newtype;
+                    pattern_count = pattern_count
+                        .checked_add(outcome.pattern_count)
+                        .ok_or_else(|| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
                     checked.push(outcome.pattern);
                 }
                 if rebuild_expected {
@@ -7820,6 +9385,8 @@ impl Elaborator {
         Ok(CheckedPattern {
             pattern: CorePattern::new(expected.into_inner(), Origin::Source(pattern.span), kind),
             inference_changed,
+            contains_newtype,
+            pattern_count,
         })
     }
 
@@ -7843,15 +9410,19 @@ impl Elaborator {
             .registry
             .nominal(info.owner)
             .ok_or_else(invalid_state)?;
-        if owner.declaration_kind == ResolvedNominalDeclarationKind::Newtype {
-            return Err(invalid_state());
-        }
+        let contains_newtype = owner.declaration_kind == ResolvedNominalDeclarationKind::Newtype;
         let info_owner = info.owner;
-        if let Some(payload) = &info.payload {
+        let declared_payload = if owner.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+        {
+            Some(owner.representation.as_ref().ok_or_else(invalid_state)?)
+        } else {
+            info.payload.as_ref()
+        };
+        if let Some(payload) = declared_payload {
             charge_type_cells(payload, &mut self.type_work)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         }
-        let declared_payload = info.payload.clone().map(IterativeTypeOwner::new);
+        let declared_payload = declared_payload.cloned().map(IterativeTypeOwner::new);
         if matches!(&*expected, Type::Inference(_)) {
             let parameter_count = self
                 .registry
@@ -7932,9 +9503,12 @@ impl Elaborator {
         let payload_type = declared_payload
             .as_ref()
             .map(|payload| {
-                substitute_type_variables_with(payload, replacements.as_map(), |cells| {
-                    self.type_work.charge(cells)
-                })
+                substitute_type_variables_with(
+                    payload,
+                    replacements.as_map(),
+                    |cells| self.type_work.charge(cells),
+                    || (),
+                )
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
             })
             .transpose()?
@@ -7947,6 +9521,8 @@ impl Elaborator {
                 None,
             ));
         }
+        let mut payload_contains_newtype = false;
+        let mut payload_pattern_count = 0usize;
         let checked_payload = match (payload, payload_type.as_deref()) {
             (None, None) => None,
             (Some(pattern), Some(ty)) => {
@@ -7971,6 +9547,8 @@ impl Elaborator {
                     self.check_core_pattern(pattern, ty, context, binders, binder_reason)?
                 };
                 let outcome_inference_changed = outcome.inference_changed;
+                payload_contains_newtype = outcome.contains_newtype;
+                payload_pattern_count = outcome.pattern_count;
                 let mut outcome_pattern = CorePatternBuffer(vec![outcome.pattern]);
                 if outcome_inference_changed {
                     let zonked = self.zonk(&expected)?;
@@ -7996,6 +9574,10 @@ impl Elaborator {
                 },
             ),
             inference_changed,
+            contains_newtype: contains_newtype || payload_contains_newtype,
+            pattern_count: 1usize
+                .checked_add(payload_pattern_count)
+                .ok_or_else(|| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
         })
     }
 
@@ -8033,9 +9615,9 @@ impl Elaborator {
         let mut codomain = ProvenancedTypeOwner::new(codomain);
         let mut function_type = ProvenancedTypeOwner::new(function_type);
         let mut pattern_binders = Vec::new();
-        let (mut checked_pattern, inference_changed) =
+        let (mut checked_pattern, inference_changed, contains_newtype, pattern_count) =
             if matches!(&parameter.kind, ResolvedPatternKind::Binder(_)) {
-                (CorePatternOwner::new(None), false)
+                (CorePatternOwner::new(None), false, false, 0)
             } else {
                 let checked = self.check_core_pattern(
                     parameter,
@@ -8047,6 +9629,8 @@ impl Elaborator {
                 (
                     CorePatternOwner::new(Some(checked.pattern)),
                     checked.inference_changed,
+                    checked.contains_newtype,
+                    checked.pattern_count,
                 )
             };
         if inference_changed {
@@ -8133,6 +9717,8 @@ impl Elaborator {
             ty: function_type.ty,
             origin,
             provenance: function_type.provenance,
+            contains_newtype,
+            pattern_count,
         });
         match body {
             FunctionBody::Block(block) => schedule_block(
@@ -8251,6 +9837,8 @@ impl Elaborator {
         clause_bodies
             .try_reserve(equations.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut contains_newtype = false;
+        let mut pattern_count = 0usize;
         for clause in equations {
             let mut binder_ids = Vec::new();
             self.type_work
@@ -8261,16 +9849,20 @@ impl Elaborator {
                 .try_reserve(arity)
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             for (pattern, domain) in clause.patterns.iter().zip(domains.iter()) {
-                patterns.push(
-                    self.check_core_pattern(
-                        pattern,
-                        &domain.ty,
-                        context,
-                        &mut binder_ids,
-                        GeneratedReason::FunctionLowering,
-                    )?
-                    .pattern,
-                );
+                let checked = self.check_core_pattern(
+                    pattern,
+                    &domain.ty,
+                    context,
+                    &mut binder_ids,
+                    GeneratedReason::FunctionLowering,
+                )?;
+                contains_newtype |= checked.contains_newtype;
+                pattern_count = pattern_count
+                    .checked_add(checked.pattern_count)
+                    .ok_or_else(|| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                patterns.push(checked.pattern);
             }
             if usefulness_with_budget(
                 &coverage_matrix,
@@ -8420,11 +10012,18 @@ impl Elaborator {
                     .tuple(arguments, ty, Origin::Source(definition_span))?
             };
             let core_remainder = self.clone_type(&remainder.ty)?;
-            self.builder.match_expression(
+            if arity > 1 {
+                pattern_count = pattern_count.checked_add(arms.len()).ok_or_else(|| {
+                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                })?;
+            }
+            self.lower_match_expression(
                 scrutinee,
                 arms,
                 core_remainder,
                 Origin::Source(definition_span),
+                contains_newtype,
+                pattern_count,
             )?
         };
         let mut body_type = IterativeTypeOwner::new(self.clone_type(&remainder.ty)?);
@@ -8488,15 +10087,19 @@ impl Elaborator {
             provenance: codomain_provenance,
         });
         let mut binder_ids = Vec::new();
+        let mut contains_newtype = false;
+        let mut pattern_count = 0usize;
         let pattern = if operational.header.parameters.len() == 1 {
-            self.check_core_pattern(
+            let checked = self.check_core_pattern(
                 &operational.header.parameters[0].pattern,
                 &domain.ty,
                 context,
                 &mut binder_ids,
                 GeneratedReason::FunctionLowering,
-            )?
-            .pattern
+            )?;
+            contains_newtype = checked.contains_newtype;
+            pattern_count = checked.pattern_count;
+            checked.pattern
         } else {
             let Type::Tuple(types) = &domain.ty else {
                 return Err(invalid_state());
@@ -8512,17 +10115,24 @@ impl Elaborator {
                 .try_reserve(types.len())
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             for (parameter, ty) in operational.header.parameters.iter().zip(types) {
-                elements.push(
-                    self.check_core_pattern(
-                        &parameter.pattern,
-                        ty,
-                        context,
-                        &mut binder_ids,
-                        GeneratedReason::FunctionLowering,
-                    )?
-                    .pattern,
-                );
+                let checked = self.check_core_pattern(
+                    &parameter.pattern,
+                    ty,
+                    context,
+                    &mut binder_ids,
+                    GeneratedReason::FunctionLowering,
+                )?;
+                contains_newtype |= checked.contains_newtype;
+                pattern_count = pattern_count
+                    .checked_add(checked.pattern_count)
+                    .ok_or_else(|| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                elements.push(checked.pattern);
             }
+            pattern_count = pattern_count
+                .checked_add(1)
+                .ok_or_else(|| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             CorePattern::new(
                 self.clone_type(&domain.ty)?,
                 Origin::Source(operational.header.span),
@@ -8594,7 +10204,7 @@ impl Elaborator {
                 Origin::Source(operational.header.span),
             )?;
             let core_body_type = IterativeTypeOwner::new(self.clone_type(&body.ty)?);
-            let node = self.builder.match_expression(
+            let node = self.lower_match_expression(
                 scrutinee,
                 vec![CoreMatchArm::new(
                     pattern.take().ok_or_else(invalid_state)?,
@@ -8603,6 +10213,8 @@ impl Elaborator {
                 )],
                 core_body_type.into_inner(),
                 Origin::Source(operational.header.span),
+                contains_newtype,
+                pattern_count,
             )?;
             body.set_node(node);
         }
@@ -11440,6 +13052,8 @@ enum ElaborationTask<'a> {
         ty: Type,
         origin: Origin,
         provenance: TypeProvenance,
+        contains_newtype: bool,
+        pattern_count: usize,
     },
     AfterApplicationFunction {
         whole_span: Span,
@@ -11508,6 +13122,8 @@ struct MatchProgress<'a> {
     next_arm: usize,
     matrix: Vec<Vec<CorePattern>>,
     arm_bodies: Vec<(NodeId, Span)>,
+    contains_newtype: bool,
+    pattern_count: usize,
     result_type: Option<(Type, TypeProvenance, CheckKind)>,
 }
 
@@ -11533,6 +13149,20 @@ impl<'a> MatchProgressOwner<'a> {
         }
         let ProvenancedType { ty, provenance } = result.into_inner();
         progress.result_type = Some((ty, provenance, kind));
+        Ok(())
+    }
+
+    fn record_pattern_decision(
+        &mut self,
+        contains_newtype: bool,
+        pattern_count: usize,
+    ) -> Result<(), TypeError> {
+        let progress = self.0.as_deref_mut().expect("match progress remains live");
+        progress.contains_newtype |= contains_newtype;
+        progress.pattern_count = progress
+            .pattern_count
+            .checked_add(pattern_count)
+            .ok_or_else(|| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         Ok(())
     }
 
@@ -11678,6 +13308,8 @@ struct FunctionCheck<'a> {
 struct CheckedPattern {
     pattern: CorePattern,
     inference_changed: bool,
+    contains_newtype: bool,
+    pattern_count: usize,
 }
 
 struct ElaboratedBinding {
@@ -11735,6 +13367,8 @@ enum ElaboratedDeclaration {
         pattern: CorePattern,
         initializer: NodeId,
         origin: Origin,
+        contains_newtype: bool,
+        pattern_count: usize,
     },
     Recursive {
         members: Vec<(TypedBinder, NodeId)>,
@@ -11995,6 +13629,430 @@ impl Drop for CorePatternMatrixBuffer {
         for row in self.0.drain(..) {
             for pattern in row {
                 pattern.discard_iteratively();
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PatternDecisionCell {
+    Pattern(usize),
+    Wildcard,
+}
+
+enum PatternDecisionKind {
+    Binder(usize),
+    Wildcard,
+    Boolean(bool),
+    Unit,
+    Tuple(Box<[usize]>),
+    Constructor {
+        constructor: crate::types::ConstructorId,
+        payload: Option<usize>,
+    },
+}
+
+enum PatternDecisionFlattenTask {
+    Visit(CorePattern),
+    FinishTuple {
+        ty: Type,
+        origin: Origin,
+        count: usize,
+    },
+    FinishConstructor {
+        ty: Type,
+        origin: Origin,
+        constructor: crate::types::ConstructorId,
+        has_payload: bool,
+    },
+}
+
+struct PatternDecisionFlattenWork(Vec<PatternDecisionFlattenTask>);
+
+impl Drop for PatternDecisionFlattenWork {
+    fn drop(&mut self) {
+        for task in self.0.drain(..) {
+            match task {
+                PatternDecisionFlattenTask::Visit(pattern) => pattern.discard_iteratively(),
+                PatternDecisionFlattenTask::FinishTuple { ty, origin, .. }
+                | PatternDecisionFlattenTask::FinishConstructor { ty, origin, .. } => {
+                    discard_type_iteratively(ty);
+                    discard_origin_iteratively(origin);
+                }
+            }
+        }
+    }
+}
+
+struct PatternDecisionFlattenScratch {
+    work: PatternDecisionFlattenWork,
+    roots: Vec<usize>,
+}
+
+impl PatternDecisionFlattenScratch {
+    fn try_new(pattern_count: usize, type_work: &mut TypeWorkBudget) -> Result<Self, TypeError> {
+        type_work
+            .charge(
+                pattern_count.checked_mul(2).ok_or_else(|| {
+                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                })?,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut work = PatternDecisionFlattenWork(Vec::new());
+        work.0
+            .try_reserve(pattern_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut roots = Vec::new();
+        roots
+            .try_reserve(pattern_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        Ok(Self { work, roots })
+    }
+}
+
+struct PatternDecisionPattern {
+    ty: Type,
+    origin: Origin,
+    kind: PatternDecisionKind,
+}
+
+struct PatternDecisionPatternArena(Vec<PatternDecisionPattern>);
+
+impl Drop for PatternDecisionPatternArena {
+    fn drop(&mut self) {
+        for pattern in self.0.drain(..) {
+            discard_type_iteratively(pattern.ty);
+            discard_origin_iteratively(pattern.origin);
+        }
+    }
+}
+
+struct PatternDecisionBinderBuffer(Vec<TypedBinder>);
+
+impl Drop for PatternDecisionBinderBuffer {
+    fn drop(&mut self) {
+        for binder in self.0.drain(..) {
+            binder.discard_metadata();
+        }
+    }
+}
+
+struct PatternDecisionContinuation {
+    function: NodeId,
+    application_types: OwnedTypeBuffer,
+    origin: Origin,
+}
+
+struct PatternDecisionContinuationArena(Vec<PatternDecisionContinuation>);
+
+impl Drop for PatternDecisionContinuationArena {
+    fn drop(&mut self) {
+        for continuation in self.0.drain(..) {
+            drop(continuation.application_types);
+            discard_origin_iteratively(continuation.origin);
+        }
+    }
+}
+
+struct PatternDecisionColumn {
+    value: NodeId,
+    ty: Type,
+    origin: Origin,
+}
+
+struct PatternDecisionColumnArena(Vec<PatternDecisionColumn>);
+
+impl Drop for PatternDecisionColumnArena {
+    fn drop(&mut self) {
+        for column in self.0.drain(..) {
+            discard_type_iteratively(column.ty);
+            discard_origin_iteratively(column.origin);
+        }
+    }
+}
+
+struct PatternDecisionOriginBuffer(Vec<Origin>);
+
+impl PatternDecisionOriginBuffer {
+    fn into_vec(mut self) -> Vec<Origin> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for PatternDecisionOriginBuffer {
+    fn drop(&mut self) {
+        for origin in self.0.drain(..) {
+            discard_origin_iteratively(origin);
+        }
+    }
+}
+
+struct PatternDecisionRow {
+    cells: Vec<PatternDecisionCell>,
+    continuation: usize,
+    arguments: Vec<Option<NodeId>>,
+}
+
+struct PatternDecisionMatrix {
+    columns: Vec<usize>,
+    rows: Vec<PatternDecisionRow>,
+}
+
+struct BooleanPatternDecisionClassification {
+    explicit_rows: [Vec<usize>; 2],
+    wildcard_rows: Vec<usize>,
+}
+
+struct DataPatternDecisionBucket {
+    constructor: crate::types::ConstructorId,
+    explicit_rows: Vec<usize>,
+    first_pattern: Option<usize>,
+    payload_is_demanded: bool,
+}
+
+struct DataPatternDecisionClassification {
+    buckets: Vec<DataPatternDecisionBucket>,
+    wildcard_rows: Vec<usize>,
+    present_count: usize,
+}
+
+struct MergedPatternDecisionRowIndices<'a> {
+    explicit: &'a [usize],
+    wildcards: &'a [usize],
+    explicit_at: usize,
+    wildcard_at: usize,
+}
+
+impl<'a> MergedPatternDecisionRowIndices<'a> {
+    const fn new(explicit: &'a [usize], wildcards: &'a [usize]) -> Self {
+        Self {
+            explicit,
+            wildcards,
+            explicit_at: 0,
+            wildcard_at: 0,
+        }
+    }
+}
+
+impl Iterator for MergedPatternDecisionRowIndices<'_> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match (
+            self.explicit.get(self.explicit_at),
+            self.wildcards.get(self.wildcard_at),
+        ) {
+            (Some(explicit), Some(wildcard)) if explicit < wildcard => {
+                self.explicit_at += 1;
+                Some(*explicit)
+            }
+            (Some(_), Some(wildcard)) => {
+                self.wildcard_at += 1;
+                Some(*wildcard)
+            }
+            (Some(explicit), None) => {
+                self.explicit_at += 1;
+                Some(*explicit)
+            }
+            (None, Some(wildcard)) => {
+                self.wildcard_at += 1;
+                Some(*wildcard)
+            }
+            (None, None) => None,
+        }
+    }
+}
+
+fn classify_boolean_pattern_decision(
+    type_work: &mut TypeWorkBudget,
+    matrix: &PatternDecisionMatrix,
+    selected: usize,
+    patterns: &PatternDecisionPatternArena,
+) -> Result<BooleanPatternDecisionClassification, TypeError> {
+    let mut classification = BooleanPatternDecisionClassification {
+        explicit_rows: [Vec::new(), Vec::new()],
+        wildcard_rows: Vec::new(),
+    };
+    for (row_index, row) in matrix.rows.iter().enumerate() {
+        type_work
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let destination = match row.cells.get(selected).copied().ok_or_else(invalid_state)? {
+            PatternDecisionCell::Wildcard => &mut classification.wildcard_rows,
+            PatternDecisionCell::Pattern(id) => {
+                let pattern = patterns.0.get(id).ok_or_else(invalid_state)?;
+                let PatternDecisionKind::Boolean(value) = pattern.kind else {
+                    return Err(invalid_state());
+                };
+                &mut classification.explicit_rows[usize::from(value)]
+            }
+        };
+        type_work
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        destination
+            .try_reserve(1)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        destination.push(row_index);
+    }
+    Ok(classification)
+}
+
+fn classify_data_pattern_decision(
+    type_work: &mut TypeWorkBudget,
+    family: &[crate::types::ConstructorId],
+    matrix: &PatternDecisionMatrix,
+    selected: usize,
+    patterns: &PatternDecisionPatternArena,
+) -> Result<DataPatternDecisionClassification, TypeError> {
+    let family_work = family
+        .len()
+        .checked_mul(3)
+        .ok_or_else(|| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    type_work
+        .charge(family_work)
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    let mut family_index = HashMap::new();
+    family_index
+        .try_reserve(family.len())
+        .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    let mut buckets = Vec::new();
+    buckets
+        .try_reserve(family.len())
+        .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    for (index, constructor) in family.iter().copied().enumerate() {
+        if family_index.insert(constructor, index).is_some() {
+            return Err(invalid_state());
+        }
+        buckets.push(DataPatternDecisionBucket {
+            constructor,
+            explicit_rows: Vec::new(),
+            first_pattern: None,
+            payload_is_demanded: false,
+        });
+    }
+
+    let mut wildcard_rows = Vec::new();
+    let mut present_count = 0usize;
+    for (row_index, row) in matrix.rows.iter().enumerate() {
+        type_work
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        match row.cells.get(selected).copied().ok_or_else(invalid_state)? {
+            PatternDecisionCell::Wildcard => {
+                type_work
+                    .charge(1)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                wildcard_rows
+                    .try_reserve(1)
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                wildcard_rows.push(row_index);
+            }
+            PatternDecisionCell::Pattern(id) => {
+                let pattern = patterns.0.get(id).ok_or_else(invalid_state)?;
+                let PatternDecisionKind::Constructor {
+                    constructor,
+                    payload,
+                } = pattern.kind
+                else {
+                    return Err(invalid_state());
+                };
+                let bucket_index = *family_index.get(&constructor).ok_or_else(invalid_state)?;
+                let bucket = buckets.get_mut(bucket_index).ok_or_else(invalid_state)?;
+                if let Some(first_id) = bucket.first_pattern {
+                    let first = patterns.0.get(first_id).ok_or_else(invalid_state)?;
+                    let PatternDecisionKind::Constructor {
+                        payload: first_payload,
+                        ..
+                    } = first.kind
+                    else {
+                        return Err(invalid_state());
+                    };
+                    if first_payload.is_some() != payload.is_some() {
+                        return Err(invalid_state());
+                    }
+                } else {
+                    bucket.first_pattern = Some(id);
+                    present_count = present_count.checked_add(1).ok_or_else(|| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                }
+                if let Some(payload) = payload {
+                    type_work.charge(1).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    let payload = patterns.0.get(payload).ok_or_else(invalid_state)?;
+                    bucket.payload_is_demanded |=
+                        !matches!(payload.kind, PatternDecisionKind::Wildcard);
+                }
+                type_work
+                    .charge(1)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                bucket
+                    .explicit_rows
+                    .try_reserve(1)
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                bucket.explicit_rows.push(row_index);
+            }
+        }
+    }
+    Ok(DataPatternDecisionClassification {
+        buckets,
+        wildcard_rows,
+        present_count,
+    })
+}
+
+enum PatternDecisionTask {
+    Compile(PatternDecisionMatrix),
+    FinishBinding {
+        binder: TypedBinder,
+        initializer: NodeId,
+        result_type: Type,
+        origin: Origin,
+    },
+    FinishMatch {
+        scrutinee: NodeId,
+        patterns: Vec<CorePattern>,
+        arm_origins: Vec<Origin>,
+        result_type: Type,
+        origin: Origin,
+    },
+}
+
+struct PatternDecisionWork(Vec<PatternDecisionTask>);
+
+impl Drop for PatternDecisionWork {
+    fn drop(&mut self) {
+        for task in self.0.drain(..) {
+            match task {
+                PatternDecisionTask::Compile(_) => {}
+                PatternDecisionTask::FinishBinding {
+                    binder,
+                    result_type,
+                    origin,
+                    ..
+                } => {
+                    binder.discard_metadata();
+                    discard_type_iteratively(result_type);
+                    discard_origin_iteratively(origin);
+                }
+                PatternDecisionTask::FinishMatch {
+                    patterns,
+                    arm_origins,
+                    result_type,
+                    origin,
+                    ..
+                } => {
+                    for pattern in patterns {
+                        pattern.discard_iteratively();
+                    }
+                    for arm_origin in arm_origins {
+                        discard_origin_iteratively(arm_origin);
+                    }
+                    discard_type_iteratively(result_type);
+                    discard_origin_iteratively(origin);
+                }
             }
         }
     }
@@ -15654,7 +17712,9 @@ mod tests {
         // add eight aligned root cells to the predecessor boundary. Global
         // arity preflight adds one interface-map cell, visits the interface,
         // implementation, and global declarations, and checks the head.
-        const EXACT_WORK: usize = 84 + 8 + 1 + 3 + 1;
+        // Selective substitution additionally owns one active-shadow entry and
+        // visits both replaced source variables before expanding them.
+        const EXACT_WORK: usize = 84 + 8 + 1 + 3 + 1 + 3;
         let declarations = concat!(
             "interface Keep<A> {\nkeep : A -> A\n}\n\n",
             "impl Keep<Int> {\nkeep value = value\n}\n",
@@ -16972,7 +19032,7 @@ mod tests {
         let mut short = Elaborator::new();
         short
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 15)
+            .charge(crate::types::TYPE_WORK_LIMIT - 18)
             .expect("the fixture leaves exactly the retained metadata cost");
         assert_eq!(
             short.instantiate(&fact, false, span),
@@ -16986,7 +19046,7 @@ mod tests {
         let mut exact = Elaborator::new();
         exact
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 16)
+            .charge(crate::types::TYPE_WORK_LIMIT - 19)
             .expect("the fixture leaves metadata plus the substituted result");
         let (instantiated, arguments) = exact
             .instantiate(&fact, false, span)
@@ -17000,8 +19060,10 @@ mod tests {
     #[test]
     fn polymorphic_instantiation_registers_fixed_inference_kinds_transactionally() {
         // Two causal-origin slots, two Omega records, four retained Kind nodes,
-        // four replacement/argument Type cells, and seven substituted cells.
-        const EXACT_WORK: usize = (2 + 2 + 4 + 4) + 7;
+        // four replacement/argument Type cells, and thirteen substitution
+        // units: two active-shadow entries, three compound result cells, and
+        // four source-variable visits plus four expanded replacements.
+        const EXACT_WORK: usize = (2 + 2 + 4 + 4) + 13;
         let source =
             SourceFile::new("kinded-instantiate.ash", "()\n").expect("the fixture should fit");
         let span = source
@@ -17614,6 +19676,1499 @@ mod tests {
         assert_eq!(exact.generated_type_variables.len(), 1);
         assert_eq!(exact.next_generated_type_variable, u32::MAX - 1);
         assert_eq!(exact.type_work.used(), EXACT_WORK);
+    }
+
+    #[test]
+    fn wide_newtype_constructor_fresh_substitution_is_additive_and_retryable() {
+        const PARAMETER_COUNT: usize = 128;
+        // One replacement entry and one active-shadow count per parameter,
+        // then the constructor body's compound/scalar result (3P + 3) plus
+        // one source visit for each of its 2P substituted variables.
+        const EXACT_WORK: usize = 7 * PARAMETER_COUNT + 3;
+        let module = ModuleId::new(804);
+        let owner = crate::types::NominalTypeId::new(module, 0);
+
+        let make_input = || {
+            let replacements = (0..PARAMETER_COUNT)
+                .map(|index| {
+                    let index = u32::try_from(index).expect("the parameter index should fit");
+                    (
+                        TypeVariableId::resolved(module, index),
+                        TypeVariableId::generated(u32::MAX - index),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let source_arguments = replacements
+                .iter()
+                .map(|(source, _)| Type::Variable(*source))
+                .collect::<Vec<_>>();
+            let body = Type::Function(
+                Box::new(Type::Tuple(source_arguments.clone().into_boxed_slice())),
+                Box::new(Type::apply_arguments(
+                    Type::Nominal(owner),
+                    source_arguments,
+                )),
+            );
+            (body, replacements)
+        };
+        let make_expected = || {
+            let generated = (0..PARAMETER_COUNT).map(|index| {
+                Type::Variable(TypeVariableId::generated(
+                    u32::MAX - u32::try_from(index).expect("the parameter index should fit"),
+                ))
+            });
+            let domain = generated.clone().collect::<Vec<_>>();
+            Type::Function(
+                Box::new(Type::Tuple(domain.into_boxed_slice())),
+                Box::new(Type::apply_arguments(Type::Nominal(owner), generated)),
+            )
+        };
+
+        let (short_body, short_replacements) = make_input();
+        let mut short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            substitute_fresh_type_variables_in_order(&short_body, &short_replacements, &mut short,),
+            Err(())
+        );
+        assert_eq!(short.used(), EXACT_WORK - 1);
+
+        for attempt in 0..2 {
+            let (body, replacements) = make_input();
+            let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
+            let substituted =
+                substitute_fresh_type_variables_in_order(&body, &replacements, &mut exact)
+                    .unwrap_or_else(|()| panic!("exact additive attempt {attempt} should fit"));
+            assert_eq!(exact.used(), EXACT_WORK);
+            assert_eq!(substituted, make_expected());
+        }
+    }
+
+    #[test]
+    fn wide_parameterized_newtype_constructor_lowering_is_exact_atomic_and_retryable() {
+        const PARAMETER_COUNT: usize = 32;
+        // Generated-parameter and replacement-map carriers (2P), generated
+        // variable registration plus its retained Kind (4P), one body
+        // substitution active-shadow map plus source/result traversal (6P + 3), two domain
+        // clones (2P + 2), one codomain clone (2P + 1), one retained function
+        // clone (3P + 3), and the abstraction parameter carrier plus retained
+        // Kinds (2P).
+        const EXACT_WORK: usize = 21 * PARAMETER_COUNT + 9;
+        let source = SourceFile::new("wide-newtype-constructor.ash", "Wide")
+            .expect("the wide constructor source should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("ordered wide constructor range"))
+            .expect("the wide constructor span should fit");
+        let module = ModuleId::new(809);
+        let owner = crate::types::NominalTypeId::new(module, 0);
+        let parameters = (0..PARAMETER_COUNT)
+            .map(|index| {
+                (
+                    TypeVariableId::resolved(
+                        module,
+                        u32::try_from(index).expect("the type-parameter index should fit"),
+                    ),
+                    Kind::Type,
+                )
+            })
+            .collect::<Vec<_>>();
+        let arguments = parameters
+            .iter()
+            .map(|(parameter, _)| Type::Variable(*parameter))
+            .collect::<Vec<_>>();
+        let scheme = Type::Forall(
+            parameters.into_boxed_slice(),
+            Box::new(Type::Function(
+                Box::new(Type::Tuple(arguments.clone().into_boxed_slice())),
+                Box::new(Type::apply_arguments(Type::Nominal(owner), arguments)),
+            )),
+        );
+        let origin = Origin::Source(span);
+        let mut elaborator = Elaborator::new();
+        elaborator.type_work = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+
+        assert_eq!(
+            elaborator.lower_newtype_constructor_value(owner, scheme.clone(), &origin, span),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            )),
+        );
+        assert_eq!(elaborator.type_work.used(), EXACT_WORK - 1);
+        assert_eq!(elaborator.generated_type_variables.len(), 0);
+        assert_eq!(elaborator.next_generated_type_variable, u32::MAX);
+
+        elaborator.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
+        let root = elaborator
+            .lower_newtype_constructor_value(owner, scheme, &origin, span)
+            .expect("the exact fresh whole-constructor budget should retry");
+        assert_eq!(elaborator.type_work.used(), EXACT_WORK);
+        assert_eq!(elaborator.generated_type_variables.len(), PARAMETER_COUNT);
+        let unchecked = elaborator
+            .finish(root)
+            .expect("the exact constructor graph should finish");
+        let kinds = unchecked.expression_kinds_for_test().collect::<Vec<_>>();
+        assert_eq!(
+            kinds
+                .iter()
+                .filter(|kind| matches!(
+                    kind,
+                    crate::core::PureExprKind::Value(crate::core::PureValue::Function(_))
+                ))
+                .count(),
+            1,
+        );
+        assert_eq!(
+            kinds
+                .iter()
+                .filter(|kind| matches!(
+                    kind,
+                    crate::core::PureExprKind::Computation(
+                        crate::core::PureComputation::NewtypeConversion(_)
+                    )
+                ))
+                .count(),
+            1,
+        );
+    }
+
+    #[test]
+    fn parameterized_newtype_constructor_generated_binder_registration_retries_same_identity() {
+        const ONE_SHORT_REGISTRATION: usize = 4;
+        let source =
+            SourceFile::new("newtype-constructor-binder.ash", "Box").expect("source should fit");
+        let span = source
+            .span(ByteRange::new(0, 3).expect("ordered range"))
+            .expect("span should fit");
+        let module = ModuleId::new(805);
+        let owner = crate::types::NominalTypeId::new(module, 0);
+        let parameter = TypeVariableId::resolved(module, 0);
+        let scheme = Type::Forall(
+            Box::new([(parameter, Kind::Type)]),
+            Box::new(Type::Function(
+                Box::new(Type::Variable(parameter)),
+                Box::new(Type::Application(
+                    Box::new(Type::Nominal(owner)),
+                    Box::new(Type::Variable(parameter)),
+                )),
+            )),
+        );
+        let origin = Origin::Source(span);
+        let mut elaborator = Elaborator::new();
+        elaborator.type_work = TypeWorkBudget::with_limit(ONE_SHORT_REGISTRATION);
+
+        assert_eq!(
+            elaborator.lower_newtype_constructor_value(owner, scheme.clone(), &origin, span),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        );
+        assert_eq!(elaborator.generated_type_variables.len(), 0);
+        assert_eq!(elaborator.next_generated_type_variable, u32::MAX);
+
+        elaborator.type_work = TypeWorkBudget::unbounded();
+        elaborator
+            .lower_newtype_constructor_value(owner, scheme, &origin, span)
+            .expect("a fresh budget should retry the unpublished generated identity");
+        let generated = TypeVariableId::generated(u32::MAX);
+        assert_eq!(elaborator.generated_type_variables.len(), 1);
+        assert_eq!(elaborator.next_generated_type_variable, u32::MAX - 1);
+        let mut lookup_budget = TypeWorkBudget::unbounded();
+        let fact = elaborator
+            .generated_type_variables
+            .fact(generated, &mut lookup_budget)
+            .expect("the retry should register the generated binder fact");
+        assert_eq!(fact.kind, Kind::Type);
+        assert_eq!(fact.origin, span);
+    }
+
+    #[test]
+    fn late_newtype_constructor_failure_rolls_back_core_for_same_elaborator_retry() {
+        // Generated-parameter and replacement scratch (2), generated-type
+        // registration (3), retained generated Kind (1), active-shadow map (1)
+        // plus the three-cell function traversal (3), the domain, child, and
+        // conversion clones (3), then the retained function type (3). The next
+        // parameter-list clone fails after the unary function has already been
+        // appended to Core.
+        const LATE_FAILURE_WORK: usize = 2 + 3 + 1 + 1 + 1 + 3 + 3 + 3;
+        let source =
+            SourceFile::new("newtype-constructor-transaction.ash", "Box").expect("test source");
+        let span = source
+            .span(ByteRange::new(0, 3).expect("ordered range"))
+            .expect("source span");
+        let module = ModuleId::new(806);
+        let owner = crate::types::NominalTypeId::new(module, 0);
+        let parameter = TypeVariableId::resolved(module, 0);
+        let scheme = Type::Forall(
+            Box::new([(parameter, Kind::Type)]),
+            Box::new(Type::Function(
+                Box::new(Type::Variable(parameter)),
+                Box::new(Type::Unit),
+            )),
+        );
+        let origin = Origin::Source(span);
+        let mut elaborator = Elaborator::new();
+        elaborator.type_work = TypeWorkBudget::with_limit(LATE_FAILURE_WORK);
+
+        assert_eq!(
+            elaborator.lower_newtype_constructor_value(owner, scheme.clone(), &origin, span),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            )),
+        );
+        assert_eq!(elaborator.type_work.used(), LATE_FAILURE_WORK);
+        assert_eq!(elaborator.generated_type_variables.len(), 0);
+        assert_eq!(elaborator.next_generated_type_variable, u32::MAX);
+
+        elaborator.type_work = TypeWorkBudget::unbounded();
+        let root = elaborator
+            .lower_newtype_constructor_value(owner, scheme, &origin, span)
+            .expect("the same elaborator should retry after rolling back Core");
+        assert_eq!(elaborator.generated_type_variables.len(), 1);
+        assert_eq!(elaborator.next_generated_type_variable, u32::MAX - 1);
+        let unchecked = elaborator
+            .finish(root)
+            .expect("the retried constructor graph should finish");
+        {
+            let kinds = unchecked.expression_kinds_for_test().collect::<Vec<_>>();
+            assert_eq!(kinds.len(), 4, "failed-attempt Core must not remain stored");
+            let functions = kinds
+                .iter()
+                .filter_map(|kind| match kind {
+                    crate::core::PureExprKind::Value(crate::core::PureValue::Function(value)) => {
+                        Some(value)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(functions.len(), 1);
+            assert_eq!(functions[0].parameter().id(), BinderId::new(0));
+            assert_eq!(
+                kinds
+                    .iter()
+                    .filter(|kind| matches!(
+                        kind,
+                        crate::core::PureExprKind::Computation(
+                            crate::core::PureComputation::NewtypeConversion(_)
+                        )
+                    ))
+                    .count(),
+                1,
+            );
+            assert!(kinds.iter().any(|kind| matches!(
+                kind,
+                crate::core::PureExprKind::Variable(variable)
+                    if variable.binder() == functions[0].parameter().id()
+            )));
+        }
+        let error = crate::core::validate(unchecked, &[&source])
+            .expect_err("CP4 must refuse the one reachable conversion");
+        assert_eq!(
+            error.reason(),
+            crate::core::ValidationReason::NewtypeConversion
+        );
+    }
+
+    #[test]
+    fn local_parameterized_newtype_constructor_is_a_generated_unary_wrap_function() {
+        let file = ModuleFixtureFile::write(
+            "local-parameterized-newtype-constructor.ash",
+            concat!(
+                "newtype Box<A> = Box(A)\n",
+                "main : Unit -> Box<Int>\n",
+                "main () = {\n",
+                "let make = Box\n",
+                "make(42)\n",
+                "}\n",
+            ),
+        );
+        let graph = load_module_graph(&file.0, &ModuleRoots::empty())
+            .expect("the local constructor fixture should load");
+        let loaded = graph
+            .module(graph.entry())
+            .expect("the local constructor entry should remain loaded");
+        let resolved = resolve_module(loaded, &[])
+            .expect("the local parameterized constructor should resolve");
+        let checked = check_module(resolved)
+            .expect("the locally bound parameterized constructor should check");
+        let linked = link_modules(vec![checked], graph.entry())
+            .expect("the local constructor fixture should link");
+        let linked = crate::evidence_validation::validate_interface_evidence(linked)
+            .expect("the local constructor fixture has no interface evidence");
+        let registry = Arc::clone(linked.registry());
+        let mut elaborator = Elaborator::for_module_program(&linked)
+            .expect("the local constructor Core namespace should fit");
+        let typed = elaborator
+            .synthesize_module_program(&linked)
+            .expect("the local constructor program should synthesize");
+        let unchecked = elaborator
+            .finish(typed.node)
+            .expect("the local constructor Core should finish unchecked");
+        let kinds = unchecked.expression_kinds_for_test().collect::<Vec<_>>();
+        let mut generated_wrap_functions = 0;
+        for kind in &kinds {
+            match kind {
+                crate::core::PureExprKind::Value(crate::core::PureValue::Function(function)) => {
+                    let body = kinds
+                        .get(function.body().value() as usize)
+                        .expect("the generated function body should remain in its arena");
+                    let crate::core::PureExprKind::Computation(
+                        crate::core::PureComputation::NewtypeConversion(conversion),
+                    ) = body
+                    else {
+                        continue;
+                    };
+                    if conversion.direction() != NewtypeConversionDirection::Wrap {
+                        continue;
+                    }
+                    let owner = registry
+                        .nominal(conversion.owner())
+                        .expect("the generated wrap owner should remain canonical");
+                    if owner.declaration_kind != ResolvedNominalDeclarationKind::Newtype {
+                        continue;
+                    }
+                    assert!(matches!(
+                        kinds.get(conversion.child().value() as usize),
+                        Some(crate::core::PureExprKind::Variable(variable))
+                            if variable.binder() == function.parameter().id()
+                    ));
+                    generated_wrap_functions += 1;
+                }
+                crate::core::PureExprKind::Value(crate::core::PureValue::Constructor(value)) => {
+                    let constructor = registry
+                        .constructor(value.constructor())
+                        .expect("an ordinary Core constructor should remain canonical");
+                    let owner = registry
+                        .nominal(constructor.owner)
+                        .expect("the ordinary Core constructor owner should remain canonical");
+                    assert_ne!(
+                        owner.declaration_kind,
+                        ResolvedNominalDeclarationKind::Newtype,
+                        "newtype constructor escaped through the allocating constructor route",
+                    );
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(generated_wrap_functions, 1);
+
+        let source = loaded.source();
+        let error =
+            crate::core::validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
+                .expect_err("CP4 validation must refuse the locally retained wrap conversion");
+        assert_eq!(
+            error.reason(),
+            crate::core::ValidationReason::NewtypeConversion
+        );
+    }
+
+    #[test]
+    fn mixed_fallbacks_remove_nested_parameterized_newtypes_from_core_patterns() {
+        let file = ModuleFixtureFile::write(
+            "nested-newtype-fallback.ash",
+            concat!(
+                "newtype Box<A> = Box(A)\n",
+                "newtype Flag = Flag(Bool)\n",
+                "newtype Envelope<A> = Envelope(Box<A>)\n",
+                "fallback : Envelope<Flag> -> Int\n",
+                "fallback _ = 0\n",
+                "classify_binder : Envelope<Flag> -> Int\n",
+                "classify_binder value = match value {\n",
+                "Envelope(Box(Flag(true))) => 1\n",
+                "other => fallback(other)\n",
+                "}\n",
+                "classify_wildcard : Envelope<Flag> -> Int\n",
+                "classify_wildcard value = match value {\n",
+                "Envelope(Box(Flag(true))) => 1\n",
+                "_ => 0\n",
+                "}\n",
+                "main : Unit -> Int\n",
+                "main () = classify_binder(Envelope(Box(Flag(false)))) + classify_wildcard(Envelope(Box(Flag(true))))\n",
+            ),
+        );
+        let graph = load_module_graph(&file.0, &ModuleRoots::empty())
+            .expect("the nested fallback fixture should load");
+        let loaded = graph
+            .module(graph.entry())
+            .expect("the nested fallback entry should remain loaded");
+        let resolved = resolve_module(loaded, &[])
+            .expect("the nested parameterized newtype patterns should resolve");
+        let checked =
+            check_module(resolved).expect("the binder and wildcard fallback patterns should check");
+        let linked = link_modules(vec![checked], graph.entry())
+            .expect("the nested fallback fixture should link");
+        let linked = crate::evidence_validation::validate_interface_evidence(linked)
+            .expect("the nested fallback fixture has no unauthenticated interface evidence");
+        let registry = Arc::clone(linked.registry());
+        let mut elaborator = Elaborator::for_module_program(&linked)
+            .expect("the nested fallback Core namespace should fit");
+        let typed = elaborator
+            .synthesize_module_program(&linked)
+            .expect("the nested fallback program should synthesize");
+        let unchecked = elaborator
+            .finish(typed.node)
+            .expect("the nested fallback Core should finish unchecked");
+
+        for kind in unchecked.expression_kinds_for_test() {
+            let crate::core::PureExprKind::Computation(crate::core::PureComputation::Match(
+                matched,
+            )) = kind
+            else {
+                continue;
+            };
+            let mut patterns = matched
+                .arms()
+                .iter()
+                .map(crate::core::CoreMatchArm::pattern)
+                .collect::<Vec<_>>();
+            while let Some(pattern) = patterns.pop() {
+                match &pattern.kind {
+                    CorePatternKind::Tuple(elements) => patterns.extend(elements),
+                    CorePatternKind::Constructor {
+                        constructor,
+                        payload,
+                    } => {
+                        let info = registry
+                            .constructor(*constructor)
+                            .expect("a lowered constructor pattern must remain canonical");
+                        let owner = registry
+                            .nominal(info.owner)
+                            .expect("the constructor owner must remain canonical");
+                        assert_ne!(
+                            owner.declaration_kind,
+                            ResolvedNominalDeclarationKind::Newtype,
+                            "newtype owner {:?} remained in an ordinary Core constructor pattern",
+                            owner.id,
+                        );
+                        if let Some(payload) = payload.as_deref() {
+                            patterns.push(payload);
+                        }
+                    }
+                    CorePatternKind::Binder(_)
+                    | CorePatternKind::Wildcard
+                    | CorePatternKind::Boolean(_)
+                    | CorePatternKind::Unit => {}
+                }
+            }
+        }
+
+        let source = loaded.source();
+        let error =
+            crate::core::validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
+                .expect_err("CP4 validation must refuse the explicit unwrap conversions");
+        assert_eq!(
+            error.reason(),
+            crate::core::ValidationReason::NewtypeConversion
+        );
+    }
+
+    fn assert_nested_newtype_patterns_lower_to_conversions(display_path: &str, text: &str) {
+        let file = ModuleFixtureFile::write(display_path, text);
+        let graph = load_module_graph(&file.0, &ModuleRoots::empty())
+            .expect("the nested pattern fixture should load");
+        let loaded = graph
+            .module(graph.entry())
+            .expect("the nested pattern entry should remain loaded");
+        let resolved = resolve_module(loaded, &[]).expect("the nested patterns should resolve");
+        let checked = check_module(resolved).expect("the nested fallback patterns should check");
+        let linked = link_modules(vec![checked], graph.entry())
+            .expect("the nested pattern fixture should link");
+        let linked = crate::evidence_validation::validate_interface_evidence(linked)
+            .expect("the nested pattern fixture has no unauthenticated interface evidence");
+        let registry = Arc::clone(linked.registry());
+        let mut elaborator = Elaborator::for_module_program(&linked)
+            .expect("the nested pattern Core namespace should fit");
+        let typed = elaborator
+            .synthesize_module_program(&linked)
+            .expect("the nested pattern program should synthesize");
+        let unchecked = elaborator
+            .finish(typed.node)
+            .expect("the nested pattern Core should finish unchecked");
+
+        for kind in unchecked.expression_kinds_for_test() {
+            let crate::core::PureExprKind::Computation(crate::core::PureComputation::Match(
+                matched,
+            )) = kind
+            else {
+                continue;
+            };
+            let mut patterns = matched
+                .arms()
+                .iter()
+                .map(crate::core::CoreMatchArm::pattern)
+                .collect::<Vec<_>>();
+            while let Some(pattern) = patterns.pop() {
+                match &pattern.kind {
+                    CorePatternKind::Tuple(elements) => patterns.extend(elements),
+                    CorePatternKind::Constructor {
+                        constructor,
+                        payload,
+                    } => {
+                        let info = registry
+                            .constructor(*constructor)
+                            .expect("a lowered constructor pattern must remain canonical");
+                        let owner = registry
+                            .nominal(info.owner)
+                            .expect("the constructor owner must remain canonical");
+                        assert_ne!(
+                            owner.declaration_kind,
+                            ResolvedNominalDeclarationKind::Newtype,
+                            "newtype owner {:?} remained beneath a composite Core pattern",
+                            owner.id,
+                        );
+                        if let Some(payload) = payload.as_deref() {
+                            patterns.push(payload);
+                        }
+                    }
+                    CorePatternKind::Binder(_)
+                    | CorePatternKind::Wildcard
+                    | CorePatternKind::Boolean(_)
+                    | CorePatternKind::Unit => {}
+                }
+            }
+        }
+
+        let source = loaded.source();
+        let error =
+            crate::core::validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
+                .expect_err("CP4 validation must refuse the explicit unwrap conversions");
+        assert_eq!(
+            error.reason(),
+            crate::core::ValidationReason::NewtypeConversion,
+            "independent validation must reach the temporary conversion refusal: {error}",
+        );
+    }
+
+    #[test]
+    fn ordinary_constructor_boundary_removes_nested_newtype_patterns_before_fallback() {
+        assert_nested_newtype_patterns_lower_to_conversions(
+            "ordinary-boundary-newtype-pattern.ash",
+            concat!(
+                "newtype Inner = Inner(Bool)\n",
+                "type Carrier = Carrier(Inner)\n",
+                "newtype Outer = Outer(Carrier)\n",
+                "fallback : Outer -> Int\n",
+                "fallback _ = 0\n",
+                "classify : Outer -> Int\n",
+                "classify value = match value {\n",
+                "Outer(Carrier(Inner(true))) => 1\n",
+                "other => fallback(other)\n",
+                "}\n",
+                "main : Unit -> Int\n",
+                "main () = classify(Outer(Carrier(Inner(false))))\n",
+            ),
+        );
+    }
+
+    #[test]
+    fn tuple_boundary_removes_nested_newtype_patterns_before_wildcard_fallback() {
+        assert_nested_newtype_patterns_lower_to_conversions(
+            "tuple-boundary-newtype-pattern.ash",
+            concat!(
+                "newtype Inner = Inner(Bool)\n",
+                "type Carrier = Carrier(Inner)\n",
+                "newtype Outer = Outer(Carrier)\n",
+                "classify : (Outer, Bool) -> Int\n",
+                "classify value = match value {\n",
+                "(Outer(Carrier(Inner(true))), true) => 1\n",
+                "_ => 0\n",
+                "}\n",
+                "main : Unit -> Int\n",
+                "main () = classify(Outer(Carrier(Inner(false))), false)\n",
+            ),
+        );
+    }
+
+    #[test]
+    fn ignored_newtype_payload_keeps_its_unwrap_reachable() {
+        assert_nested_newtype_patterns_lower_to_conversions(
+            "ignored-newtype-payload.ash",
+            concat!(
+                "newtype N = N(Bool)\n",
+                "classify : N -> Int\n",
+                "classify value = match value {\n",
+                "N(_) => 1\n",
+                "}\n",
+                "main : Unit -> Int\n",
+                "main () = classify(N(true))\n",
+            ),
+        );
+    }
+
+    #[test]
+    fn ignored_tuple_column_creates_no_orphan_projection() {
+        assert_nested_newtype_patterns_lower_to_conversions(
+            "ignored-tuple-column.ash",
+            concat!(
+                "newtype N = N(Bool)\n",
+                "classify : (N, Bool) -> Int\n",
+                "classify value = match value {\n",
+                "(N(true), _) => 1\n",
+                "(N(false), _) => 0\n",
+                "}\n",
+                "main : Unit -> Int\n",
+                "main () = classify(N(true), false)\n",
+            ),
+        );
+    }
+
+    #[test]
+    fn ignored_data_payload_creates_no_orphan_projection() {
+        assert_nested_newtype_patterns_lower_to_conversions(
+            "ignored-data-payload.ash",
+            concat!(
+                "type Carrier = Carrier(Bool)\n",
+                "newtype N = N(Carrier)\n",
+                "classify : N -> Int\n",
+                "classify value = match value {\n",
+                "N(Carrier(_)) => 1\n",
+                "}\n",
+                "main : Unit -> Int\n",
+                "main () = classify(N(Carrier(true)))\n",
+            ),
+        );
+    }
+
+    #[test]
+    fn crossed_composite_binders_share_one_arm_continuation_definition() {
+        assert_nested_newtype_patterns_lower_to_conversions(
+            "crossed-binder-newtype-pattern.ash",
+            concat!(
+                "newtype Wrapped = Wrapped(Bool)\n",
+                "type Choice =\n",
+                "A((Bool, Wrapped))\n",
+                "| O\n",
+                "as_int : Bool -> Int\n",
+                "as_int true = 1\n",
+                "as_int false = 0\n",
+                "classify : (Choice, Choice) -> Int\n",
+                "classify value = match value {\n",
+                "(A((true, Wrapped(x))), _) => as_int(x)\n",
+                "(_, A((true, Wrapped(y)))) => as_int(y)\n",
+                "_ => 0\n",
+                "}\n",
+                "main : Unit -> Int\n",
+                "main () = classify(O, A((true, Wrapped(true))))\n",
+            ),
+        );
+    }
+
+    #[test]
+    fn ordinary_match_without_newtypes_keeps_the_direct_core_match_path() {
+        let source = SourceFile::new("ordinary-direct-match.ash", "true false")
+            .expect("the ordinary match source should fit");
+        let true_span = source
+            .span(ByteRange::new(0, 4).expect("ordered true range"))
+            .expect("the true span should fit");
+        let false_span = source
+            .span(ByteRange::new(5, 10).expect("ordered false range"))
+            .expect("the false span should fit");
+        let mut elaborator = Elaborator::new();
+        let scrutinee = elaborator
+            .builder
+            .boolean(true, Type::Bool, Origin::Source(true_span))
+            .expect("the ordinary scrutinee should fit");
+        let true_body = elaborator
+            .builder
+            .integer(
+                crate::integer::Integer::parse_decimal("1").expect("valid integer"),
+                Type::Int,
+                Origin::Source(true_span),
+            )
+            .expect("the true body should fit");
+        let false_body = elaborator
+            .builder
+            .integer(
+                crate::integer::Integer::parse_decimal("0").expect("valid integer"),
+                Type::Int,
+                Origin::Source(false_span),
+            )
+            .expect("the false body should fit");
+        let root = elaborator
+            .lower_match_expression(
+                scrutinee,
+                vec![
+                    CoreMatchArm::new(
+                        CorePattern::new(
+                            Type::Bool,
+                            Origin::Source(true_span),
+                            CorePatternKind::Boolean(true),
+                        ),
+                        true_body,
+                        Origin::Source(true_span),
+                    ),
+                    CoreMatchArm::new(
+                        CorePattern::new(
+                            Type::Bool,
+                            Origin::Source(false_span),
+                            CorePatternKind::Boolean(false),
+                        ),
+                        false_body,
+                        Origin::Source(false_span),
+                    ),
+                ],
+                Type::Int,
+                Origin::Source(true_span),
+                false,
+                2,
+            )
+            .expect("the ordinary match should retain the direct builder path");
+        let unchecked = elaborator
+            .finish(root)
+            .expect("the ordinary direct match should finish");
+        assert!(matches!(
+            unchecked.expression_kinds_for_test().last(),
+            Some(crate::core::PureExprKind::Computation(
+                crate::core::PureComputation::Match(_)
+            ))
+        ));
+    }
+
+    #[test]
+    fn pattern_decision_row_clone_has_an_exact_atomic_boundary_and_fresh_retry() {
+        const CELL_COUNT: usize = 3;
+        const ARGUMENT_COUNT: usize = 2;
+        const EXACT_WORK: usize = CELL_COUNT + ARGUMENT_COUNT + 1;
+        let row = PatternDecisionRow {
+            cells: vec![PatternDecisionCell::Wildcard; CELL_COUNT],
+            continuation: 0,
+            arguments: vec![None; ARGUMENT_COUNT],
+        };
+
+        let mut short = Elaborator::new();
+        short.type_work = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+        assert!(matches!(
+            short.clone_pattern_decision_row(&row),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        ));
+
+        for _ in 0..2 {
+            let mut exact = Elaborator::new();
+            exact.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
+            let cloned = exact
+                .clone_pattern_decision_row(&row)
+                .expect("the exact fresh matrix-row budget should fit");
+            assert_eq!(cloned.cells.len(), CELL_COUNT);
+            assert_eq!(cloned.arguments.len(), ARGUMENT_COUNT);
+            assert_eq!(exact.type_work.used(), EXACT_WORK);
+        }
+    }
+
+    #[test]
+    fn complete_boolean_branch_copy_is_exact_and_retryable_with_wildcard_duplication() {
+        // One visit and one retained classification index per source row (6);
+        // two branch-carrier slots in each of three buffers (6); four retained
+        // row copies, each with one capacity slot, one cell, one row record,
+        // and one cell replacement (16); two pattern types (2); two rebuilt
+        // column records (2); three scheduled tasks (3); one result type (1).
+        const EXACT_WORK: usize = 6 + 6 + 16 + 2 + 2 + 3 + 1;
+        let source = SourceFile::new("boolean-branch-budget.ash", "false true _")
+            .expect("the Boolean branch source should fit");
+        let span = source
+            .span(ByteRange::new(0, 12).expect("ordered Boolean branch range"))
+            .expect("the Boolean branch span should fit");
+        let compile = |limit| {
+            let mut elaborator = Elaborator::new();
+            let scrutinee = elaborator
+                .builder
+                .boolean(false, Type::Bool, Origin::Source(span))
+                .expect("the Boolean scrutinee should fit");
+            elaborator.type_work = TypeWorkBudget::with_limit(limit);
+            let patterns = PatternDecisionPatternArena(vec![
+                PatternDecisionPattern {
+                    ty: Type::Bool,
+                    origin: Origin::Source(span),
+                    kind: PatternDecisionKind::Boolean(false),
+                },
+                PatternDecisionPattern {
+                    ty: Type::Bool,
+                    origin: Origin::Source(span),
+                    kind: PatternDecisionKind::Boolean(true),
+                },
+            ]);
+            let matrix = PatternDecisionMatrix {
+                columns: vec![0],
+                rows: vec![
+                    PatternDecisionRow {
+                        cells: vec![PatternDecisionCell::Pattern(0)],
+                        continuation: 0,
+                        arguments: Vec::new(),
+                    },
+                    PatternDecisionRow {
+                        cells: vec![PatternDecisionCell::Pattern(1)],
+                        continuation: 1,
+                        arguments: Vec::new(),
+                    },
+                    PatternDecisionRow {
+                        cells: vec![PatternDecisionCell::Wildcard],
+                        continuation: 2,
+                        arguments: Vec::new(),
+                    },
+                ],
+            };
+            let columns = PatternDecisionColumnArena(vec![PatternDecisionColumn {
+                value: scrutinee,
+                ty: Type::Bool,
+                origin: Origin::Source(span),
+            }]);
+            let mut tasks = PatternDecisionWork(Vec::new());
+            let result = elaborator.compile_boolean_pattern_decision(
+                matrix,
+                0,
+                &patterns,
+                &columns,
+                &Type::Unit,
+                &Origin::Source(span),
+                &mut tasks,
+            );
+            (elaborator, patterns, columns, tasks, result)
+        };
+
+        let (short, _, short_columns, short_tasks, result) = compile(EXACT_WORK - 1);
+        assert!(matches!(
+            result,
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        ));
+        assert_eq!(short.type_work.used(), EXACT_WORK - 1);
+        assert_eq!(short_columns.0.len(), 1);
+        assert!(short_tasks.0.is_empty());
+
+        for _ in 0..2 {
+            let (exact, _, columns, tasks, result) = compile(EXACT_WORK);
+            result.expect("the exact complete Boolean branch copy should fit");
+            assert_eq!(exact.type_work.used(), EXACT_WORK);
+            assert_eq!(columns.0.len(), 1);
+            let copied_rows = tasks
+                .0
+                .iter()
+                .filter_map(|task| match task {
+                    PatternDecisionTask::Compile(matrix) => Some(matrix.rows.len()),
+                    PatternDecisionTask::FinishBinding { .. }
+                    | PatternDecisionTask::FinishMatch { .. } => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(copied_rows, [2, 2]);
+        }
+    }
+
+    #[test]
+    fn complete_data_family_copy_is_exact_and_retryable_with_wildcard_duplication() {
+        const FAMILY_COUNT: usize = 3;
+        const ROW_COUNT: usize = FAMILY_COUNT + 1;
+        // Family visit/index/bucket records (9); one visit and one retained
+        // classification index per source row (8); three branch-carrier slots
+        // in each of three buffers (9); source type (1); three canonical bucket
+        // emission visits (3); six retained row copies of four units each (24);
+        // three pattern types (3); three rebuilt columns (3); four scheduled
+        // tasks (4); result (1).
+        const EXACT_WORK: usize = 9 + 8 + 9 + 1 + 3 + 24 + 3 + 3 + 4 + 1;
+        let source = SourceFile::new("data-branch-budget.ash", "A B C _")
+            .expect("the data branch source should fit");
+        let span = source
+            .span(ByteRange::new(0, 7).expect("ordered data branch range"))
+            .expect("the data branch span should fit");
+        let module = ModuleId::new(807);
+        let owner = crate::types::NominalTypeId::new(module, 0);
+        let family = (0..FAMILY_COUNT)
+            .map(|index| {
+                crate::types::ConstructorId::new(
+                    owner,
+                    u32::try_from(index).expect("the constructor index should fit"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let registry = Arc::new(ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: ResolvedNominalDeclarationKind::Data,
+                representation: None,
+                id: owner,
+                spelling: "Choice".to_owned(),
+                constructors: family.clone().into_boxed_slice(),
+                origin: Origin::Source(span),
+            }],
+            family
+                .iter()
+                .enumerate()
+                .map(
+                    |(index, constructor)| crate::resolved::ResolvedConstructor {
+                        id: *constructor,
+                        owner,
+                        spelling: format!("Choice{index}"),
+                        payload: None,
+                        origin: Origin::Source(span),
+                    },
+                )
+                .collect(),
+        ));
+        let compile = |limit| {
+            let mut elaborator = Elaborator::new();
+            elaborator.registry = Arc::clone(&registry);
+            elaborator.builder = CoreBuilder::with_registry(Arc::clone(&registry));
+            let scrutinee = elaborator
+                .builder
+                .unit(Type::Nominal(owner), Origin::Source(span))
+                .expect("the data scrutinee should fit");
+            elaborator.type_work = TypeWorkBudget::with_limit(limit);
+            let patterns = PatternDecisionPatternArena(
+                family
+                    .iter()
+                    .map(|constructor| PatternDecisionPattern {
+                        ty: Type::Nominal(owner),
+                        origin: Origin::Source(span),
+                        kind: PatternDecisionKind::Constructor {
+                            constructor: *constructor,
+                            payload: None,
+                        },
+                    })
+                    .collect(),
+            );
+            let mut rows = (0..FAMILY_COUNT)
+                .map(|index| PatternDecisionRow {
+                    cells: vec![PatternDecisionCell::Pattern(index)],
+                    continuation: index,
+                    arguments: Vec::new(),
+                })
+                .collect::<Vec<_>>();
+            rows.push(PatternDecisionRow {
+                cells: vec![PatternDecisionCell::Wildcard],
+                continuation: FAMILY_COUNT,
+                arguments: Vec::new(),
+            });
+            assert_eq!(rows.len(), ROW_COUNT);
+            let matrix = PatternDecisionMatrix {
+                columns: vec![0],
+                rows,
+            };
+            let mut columns = PatternDecisionColumnArena(vec![PatternDecisionColumn {
+                value: scrutinee,
+                ty: Type::Nominal(owner),
+                origin: Origin::Source(span),
+            }]);
+            let mut tasks = PatternDecisionWork(Vec::new());
+            let result = elaborator.compile_data_pattern_decision(
+                matrix,
+                0,
+                owner,
+                &patterns,
+                &mut columns,
+                &Type::Unit,
+                &Origin::Source(span),
+                &mut tasks,
+            );
+            (elaborator, patterns, columns, tasks, result)
+        };
+
+        let (short, _, short_columns, short_tasks, result) = compile(EXACT_WORK - 1);
+        assert!(matches!(
+            result,
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        ));
+        assert_eq!(short.type_work.used(), EXACT_WORK - 1);
+        assert_eq!(short_columns.0.len(), 1);
+        assert!(short_tasks.0.is_empty());
+
+        for _ in 0..2 {
+            let (exact, _, columns, tasks, result) = compile(EXACT_WORK);
+            result.expect("the exact complete data-family copy should fit");
+            assert_eq!(exact.type_work.used(), EXACT_WORK);
+            assert_eq!(columns.0.len(), 1);
+            let copied_rows = tasks
+                .0
+                .iter()
+                .filter_map(|task| match task {
+                    PatternDecisionTask::Compile(matrix) => Some(matrix.rows.len()),
+                    PatternDecisionTask::FinishBinding { .. }
+                    | PatternDecisionTask::FinishMatch { .. } => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(copied_rows, [2, 2, 2]);
+        }
+    }
+
+    #[test]
+    fn wide_complete_data_family_classification_is_additive_in_family_and_rows() {
+        const FAMILY_COUNT: usize = 64;
+        // Family visit/index/bucket records (3F), row visit/index records (2R),
+        // three output carrier records per branch (3F), source type (1), one
+        // canonical bucket emission visit and four-unit row copy per constructor
+        // (5F), pattern and column types (2F), scheduled tasks (F + 1), and
+        // result type (1). Here R = F.
+        const EXACT_WORK: usize = 16 * FAMILY_COUNT + 3;
+        let source =
+            SourceFile::new("wide-data-branch-budget.ash", "X").expect("test source should fit");
+        let span = source
+            .span(ByteRange::new(0, 1).expect("ordered wide data range"))
+            .expect("the wide data span should fit");
+        let module = ModuleId::new(808);
+        let owner = crate::types::NominalTypeId::new(module, 0);
+        let family = (0..FAMILY_COUNT)
+            .map(|index| {
+                crate::types::ConstructorId::new(
+                    owner,
+                    u32::try_from(index).expect("the constructor index should fit"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let registry = Arc::new(ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: ResolvedNominalDeclarationKind::Data,
+                representation: None,
+                id: owner,
+                spelling: "Wide".to_owned(),
+                constructors: family.clone().into_boxed_slice(),
+                origin: Origin::Source(span),
+            }],
+            family
+                .iter()
+                .enumerate()
+                .map(
+                    |(index, constructor)| crate::resolved::ResolvedConstructor {
+                        id: *constructor,
+                        owner,
+                        spelling: format!("Wide{index}"),
+                        payload: None,
+                        origin: Origin::Source(span),
+                    },
+                )
+                .collect(),
+        ));
+        let compile = |limit| {
+            let mut elaborator = Elaborator::new();
+            elaborator.registry = Arc::clone(&registry);
+            elaborator.builder = CoreBuilder::with_registry(Arc::clone(&registry));
+            let scrutinee = elaborator
+                .builder
+                .unit(Type::Nominal(owner), Origin::Source(span))
+                .expect("the wide data scrutinee should fit");
+            elaborator.type_work = TypeWorkBudget::with_limit(limit);
+            let patterns = PatternDecisionPatternArena(
+                family
+                    .iter()
+                    .map(|constructor| PatternDecisionPattern {
+                        ty: Type::Nominal(owner),
+                        origin: Origin::Source(span),
+                        kind: PatternDecisionKind::Constructor {
+                            constructor: *constructor,
+                            payload: None,
+                        },
+                    })
+                    .collect(),
+            );
+            let matrix = PatternDecisionMatrix {
+                columns: vec![0],
+                rows: (0..FAMILY_COUNT)
+                    .map(|index| PatternDecisionRow {
+                        cells: vec![PatternDecisionCell::Pattern(index)],
+                        continuation: index,
+                        arguments: Vec::new(),
+                    })
+                    .collect(),
+            };
+            let mut columns = PatternDecisionColumnArena(vec![PatternDecisionColumn {
+                value: scrutinee,
+                ty: Type::Nominal(owner),
+                origin: Origin::Source(span),
+            }]);
+            let mut tasks = PatternDecisionWork(Vec::new());
+            let result = elaborator.compile_data_pattern_decision(
+                matrix,
+                0,
+                owner,
+                &patterns,
+                &mut columns,
+                &Type::Unit,
+                &Origin::Source(span),
+                &mut tasks,
+            );
+            (elaborator.type_work.used(), tasks, result)
+        };
+
+        let (used, tasks, result) = compile(EXACT_WORK - 1);
+        assert!(matches!(
+            result,
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        ));
+        assert_eq!(used, EXACT_WORK - 1);
+        assert!(tasks.0.is_empty());
+
+        for _ in 0..2 {
+            let (used, tasks, result) = compile(EXACT_WORK);
+            result.expect("the additive wide family and row classification should fit");
+            assert_eq!(used, EXACT_WORK);
+            assert_eq!(
+                tasks
+                    .0
+                    .iter()
+                    .filter(|task| matches!(task, PatternDecisionTask::Compile(_)))
+                    .count(),
+                FAMILY_COUNT,
+            );
+        }
+    }
+
+    #[test]
+    fn tuple_projection_scratch_preflight_is_exact_atomic_and_retryable() {
+        const ARITY: usize = 4;
+        const DEMAND_COUNT: usize = 2;
+        const EXACT_WORK: usize = ARITY + 3 * DEMAND_COUNT;
+        let preflight = |limit| {
+            let mut elaborator = Elaborator::new();
+            elaborator.type_work = TypeWorkBudget::with_limit(limit);
+            let mut columns = PatternDecisionColumnArena(Vec::new());
+            let patterns = PatternDecisionPatternArena(Vec::new());
+            let tasks = PatternDecisionWork(Vec::new());
+            let result = elaborator.prepare_tuple_pattern_projection_scratch(
+                ARITY,
+                DEMAND_COUNT,
+                &mut columns,
+            );
+            (elaborator, columns, patterns, tasks, result)
+        };
+
+        let (short, short_columns, short_patterns, short_tasks, result) = preflight(EXACT_WORK - 1);
+        assert!(matches!(
+            result,
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        ));
+        assert_eq!(short.type_work.used(), 0);
+        assert!(short_columns.0.is_empty());
+        assert!(short_patterns.0.is_empty());
+        assert!(short_tasks.0.is_empty());
+
+        for _ in 0..2 {
+            let (exact, columns, patterns, tasks, result) = preflight(EXACT_WORK);
+            let (projected_columns, projected_patterns, wildcards) =
+                result.expect("the exact tuple-projection preflight should fit");
+            assert!(projected_columns.is_empty());
+            assert!(projected_columns.capacity() >= DEMAND_COUNT);
+            assert!(projected_patterns.is_empty());
+            assert_eq!(wildcards.len(), DEMAND_COUNT);
+            assert_eq!(exact.type_work.used(), EXACT_WORK);
+            assert!(columns.0.is_empty());
+            assert!(patterns.0.is_empty());
+            assert!(tasks.0.is_empty());
+        }
+    }
+
+    #[test]
+    fn newtype_payload_demand_scan_is_exact_atomic_and_retryable() {
+        const ROW_COUNT: usize = 4;
+        let source = SourceFile::new("newtype-demand-budget.ash", "N(_)")
+            .expect("the demand-scan source should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("ordered demand-scan range"))
+            .expect("the demand-scan span should fit");
+        let owner = crate::types::NominalTypeId::new(ModuleId::new(1), 0);
+        let constructor = crate::types::ConstructorId::new(owner, 0);
+        let scan = |limit| {
+            let mut elaborator = Elaborator::new();
+            elaborator.type_work = TypeWorkBudget::with_limit(limit);
+            let patterns = PatternDecisionPatternArena(vec![
+                PatternDecisionPattern {
+                    ty: Type::Unit,
+                    origin: Origin::Source(span),
+                    kind: PatternDecisionKind::Wildcard,
+                },
+                PatternDecisionPattern {
+                    ty: Type::Nominal(owner),
+                    origin: Origin::Source(span),
+                    kind: PatternDecisionKind::Constructor {
+                        constructor,
+                        payload: Some(0),
+                    },
+                },
+            ]);
+            let matrix = PatternDecisionMatrix {
+                columns: vec![0],
+                rows: (0..ROW_COUNT)
+                    .map(|_| PatternDecisionRow {
+                        cells: vec![PatternDecisionCell::Pattern(1)],
+                        continuation: 0,
+                        arguments: Vec::new(),
+                    })
+                    .collect(),
+            };
+            let columns = PatternDecisionColumnArena(Vec::new());
+            let tasks = PatternDecisionWork(Vec::new());
+            let pattern_count = patterns.0.len();
+            let result = elaborator.newtype_payload_is_demanded(&matrix, 0, constructor, &patterns);
+            (elaborator, patterns, columns, tasks, pattern_count, result)
+        };
+
+        let (short, patterns, columns, tasks, pattern_count, result) = scan(ROW_COUNT - 1);
+        assert!(matches!(
+            result,
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        ));
+        assert_eq!(short.type_work.used(), 0);
+        assert_eq!(patterns.0.len(), pattern_count);
+        assert!(columns.0.is_empty());
+        assert!(tasks.0.is_empty());
+
+        for _ in 0..2 {
+            let (exact, patterns, columns, tasks, pattern_count, result) = scan(ROW_COUNT);
+            assert_eq!(result, Ok(false));
+            assert_eq!(exact.type_work.used(), ROW_COUNT);
+            assert_eq!(patterns.0.len(), pattern_count);
+            assert!(columns.0.is_empty());
+            assert!(tasks.0.is_empty());
+        }
+    }
+
+    #[test]
+    fn pattern_decision_strict_binding_schedule_is_exact_atomic_and_retryable() {
+        const EXACT_WORK: usize = 2;
+        let source = SourceFile::new("decision-binding-budget.ash", "_")
+            .expect("the binding-budget source should fit");
+        let span = source
+            .span(ByteRange::new(0, 1).expect("ordered binding-budget range"))
+            .expect("the binding-budget span should fit");
+        let schedule = |limit| {
+            let mut elaborator = Elaborator::new();
+            let initializer = elaborator
+                .builder
+                .unit(Type::Unit, Origin::Source(span))
+                .expect("the binding initializer should fit");
+            let binder = elaborator
+                .builder
+                .binder(Type::Unit, Origin::Source(span))
+                .expect("the strict binding binder should fit");
+            elaborator.type_work = TypeWorkBudget::with_limit(limit);
+            let mut tasks = PatternDecisionWork(Vec::new());
+            let result = elaborator.schedule_pattern_decision_binding(
+                binder,
+                initializer,
+                PatternDecisionMatrix {
+                    columns: Vec::new(),
+                    rows: Vec::new(),
+                },
+                Type::Unit,
+                Origin::Source(span),
+                &mut tasks,
+            );
+            (elaborator, tasks, result)
+        };
+
+        let (short, short_tasks, result) = schedule(EXACT_WORK - 1);
+        assert!(matches!(
+            result,
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        ));
+        assert!(short_tasks.0.is_empty());
+        assert_eq!(short.type_work.used(), 0);
+
+        for _ in 0..2 {
+            let (exact, tasks, result) = schedule(EXACT_WORK);
+            result.expect("the exact strict-binding schedule should fit");
+            assert_eq!(tasks.0.len(), EXACT_WORK);
+            assert_eq!(exact.type_work.used(), EXACT_WORK);
+        }
+    }
+
+    #[test]
+    fn multi_arm_pattern_decision_flattening_uses_one_additive_scratch_boundary() {
+        const ARM_COUNT: usize = 2;
+        const PATTERN_COUNT: usize = ARM_COUNT;
+        const EXACT_WORK: usize = PATTERN_COUNT * 2;
+        let source = SourceFile::new("decision-flatten-budget.ash", "true ()")
+            .expect("the flattening source should fit");
+        let boolean_span = source
+            .span(ByteRange::new(0, 4).expect("ordered boolean range"))
+            .expect("the boolean span should fit");
+        let unit_span = source
+            .span(ByteRange::new(5, 7).expect("ordered unit range"))
+            .expect("the unit span should fit");
+        let flatten = |limit| {
+            let mut elaborator = Elaborator::new();
+            elaborator.type_work = TypeWorkBudget::with_limit(limit);
+            let mut arena = PatternDecisionPatternArena(Vec::new());
+            arena
+                .0
+                .try_reserve(PATTERN_COUNT)
+                .expect("the fixed test arena should fit");
+            let result =
+                PatternDecisionFlattenScratch::try_new(PATTERN_COUNT, &mut elaborator.type_work)
+                    .and_then(|mut scratch| {
+                        elaborator.flatten_pattern_decision(
+                            CorePattern::new(
+                                Type::Bool,
+                                Origin::Source(boolean_span),
+                                CorePatternKind::Boolean(true),
+                            ),
+                            &mut arena,
+                            &mut scratch,
+                        )?;
+                        elaborator.flatten_pattern_decision(
+                            CorePattern::new(
+                                Type::Unit,
+                                Origin::Source(unit_span),
+                                CorePatternKind::Unit,
+                            ),
+                            &mut arena,
+                            &mut scratch,
+                        )?;
+                        Ok(())
+                    });
+            (elaborator, arena, result)
+        };
+
+        let (short, short_arena, result) = flatten(EXACT_WORK - 1);
+        assert!(matches!(
+            result,
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        ));
+        assert!(short_arena.0.is_empty());
+        assert_eq!(short.type_work.used(), 0);
+
+        for _ in 0..2 {
+            let (exact, arena, result) = flatten(EXACT_WORK);
+            result.expect("the shared exact scratch should flatten both one-node arms");
+            assert_eq!(arena.0.len(), PATTERN_COUNT);
+            assert_eq!(exact.type_work.used(), EXACT_WORK);
+        }
+    }
+
+    #[test]
+    fn pattern_decision_carriers_discard_deep_composites_on_a_small_stack() {
+        const DEPTH: usize = 20_000;
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("decision-carrier-drop.ash", "_")
+                    .expect("the carrier source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 1).expect("ordered carrier range"))
+                    .expect("the carrier span should fit");
+                let mut arena = PatternDecisionPatternArena(Vec::with_capacity(DEPTH));
+                for index in 0..DEPTH {
+                    arena.0.push(PatternDecisionPattern {
+                        ty: Type::Unit,
+                        origin: Origin::Source(span),
+                        kind: PatternDecisionKind::Constructor {
+                            constructor: crate::types::ConstructorId::new(
+                                crate::types::NominalTypeId::new(ModuleId::new(1), 0),
+                                index as u32,
+                            ),
+                            payload: index.checked_sub(1),
+                        },
+                    });
+                }
+                let deep_pattern = || {
+                    let mut pattern = CorePattern::new(
+                        Type::Unit,
+                        Origin::Source(span),
+                        CorePatternKind::Wildcard,
+                    );
+                    for _ in 0..DEPTH {
+                        pattern = CorePattern::new(
+                            Type::Unit,
+                            Origin::Source(span),
+                            CorePatternKind::Tuple(vec![pattern].into_boxed_slice()),
+                        );
+                    }
+                    pattern
+                };
+                let deep_type = || {
+                    let mut ty = Type::Unit;
+                    for _ in 0..DEPTH {
+                        ty = Type::Function(Box::new(Type::Unit), Box::new(ty));
+                    }
+                    ty
+                };
+                let scratch = PatternDecisionFlattenScratch {
+                    work: PatternDecisionFlattenWork(vec![PatternDecisionFlattenTask::Visit(
+                        deep_pattern(),
+                    )]),
+                    roots: Vec::new(),
+                };
+                drop(scratch);
+                let mut builder = CoreBuilder::new();
+                let scrutinee = builder
+                    .unit(Type::Unit, Origin::Source(span))
+                    .expect("the carrier scrutinee should fit");
+                let binder = builder
+                    .binder(Type::Unit, Origin::Source(span))
+                    .expect("the pending strict-binding binder should fit");
+                let work = PatternDecisionWork(vec![
+                    PatternDecisionTask::FinishBinding {
+                        binder,
+                        initializer: scrutinee,
+                        result_type: deep_type(),
+                        origin: Origin::Source(span),
+                    },
+                    PatternDecisionTask::FinishMatch {
+                        scrutinee,
+                        patterns: vec![deep_pattern()],
+                        arm_origins: vec![Origin::Source(span)],
+                        result_type: Type::Unit,
+                        origin: Origin::Source(span),
+                    },
+                ]);
+                drop(work);
+                drop(arena);
+            })
+            .expect("the small-stack decision carrier worker should start")
+            .join()
+            .expect("decision carriers must dismantle composite state iteratively");
+    }
+
+    #[test]
+    fn completed_strict_binding_chain_discards_on_a_small_stack() {
+        const DEPTH: usize = 20_000;
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("decision-binding-drop.ash", "_")
+                    .expect("the completed-binding source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 1).expect("ordered completed-binding range"))
+                    .expect("the completed-binding span should fit");
+                let mut builder = CoreBuilder::new();
+                let value = builder
+                    .unit(Type::Unit, Origin::Source(span))
+                    .expect("the completed-binding value should fit");
+                let unwrapped = builder
+                    .newtype_conversion(
+                        crate::types::NominalTypeId::new(ModuleId::new(1), 0),
+                        NewtypeConversionDirection::Unwrap,
+                        value,
+                        Type::Unit,
+                        Origin::Source(span),
+                    )
+                    .expect("the explicit unwrap should fit");
+                let mut body = value;
+                for _ in 0..DEPTH {
+                    let binder = builder
+                        .binder(Type::Unit, Origin::Source(span))
+                        .expect("the completed strict-binding binder should fit");
+                    body = builder
+                        .binding(binder, unwrapped, body, Type::Unit, Origin::Source(span))
+                        .expect("the completed strict binding should fit");
+                }
+                let program = builder
+                    .finish(body)
+                    .expect("the completed strict-binding chain should finish");
+                drop(program);
+            })
+            .expect("the completed-binding small-stack worker should start")
+            .join()
+            .expect("completed strict bindings must dismantle iteratively");
     }
 
     #[test]
@@ -19352,6 +22907,8 @@ mod tests {
                             ty: deep_application_type(DEPTH),
                             origin: origin.clone(),
                             provenance: TypeProvenance::atom(Some(span)),
+                            contains_newtype: false,
+                            pattern_count: 0,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -19571,6 +23128,8 @@ mod tests {
                             ty: Type::Unit,
                             origin: deep_generated_origin(DEPTH, span),
                             provenance: TypeProvenance::atom(Some(span)),
+                            contains_newtype: false,
+                            pattern_count: 0,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -19627,6 +23186,8 @@ mod tests {
                             ty: Type::Unit,
                             origin: Origin::Source(span),
                             provenance: TypeProvenance::atom(Some(span)),
+                            contains_newtype: false,
+                            pattern_count: 1,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -19686,6 +23247,8 @@ mod tests {
                             ty: Type::Unit,
                             origin: Origin::Source(span),
                             provenance: TypeProvenance::atom(Some(span)),
+                            contains_newtype: false,
+                            pattern_count: 1,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -20447,9 +24010,10 @@ mod tests {
     fn lowered_requirement_rows_and_replacements_have_an_exact_retryable_type_boundary() {
         // One requirement-row owner + one source value clone + one method-row
         // owner + one replacement-entry owner + one replacement argument +
-        // one substituted result + two application cells + one Core value
+        // one substitution shadow-map entry + one source-variable visit + one
+        // substituted result + two application cells + one Core value
         // clone + one evidence-function cell + one evidence-domain clone.
-        const EXACT_TYPE_WORK: usize = 1 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1;
+        const EXACT_TYPE_WORK: usize = 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1;
 
         let resolved = resolved_module_fixture("lowered-row-budget.ash", "", "Unit", "()");
         let span = fixture_result(&resolved).span;

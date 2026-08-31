@@ -100,6 +100,9 @@ fn runtime_class(program: &ValidatedProgram, event: &TraceEvent) -> &'static str
         PureExprKind::Computation(PureComputation::Primitive(_)) => "primitive",
         PureExprKind::Computation(PureComputation::Tuple(_)) => "tuple",
         PureExprKind::Computation(PureComputation::Match(_)) => "match",
+        PureExprKind::Computation(PureComputation::NewtypeConversion(_)) => {
+            "newtype-conversion-refusal"
+        }
         PureExprKind::Computation(PureComputation::TypeAbstraction(_)) => {
             "type-abstraction-erasure"
         }
@@ -135,6 +138,7 @@ const fn runtime_failure_class(failure: RuntimeFailure) -> &'static str {
         RuntimeFailure::UninitializedLocation => "runtime.uninitialized-location",
         RuntimeFailure::AliasLoop => "runtime.alias-loop",
         RuntimeFailure::ImpossibleMatch => "runtime.impossible-match",
+        RuntimeFailure::NewtypeConversionUnavailable => "runtime.newtype-conversion-unavailable",
     }
 }
 

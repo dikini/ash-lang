@@ -27,7 +27,9 @@ use super::{
     literal::{BooleanNode, IntegerNode, UnitNode},
     primitive::{Primitive, PrimitiveNode},
     recursion::{RecursiveBindingMember, RecursiveBindingNode},
-    type_ops::{TypeAbstractionNode, TypeApplicationNode},
+    type_ops::{
+        NewtypeConversionDirection, NewtypeConversionNode, TypeAbstractionNode, TypeApplicationNode,
+    },
     variable::{TypedBinder, VariableNode},
 };
 use crate::{
@@ -791,6 +793,7 @@ fn method_evidence_adapter_application_matches(
             expected,
             &replacements.0,
             |cells| type_work.charge(cells),
+            || (),
         )?);
         if !same_type_with_budget(&expected, actual, type_work)? {
             return Ok(false);
@@ -1118,7 +1121,9 @@ impl PureExprKind {
                 PureComputation::Primitive(node) => fixed_child_count(node.children()),
                 PureComputation::Tuple(node) => node.elements().len(),
                 PureComputation::Match(node) => node.arms().len() + 1,
-                PureComputation::TypeAbstraction(_) | PureComputation::TypeApplication(_) => 1,
+                PureComputation::NewtypeConversion(_)
+                | PureComputation::TypeAbstraction(_)
+                | PureComputation::TypeApplication(_) => 1,
             },
         }
     }
@@ -1153,6 +1158,9 @@ impl PureExprKind {
                 }
                 PureComputation::TypeApplication(node) => {
                     fixed_child_at([Some(node.function())], index)
+                }
+                PureComputation::NewtypeConversion(node) => {
+                    fixed_child_at([Some(node.child())], index)
                 }
             },
         }
@@ -1197,6 +1205,8 @@ pub enum PureComputation {
     Tuple(TupleNode),
     /// Structured first-match selection.
     Match(MatchNode),
+    /// An explicit erased module-newtype representation conversion.
+    NewtypeConversion(NewtypeConversionNode),
     /// An explicit erased rank-1 type abstraction.
     TypeAbstraction(TypeAbstractionNode),
     /// An explicit erased rank-1 type application.
@@ -1242,6 +1252,11 @@ type UnvalidatedParts = (
 );
 
 impl UnvalidatedProgram {
+    #[cfg(test)]
+    pub(crate) fn expression_kinds_for_test(&self) -> impl Iterator<Item = &PureExprKind> {
+        self.nodes.iter().map(|node| &node.kind)
+    }
+
     pub(super) fn discard_iteratively(mut self) {
         self.discard_contents();
     }
@@ -1297,6 +1312,7 @@ impl UnvalidatedProgram {
                     PureComputation::Apply(_)
                     | PureComputation::Primitive(_)
                     | PureComputation::Tuple(_)
+                    | PureComputation::NewtypeConversion(_)
                     | PureComputation::TypeAbstraction(_),
                 ) => {}
             }
@@ -1420,6 +1436,7 @@ impl Drop for PureProgram {
                     PureComputation::Apply(_)
                     | PureComputation::Primitive(_)
                     | PureComputation::Tuple(_)
+                    | PureComputation::NewtypeConversion(_)
                     | PureComputation::TypeAbstraction(_),
                 ) => {}
             }
@@ -1481,6 +1498,30 @@ impl ValidatedProgram {
     pub(crate) fn method_evidence_anchors(&self) -> &[MethodEvidenceAnchor] {
         self.0.method_evidence_anchors()
     }
+}
+
+#[cfg(test)]
+pub(crate) fn forge_validated_for_test(program: UnvalidatedProgram) -> ValidatedProgram {
+    let (registry, method_evidence, method_evidence_anchors, arena, stored_nodes, root) =
+        program.into_parts();
+    let nodes = stored_nodes
+        .into_iter()
+        .map(|stored| TypedExpr {
+            ty: stored.ty,
+            origin: stored
+                .origin
+                .expect("a forged validated test node must retain provenance"),
+            kind: stored.kind,
+        })
+        .collect();
+    ValidatedProgram::new(PureProgram::new(
+        registry,
+        method_evidence,
+        method_evidence_anchors,
+        arena,
+        nodes,
+        root,
+    ))
 }
 
 /// Why unchecked Core construction could not be represented.
@@ -1577,6 +1618,15 @@ impl Default for CoreBuilder {
 /// Identifies the first Core node after an elaboration-local type boundary.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TypeRewriteCheckpoint(usize);
+
+/// Captures the builder-owned state that constructor lowering may append.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CoreBuilderCheckpoint {
+    nodes: usize,
+    next_binder: u32,
+    binder_phase_started: bool,
+    requires_type_rewrite: bool,
+}
 
 impl CoreBuilder {
     fn from_catalogs(
@@ -2056,6 +2106,24 @@ impl CoreBuilder {
         )
     }
 
+    /// Adds an unchecked explicit module-newtype representation conversion.
+    pub fn newtype_conversion(
+        &mut self,
+        owner: crate::types::NominalTypeId,
+        direction: NewtypeConversionDirection,
+        child: NodeId,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        self.push(
+            ty,
+            origin,
+            PureExprKind::Computation(PureComputation::NewtypeConversion(
+                NewtypeConversionNode::new(owner, direction, child),
+            )),
+        )
+    }
+
     /// Adds strict tuple construction with an unchecked result annotation.
     pub fn tuple(
         &mut self,
@@ -2466,6 +2534,41 @@ impl CoreBuilder {
         TypeRewriteCheckpoint(self.nodes.len())
     }
 
+    /// Captures an elaboration-local construction boundary.
+    pub(crate) fn checkpoint(&self) -> CoreBuilderCheckpoint {
+        CoreBuilderCheckpoint {
+            nodes: self.nodes.len(),
+            next_binder: self.next_binder,
+            binder_phase_started: self.binder_phase_started,
+            requires_type_rewrite: self.requires_type_rewrite,
+        }
+    }
+
+    /// Discards every node and generated binder appended after `checkpoint`.
+    pub(crate) fn rollback(&mut self, checkpoint: CoreBuilderCheckpoint) {
+        debug_assert!(checkpoint.nodes <= self.nodes.len());
+        while self.nodes.len() > checkpoint.nodes {
+            let stored = self
+                .nodes
+                .pop()
+                .expect("the checkpoint suffix is non-empty");
+            discard_type_iteratively(stored.ty);
+            if let Some(origin) = stored.origin {
+                discard_origin_iteratively(origin);
+            }
+            discard_pure_expr_kind_metadata(stored.kind);
+        }
+        self.generated_binders.retain(|identity| {
+            !matches!(identity, BinderId::Generated(local) if *local >= checkpoint.next_binder)
+        });
+        self.inference_binders.retain(|identity| {
+            !matches!(identity, BinderId::Generated(local) if *local >= checkpoint.next_binder)
+        });
+        self.next_binder = checkpoint.next_binder;
+        self.binder_phase_started = checkpoint.binder_phase_started;
+        self.requires_type_rewrite = checkpoint.requires_type_rewrite;
+    }
+
     /// Rewrites type payloads only on nodes emitted after `checkpoint`.
     pub(crate) fn rewrite_types_since<F>(
         &mut self,
@@ -2537,6 +2640,7 @@ impl CoreBuilder {
                     PureComputation::Apply(_)
                     | PureComputation::Primitive(_)
                     | PureComputation::Tuple(_)
+                    | PureComputation::NewtypeConversion(_)
                     | PureComputation::TypeAbstraction(_),
                 ) => {}
             }
@@ -2729,6 +2833,7 @@ fn discard_pure_expr_kind_metadata(kind: PureExprKind) {
             PureComputation::Apply(_)
             | PureComputation::Primitive(_)
             | PureComputation::Tuple(_)
+            | PureComputation::NewtypeConversion(_)
             | PureComputation::TypeAbstraction(_),
         ) => {}
     }
@@ -3861,6 +3966,130 @@ mod tests {
             .expect("the raw Core thread should start")
             .join()
             .expect("raw Core teardown must dismantle stored types iteratively");
+    }
+
+    #[test]
+    fn newtype_conversion_admission_has_an_exact_atomic_retry_boundary() {
+        let source = SourceFile::new("newtype-conversion.ash", "1").expect("test source");
+        let origin = Origin::Source(
+            source
+                .span(ByteRange::new(0, 1).expect("ordered range"))
+                .expect("source span"),
+        );
+        let owner = NominalTypeId::new(ModuleId::new(0), 0);
+        let prepare = || {
+            let mut builder = CoreBuilder::new();
+            let child = builder
+                .integer(
+                    Integer::parse_decimal("1").expect("valid integer"),
+                    Type::Int,
+                    origin.clone(),
+                )
+                .expect("the conversion child should fit");
+            (builder, child)
+        };
+
+        let (mut measured, measured_child) = prepare();
+        let before = measured.type_work.used();
+        measured
+            .newtype_conversion(
+                owner,
+                NewtypeConversionDirection::Wrap,
+                measured_child,
+                Type::Nominal(owner),
+                origin.clone(),
+            )
+            .expect("the measured conversion should fit");
+        let conversion_work = measured.type_work.used() - before;
+        assert!(conversion_work > 0);
+
+        let (mut short, short_child) = prepare();
+        let short_node_count = short.nodes.len();
+        short
+            .charge_type_work_for_test(
+                TYPE_WORK_LIMIT - short.type_work.used() - (conversion_work - 1),
+            )
+            .expect("the one-short prefix should fit");
+        assert_eq!(
+            short.newtype_conversion(
+                owner,
+                NewtypeConversionDirection::Wrap,
+                short_child,
+                Type::Nominal(owner),
+                origin.clone(),
+            ),
+            Err(BuildError::TypeWorkExceeded),
+        );
+        assert_eq!(short.nodes.len(), short_node_count);
+
+        for _ in 0..2 {
+            let (mut exact, exact_child) = prepare();
+            exact
+                .charge_type_work_for_test(
+                    TYPE_WORK_LIMIT - exact.type_work.used() - conversion_work,
+                )
+                .expect("the exact prefix should fit");
+            let root = exact
+                .newtype_conversion(
+                    owner,
+                    NewtypeConversionDirection::Wrap,
+                    exact_child,
+                    Type::Nominal(owner),
+                    origin.clone(),
+                )
+                .expect("a fresh exact builder should retry the conversion");
+            assert_eq!(exact.type_work.used(), TYPE_WORK_LIMIT);
+            assert_eq!(exact.nodes.len(), 2);
+            let program = exact
+                .finish(root)
+                .expect("the exact conversion should finish");
+            drop(program);
+        }
+    }
+
+    #[test]
+    fn unvalidated_newtype_conversion_chain_discards_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("newtype-conversion-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("conversion-chain.ash", "()").expect("test source");
+                let origin = Origin::Source(
+                    source
+                        .span(ByteRange::new(0, 2).expect("ordered range"))
+                        .expect("source span"),
+                );
+                let owner = NominalTypeId::new(ModuleId::new(0), 0);
+                let mut builder = CoreBuilder::new();
+                let mut root = builder
+                    .unit(Type::Unit, origin.clone())
+                    .expect("the conversion leaf should fit");
+                for index in 0..DEPTH {
+                    root = builder
+                        .newtype_conversion(
+                            owner,
+                            if index % 2 == 0 {
+                                NewtypeConversionDirection::Wrap
+                            } else {
+                                NewtypeConversionDirection::Unwrap
+                            },
+                            root,
+                            Type::Unit,
+                            origin.clone(),
+                        )
+                        .expect("the conversion chain should fit");
+                }
+                assert_eq!(builder.nodes.len(), DEPTH + 1);
+                let program = builder
+                    .finish(root)
+                    .expect("the conversion chain should finish");
+                drop(program);
+            })
+            .expect("the conversion disposal thread should start")
+            .join()
+            .expect("conversion carriers must dismantle iteratively");
     }
 
     #[test]

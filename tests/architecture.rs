@@ -15,7 +15,7 @@ use ash::{
         literal::{BooleanNode, IntegerNode, UnitNode},
         primitive::PrimitiveNode,
         recursion::RecursiveBindingNode,
-        type_ops::{TypeAbstractionNode, TypeApplicationNode},
+        type_ops::{NewtypeConversionNode, TypeAbstractionNode, TypeApplicationNode},
         validate,
         variable::VariableNode,
     },
@@ -618,6 +618,23 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::ElaborationTaskBuffer.0", FieldMixedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTreeAndTransientWork),
     kind_site!("src/elaborate.rs::Elaborator.base_context", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::Elaborator.current_implementation_method", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionBinderBuffer.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionColumn.ty", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionColumnArena.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionContinuation.application_types", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionContinuationArena.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionFlattenScratch.work", FieldTransientCarrierRetentionPreservedCarrierElaborationCoreTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionFlattenTask.FinishConstructor.ty", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionFlattenTask.FinishTuple.ty", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionFlattenTask.Visit.0", FieldTransientCarrierRetentionPreservedCarrierElaborationCoreTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionFlattenWork.0", FieldTransientCarrierRetentionPreservedCarrierElaborationCoreTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionPattern.ty", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionPatternArena.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionTask.FinishBinding.binder", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionTask.FinishBinding.result_type", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionTask.FinishMatch.patterns", FieldTransientCarrierRetentionPreservedCarrierElaborationCoreTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionTask.FinishMatch.result_type", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionWork.0", FieldTransientCarrierRetentionPreservedCarrierElaborationCoreTypeTransientWork),
     kind_site!("src/elaborate.rs::Elaborator.builder", FieldMixedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeCoreTreeAndRegistryTree),
     kind_site!("src/elaborate.rs::Elaborator.evidence_lowering", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::Elaborator.generated_type_variables", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
@@ -885,6 +902,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::AuthorizedImplementationFact.fact", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::CanonicalNominalKind.Frozen.kind", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/resolved.rs::CanonicalNominalKind.Parameters.parameters", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeRegistryTree),
+    kind_site!("src/resolved.rs::CanonicalRepresentationFact.representation", FieldSummaryValueTypeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::CheckedDefinition.source", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
     kind_site!("src/resolved.rs::CheckedGlobalScheme.scheme", FieldCheckedSchemeSchemeValueInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedImplementationBody.source", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
@@ -916,10 +934,12 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::CheckedModuleParts.schemes", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CombinedRegistryBuilder.canonical_variables", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::CombinedRegistryBuilder.constructors", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
+    kind_site!("src/resolved.rs::CombinedRegistryBuilder.nominals", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::CombinedRegistryBuilder.nominal_parameters", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::CombinedRegistryBuilder.parameter_rows", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::CombinedRegistryBuilder.type_variables", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::ExportSummary.constructors", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolved.rs::ExportSummary.canonical_representations", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportSummary.hidden_constructors", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportSummary.hidden_interfaces", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportSummary.hidden_nominals", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
@@ -931,10 +951,13 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ExportedConstructor.scheme", FieldSummarySchemeSchemeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportedGlobal.scheme", FieldSummarySchemeSchemeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportedHiddenType.parameters", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolved.rs::ExportedHiddenType.representation", FieldSummaryValueTypeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportedType.parameters", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolved.rs::ExportedType.representation", FieldSummaryValueTypeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedConstructorFact.payload", FieldSummaryValueTypeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedConstructorFact.scheme", FieldSummarySchemeSchemeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedFacts.constructors", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolved.rs::ImportedFacts.canonical_representations", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedFacts.globals", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedFacts.implementations", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedFacts.interfaces", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
@@ -943,7 +966,9 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ImportedImplementationFact.fact", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedInterfaceFact.fact", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedNominalFact.parameters", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolved.rs::ImportedNominalFact.representation", FieldSummaryValueTypeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedNominalFactRef.parameters", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree, Borrowed),
+    kind_site!("src/resolved.rs::ImportedNominalFactRef.representation", FieldSummaryValueTypeValueResolutionResolutionTypeSummaryTree, Borrowed),
     kind_site!("src/resolved.rs::NonMaterializedNominalKindFact.kind", FieldRegistryCarrierRetentionPreservedCarrierElaborationInferenceTypeRegistryTree),
     kind_site!("src/resolved.rs::PreparedImportedNominalAction.Insert.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::PreparedImportedNominalMerge.action", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
@@ -1019,6 +1044,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ResolvedModuleProgram.groups", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedModuleProgram.registry", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree, Shared),
     kind_site!("src/resolved.rs::ResolvedModuleProgram.result", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/resolved.rs::ResolvedNominalBuffer.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedNominalParameterBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::ResolvedNominalParameterVecBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::ResolvedOccurrence.evidence", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Shared),
@@ -1027,9 +1053,11 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ResolvedRecursiveMember.initializer", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedRegistry.abstract_nominal_kinds", FieldRegistryCarrierRetentionPreservedCarrierElaborationInferenceTypeRegistryTree),
     kind_site!("src/resolved.rs::ResolvedRegistry.constructors", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),
+    kind_site!("src/resolved.rs::ResolvedRegistry.nominals", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),
     kind_site!("src/resolved.rs::ResolvedRegistry.nominal_parameters", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),
     kind_site!("src/resolved.rs::ResolvedRegistry.type_variables", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),
     kind_site!("src/resolved.rs::ResolvedRequirement.application", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolved.rs::ResolvedNominalType.representation", FieldResolvedValueTypeValueResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedType.ty", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedTypeVariableBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::ResolvedTypeVariable.kind", FieldResolvedDeclaredKindDeclaredResolutionResolutionTypeResolvedTree),
@@ -1136,8 +1164,12 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/types.rs::$fn_same_type_with_budget::Task.Compare.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_same_type_with_budget::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_substitute_type_variables::Task.FinishForall.0", FieldTransientCarrierRetentionPreservedCarrierTypeOperationTypeTransientWork),
+    kind_site!("src/types.rs::$fn_substitute_type_variables::Task.EnterForall.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_substitute_type_variables::Task.ExitForall.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_substitute_type_variables::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_substitute_type_variables::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_substitute_type_variables_with::ChargeTask.EnterForall.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_substitute_type_variables_with::ChargeTask.ExitForall.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_substitute_type_variables_with::ChargeTask.Slice.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_substitute_type_variables_with::ChargeTask.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_write_kind::Task.kind", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
@@ -6718,6 +6750,7 @@ enum ShadowPureComputation {
     Primitive(PrimitiveNode),
     Tuple(TupleNode),
     Match(MatchNode),
+    NewtypeConversion(NewtypeConversionNode),
     TypeAbstraction(TypeAbstractionNode),
     TypeApplication(TypeApplicationNode),
 }
@@ -6741,6 +6774,9 @@ fn assemble_shadow(expression: &TypedExpr) -> ShadowTypedExpr {
             PureComputation::Primitive(node) => ShadowPureComputation::Primitive(*node),
             PureComputation::Tuple(node) => ShadowPureComputation::Tuple(node.clone()),
             PureComputation::Match(node) => ShadowPureComputation::Match(node.clone()),
+            PureComputation::NewtypeConversion(node) => {
+                ShadowPureComputation::NewtypeConversion(*node)
+            }
             PureComputation::TypeAbstraction(node) => {
                 ShadowPureComputation::TypeAbstraction(node.clone())
             }
@@ -6858,6 +6894,10 @@ fn validate_shadow_computation(
                     .iter()
                     .all(|arm| facts.node_type(arm.body()) == Some(ty))
         }
+        ShadowPureComputation::NewtypeConversion(node) => {
+            let _ = (node.owner(), node.direction(), node.child());
+            false
+        }
         ShadowPureComputation::TypeAbstraction(node) => {
             matches!(ty, Type::Forall(parameters, body)
                 if parameters.as_ref() == node.parameters()
@@ -6893,6 +6933,7 @@ fn traverse_shadow(expression: &ShadowTypedExpr) -> Vec<NodeId> {
             ShadowPureComputation::Match(node) => std::iter::once(node.scrutinee())
                 .chain(node.arms().iter().map(|arm| arm.body()))
                 .collect(),
+            ShadowPureComputation::NewtypeConversion(node) => vec![node.child()],
             ShadowPureComputation::TypeAbstraction(node) => vec![node.body()],
             ShadowPureComputation::TypeApplication(node) => vec![node.function()],
         },
@@ -6903,6 +6944,7 @@ fn traverse_shadow(expression: &ShadowTypedExpr) -> Vec<NodeId> {
 enum ShadowTransformPlan {
     Preserve(Vec<NodeId>),
     ReplaceWithMockUnit,
+    RefuseNewtypeConversion,
 }
 
 fn transform_shadow(expression: &ShadowTypedExpr) -> ShadowTransformPlan {
@@ -6940,6 +6982,9 @@ fn transform_shadow(expression: &ShadowTypedExpr) -> ShadowTransformPlan {
                     .chain(node.arms().iter().map(|arm| arm.body()))
                     .collect(),
             ),
+            ShadowPureComputation::NewtypeConversion(_) => {
+                ShadowTransformPlan::RefuseNewtypeConversion
+            }
             ShadowPureComputation::TypeAbstraction(node) => {
                 ShadowTransformPlan::Preserve(vec![node.body()])
             }
@@ -6968,6 +7013,7 @@ fn consume_shadow(expression: &ShadowTypedExpr) -> &'static str {
             ShadowPureComputation::Primitive(_) => "primitive",
             ShadowPureComputation::Tuple(_) => "tuple",
             ShadowPureComputation::Match(_) => "match",
+            ShadowPureComputation::NewtypeConversion(_) => "newtype conversion",
             ShadowPureComputation::TypeAbstraction(_) => "type abstraction",
             ShadowPureComputation::TypeApplication(_) => "type application",
         },

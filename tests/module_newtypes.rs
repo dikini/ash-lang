@@ -5,7 +5,9 @@ use std::{
 };
 
 use ash::{
-    elaborate::{TypeError, TypeReason, check_module},
+    core::{ValidationReason, validate_modules},
+    elaborate::{Elaborator, TypeError, TypeReason, check_module, link_modules},
+    evidence_validation::validate_interface_evidence,
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, ResolveModuleError, ResolveReason, resolve_module},
     resolved::{ImportedTypeAccess, ResolvedNominalDeclarationKind},
@@ -174,6 +176,42 @@ fn module_opaque_newtype_keeps_its_representation_only_for_facade_linkage() {
 }
 
 #[test]
+fn opaque_newtype_constructor_is_inaccessible_in_expressions_and_patterns() {
+    for entry_text in [
+        concat!(
+            "import base (Token)\n",
+            "main : Unit -> Token\n",
+            "main () = Token(1)\n",
+        ),
+        concat!(
+            "import base (Token)\n",
+            "read : Token -> Int\n",
+            "read (Token(value)) = value\n",
+        ),
+    ] {
+        let tree = ModuleTree::create();
+        let entry = tree.write("entry.ash", entry_text);
+        tree.write("base.ash", "pub opaque newtype Token = Token(Int)\n");
+        let graph = load_module_graph(&entry, &ModuleRoots::empty())
+            .expect("opaque constructor module graph should load");
+        let base = check_module(
+            resolve_module(module_named(&graph, "base.ash"), &[])
+                .expect("opaque defining module should resolve"),
+        )
+        .expect("opaque defining module should check");
+        let entry_module = module_named(&graph, "entry.ash");
+        let dependency = DependencyExports::new(&entry_module.dependencies()[0], base.exports())
+            .expect("opaque dependency summary should authenticate");
+        let ResolveModuleError::Resolution(error) = resolve_module(entry_module, &[dependency])
+            .expect_err("an opaque newtype constructor should be inaccessible")
+        else {
+            panic!("opaque constructor access should fail during resolution");
+        };
+        assert_eq!(error.reason, ResolveReason::OpaqueConstructor);
+    }
+}
+
+#[test]
 fn module_newtype_constructor_must_repeat_its_nominal_spelling() {
     let tree = ModuleTree::create();
     let text = "newtype UserId = OtherId(Int)\n";
@@ -268,7 +306,7 @@ fn module_newtype_representation_kind_failure_precedes_cycle_checking() {
 }
 
 #[test]
-fn transparent_newtype_constructor_expression_is_unavailable_before_cp4_conversions() {
+fn transparent_newtype_constructor_expression_wraps_its_representation() {
     let tree = ModuleTree::create();
     let entry = tree.write(
         "entry.ash",
@@ -279,16 +317,61 @@ fn transparent_newtype_constructor_expression_is_unavailable_before_cp4_conversi
     let resolved = resolve_module(module_named(&graph, "entry.ash"), &[])
         .expect("the newtype declaration and its constructor occurrence should resolve");
 
-    let TypeError::Internal(failure) = check_module(resolved)
-        .expect_err("CP3 must refuse ordinary-Core newtype construction before conversions exist")
-    else {
-        panic!("the unavailable constructor boundary should remain structured internally");
-    };
-    assert_eq!(failure.reason_code(), "type.internal");
+    check_module(resolved)
+        .expect("an accessible newtype constructor should wrap its representation");
 }
 
 #[test]
-fn transparent_newtype_constructor_pattern_is_unavailable_before_cp4_conversions() {
+fn module_newtype_constructors_are_first_class_across_representation_shapes() {
+    let cases = [
+        concat!(
+            "newtype Pair = Pair((Int, Bool))\n",
+            "main : Unit -> Pair\n",
+            "main () = Pair((1, true))\n",
+        ),
+        concat!(
+            "type Wrapped = Wrapped(Int)\n",
+            "newtype Container = Container(Wrapped)\n",
+            "main : Unit -> Container\n",
+            "main () = Container(Wrapped(1))\n",
+        ),
+        concat!(
+            "newtype Inner = Inner(Int)\n",
+            "newtype Outer = Outer(Inner)\n",
+            "main : Unit -> Outer\n",
+            "main () = Outer(Inner(1))\n",
+        ),
+        concat!(
+            "newtype Box<A> = Box(A)\n",
+            "apply : (A -> B, A) -> B\n",
+            "apply (function, value) = function value\n",
+            "main : Unit -> Box<Int>\n",
+            "main () = apply(Box, 42)\n",
+        ),
+        concat!(
+            "newtype UserId = UserId(Int)\n",
+            "make : Unit -> (Int -> UserId)\n",
+            "make () = UserId\n",
+            "main : Unit -> UserId\n",
+            "main () = make()(42)\n",
+        ),
+    ];
+
+    for (index, text) in cases.into_iter().enumerate() {
+        let tree = ModuleTree::create();
+        let entry = tree.write("entry.ash", text);
+        let graph = load_module_graph(&entry, &ModuleRoots::empty())
+            .expect("constructor matrix module graph should load");
+        let resolved = resolve_module(module_named(&graph, "entry.ash"), &[])
+            .expect("constructor matrix case should resolve");
+        check_module(resolved).unwrap_or_else(|error| {
+            panic!("constructor matrix case {index} should check: {error}")
+        });
+    }
+}
+
+#[test]
+fn transparent_newtype_constructor_pattern_unwraps_its_representation() {
     let tree = ModuleTree::create();
     let entry = tree.write(
         "entry.ash",
@@ -298,6 +381,8 @@ fn transparent_newtype_constructor_pattern_is_unavailable_before_cp4_conversions
             "read value = match value {\n",
             "UserId(number) => number\n",
             "}\n",
+            "main : Unit -> Int\n",
+            "main () = read(UserId(42))\n",
         ),
     );
     let graph =
@@ -305,12 +390,154 @@ fn transparent_newtype_constructor_pattern_is_unavailable_before_cp4_conversions
     let resolved = resolve_module(module_named(&graph, "entry.ash"), &[])
         .expect("the newtype declaration and its value pattern should resolve");
 
-    let TypeError::Internal(failure) = check_module(resolved)
-        .expect_err("CP3 must refuse ordinary-Core newtype patterns before conversions exist")
-    else {
-        panic!("the unavailable pattern boundary should remain structured internally");
-    };
-    assert_eq!(failure.reason_code(), "type.internal");
+    let checked = check_module(resolved)
+        .expect("an accessible newtype constructor pattern should unwrap its representation");
+    let linked = link_modules(vec![checked], graph.entry())
+        .expect("the checked newtype pattern module should link");
+    let linked = validate_interface_evidence(linked)
+        .expect("the newtype pattern has no unauthenticated interface evidence");
+    let mut elaborator =
+        Elaborator::for_module_program(&linked).expect("the final Core namespace should fit");
+    let typed = elaborator
+        .synthesize_module_program(&linked)
+        .expect("the newtype pattern should lower through an explicit unwrap");
+    let unchecked = elaborator
+        .finish(typed.node)
+        .expect("the explicit unwrap should finish as unvalidated Core");
+    let source = module_named(&graph, "entry.ash").source();
+    let error = validate_modules(unchecked, &[source], &[(graph.entry(), source.id())])
+        .expect_err("CP4 validation must refuse the unauthenticated unwrap conversion");
+    assert_eq!(error.reason(), ValidationReason::NewtypeConversion);
+}
+
+#[test]
+fn irrefutable_newtype_function_and_binding_patterns_preserve_payload_binders() {
+    let tree = ModuleTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "newtype Pair = Pair((Int, Bool))\n",
+            "first : Pair -> Int\n",
+            "first (Pair((number, _))) = number\n",
+            "main : Unit -> Int\n",
+            "main () = {\n",
+            "let Pair((number, _)) = Pair((42, true))\n",
+            "first(Pair((number, false)))\n",
+            "}\n",
+        ),
+    );
+    let graph = load_module_graph(&entry, &ModuleRoots::empty())
+        .expect("function and binding pattern module graph should load");
+    let resolved = resolve_module(module_named(&graph, "entry.ash"), &[])
+        .expect("function and binding newtype patterns should resolve");
+
+    check_module(resolved)
+        .expect("irrefutable function and binding patterns should retain payload binders");
+}
+
+#[test]
+fn mixed_newtype_match_fallback_binder_keeps_the_nominal_value() {
+    let tree = ModuleTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "newtype Flag = Flag(Bool)\n",
+            "fallback : Flag -> Int\n",
+            "fallback _ = 0\n",
+            "classify : Flag -> Int\n",
+            "classify value = match value {\n",
+            "Flag(true) => 1\n",
+            "other => fallback(other)\n",
+            "}\n",
+            "main : Unit -> Int\n",
+            "main () = classify(Flag(false))\n",
+        ),
+    );
+    let graph = load_module_graph(&entry, &ModuleRoots::empty())
+        .expect("mixed fallback module graph should load");
+    let resolved = resolve_module(module_named(&graph, "entry.ash"), &[])
+        .expect("mixed fallback patterns should resolve");
+
+    check_module(resolved)
+        .expect("a fallback binder should retain the original nominal newtype value");
+}
+
+#[test]
+fn newtype_patterns_cover_parameterized_nested_and_refutable_representations() {
+    let tree = ModuleTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "type Wrapped = Wrapped(Int)\n",
+            "newtype Container = Container(Wrapped)\n",
+            "newtype Box<A> = Box(A)\n",
+            "newtype Inner = Inner(Int)\n",
+            "newtype Outer = Outer(Inner)\n",
+            "newtype Flag = Flag(Bool)\n",
+            "unbox : Box<A> -> A\n",
+            "unbox (Box(value)) = value\n",
+            "nested : Outer -> Int\n",
+            "nested (Outer(Inner(value))) = value\n",
+            "contained : Container -> Int\n",
+            "contained (Container(Wrapped(value))) = value\n",
+            "classify : Flag -> Int\n",
+            "classify value = match value {\n",
+            "Flag(true) => 1\n",
+            "Flag(false) => 0\n",
+            "}\n",
+            "main : Unit -> Int\n",
+            "main () = unbox(Box(nested(Outer(Inner(contained(Container(Wrapped(41)))))))) + classify(Flag(true))\n",
+        ),
+    );
+    let graph = load_module_graph(&entry, &ModuleRoots::empty())
+        .expect("pattern representation matrix module graph should load");
+    let resolved = resolve_module(module_named(&graph, "entry.ash"), &[])
+        .expect("pattern representation matrix should resolve");
+
+    check_module(resolved)
+        .expect("parameterized, nested, data, and refutable newtype patterns should check");
+}
+
+#[test]
+fn newtype_nominal_mismatch_precedes_coverage_and_payload_coverage_is_retained() {
+    let cases = [
+        (
+            concat!(
+                "newtype UserId = UserId(Int)\n",
+                "newtype OrderId = OrderId(Int)\n",
+                "read : UserId -> Int\n",
+                "read value = match value {\n",
+                "OrderId(number) => number\n",
+                "}\n",
+            ),
+            TypeReason::ConstructorOwner,
+        ),
+        (
+            concat!(
+                "newtype Flag = Flag(Bool)\n",
+                "read : Flag -> Int\n",
+                "read value = match value {\n",
+                "Flag(true) => 1\n",
+                "}\n",
+            ),
+            TypeReason::NonExhaustive,
+        ),
+    ];
+
+    for (text, expected) in cases {
+        let tree = ModuleTree::create();
+        let entry = tree.write("entry.ash", text);
+        let graph = load_module_graph(&entry, &ModuleRoots::empty())
+            .expect("newtype diagnostic module graph should load");
+        let resolved = resolve_module(module_named(&graph, "entry.ash"), &[])
+            .expect("newtype diagnostic case should resolve");
+        let TypeError::Source(error) =
+            check_module(resolved).expect_err("newtype diagnostic case should be rejected")
+        else {
+            panic!("newtype diagnostic should remain source-owned");
+        };
+        assert_eq!(error.reason, expected);
+    }
 }
 
 #[test]

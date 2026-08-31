@@ -1498,6 +1498,7 @@ fn elaboration_distinguishes_structural_application_from_simultaneous_instantiat
                 | PureComputation::Primitive(_)
                 | PureComputation::Tuple(_)
                 | PureComputation::Match(_)
+                | PureComputation::NewtypeConversion(_)
                 | PureComputation::TypeAbstraction(_),
             ) => {}
         }

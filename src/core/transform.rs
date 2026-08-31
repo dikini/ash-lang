@@ -98,6 +98,8 @@ pub enum TransformError {
     Build(BuildError),
     /// A supposedly validated graph did not satisfy a traversal invariant.
     InvalidValidatedInput,
+    /// A module-newtype conversion reached the transform before CP5 authentication.
+    NewtypeConversionUnavailable,
 }
 
 impl fmt::Display for TransformError {
@@ -107,6 +109,9 @@ impl fmt::Display for TransformError {
             Self::InvalidValidatedInput => {
                 formatter.write_str("validated Core transformation state is inconsistent")
             }
+            Self::NewtypeConversionUnavailable => {
+                formatter.write_str("module newtype conversion is unavailable to Core transforms")
+            }
         }
     }
 }
@@ -115,7 +120,7 @@ impl Error for TransformError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Build(error) => Some(error),
-            Self::InvalidValidatedInput => None,
+            Self::InvalidValidatedInput | Self::NewtypeConversionUnavailable => None,
         }
     }
 }
@@ -211,6 +216,7 @@ fn rebuild_with_initial_type_work(
                 PureComputation::Apply(_)
                 | PureComputation::Primitive(_)
                 | PureComputation::Tuple(_)
+                | PureComputation::NewtypeConversion(_)
                 | PureComputation::TypeAbstraction(_)
                 | PureComputation::TypeApplication(_),
             ) => {}
@@ -434,6 +440,9 @@ fn rebuild_node(
                 .match_expression(scrutinee, arms, ty.into_inner(), origin)
                 .map_err(TransformError::from)
         }
+        PureExprKind::Computation(PureComputation::NewtypeConversion(_)) => {
+            Err(TransformError::NewtypeConversionUnavailable)
+        }
         PureExprKind::Computation(PureComputation::TypeAbstraction(node)) => {
             let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
             let body = remap(remapped, node.body())?;
@@ -596,6 +605,12 @@ fn postorder(
                 let expression = program
                     .node(id)
                     .ok_or(TransformError::InvalidValidatedInput)?;
+                if matches!(
+                    &expression.kind,
+                    PureExprKind::Computation(PureComputation::NewtypeConversion(_))
+                ) {
+                    return Err(TransformError::NewtypeConversionUnavailable);
+                }
                 let child_count = if fold_literal_primitives
                     && matches!(
                             &expression.kind,
@@ -670,6 +685,7 @@ fn node_index(id: NodeId) -> Result<usize, TransformError> {
 mod tests {
     use super::*;
     use crate::{
+        core::NewtypeConversionDirection,
         elaborate::{Elaborator, check_module, link_modules},
         module::{ModuleGraph, ModuleRoots, load_module_graph},
         resolve::{DependencyExports, resolve_module},
@@ -887,8 +903,14 @@ mod tests {
         // Constructor admission reserves both the E=4 consumed bitmap and
         // the E=4 anchor carrier, adding the second E term to prior totals.
         const CONSTRUCTOR_SECOND_CARRIER_WORK: usize = 4;
-        const IDENTITY_WORK: usize =
-            CORE_WORK + ANCHOR_REPLAY_WORK + PRODUCER_REMAP_WORK + CONSTRUCTOR_SECOND_CARRIER_WORK;
+        // Two adapter-application substitutions each add one active-shadow
+        // entry and one replaced-source visit beyond the retained result.
+        const ADAPTER_SUBSTITUTION_WORK: usize = 2 * 2;
+        const IDENTITY_WORK: usize = CORE_WORK
+            + ANCHOR_REPLAY_WORK
+            + PRODUCER_REMAP_WORK
+            + CONSTRUCTOR_SECOND_CARRIER_WORK
+            + ADAPTER_SUBSTITUTION_WORK;
         const FOLD_WORK: usize = IDENTITY_WORK;
         let fixture = linked_method_transform_fixture();
         assert_eq!(
@@ -1802,5 +1824,102 @@ mod tests {
             .expect("small-stack match-pattern thread should start")
             .join()
             .expect("missing-remap pattern teardown must fit the small stack");
+    }
+
+    #[test]
+    fn transforms_structurally_refuse_forged_validated_newtype_conversions() {
+        let source = SourceFile::new("transform-conversion.ash", "()").expect("test source");
+        let origin = Origin::Source(
+            source
+                .span(ByteRange::new(0, 2).expect("ordered range"))
+                .expect("source span"),
+        );
+        let owner = NominalTypeId::new(source.id(), 0);
+        let mut builder = CoreBuilder::new();
+        let child = builder
+            .unit(Type::Unit, origin.clone())
+            .expect("the conversion child should fit");
+        let root = builder
+            .newtype_conversion(
+                owner,
+                NewtypeConversionDirection::Wrap,
+                child,
+                Type::Unit,
+                origin,
+            )
+            .expect("the conversion carrier should fit");
+        let program = super::super::dialect::forge_validated_for_test(
+            builder.finish(root).expect("the conversion should finish"),
+        );
+
+        assert_eq!(
+            identity_traversal(&program).expect_err("identity must refuse the conversion"),
+            TransformError::NewtypeConversionUnavailable,
+        );
+        assert_eq!(
+            fold_literal_primitives(&program).expect_err("folding must refuse the conversion"),
+            TransformError::NewtypeConversionUnavailable,
+        );
+        for fold_literal_primitives in [false, true] {
+            assert_eq!(
+                rebuild_with_initial_type_work(&program, fold_literal_primitives, TYPE_WORK_LIMIT,)
+                    .expect_err("conversion refusal must precede all builder resource work"),
+                TransformError::NewtypeConversionUnavailable,
+            );
+        }
+    }
+
+    #[test]
+    fn transform_conversion_refusal_and_teardown_fit_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("transform-newtype-conversion-refusal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source =
+                    SourceFile::new("transform-conversion-chain.ash", "()").expect("test source");
+                let origin = Origin::Source(
+                    source
+                        .span(ByteRange::new(0, 2).expect("ordered range"))
+                        .expect("source span"),
+                );
+                let owner = NominalTypeId::new(source.id(), 0);
+                let mut builder = CoreBuilder::new();
+                let mut root = builder
+                    .unit(Type::Unit, origin.clone())
+                    .expect("the conversion leaf should fit");
+                for index in 0..DEPTH {
+                    root = builder
+                        .newtype_conversion(
+                            owner,
+                            if index % 2 == 0 {
+                                NewtypeConversionDirection::Wrap
+                            } else {
+                                NewtypeConversionDirection::Unwrap
+                            },
+                            root,
+                            Type::Unit,
+                            origin.clone(),
+                        )
+                        .expect("the conversion chain should fit");
+                }
+                let program = super::super::dialect::forge_validated_for_test(
+                    builder.finish(root).expect("the conversion should finish"),
+                );
+                assert_eq!(
+                    identity_traversal(&program)
+                        .expect_err("identity must refuse the conversion chain"),
+                    TransformError::NewtypeConversionUnavailable,
+                );
+                assert_eq!(
+                    fold_literal_primitives(&program)
+                        .expect_err("folding must refuse the conversion chain"),
+                    TransformError::NewtypeConversionUnavailable,
+                );
+            })
+            .expect("the transform refusal thread should start")
+            .join()
+            .expect("transform conversion refusal must fit a small stack");
     }
 }

@@ -1255,9 +1255,9 @@ mod tests {
         // facade, second long facade, then entry; linking and linked evidence
         // validation contribute the final two additive boundaries.
         const EXPECTED_BOUNDARIES: [usize; 13] = [
-            0, 1, 829, 1_374, 1_658, 2_203, 2_487, 3_026, 3_314, 4_282, 4_707, 4_856, 6_516,
+            0, 1, 836, 1_381, 1_665, 2_210, 2_494, 3_033, 3_321, 4_289, 4_714, 4_863, 6_523,
         ];
-        const EXACT_CONSTRAINT_WORK: usize = 6_516;
+        const EXACT_CONSTRAINT_WORK: usize = 6_523;
         let source = relational_interface_graph_source();
         let directory = source
             .0

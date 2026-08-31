@@ -190,6 +190,8 @@ pub enum ValidationReason {
     TypeOperation,
     /// A Core type variable occurs outside its abstraction scope.
     TypeScope,
+    /// A module-newtype conversion reached validation before relation authentication exists.
+    NewtypeConversion,
 }
 
 impl fmt::Display for ValidationReason {
@@ -211,6 +213,7 @@ impl fmt::Display for ValidationReason {
             Self::Resource => "core.validation.resource",
             Self::TypeOperation => "core.validation.type-operation",
             Self::TypeScope => "core.validation.type-scope",
+            Self::NewtypeConversion => "core.validation.newtype-conversion",
         })
     }
 }
@@ -1461,10 +1464,12 @@ impl<'program, 'source> Validator<'program, 'source> {
         {
             replacements.insert_replacing(*parameter, self.clone_type_charged(argument)?);
         }
-        let body =
-            substitute_type_variables_with(&method.value_type, replacements.as_map(), |cells| {
-                self.charge_type_work(cells)
-            })?;
+        let body = substitute_type_variables_with(
+            &method.value_type,
+            replacements.as_map(),
+            |cells| self.charge_type_work(cells),
+            || ValidationError::new(ValidationReason::Resource, None),
+        )?;
         let mut parameters = Vec::new();
         self.charge_type_work(method.parameters.len())?;
         parameters
@@ -1798,6 +1803,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                                 linked,
                                 scope_replacements.as_map(),
                                 |cells| self.charge_type_work(cells),
+                                || ValidationError::new(ValidationReason::Resource, None),
                             )?);
                         if !self.same_type_charged(actual, &expected_argument)? {
                             return Ok(false);
@@ -1879,6 +1885,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             expected_body,
             replacements.as_map(),
             |cells| self.charge_type_work(cells),
+            || ValidationError::new(ValidationReason::Resource, None),
         )?);
         self.same_type_charged(&renamed, actual_body)
     }
@@ -1980,6 +1987,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 expected,
                 scope_replacements.as_map(),
                 |cells| self.charge_type_work(cells),
+                || ValidationError::new(ValidationReason::Resource, None),
             )?);
             if !self.same_type_charged(&expected, actual)? {
                 return Err(ValidationError::new(
@@ -1993,6 +2001,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 expected,
                 scope_replacements.as_map(),
                 |cells| self.charge_type_work(cells),
+                || ValidationError::new(ValidationReason::Resource, None),
             )?);
             if !self.same_type_charged(&expected, &stored.ty)? {
                 return Err(ValidationError::new(
@@ -2534,6 +2543,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             &edge.value_type,
             interface_replacement.as_map(),
             |cells| self.charge_type_work(cells),
+            || ValidationError::new(ValidationReason::Resource, None),
         )?;
         let expected_domain = if edge.method_parameters.is_empty() {
             IterativeTypeOwner::new(expected_body)
@@ -3602,6 +3612,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 argument,
                 replacements,
                 |cells| self.charge_type_work(cells),
+                || ValidationError::new(ValidationReason::Resource, None),
             )?);
         }
         Ok(InterfaceApplication::new(
@@ -4243,6 +4254,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                     PureComputation::Apply(_)
                     | PureComputation::Primitive(_)
                     | PureComputation::Tuple(_)
+                    | PureComputation::NewtypeConversion(_)
                     | PureComputation::TypeAbstraction(_)
                     | PureComputation::TypeApplication(_),
                 ) => {}
@@ -4484,6 +4496,17 @@ impl<'program, 'source> Validator<'program, 'source> {
                 else {
                     return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
                 };
+                if self
+                    .program
+                    .registry
+                    .nominal(info.owner)
+                    .is_some_and(|owner| {
+                        owner.declaration_kind
+                            == crate::resolved::ResolvedNominalDeclarationKind::Newtype
+                    })
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                }
                 let parameters = self
                     .program
                     .registry
@@ -4679,6 +4702,12 @@ impl<'program, 'source> Validator<'program, 'source> {
                     return Err(ValidationError::new(ValidationReason::Coverage, Some(id)));
                 }
             }
+            PureComputation::NewtypeConversion(_) => {
+                return Err(ValidationError::new(
+                    ValidationReason::NewtypeConversion,
+                    Some(id),
+                ));
+            }
             PureComputation::TypeAbstraction(abstraction) => {
                 let body = self.node(abstraction.body())?;
                 let Type::Forall(parameters, scheme_body) = &node.ty else {
@@ -4769,6 +4798,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                     body,
                     replacements.as_map(),
                     |cells| self.charge_type_work(cells),
+                    || ValidationError::new(ValidationReason::Resource, None),
                 )?);
                 if !self.same_type_charged(&node.ty, &instantiated)? {
                     return Err(ValidationError::new(
@@ -5056,6 +5086,17 @@ impl<'program, 'source> Validator<'program, 'source> {
                     let Some(info) = self.program.registry.constructor(*constructor) else {
                         return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
                     };
+                    if self
+                        .program
+                        .registry
+                        .nominal(info.owner)
+                        .is_some_and(|owner| {
+                            owner.declaration_kind
+                                == crate::resolved::ResolvedNominalDeclarationKind::Newtype
+                        })
+                    {
+                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                    }
                     if info.owner != owner {
                         return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
                     }
@@ -5087,6 +5128,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                             payload,
                             replacements.as_map(),
                             |cells| self.charge_type_work(cells),
+                            || ValidationError::new(ValidationReason::Resource, None),
                         )?))
                     } else {
                         None
@@ -5226,7 +5268,8 @@ impl<'program, 'source> Validator<'program, 'source> {
                         | PureExprKind::Computation(
                             PureComputation::Apply(_)
                             | PureComputation::Primitive(_)
-                            | PureComputation::Tuple(_),
+                            | PureComputation::Tuple(_)
+                            | PureComputation::NewtypeConversion(_),
                         ) => {}
                     }
                     requirements[self.index(id)?] = Some(free);
@@ -5500,6 +5543,9 @@ impl<'program, 'source> Validator<'program, 'source> {
                         PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
                             self.requirements_for(&requirements, operation.function())?
                         }
+                        PureExprKind::Computation(PureComputation::NewtypeConversion(
+                            operation,
+                        )) => self.requirements_for(&requirements, operation.child())?,
                         PureExprKind::Value(
                             PureValue::Integer(_)
                             | PureValue::Boolean(_)
@@ -5598,7 +5644,7 @@ mod tests {
     use super::*;
     use crate::{
         core::{
-            CoreBuilder, PureValue,
+            CoreBuilder, NewtypeConversionDirection, PureValue,
             binding::BindingNode,
             function::{ApplicationNode, FunctionNode},
             transform::{fold_literal_primitives, identity_traversal},
@@ -6229,12 +6275,13 @@ mod tests {
         measured
             .validate_method_evidence_authority()
             .expect("the concrete source topology validates");
-        // The complete-application authority graph costs 632 units. Its one concrete source
+        // The complete-application authority graph costs 652 units after
+        // replacement-key shadow maps and replaced-source visits. Its one concrete source
         // adds S=1 catalog lookup, one fallible pending slot, and M=1 exact
         // selected-method membership cell. The checked type walkers reserve
         // 45 root/child stack slots separately from their existing visits.
         const CHECKED_STACK_CAPACITY_WORK: usize = 45;
-        const EXACT_WORK: usize = 632 + 1 + 1 + 1 + 1 + CHECKED_STACK_CAPACITY_WORK;
+        const EXACT_WORK: usize = 652 + 1 + 1 + 1 + 1 + CHECKED_STACK_CAPACITY_WORK;
         assert_eq!(measured.type_work.get(), EXACT_WORK);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
@@ -6286,13 +6333,14 @@ mod tests {
             .validate_method_evidence_authority()
             .expect("the widened concrete source topology validates");
         // The owner, occurrence, carrier, source-chain, and checked-Type
-        // relations consume 1,175 units for this complete-application graph. The concrete
+        // relations consume 1,195 units for this complete-application graph after
+        // replacement-key shadow maps and replaced-source visits. The concrete
         // source has Q=2 retained prerequisite method rows, each of which
         // independently reads the W=2 abstract method list before membership.
         // Exact sequence comparison also visits R=2 retained rows and the W=2
         // methods of D=1 direct selected prerequisite:
-        // 1,175 + Q*W + R + D*W = 1,183.
-        const FIXED_AUTHORITY_AND_SOURCE_WORK: usize = 1_175;
+        // 1,195 + Q*W + R + D*W = 1,203.
+        const FIXED_AUTHORITY_AND_SOURCE_WORK: usize = 1_195;
         const PREREQUISITE_METHOD_LIST_WORK: usize = 2 * 2;
         const EXACT_PREREQUISITE_SEQUENCE_WORK: usize = 2 + 2;
         const EXACT_WORK: usize = FIXED_AUTHORITY_AND_SOURCE_WORK
@@ -6483,14 +6531,15 @@ mod tests {
             .validate_method_evidence_authority()
             .expect("the exact monomorphic producer identity validates");
         let exact_work = measured.type_work.get();
-        // The complete-application authenticated graph costs 705 units. The exact abstract
+        // The complete-application authenticated graph costs 725 units after
+        // replacement-key shadow maps and replaced-source visits. The exact abstract
         // producer adds one owner-envelope pass: N=49 nodes, R=5 recursive
         // members, p=0 preceding evidence functions, and one selected binder.
         // Its checked type walks independently reserve 45 root/child stack
         // slots in addition to their existing visits.
         const EXACT_SOURCE_ENVELOPE_WORK: usize = 49 + 5 + 1;
         const CHECKED_STACK_CAPACITY_WORK: usize = 45;
-        const EXACT_WORK: usize = 705 + EXACT_SOURCE_ENVELOPE_WORK + CHECKED_STACK_CAPACITY_WORK;
+        const EXACT_WORK: usize = 725 + EXACT_SOURCE_ENVELOPE_WORK + CHECKED_STACK_CAPACITY_WORK;
         assert_eq!(exact_work, EXACT_WORK);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
@@ -6535,7 +6584,8 @@ mod tests {
             .validate_method_evidence_authority()
             .expect("the measured linked authority should validate");
         let exact_work = measured.type_work.get();
-        // The complete-application authority walk costs 2,284 units. This fixture then
+        // The complete-application authority walk costs 2,352 units after
+        // replacement-key shadow maps and replaced-source visits. This fixture then
         // exercises 22 independently retained replacement-map, fresh-ID-set,
         // source-map, and parameter-vector capacity rows which must be admitted
         // before their respective reserves. Its A=3 adapters and Q=2 edges add
@@ -6547,7 +6597,7 @@ mod tests {
         // stack slots independently from their already charged node visits.
         const CHECKED_STACK_CAPACITY_WORK: usize = 92;
         const EXACT_WORK: usize =
-            2_284 + PRECHARGED_CARRIER_ROWS + EXACT_IDENTITY_WORK + CHECKED_STACK_CAPACITY_WORK;
+            2_352 + PRECHARGED_CARRIER_ROWS + EXACT_IDENTITY_WORK + CHECKED_STACK_CAPACITY_WORK;
         assert_eq!(exact_work, EXACT_WORK);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
@@ -7623,6 +7673,7 @@ mod tests {
                     PureComputation::Apply(_)
                     | PureComputation::Primitive(_)
                     | PureComputation::Tuple(_)
+                    | PureComputation::NewtypeConversion(_)
                     | PureComputation::TypeAbstraction(_),
                 ) => {}
             }
@@ -8079,7 +8130,8 @@ mod tests {
                 | PureExprKind::Computation(
                     PureComputation::Apply(_)
                     | PureComputation::Primitive(_)
-                    | PureComputation::Tuple(_),
+                    | PureComputation::Tuple(_)
+                    | PureComputation::NewtypeConversion(_),
                 ) => {}
             }
         }
@@ -10296,7 +10348,8 @@ mod tests {
             | PureExprKind::Computation(
                 PureComputation::Apply(_)
                 | PureComputation::Primitive(_)
-                | PureComputation::Tuple(_),
+                | PureComputation::Tuple(_)
+                | PureComputation::NewtypeConversion(_),
             ) => false,
         }
     }
@@ -10448,6 +10501,7 @@ mod tests {
                 PureComputation::Apply(_)
                 | PureComputation::Primitive(_)
                 | PureComputation::Tuple(_)
+                | PureComputation::NewtypeConversion(_)
                 | PureComputation::TypeAbstraction(_),
             ) => {}
         }
@@ -10519,6 +10573,7 @@ mod tests {
                     | PureComputation::Primitive(_)
                     | PureComputation::Tuple(_)
                     | PureComputation::Match(_)
+                    | PureComputation::NewtypeConversion(_)
                     | PureComputation::TypeAbstraction(_)
                     | PureComputation::TypeApplication(_),
                 ) => {}
@@ -10601,6 +10656,7 @@ mod tests {
                     | PureComputation::Primitive(_)
                     | PureComputation::Tuple(_)
                     | PureComputation::Match(_)
+                    | PureComputation::NewtypeConversion(_)
                     | PureComputation::TypeAbstraction(_)
                     | PureComputation::TypeApplication(_),
                 ) => {}
@@ -11275,6 +11331,38 @@ mod tests {
     fn origin(source: &SourceFile) -> Origin {
         let range = ByteRange::new(0, 2).expect("ordered range");
         Origin::Source(source.span(range).expect("source span"))
+    }
+
+    fn newtype_registry(
+        source: &SourceFile,
+    ) -> (
+        Arc<crate::resolved::ResolvedRegistry>,
+        crate::types::NominalTypeId,
+        ConstructorId,
+    ) {
+        let owner = crate::types::NominalTypeId::new(source.id(), 0);
+        let constructor = ConstructorId::new(owner, 0);
+        let node_origin = origin(source);
+        let registry = crate::resolved::ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Newtype,
+                representation: Some(Type::Int),
+                id: owner,
+                spelling: "UserId".to_owned(),
+                constructors: Box::new([constructor]),
+                origin: node_origin.clone(),
+            }],
+            vec![ResolvedConstructor {
+                id: constructor,
+                owner,
+                spelling: "UserId".to_owned(),
+                payload: None,
+                origin: node_origin,
+            }],
+        )
+        .with_type_parameters(vec![(owner, Vec::new())]);
+        (Arc::new(registry), owner, constructor)
     }
 
     fn range_origin(source: &SourceFile, start: u32, end: u32) -> Origin {
@@ -12285,7 +12373,7 @@ mod tests {
 
         let application_validator = Validator::new(&program, &[&file]);
         application_validator
-            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - 6)
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - 7)
             .expect("test setup leaves synthesis, comparison, clone, index, substitution, and result comparison work");
         application_validator
             .validate_computation(
@@ -12316,8 +12404,9 @@ mod tests {
         // Synthesis visits each Type cell and compares each tuple child to
         // Kind::Type, then validation revisits the argument for its retained
         // substitution clone. The final three units are expected-Kind
-        // comparison, replacement storage, and substituted-result comparison.
-        const EXPECTED_WORK: usize = ARGUMENT_CELLS * 3 + 3;
+        // comparison, replacement storage, an active-shadow entry, and
+        // substituted-result comparison.
+        const EXPECTED_WORK: usize = ARGUMENT_CELLS * 3 + 4;
         let file = source();
         let origin = origin(&file);
         let arena = super::super::dialect::ArenaId::new(106);
@@ -12417,7 +12506,9 @@ mod tests {
         const ROOT_TYPE_CELLS: usize = WIDTH * 2 + 1;
         const HEAD_INSPECTION: usize = WIDTH + 1;
         const REPLACEMENT_STORAGE: usize = WIDTH * 2;
-        const PAYLOAD_WORK: usize = 3;
+        // Payload checking plus one active-shadow entry per phantom owner
+        // parameter used by substitution.
+        const PAYLOAD_WORK: usize = 3 + WIDTH;
         // The pattern/expected agreement comparison visits the complete root
         // before replacement storage and substitution are admitted.
         const ROOT_COMPARISON: usize = ROOT_TYPE_CELLS;
@@ -14200,6 +14291,145 @@ mod tests {
 
         let error = validate(program, &[&file]).expect_err("foreign dialect");
         assert_eq!(error.reason(), ValidationReason::DialectMembership);
+    }
+
+    #[test]
+    fn independent_validation_rejects_every_newtype_conversion() {
+        let file = source();
+        let owner = crate::types::NominalTypeId::new(file.id(), 0);
+        let mut builder = CoreBuilder::new();
+        let child = builder
+            .unit(Type::Unit, origin(&file))
+            .expect("the conversion child should fit");
+        let root = builder
+            .newtype_conversion(
+                owner,
+                NewtypeConversionDirection::Wrap,
+                child,
+                Type::Unit,
+                origin(&file),
+            )
+            .expect("the unchecked conversion carrier should fit");
+
+        let error = validate(
+            builder.finish(root).expect("the conversion should finish"),
+            &[&file],
+        )
+        .expect_err("CP4 must not publish an unauthenticated conversion");
+        assert_eq!(error.reason(), ValidationReason::NewtypeConversion);
+        assert_eq!(error.node(), Some(root));
+    }
+
+    #[test]
+    fn independent_validation_rejects_newtypes_in_the_ordinary_constructor_route() {
+        let file = source();
+        let (registry, owner, constructor) = newtype_registry(&file);
+        let mut builder = CoreBuilder::with_registry(registry);
+        let root = builder
+            .constructor(constructor, Type::Nominal(owner), origin(&file))
+            .expect("the forged ordinary constructor should fit unchecked Core");
+
+        let error = validate(
+            builder.finish(root).expect("the constructor should finish"),
+            &[&file],
+        )
+        .expect_err("a newtype must never validate as an ordinary constructor");
+        assert_eq!(error.reason(), ValidationReason::Registry);
+        assert_eq!(error.node(), Some(root));
+    }
+
+    #[test]
+    fn independent_validation_rejects_newtypes_in_ordinary_constructor_patterns() {
+        let file = source();
+        let (registry, owner, constructor) = newtype_registry(&file);
+        let node_origin = origin(&file);
+        let mut builder = CoreBuilder::with_registry(registry);
+        let parameter = builder
+            .binder(Type::Nominal(owner), node_origin.clone())
+            .expect("the nominal parameter should fit");
+        let scrutinee = builder
+            .variable(parameter.id(), Type::Nominal(owner), node_origin.clone())
+            .expect("the scrutinee should fit");
+        let body = builder
+            .unit(Type::Unit, node_origin.clone())
+            .expect("the arm body should fit");
+        let pattern = CorePattern::new(
+            Type::Nominal(owner),
+            node_origin.clone(),
+            CorePatternKind::Constructor {
+                constructor,
+                payload: None,
+            },
+        );
+        let matched = builder
+            .match_expression(
+                scrutinee,
+                vec![super::super::CoreMatchArm::new(
+                    pattern,
+                    body,
+                    node_origin.clone(),
+                )],
+                Type::Unit,
+                node_origin.clone(),
+            )
+            .expect("the forged constructor pattern should fit unchecked Core");
+        let root = builder
+            .function(
+                parameter,
+                matched,
+                Type::Function(Box::new(Type::Nominal(owner)), Box::new(Type::Unit)),
+                node_origin,
+            )
+            .expect("the enclosing function should fit");
+
+        let error = validate(
+            builder.finish(root).expect("the function should finish"),
+            &[&file],
+        )
+        .expect_err("a newtype must never validate as an ordinary constructor pattern");
+        assert_eq!(error.reason(), ValidationReason::Pattern);
+        assert_eq!(error.node(), Some(matched));
+    }
+
+    #[test]
+    fn rejected_newtype_conversion_chain_discards_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("newtype-conversion-validation-refusal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let file = source();
+                let owner = crate::types::NominalTypeId::new(file.id(), 0);
+                let mut builder = CoreBuilder::new();
+                let mut root = builder
+                    .unit(Type::Unit, origin(&file))
+                    .expect("the conversion leaf should fit");
+                for index in 0..DEPTH {
+                    root = builder
+                        .newtype_conversion(
+                            owner,
+                            if index % 2 == 0 {
+                                NewtypeConversionDirection::Wrap
+                            } else {
+                                NewtypeConversionDirection::Unwrap
+                            },
+                            root,
+                            Type::Unit,
+                            origin(&file),
+                        )
+                        .expect("the unchecked conversion chain should fit");
+                }
+                let error = validate(
+                    builder.finish(root).expect("the conversion should finish"),
+                    &[&file],
+                )
+                .expect_err("the independent validator must refuse the conversion");
+                assert_eq!(error.reason(), ValidationReason::NewtypeConversion);
+            })
+            .expect("the conversion validation thread should start")
+            .join()
+            .expect("conversion refusal and teardown must fit a small stack");
     }
 
     #[test]

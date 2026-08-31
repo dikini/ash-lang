@@ -204,6 +204,7 @@ fn assert_higher_kinded_linked_core(
                 | PureComputation::Primitive(_)
                 | PureComputation::Tuple(_)
                 | PureComputation::Match(_)
+                | PureComputation::NewtypeConversion(_)
                 | PureComputation::TypeAbstraction(_),
             ) => {}
         }

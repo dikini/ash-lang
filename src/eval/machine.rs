@@ -294,6 +294,8 @@ pub enum RuntimeFailure {
     AliasLoop,
     /// Independently validated coverage selected no arm.
     ImpossibleMatch,
+    /// A module-newtype conversion reached evaluation before CP5 authentication.
+    NewtypeConversionUnavailable,
 }
 
 impl RuntimeFailure {
@@ -313,6 +315,7 @@ impl RuntimeFailure {
             Self::UninitializedLocation => "runtime.uninitialized-location",
             Self::AliasLoop => "runtime.alias-loop",
             Self::ImpossibleMatch => "runtime.impossible-match",
+            Self::NewtypeConversionUnavailable => "runtime.newtype-conversion-unavailable",
         }
     }
 }
@@ -338,6 +341,9 @@ impl fmt::Display for RuntimeFailure {
             Self::UninitializedLocation => "runtime heap location is uninitialized",
             Self::AliasLoop => "runtime heap aliases form a loop",
             Self::ImpossibleMatch => "validated exhaustive match selected no arm",
+            Self::NewtypeConversionUnavailable => {
+                "module newtype conversion is unavailable to the evaluator"
+            }
         })
     }
 }
@@ -513,6 +519,9 @@ fn dispatch_entry(
         }
         PureExprKind::Computation(PureComputation::Match(match_node)) => {
             enter_match(match_node, environment)
+        }
+        PureExprKind::Computation(PureComputation::NewtypeConversion(_)) => {
+            return Err(RuntimeFailure::NewtypeConversionUnavailable);
         }
         PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
             enter_type_abstraction(operation, environment)
@@ -1038,7 +1047,7 @@ mod tests {
     use super::*;
     use crate::{
         core::{
-            CoreBuilder,
+            CoreBuilder, NewtypeConversionDirection,
             binding::BindingNode,
             function::ApplicationNode,
             function::FunctionNode,
@@ -1894,5 +1903,93 @@ mod tests {
         worker
             .join()
             .expect("recursive template environment should drop iteratively");
+    }
+
+    #[test]
+    fn evaluator_structurally_refuses_a_forged_validated_newtype_conversion() {
+        let source = SourceFile::new("runtime-conversion.ash", "()").expect("test source");
+        let origin = Origin::Source(
+            source
+                .span(ByteRange::new(0, 2).expect("ordered range"))
+                .expect("source span"),
+        );
+        let owner = NominalTypeId::new(source.id(), 0);
+        let mut builder = CoreBuilder::new();
+        let child = builder
+            .unit(Type::Unit, origin.clone())
+            .expect("the conversion child should fit");
+        let root = builder
+            .newtype_conversion(
+                owner,
+                NewtypeConversionDirection::Unwrap,
+                child,
+                Type::Unit,
+                origin,
+            )
+            .expect("the conversion carrier should fit");
+        let program = crate::core::dialect::forge_validated_for_test(
+            builder.finish(root).expect("the conversion should finish"),
+        );
+        let shared = program.shared();
+        let mut heap = Vec::new();
+
+        let error = match dispatch_entry(&shared, root, Environment::new(), &mut heap) {
+            Err(error) => error,
+            Ok(_) => panic!("dispatch must refuse before entering the child"),
+        };
+        assert_eq!(error, RuntimeFailure::NewtypeConversionUnavailable);
+        assert!(heap.is_empty());
+        assert_eq!(
+            evaluate(&program).expect_err("evaluation must refuse the conversion"),
+            RuntimeFailure::NewtypeConversionUnavailable,
+        );
+    }
+
+    #[test]
+    fn evaluator_conversion_refusal_and_teardown_fit_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("runtime-newtype-conversion-refusal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source =
+                    SourceFile::new("runtime-conversion-chain.ash", "()").expect("test source");
+                let origin = Origin::Source(
+                    source
+                        .span(ByteRange::new(0, 2).expect("ordered range"))
+                        .expect("source span"),
+                );
+                let owner = NominalTypeId::new(source.id(), 0);
+                let mut builder = CoreBuilder::new();
+                let mut root = builder
+                    .unit(Type::Unit, origin.clone())
+                    .expect("the conversion leaf should fit");
+                for index in 0..DEPTH {
+                    root = builder
+                        .newtype_conversion(
+                            owner,
+                            if index % 2 == 0 {
+                                NewtypeConversionDirection::Wrap
+                            } else {
+                                NewtypeConversionDirection::Unwrap
+                            },
+                            root,
+                            Type::Unit,
+                            origin.clone(),
+                        )
+                        .expect("the conversion chain should fit");
+                }
+                let program = crate::core::dialect::forge_validated_for_test(
+                    builder.finish(root).expect("the conversion should finish"),
+                );
+                assert_eq!(
+                    evaluate(&program).expect_err("evaluation must refuse the conversion chain"),
+                    RuntimeFailure::NewtypeConversionUnavailable,
+                );
+            })
+            .expect("the evaluator refusal thread should start")
+            .join()
+            .expect("evaluator conversion refusal must fit a small stack");
     }
 }

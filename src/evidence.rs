@@ -3053,6 +3053,7 @@ impl EvidenceSelector {
                                     argument,
                                     replacements.as_map(),
                                     |cells| type_work.charge(cells),
+                                    || (),
                                 )
                                 .map_err(|()| SelectionFailure::TypeResource)?,
                             );
@@ -3758,9 +3759,12 @@ fn substitute_dependent_positions(
             key_index += 1;
         } else {
             dependents.0.push(
-                substitute_type_variables_with(argument, replacements, |cells| {
-                    type_work.charge(cells)
-                })
+                substitute_type_variables_with(
+                    argument,
+                    replacements,
+                    |cells| type_work.charge(cells),
+                    || (),
+                )
                 .map_err(|()| SelectionFailure::TypeResource)?,
             );
         }
@@ -7305,7 +7309,9 @@ mod tests {
         const GOAL_ENVIRONMENT_TYPE_WORK: usize = 2 * 4;
         const MATCHED_SUBSTITUTION_TYPE_WORK: usize = 1;
         const REPLACEMENT_INDEX_AND_VALUE_WORK: usize = 2;
-        const PREREQUISITE_SUBSTITUTION_WORK: usize = 1 + 3;
+        // Replacement retention plus the active-shadow map, source-variable
+        // visit, and retained three-cell prerequisite result.
+        const PREREQUISITE_SUBSTITUTION_WORK: usize = 1 + 5;
         const SELECTION_ARGUMENT_WORK: usize = 1 + 3;
         // Closing and publication each move one complete application through
         // an aligned zonk buffer before either result is visible.
