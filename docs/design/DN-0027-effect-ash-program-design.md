@@ -3,6 +3,7 @@
 - ID: `DN-0027`
 - Status: exploring
 - Related: [DN-0026](DN-0026-effect-ash-resource-first-milestones.md),
+  [DN-0028](DN-0028-effect-ash-milestone-plan.md),
   [AD-0007](../decisions/AD-0007-typed-core-dialects.md), and
   [AD-0008](../decisions/AD-0008-explicit-evaluator-machine.md)
 
