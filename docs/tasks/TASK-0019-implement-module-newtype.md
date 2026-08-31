@@ -69,6 +69,10 @@ Execute the linked plan to:
   path rather than introducing parallel subsystems.
 - The pure `d1e323d` baseline passes `cargo xtask verify`, including formatting,
   build, Clippy, all tests, and Rustdoc.
+- The product branch carries the reviewed planning and authorization history as
+  unsigned commits `9b483ce`, `d542103`, `a0996d1`, `487ed30`, and `686011c`.
+  It contains exactly five commits after `d1e323d`, has no `src/` or `spec/`
+  delta, and is clean before product implementation.
 - No product Rust or normative specification file has changed.
 
 ## Verification
