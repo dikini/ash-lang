@@ -2308,7 +2308,15 @@ mod tests {
         let source = SourceFile::new("newtype-resource.ash", "newtype Exact = Exact(Int)\n")
             .expect("the parser fixture should fit");
         let baseline = super::super::parse(lex(&source).expect("the parser fixture should lex"));
-        let exact_work = baseline.tokens().len() + baseline.events().len();
+        // One syntax unit per retained token and parser event.
+        const TOKEN_WORK: usize = 9;
+        const EVENT_WORK: usize = 19;
+        const EXACT_WORK: usize = TOKEN_WORK + EVENT_WORK;
+        assert_eq!(
+            (baseline.tokens().len(), baseline.events().len()),
+            (TOKEN_WORK, EVENT_WORK),
+        );
+        let exact_work = EXACT_WORK;
 
         assert!(
             baseline.parse_diagnostics().is_empty(),

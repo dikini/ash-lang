@@ -1015,9 +1015,8 @@ mod tests {
         let (registry, constructor, owner) = constructor_registry(WIDTH, Type::Int);
         let applied = Type::apply_arguments(Type::Nominal(owner), vec![Type::Bool; WIDTH]);
         // W application-spine visits + W replacement records + W retained
-        // argument leaves + W active-shadow records + one substituted payload
-        // cell.
-        let required = WIDTH * 4 + 1;
+        // argument leaves + one substituted payload cell.
+        let required = WIDTH * 3 + 1;
         let mut exact = UsefulnessBudget {
             remaining: required,
         };

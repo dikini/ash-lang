@@ -7309,9 +7309,8 @@ mod tests {
         const GOAL_ENVIRONMENT_TYPE_WORK: usize = 2 * 4;
         const MATCHED_SUBSTITUTION_TYPE_WORK: usize = 1;
         const REPLACEMENT_INDEX_AND_VALUE_WORK: usize = 2;
-        // Replacement retention plus the active-shadow map, source-variable
-        // visit, and retained three-cell prerequisite result.
-        const PREREQUISITE_SUBSTITUTION_WORK: usize = 1 + 5;
+        // Replacement retention plus the retained three-cell prerequisite result.
+        const PREREQUISITE_SUBSTITUTION_WORK: usize = 1 + 3;
         const SELECTION_ARGUMENT_WORK: usize = 1 + 3;
         // Closing and publication each move one complete application through
         // an aligned zonk buffer before either result is visible.

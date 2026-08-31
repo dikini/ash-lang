@@ -903,14 +903,8 @@ mod tests {
         // Constructor admission reserves both the E=4 consumed bitmap and
         // the E=4 anchor carrier, adding the second E term to prior totals.
         const CONSTRUCTOR_SECOND_CARRIER_WORK: usize = 4;
-        // Two adapter-application substitutions each add one active-shadow
-        // entry and one replaced-source visit beyond the retained result.
-        const ADAPTER_SUBSTITUTION_WORK: usize = 2 * 2;
-        const IDENTITY_WORK: usize = CORE_WORK
-            + ANCHOR_REPLAY_WORK
-            + PRODUCER_REMAP_WORK
-            + CONSTRUCTOR_SECOND_CARRIER_WORK
-            + ADAPTER_SUBSTITUTION_WORK;
+        const IDENTITY_WORK: usize =
+            CORE_WORK + ANCHOR_REPLAY_WORK + PRODUCER_REMAP_WORK + CONSTRUCTOR_SECOND_CARRIER_WORK;
         const FOLD_WORK: usize = IDENTITY_WORK;
         let fixture = linked_method_transform_fixture();
         assert_eq!(
@@ -1828,6 +1822,10 @@ mod tests {
 
     #[test]
     fn transforms_rebuild_validated_newtype_conversions() {
+        const REMAP_WORK: usize = 2; // one slot per input node
+        const CHILD_COPY_WORK: usize = 2; // clone + admit `Unit`
+        const CONVERSION_COPY_WORK: usize = 2; // clone + admit `Unit`
+        const EXACT_WORK: usize = REMAP_WORK + CHILD_COPY_WORK + CONVERSION_COPY_WORK;
         let source = SourceFile::new("transform-conversion.ash", "()").expect("test source");
         let origin = Origin::Source(
             source
@@ -1866,10 +1864,24 @@ mod tests {
         }
         for fold_literal_primitives in [false, true] {
             assert_eq!(
-                rebuild_with_initial_type_work(&program, fold_literal_primitives, TYPE_WORK_LIMIT,)
-                    .expect_err("conversion rebuilding must retain its type-work boundary"),
+                rebuild_with_initial_type_work(
+                    &program,
+                    fold_literal_primitives,
+                    TYPE_WORK_LIMIT - (EXACT_WORK - 1),
+                )
+                .expect_err("one-short newtype transform must reject"),
                 TransformError::Build(BuildError::TypeWorkExceeded),
             );
+            for _ in 0..2 {
+                let rebuilt = rebuild_with_initial_type_work(
+                    &program,
+                    fold_literal_primitives,
+                    TYPE_WORK_LIMIT - EXACT_WORK,
+                )
+                .expect("exact newtype transform should retry");
+                assert_eq!(rebuilt.expression_kinds_for_test().count(), 2);
+                drop(rebuilt);
+            }
         }
     }
 

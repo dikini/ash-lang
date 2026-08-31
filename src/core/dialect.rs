@@ -4000,8 +4000,10 @@ mod tests {
                 origin.clone(),
             )
             .expect("the measured conversion should fit");
+        const RESULT_TYPE_WORK: usize = 1; // one nominal result-type cell
+        const EXACT_CONVERSION_WORK: usize = RESULT_TYPE_WORK;
         let conversion_work = measured.type_work.used() - before;
-        assert!(conversion_work > 0);
+        assert_eq!(conversion_work, EXACT_CONVERSION_WORK);
 
         let (mut short, short_child) = prepare();
         let short_node_count = short.nodes.len();

@@ -16736,7 +16736,7 @@ mod tests {
                 "User",
                 owner,
                 ExportedTypeAccess::Transparent,
-                Origin::Source(span.clone()),
+                Origin::Source(span),
             )],
             vec![("User", constructor, Some(Type::Int), Origin::Source(span))],
             Vec::new(),
@@ -17018,8 +17018,12 @@ mod tests {
                 &mut measured_constraints,
             )
             .expect("unbounded retention should measure canonical work");
+        const REPRESENTATION_SLOT_WORK: usize = 1;
+        const REPRESENTATION_TYPE_WORK: usize = 1; // `Int` has one type cell.
+        const EXACT_WORK: usize = REPRESENTATION_SLOT_WORK + REPRESENTATION_TYPE_WORK;
         let exact_work = measured_types.used();
-        assert!(exact_work > 0);
+        assert_eq!(exact_work, EXACT_WORK);
+        assert_eq!(measured_constraints.used(), 0);
 
         let mut short = ImportedFacts::default();
         let mut short_types = TypeWorkBudget::with_limit(exact_work - 1);
@@ -17034,6 +17038,7 @@ mod tests {
             ),
             Err(ImportedNominalMergeFailure::TypeResource)
         ));
+        assert_eq!(short_constraints.used(), 0);
         assert!(short.canonical_representation(identity).is_none());
 
         let mut exact_types = TypeWorkBudget::with_limit(exact_work);
@@ -17048,6 +17053,7 @@ mod tests {
             )
             .expect("a fresh exact retry should retain the canonical representation");
         assert_eq!(exact_types.used(), exact_work);
+        assert_eq!(exact_constraints.used(), 0);
         assert!(
             short
                 .canonical_representation(identity)
@@ -17273,7 +17279,7 @@ mod tests {
         let module = ModuleId::new(9_996);
         let identity = NominalTypeId::new(module, 0);
         let provenance =
-            ResolvedTypeProvenance::new(vec![ResolvedTypeProvenanceNode::Fact(span.clone())], 0);
+            ResolvedTypeProvenance::new(vec![ResolvedTypeProvenanceNode::Fact(span)], 0);
         let mut summary = ExportSummary::test_fixture(
             module,
             Vec::new(),

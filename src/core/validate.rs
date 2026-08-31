@@ -6547,13 +6547,12 @@ mod tests {
         measured
             .validate_method_evidence_authority()
             .expect("the concrete source topology validates");
-        // The complete-application authority graph costs 652 units after
-        // replacement-key shadow maps and replaced-source visits. Its one concrete source
+        // The complete-application authority graph costs 632 units. Its one concrete source
         // adds S=1 catalog lookup, one fallible pending slot, and M=1 exact
         // selected-method membership cell. The checked type walkers reserve
         // 45 root/child stack slots separately from their existing visits.
         const CHECKED_STACK_CAPACITY_WORK: usize = 45;
-        const EXACT_WORK: usize = 652 + 1 + 1 + 1 + 1 + CHECKED_STACK_CAPACITY_WORK;
+        const EXACT_WORK: usize = 632 + 1 + 1 + 1 + 1 + CHECKED_STACK_CAPACITY_WORK;
         assert_eq!(measured.type_work.get(), EXACT_WORK);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
@@ -6605,14 +6604,13 @@ mod tests {
             .validate_method_evidence_authority()
             .expect("the widened concrete source topology validates");
         // The owner, occurrence, carrier, source-chain, and checked-Type
-        // relations consume 1,195 units for this complete-application graph after
-        // replacement-key shadow maps and replaced-source visits. The concrete
+        // relations consume 1,175 units for this complete-application graph. The concrete
         // source has Q=2 retained prerequisite method rows, each of which
         // independently reads the W=2 abstract method list before membership.
         // Exact sequence comparison also visits R=2 retained rows and the W=2
         // methods of D=1 direct selected prerequisite:
-        // 1,195 + Q*W + R + D*W = 1,203.
-        const FIXED_AUTHORITY_AND_SOURCE_WORK: usize = 1_195;
+        // 1,175 + Q*W + R + D*W = 1,183.
+        const FIXED_AUTHORITY_AND_SOURCE_WORK: usize = 1_175;
         const PREREQUISITE_METHOD_LIST_WORK: usize = 2 * 2;
         const EXACT_PREREQUISITE_SEQUENCE_WORK: usize = 2 + 2;
         const EXACT_WORK: usize = FIXED_AUTHORITY_AND_SOURCE_WORK
@@ -6803,15 +6801,14 @@ mod tests {
             .validate_method_evidence_authority()
             .expect("the exact monomorphic producer identity validates");
         let exact_work = measured.type_work.get();
-        // The complete-application authenticated graph costs 725 units after
-        // replacement-key shadow maps and replaced-source visits. The exact abstract
+        // The complete-application authenticated graph costs 705 units. The exact abstract
         // producer adds one owner-envelope pass: N=49 nodes, R=5 recursive
         // members, p=0 preceding evidence functions, and one selected binder.
         // Its checked type walks independently reserve 45 root/child stack
         // slots in addition to their existing visits.
         const EXACT_SOURCE_ENVELOPE_WORK: usize = 49 + 5 + 1;
         const CHECKED_STACK_CAPACITY_WORK: usize = 45;
-        const EXACT_WORK: usize = 725 + EXACT_SOURCE_ENVELOPE_WORK + CHECKED_STACK_CAPACITY_WORK;
+        const EXACT_WORK: usize = 705 + EXACT_SOURCE_ENVELOPE_WORK + CHECKED_STACK_CAPACITY_WORK;
         assert_eq!(exact_work, EXACT_WORK);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
@@ -6856,8 +6853,7 @@ mod tests {
             .validate_method_evidence_authority()
             .expect("the measured linked authority should validate");
         let exact_work = measured.type_work.get();
-        // The complete-application authority walk costs 2,352 units after
-        // replacement-key shadow maps and replaced-source visits. This fixture then
+        // The complete-application authority walk costs 2,284 units. This fixture then
         // exercises 22 independently retained replacement-map, fresh-ID-set,
         // source-map, and parameter-vector capacity rows which must be admitted
         // before their respective reserves. Its A=3 adapters and Q=2 edges add
@@ -6869,7 +6865,7 @@ mod tests {
         // stack slots independently from their already charged node visits.
         const CHECKED_STACK_CAPACITY_WORK: usize = 92;
         const EXACT_WORK: usize =
-            2_352 + PRECHARGED_CARRIER_ROWS + EXACT_IDENTITY_WORK + CHECKED_STACK_CAPACITY_WORK;
+            2_284 + PRECHARGED_CARRIER_ROWS + EXACT_IDENTITY_WORK + CHECKED_STACK_CAPACITY_WORK;
         assert_eq!(exact_work, EXACT_WORK);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
@@ -12811,7 +12807,7 @@ mod tests {
 
         let application_validator = Validator::new(&program, &[&file]);
         application_validator
-            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - 7)
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - 6)
             .expect("test setup leaves synthesis, comparison, clone, index, substitution, and result comparison work");
         application_validator
             .validate_computation(
@@ -12842,9 +12838,8 @@ mod tests {
         // Synthesis visits each Type cell and compares each tuple child to
         // Kind::Type, then validation revisits the argument for its retained
         // substitution clone. The final three units are expected-Kind
-        // comparison, replacement storage, an active-shadow entry, and
-        // substituted-result comparison.
-        const EXPECTED_WORK: usize = ARGUMENT_CELLS * 3 + 4;
+        // comparison, replacement storage, and substituted-result comparison.
+        const EXPECTED_WORK: usize = ARGUMENT_CELLS * 3 + 3;
         let file = source();
         let origin = origin(&file);
         let arena = super::super::dialect::ArenaId::new(106);
@@ -12944,9 +12939,7 @@ mod tests {
         const ROOT_TYPE_CELLS: usize = WIDTH * 2 + 1;
         const HEAD_INSPECTION: usize = WIDTH + 1;
         const REPLACEMENT_STORAGE: usize = WIDTH * 2;
-        // Payload checking plus one active-shadow entry per phantom owner
-        // parameter used by substitution.
-        const PAYLOAD_WORK: usize = 3 + WIDTH;
+        const PAYLOAD_WORK: usize = 3;
         // The pattern/expected agreement comparison visits the complete root
         // before replacement storage and substitution are admitted.
         const ROOT_COMPARISON: usize = ROOT_TYPE_CELLS;
@@ -15031,11 +15024,17 @@ mod tests {
         let exact_work = validator.type_work.get();
         // P argument slots + (P + 1) spine inspections + P replacement slots
         // + P parameter/argument rows = 4P + 1.
+        const NEWTYPE_PARAMETER_WORK: usize = 4 * 2 + 1;
+        // All fixed registry and node validation for this concrete fixture is
+        // independent of the conversion's parameter-width term.
+        const VALIDATION_ENVELOPE_WORK: usize = 518;
+        const EXACT_WORK: usize = VALIDATION_ENVELOPE_WORK + NEWTYPE_PARAMETER_WORK;
         assert_eq!(
             validator.newtype_conversion_parameter_work.get(),
-            9,
+            NEWTYPE_PARAMETER_WORK,
             "two arguments require 2P carriers, P row traversal, and P+1 spine inspection",
         );
+        assert_eq!(exact_work, EXACT_WORK);
         assert!(exact_work < CORE_VALIDATION_TYPE_WORK_LIMIT);
         drop(validator);
         drop(measured);

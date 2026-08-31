@@ -16505,8 +16505,13 @@ mod tests {
         let mut measured_type_work = TypeWorkBudget::unbounded();
         check_newtype_representation_cycles(&resolved, &mut measured_type_work)
             .expect("the isolated newtype representation graph should check");
+        const VERTEX_INDEX_WORK: usize = 2; // declaration row + identity map row
+        const ADJACENCY_WORK: usize = 2; // outer row + one outgoing-row carrier
+        const TYPE_WALK_WORK: usize = 2; // pending root + visited `Int`
+        const DFS_WORK: usize = 6; // three arrays + root pair + completion visit
+        const EXACT_WORK: usize = VERTEX_INDEX_WORK + ADJACENCY_WORK + TYPE_WALK_WORK + DFS_WORK;
         let exact_work = measured_type_work.used();
-        assert!(exact_work > 0);
+        assert_eq!(exact_work, EXACT_WORK);
 
         let mut short_type_work = TypeWorkBudget::with_limit(exact_work - 1);
         let failure = check_newtype_representation_cycles(&resolved, &mut short_type_work)
@@ -17712,9 +17717,7 @@ mod tests {
         // add eight aligned root cells to the predecessor boundary. Global
         // arity preflight adds one interface-map cell, visits the interface,
         // implementation, and global declarations, and checks the head.
-        // Selective substitution additionally owns one active-shadow entry and
-        // visits both replaced source variables before expanding them.
-        const EXACT_WORK: usize = 84 + 8 + 1 + 3 + 1 + 3;
+        const EXACT_WORK: usize = 84 + 8 + 1 + 3 + 1;
         let declarations = concat!(
             "interface Keep<A> {\nkeep : A -> A\n}\n\n",
             "impl Keep<Int> {\nkeep value = value\n}\n",
@@ -19032,7 +19035,7 @@ mod tests {
         let mut short = Elaborator::new();
         short
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 18)
+            .charge(crate::types::TYPE_WORK_LIMIT - 15)
             .expect("the fixture leaves exactly the retained metadata cost");
         assert_eq!(
             short.instantiate(&fact, false, span),
@@ -19046,7 +19049,7 @@ mod tests {
         let mut exact = Elaborator::new();
         exact
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 19)
+            .charge(crate::types::TYPE_WORK_LIMIT - 16)
             .expect("the fixture leaves metadata plus the substituted result");
         let (instantiated, arguments) = exact
             .instantiate(&fact, false, span)
@@ -19060,10 +19063,8 @@ mod tests {
     #[test]
     fn polymorphic_instantiation_registers_fixed_inference_kinds_transactionally() {
         // Two causal-origin slots, two Omega records, four retained Kind nodes,
-        // four replacement/argument Type cells, and thirteen substitution
-        // units: two active-shadow entries, three compound result cells, and
-        // four source-variable visits plus four expanded replacements.
-        const EXACT_WORK: usize = (2 + 2 + 4 + 4) + 13;
+        // four replacement/argument Type cells and seven substituted cells.
+        const EXACT_WORK: usize = (2 + 2 + 4 + 4) + 7;
         let source =
             SourceFile::new("kinded-instantiate.ash", "()\n").expect("the fixture should fit");
         let span = source
@@ -19681,10 +19682,9 @@ mod tests {
     #[test]
     fn wide_newtype_constructor_fresh_substitution_is_additive_and_retryable() {
         const PARAMETER_COUNT: usize = 128;
-        // One replacement entry and one active-shadow count per parameter,
-        // then the constructor body's compound/scalar result (3P + 3) plus
-        // one source visit for each of its 2P substituted variables.
-        const EXACT_WORK: usize = 7 * PARAMETER_COUNT + 3;
+        // One replacement entry per parameter plus the constructor body's
+        // compound/scalar result (3P + 3).
+        const EXACT_WORK: usize = 4 * PARAMETER_COUNT + 3;
         let module = ModuleId::new(804);
         let owner = crate::types::NominalTypeId::new(module, 0);
 
@@ -19748,11 +19748,11 @@ mod tests {
         const PARAMETER_COUNT: usize = 32;
         // Generated-parameter and replacement-map carriers (2P), generated
         // variable registration plus its retained Kind (4P), one body
-        // substitution active-shadow map plus source/result traversal (6P + 3), two domain
+        // body substitution result traversal (3P + 3), two domain
         // clones (2P + 2), one codomain clone (2P + 1), one retained function
         // clone (3P + 3), and the abstraction parameter carrier plus retained
         // Kinds (2P).
-        const EXACT_WORK: usize = 21 * PARAMETER_COUNT + 9;
+        const EXACT_WORK: usize = 18 * PARAMETER_COUNT + 9;
         let source = SourceFile::new("wide-newtype-constructor.ash", "Wide")
             .expect("the wide constructor source should fit");
         let span = source
@@ -19883,12 +19883,12 @@ mod tests {
     #[test]
     fn late_newtype_constructor_failure_rolls_back_core_for_same_elaborator_retry() {
         // Generated-parameter and replacement scratch (2), generated-type
-        // registration (3), retained generated Kind (1), active-shadow map (1)
-        // plus the three-cell function traversal (3), the domain, child, and
+        // registration (3), retained generated Kind (1), the three-cell
+        // function traversal (3), the domain, child, and
         // conversion clones (3), then the retained function type (3). The next
         // parameter-list clone fails after the unary function has already been
         // appended to Core.
-        const LATE_FAILURE_WORK: usize = 2 + 3 + 1 + 1 + 1 + 3 + 3 + 3;
+        const LATE_FAILURE_WORK: usize = 2 + 3 + 1 + 3 + 3 + 3;
         let source =
             SourceFile::new("newtype-constructor-transaction.ash", "Box").expect("test source");
         let span = source
@@ -23994,10 +23994,9 @@ mod tests {
     fn lowered_requirement_rows_and_replacements_have_an_exact_retryable_type_boundary() {
         // One requirement-row owner + one source value clone + one method-row
         // owner + one replacement-entry owner + one replacement argument +
-        // one substitution shadow-map entry + one source-variable visit + one
-        // substituted result + two application cells + one Core value
+        // one substituted result + two application cells + one Core value
         // clone + one evidence-function cell + one evidence-domain clone.
-        const EXACT_TYPE_WORK: usize = 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1;
+        const EXACT_TYPE_WORK: usize = 1 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1;
 
         let resolved = resolved_module_fixture("lowered-row-budget.ash", "", "Unit", "()");
         let span = fixture_result(&resolved).span;

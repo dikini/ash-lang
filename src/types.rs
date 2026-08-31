@@ -888,14 +888,7 @@ pub(crate) fn substitute_type_variables_with<E>(
         ExitForall(&'a [(TypeVariableId, Kind)]),
     }
 
-    charge(replacements.len())?;
     let mut active_shadows = HashMap::new();
-    active_shadows
-        .try_reserve(replacements.len())
-        .map_err(|_| allocation_error())?;
-    for identity in replacements.keys() {
-        active_shadows.insert(*identity, 0usize);
-    }
     let mut work = vec![ChargeTask::Visit(ty, true)];
     while let Some(task) = work.pop() {
         match task {
@@ -906,7 +899,6 @@ pub(crate) fn substitute_type_variables_with<E>(
                 {
                     charge(1)?;
                 } else if replacements.contains_key(identity) {
-                    charge(1)?;
                     work.push(ChargeTask::Visit(&replacements[identity], false));
                 } else {
                     charge(1)?;
@@ -964,10 +956,20 @@ pub(crate) fn substitute_type_variables_with<E>(
             }
             ChargeTask::EnterForall(parameters) => {
                 for (parameter, _) in parameters {
-                    charge(1)?;
-                    let Some(count) = active_shadows.get_mut(parameter) else {
+                    if !replacements.contains_key(parameter) {
                         continue;
-                    };
+                    }
+                    if !active_shadows.contains_key(parameter) {
+                        charge(1)?;
+                        active_shadows
+                            .try_reserve(1)
+                            .map_err(|_| allocation_error())?;
+                        active_shadows.insert(*parameter, 0usize);
+                    }
+                    charge(1)?;
+                    let count = active_shadows
+                        .get_mut(parameter)
+                        .expect("an overlapping shadow key was retained before entry");
                     *count = count
                         .checked_add(1)
                         .expect("an active shadow count cannot exceed source nesting");
@@ -975,10 +977,10 @@ pub(crate) fn substitute_type_variables_with<E>(
             }
             ChargeTask::ExitForall(parameters) => {
                 for (parameter, _) in parameters {
-                    charge(1)?;
                     let Some(count) = active_shadows.get_mut(parameter) else {
                         continue;
                     };
+                    charge(1)?;
                     *count = count
                         .checked_sub(1)
                         .expect("each exited shadow must have been entered");
@@ -2355,10 +2357,9 @@ mod tests {
         );
         let replacements =
             HashMap::from([(function, Type::Nominal(owner)), (argument, Type::Bool)]);
-        // Two active-shadow map records, three source visits, and two expanded
-        // scalar replacements.
-        let mut exact = 7usize;
-        let mut short = 6usize;
+        // One application plus two expanded scalar replacements.
+        let mut exact = 3usize;
+        let mut short = 2usize;
 
         let rebuilt = substitute_type_variables_with(
             &application,
@@ -2431,12 +2432,11 @@ mod tests {
     fn nested_forall_substitution_uses_linear_active_shadow_counts() {
         const DEPTH: usize = 2_048;
         const WIDTH: usize = 2_048;
-        // Two replacement-key shadow-map records; D retained forall nodes,
+        // One overlapping replacement-key shadow-map record; D retained forall nodes,
         // binder records, and Kind nodes; enter and exit transitions for the
         // shadowed key at every depth; one tuple, one directly shadowed
-        // variable, and W source-variable visits plus W non-recursive
-        // replacement variables.
-        const EXACT_WORK: usize = 2 + (3 * DEPTH) + (2 * DEPTH) + 1 + 1 + (2 * WIDTH);
+        // variable, and W non-recursive replacement variables.
+        const EXACT_WORK: usize = 1 + (3 * DEPTH) + (2 * DEPTH) + 1 + 1 + WIDTH;
 
         std::thread::Builder::new()
             .name("nested-forall-substitution-shadow-counts".to_owned())
@@ -2516,10 +2516,9 @@ mod tests {
     #[test]
     fn wide_unrelated_forall_parameter_inspection_is_exact_and_retryable() {
         const WIDTH: usize = 2_048;
-        // One replacement-key shadow-map record; one forall node; W binder
-        // records and W Kind nodes; W enter plus W exit inspections; one
-        // source-variable visit; and one scalar replacement visit.
-        const EXACT_WORK: usize = 1 + 1 + (2 * WIDTH) + WIDTH + WIDTH + 1 + 1;
+        // One forall node, W binder records and W Kind nodes, and one scalar
+        // replacement visit. Unrelated binders retain no shadow state.
+        const EXACT_WORK: usize = 1 + (2 * WIDTH) + 1;
 
         let substituted = TypeVariableId::new(0);
         let source = Type::Forall(
@@ -2583,10 +2582,9 @@ mod tests {
         const WIDTH: usize = 32_768;
         // Replacing the sole source variable retains every node of a left-deep
         // unary application: one nominal, D applications, and D arguments.
-        const DEEP_RESULT_CELLS: usize = 1 + 1 + (2 * DEPTH + 1);
-        // The shadow-map record, tuple visit, and one source visit plus one
-        // scalar replacement per source element.
-        const WIDE_RESULT_CELLS: usize = 1 + 1 + (2 * WIDTH);
+        const DEEP_RESULT_CELLS: usize = 2 * DEPTH + 1;
+        // The tuple plus one scalar replacement per source element.
+        const WIDE_RESULT_CELLS: usize = 1 + WIDTH;
 
         fn assert_deep_application(ty: &Type, depth: usize, owner: NominalTypeId) {
             let mut current = ty;
