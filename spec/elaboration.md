@@ -341,10 +341,12 @@ Elaboration records both operations explicitly in Core. A generalized
 definition becomes `TypeAbstraction(parameters, body)` with type
 `forall parameters. body_type`; both lists retain the same ordered
 identity-kind pairs. Each polymorphic occurrence becomes
-`TypeApplication(function, arguments)`. It supplies one monotype argument per
-outer binder in order, checks each argument against that binder's kind, and
-obtains its result by simultaneous substitution into the scheme body. The Core
-operation is not a curried sequence of unary expression operations.
+`TypeApplication(function, arguments)`. It supplies one argument of the
+corresponding binder kind in abstraction order. Ordinary monotypes and complete
+`EffectRow` arguments remain in the two ordered slices defined above. It checks
+each argument against its binder's kind and obtains the result by simultaneous
+substitution into the scheme body. The Core operation is not a curried sequence
+of unary expression operations.
 Parameterized constructors use the same Core instantiation form as
 polymorphic value names.
 
