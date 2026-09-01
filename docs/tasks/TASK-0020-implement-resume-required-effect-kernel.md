@@ -124,6 +124,12 @@ The pure Core dialect remains closed. Effect Core may share structural value
 families and the accepted operation-family seam, but its validator and
 evaluator entry are separate production boundaries.
 
+Ash compiler and runtime compute are strictly limited. Reuse an existing
+owner, validator, budget, traversal, and machine before adding another. A new
+proportional carrier or pass requires evidence that the existing machinery
+cannot satisfy the accepted rule. If a slice exceeds its forecast, stop and
+simplify it rather than consuming capacity assigned to later milestones.
+
 ## Deviations
 
 None.

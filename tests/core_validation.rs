@@ -1603,6 +1603,35 @@ fn core_transforms_preserve_higher_kinded_outer_binders() {
 }
 
 #[test]
+fn pure_core_uses_an_uninhabited_operation_family_and_empty_rows() {
+    fn eliminate(operation: ash::core::PureOperation) -> ! {
+        match operation {}
+    }
+
+    let _: fn(ash::core::PureOperation) -> ! = eliminate;
+    assert_eq!(
+        std::mem::size_of::<
+            <ash::core::dialect::PureOperationFamily as ash::core::dialect::CoreOperationFamily>::Effects,
+        >(),
+        0,
+    );
+    let file = source("pure row");
+    let mut builder = CoreBuilder::new();
+    let root = builder
+        .unit(Type::Unit, whole_origin(&file))
+        .expect("pure unit");
+    let program = validate(builder.finish(root).expect("pure root"), &[&file])
+        .expect("ordinary pure validation remains authoritative");
+    assert!(
+        program
+            .node(root)
+            .expect("pure root node")
+            .effects()
+            .is_empty()
+    );
+}
+
+#[test]
 fn rejects_outer_instantiation_argument_of_the_wrong_kind() {
     let file = source("wrong outer kind");
     let origin = whole_origin(&file);

@@ -1053,7 +1053,15 @@ pub(crate) fn compare_effect_instances_with_budget(
     right: &EffectInstance,
     budget: &mut TypeWorkBudget,
 ) -> Result<Ordering, ()> {
-    budget.charge(1)?;
+    compare_effect_instances_with_charge(left, right, &mut |work| budget.charge(work))
+}
+
+fn compare_effect_instances_with_charge(
+    left: &EffectInstance,
+    right: &EffectInstance,
+    charge: &mut impl FnMut(usize) -> Result<(), ()>,
+) -> Result<Ordering, ()> {
+    charge(1)?;
     let effects = left.effect.cmp(&right.effect);
     if effects != Ordering::Equal {
         return Ok(effects);
@@ -1063,7 +1071,7 @@ pub(crate) fn compare_effect_instances_with_budget(
         return Ok(lengths);
     }
     for (left, right) in left.arguments.iter().zip(&right.arguments) {
-        let ordering = compare_types_with_budget(left, right, budget)?;
+        let ordering = compare_types_with_charge(left, right, charge)?;
         if ordering != Ordering::Equal {
             return Ok(ordering);
         }
@@ -1071,10 +1079,52 @@ pub(crate) fn compare_effect_instances_with_budget(
     Ok(Ordering::Equal)
 }
 
-fn compare_types_with_budget(
+pub(crate) fn same_effect_rows_with_budget(
+    left: &EffectRow,
+    right: &EffectRow,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    same_effect_rows_with_charge(left, right, |work| budget.charge(work))
+}
+
+pub(crate) fn same_effect_rows_with_charge(
+    left: &EffectRow,
+    right: &EffectRow,
+    mut charge: impl FnMut(usize) -> Result<(), ()>,
+) -> Result<bool, ()> {
+    charge(1)?;
+    if left.known.len() != right.known.len() {
+        return Ok(false);
+    }
+    match (&left.tail, &right.tail) {
+        (None, None) => {}
+        (Some(left), Some(right)) => {
+            charge(1)?;
+            if left.variable != right.variable || left.lacks.len() != right.lacks.len() {
+                return Ok(false);
+            }
+            for (left, right) in left.lacks.iter().zip(&right.lacks) {
+                if compare_effect_instances_with_charge(left, right, &mut charge)?
+                    != Ordering::Equal
+                {
+                    return Ok(false);
+                }
+            }
+        }
+        _ => return Ok(false),
+    }
+    for (left, right) in left.known.iter().zip(&right.known) {
+        if compare_effect_instances_with_charge(left, right, &mut charge)? != Ordering::Equal {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn compare_types_with_charge(
     left: &Type,
     right: &Type,
-    budget: &mut TypeWorkBudget,
+    charge: &mut impl FnMut(usize) -> Result<(), ()>,
 ) -> Result<Ordering, ()> {
     enum Task<'a> {
         Types(&'a Type, &'a Type),
@@ -1120,7 +1170,7 @@ fn compare_types_with_budget(
     let mut work = Vec::new();
     macro_rules! schedule {
         ($task:expr) => {{
-            budget.charge(1)?;
+            charge(1)?;
             work.try_reserve(1).map_err(|_| ())?;
             work.push($task);
         }};
@@ -4116,6 +4166,53 @@ mod tests {
             clone_computation_type_with_budget(&computation, &mut computation_exact),
             Ok(computation),
         );
+    }
+
+    #[test]
+    fn effect_row_equality_is_exact_retryable_and_deep() {
+        fn row(depth: usize) -> EffectRow {
+            let mut argument = Type::Unit;
+            for _ in 0..depth {
+                argument = Type::Application(Box::new(Type::Int), Box::new(argument));
+            }
+            EffectRow::open(
+                EffectRowVariable::rigid(TypeVariableId::generated(0)),
+                Box::new([EffectInstance::new(
+                    EffectId::new(ModuleId::new(0), 0),
+                    Box::new([argument]),
+                )]),
+            )
+        }
+
+        std::thread::Builder::new()
+            .name("effect-row-equality-deep".to_owned())
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let left = row(4_096);
+                let right = row(4_096);
+                let mut measured = TypeWorkBudget::unbounded();
+                assert_eq!(
+                    same_effect_rows_with_budget(&left, &right, &mut measured),
+                    Ok(true),
+                );
+                let exact_work = measured.used();
+                let mut short = TypeWorkBudget::with_limit(exact_work - 1);
+                assert_eq!(
+                    same_effect_rows_with_budget(&left, &right, &mut short),
+                    Err(()),
+                );
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(exact_work);
+                    assert_eq!(
+                        same_effect_rows_with_budget(&left, &right, &mut exact),
+                        Ok(true),
+                    );
+                    assert_eq!(exact.used(), exact_work);
+                }
+            })
+            .expect("deep row-equality worker")
+            .join()
+            .expect("row equality must stay iterative");
     }
 
     #[test]

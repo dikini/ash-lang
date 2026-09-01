@@ -844,7 +844,7 @@ impl CheckedModule {
             declaration_order: std::mem::take(&mut resolved.declaration_order),
             interfaces: std::mem::take(&mut resolved.interfaces),
             effects: std::mem::take(&mut resolved.effects),
-            imported_effects: resolved.imported.take_effects(),
+            imported_effects: std::mem::take(&mut resolved.imported).into_effects(),
             implementations: parts.implementations,
             definitions: parts.definitions,
             available_implementations: parts.available_implementations,
@@ -3644,9 +3644,9 @@ pub struct ImportedFacts {
 }
 
 impl ImportedFacts {
-    fn take_effects(&mut self) -> Box<[ResolvedEffectDeclaration]> {
-        self.effect_positions.clear();
-        std::mem::take(&mut self.effects).into_boxed_slice()
+    fn into_effects(mut self) -> Box<[ResolvedEffectDeclaration]> {
+        let effects = std::mem::take(&mut self.effects);
+        effects.into_boxed_slice()
     }
 
     /// Looks up one imported checked global by semantic identity.
@@ -3694,8 +3694,8 @@ impl ImportedFacts {
         budget: &mut TypeWorkBudget,
     ) -> Result<(), ()> {
         if let Some(position) = self.effect_positions.get(&fact.id).copied() {
-            let displaced = std::mem::replace(&mut self.effects[position], fact);
-            discard_resolved_effect_iteratively(displaced);
+            let slot = self.effects.get_mut(position).ok_or(())?;
+            discard_resolved_effect_iteratively(std::mem::replace(slot, fact));
             return Ok(());
         }
         budget.charge(2)?;
@@ -4351,6 +4351,10 @@ impl Drop for ImportedFacts {
             drop(imported.fact);
         }
         self.interface_positions.clear();
+        for effect in self.effects.drain(..) {
+            discard_resolved_effect_iteratively(effect);
+        }
+        self.effect_positions.clear();
         for imported in self.implementations.drain(..) {
             drop(imported.fact);
         }
@@ -8336,13 +8340,6 @@ impl ExportSummary {
                 &mut environments,
                 type_work,
             )?;
-            if effect
-                .parameters
-                .iter()
-                .any(|parameter| parameter.kind != Kind::Type)
-            {
-                return Err(ResolvedBuildFailure::InvalidState);
-            }
             for (operation_index, operation) in effect.operations.iter().enumerate() {
                 if operation.id.owner() != effect.id
                     || usize::try_from(operation.id.operation()) != Ok(operation_index)
@@ -13861,6 +13858,9 @@ struct CombinedRegistryCounts {
     nominals: usize,
     family_entries: usize,
     constructors: usize,
+    effects: usize,
+    effect_operations: usize,
+    effect_parameters: usize,
     nominal_parameters: usize,
     interfaces: usize,
     interface_parameters: usize,
@@ -13880,6 +13880,8 @@ struct CombinedRegistryBuilder {
     constructors: ResolvedConstructorBuffer,
     nominal_positions: HashMap<NominalTypeId, usize>,
     constructor_positions: HashMap<ConstructorId, usize>,
+    effects: Vec<ResolvedEffectDeclaration>,
+    effect_positions: HashMap<EffectId, usize>,
     parameter_rows: ResolvedNominalParameterBuffer,
     canonical_variables: ResolvedTypeVariableBuffer,
     nominal_parameters: HashMap<NominalTypeId, Box<[ResolvedTypeVariable]>>,
@@ -13895,6 +13897,8 @@ impl CombinedRegistryBuilder {
             constructors: ResolvedConstructorBuffer(Vec::new()),
             nominal_positions: HashMap::new(),
             constructor_positions: HashMap::new(),
+            effects: Vec::new(),
+            effect_positions: HashMap::new(),
             parameter_rows: ResolvedNominalParameterBuffer(Vec::new()),
             canonical_variables: ResolvedTypeVariableBuffer(Vec::new()),
             nominal_parameters: HashMap::new(),
@@ -13919,6 +13923,14 @@ impl CombinedRegistryBuilder {
         builder
             .constructor_positions
             .try_reserve(counts.constructors)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        builder
+            .effects
+            .try_reserve_exact(counts.effects)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        builder
+            .effect_positions
+            .try_reserve(counts.effects)
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         builder
             .parameter_rows
@@ -14017,8 +14029,8 @@ impl CombinedRegistryBuilder {
             constructors: constructors.into_boxed_slice(),
             nominal_positions: std::mem::take(&mut self.nominal_positions),
             constructor_positions: std::mem::take(&mut self.constructor_positions),
-            effects: Box::new([]),
-            effect_positions: HashMap::new(),
+            effects: std::mem::take(&mut self.effects).into_boxed_slice(),
+            effect_positions: std::mem::take(&mut self.effect_positions),
             nominal_parameters: std::mem::take(&mut self.nominal_parameters),
             type_variables: std::mem::take(&mut self.type_variables),
             global_parameter_rows: std::mem::take(&mut self.global_parameter_rows)
@@ -14041,6 +14053,9 @@ impl Drop for CombinedRegistryBuilder {
         }
         for parameter in self.type_variables.drain().map(|(_, parameter)| parameter) {
             discard_resolved_type_variable(parameter);
+        }
+        for effect in self.effects.drain(..) {
+            discard_resolved_effect_iteratively(effect);
         }
     }
 }
@@ -14086,6 +14101,23 @@ fn checked_registry_counts(
         let registry = checked.registry();
         checked_accumulate(&mut counts.nominals, registry.nominals.len())?;
         checked_accumulate(&mut counts.constructors, registry.constructors.len())?;
+        checked_accumulate(&mut counts.effects, registry.effects.len())?;
+        for effect in registry.effects.iter() {
+            checked_accumulate(&mut counts.effect_operations, effect.operations.len())?;
+            checked_accumulate(&mut counts.effect_parameters, effect.parameters.len())?;
+            for parameter in effect.parameters.iter() {
+                type_accumulate(
+                    &mut counts.retention_type_work,
+                    retained_type_variable_work(parameter)?,
+                )?;
+            }
+            for operation in effect.operations.iter() {
+                let mut operation_work = TypeWorkBudget::unbounded();
+                charge_type_cells(&operation.annotation.ty, &mut operation_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                type_accumulate(&mut counts.retention_type_work, operation_work.used())?;
+            }
+        }
         checked_accumulate(&mut counts.interfaces, checked.interface_facts().len())?;
         for interface in checked.interface_facts() {
             checked_accumulate(&mut counts.interface_parameters, interface.parameters.len())?;
@@ -14145,6 +14177,7 @@ fn checked_registry_counts(
     let non_method_type_variables = counts
         .nominal_parameters
         .checked_add(counts.interface_parameters)
+        .and_then(|count| count.checked_add(counts.effect_parameters))
         .and_then(|count| count.checked_add(counts.global_parameters))
         .and_then(|count| count.checked_add(counts.implementation_parameters))
         .ok_or(ResolvedBuildFailure::ConstraintResource)?;
@@ -14167,6 +14200,9 @@ fn checked_registry_counts(
                 .and_then(|constructors| work.checked_add(constructors))
         })
         .and_then(|work| work.checked_add(counts.type_variables))
+        .and_then(|work| work.checked_add(counts.effects.checked_mul(2)?))
+        .and_then(|work| work.checked_add(counts.effect_operations))
+        .and_then(|work| work.checked_add(counts.effect_parameters))
         .and_then(|work| {
             counts
                 .global_rows
@@ -14186,6 +14222,8 @@ fn checked_registry_counts(
         )
         .and_then(|work| work.checked_add(counts.family_entries))
         .and_then(|work| work.checked_add(counts.constructors))
+        .and_then(|work| work.checked_add(counts.effects))
+        .and_then(|work| work.checked_add(counts.effect_operations))
         .and_then(|work| work.checked_add(counts.interface_parameters))
         .and_then(|work| work.checked_add(counts.schemes))
         .and_then(|work| work.checked_add(counts.implementations))
@@ -14195,6 +14233,7 @@ fn checked_registry_counts(
         .checked_add(counts.nominals)
         .and_then(|work| work.checked_add(counts.family_entries))
         .and_then(|work| work.checked_add(counts.constructors))
+        .and_then(|work| work.checked_add(counts.effects))
         .and_then(|work| work.checked_add(counts.global_rows))
         .ok_or(ResolvedBuildFailure::ConstraintResource)?;
     counts.fixed_constraint_work = deterministic_visits
@@ -14227,6 +14266,7 @@ fn validate_checked_registries<'a>(
     let mut nominal_ids = HashSet::new();
     let mut family_ids = HashSet::new();
     let mut constructor_ids = HashSet::new();
+    let mut effect_ids = HashSet::new();
     let mut global_owners = HashSet::new();
     module_ids
         .try_reserve(counts.modules)
@@ -14239,6 +14279,9 @@ fn validate_checked_registries<'a>(
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
     constructor_ids
         .try_reserve(counts.constructors)
+        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+    effect_ids
+        .try_reserve(counts.effects)
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
     global_owners
         .try_reserve(counts.global_rows)
@@ -14297,6 +14340,28 @@ fn validate_checked_registries<'a>(
                 return Err(ResolvedBuildFailure::InvalidState);
             }
         }
+        if registry.effect_positions.len() != registry.effects.len() {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        for (position, effect) in registry.effects.iter().enumerate() {
+            if effect.id.module() != module
+                || !effect_ids.insert(effect.id)
+                || registry.effect_positions.get(&effect.id) != Some(&position)
+                || effect.operations.is_empty()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            for (ordinal, operation) in effect.operations.iter().enumerate() {
+                if operation.id.owner() != effect.id
+                    || usize::try_from(operation.id.operation()) != Ok(ordinal)
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+            }
+            local_variable_count = local_variable_count
+                .checked_add(effect.parameters.len())
+                .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+        }
         if family_ids.len() != constructor_ids.len() {
             return Err(ResolvedBuildFailure::InvalidState);
         }
@@ -14335,6 +14400,7 @@ fn validate_checked_registries<'a>(
         || nominal_ids.len() != counts.nominals
         || family_ids.len() != counts.family_entries
         || constructor_ids.len() != counts.constructors
+        || effect_ids.len() != counts.effects
         || global_owners.len() != counts.global_rows
     {
         return Err(ResolvedBuildFailure::InvalidState);
@@ -14372,6 +14438,26 @@ fn validate_checked_registries<'a>(
                 }
                 previous = Some(parameter.id.local());
                 if !type_variable_ids.insert(parameter.id) {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                let canonical = registry
+                    .type_variables
+                    .get(&parameter.id)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                if !same_checker_type_variable_after_base_charge(
+                    canonical,
+                    parameter,
+                    constraint_work,
+                )? {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+            }
+        }
+        for effect in registry.effects.iter() {
+            for parameter in effect.parameters.iter() {
+                if parameter.id.module() != Some(checked.module())
+                    || !type_variable_ids.insert(parameter.id)
+                {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
                 let canonical = registry
@@ -14576,6 +14662,20 @@ fn retain_checked_registries(
                 .insert(constructor.id, position);
             debug_assert!(displaced.is_none());
             builder.constructors.0.push(retained);
+        }
+        for effect in registry.effects.iter() {
+            let position = builder.effects.len();
+            let mut unbounded = TypeWorkBudget::unbounded();
+            let retained = clone_resolved_effect_with_budget(effect, &mut unbounded)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            if builder
+                .effect_positions
+                .insert(effect.id, position)
+                .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            builder.effects.push(retained);
         }
         for scheme in checked.schemes() {
             if !scheme.scheme.type_parameters.is_empty() {
@@ -14853,12 +14953,7 @@ impl ResolvedRegistry {
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?,
             );
         }
-        registry.effect_positions = effects
-            .iter()
-            .enumerate()
-            .map(|(position, effect)| (effect.id, position))
-            .collect();
-        registry.effects = effects.into_boxed_slice();
+        registry = registry.with_effects(effects);
         for nominal in &self.nominals {
             let parameters = self
                 .nominal_parameters
@@ -15014,7 +15109,10 @@ impl ResolvedRegistry {
             .enumerate()
             .map(|(position, effect)| (effect.id, position))
             .collect();
-        self.effects = effects.into_boxed_slice();
+        let displaced = std::mem::replace(&mut self.effects, effects.into_boxed_slice());
+        for effect in displaced.into_vec() {
+            discard_resolved_effect_iteratively(effect);
+        }
         self
     }
 
@@ -15022,6 +15120,12 @@ impl ResolvedRegistry {
     #[must_use]
     pub fn effect(&self, id: EffectId) -> Option<&ResolvedEffectDeclaration> {
         self.effects.get(*self.effect_positions.get(&id)?)
+    }
+
+    /// Returns canonical linked effects in deterministic module/declaration order.
+    #[must_use]
+    pub const fn effects(&self) -> &[ResolvedEffectDeclaration] {
+        &self.effects
     }
 
     fn with_abstract_nominal_facts(
@@ -18875,6 +18979,7 @@ mod tests {
         let module = ModuleId::new(9_700);
         let nominal = NominalTypeId::new(module, 0);
         let constructor = ConstructorId::new(nominal, 0);
+        let effect = EffectId::new(module, 0);
         let parameter_id = TypeVariableId::resolved(module, 0);
         let mut kind = Kind::Type;
         let mut payload = Type::Variable(parameter_id);
@@ -18908,7 +19013,31 @@ mod tests {
                 origin: Origin::Source(span),
             }],
         )
-        .with_type_parameters(vec![(nominal, vec![parameter])]);
+        .with_type_parameters(vec![(nominal, vec![parameter])])
+        .with_effects(vec![ResolvedEffectDeclaration {
+            id: effect,
+            public: false,
+            spelling: "DeepEffect".into(),
+            parameters: Box::new([]),
+            operations: vec![ResolvedEffectOperation {
+                id: OperationId::new(effect, 0),
+                spelling: "step".into(),
+                annotation: ResolvedType {
+                    ty: Type::Function(Box::new(Type::Unit), Box::new(Type::Unit)),
+                    provenance: ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                },
+                origin: Origin::Source(span),
+                span,
+            }]
+            .into_boxed_slice(),
+            origin: Origin::Source(span),
+            span,
+        }]);
         vec![CheckedModule {
             module,
             registry: Arc::new(registry),
@@ -18937,11 +19066,11 @@ mod tests {
         // constructor inventory, binder-identity index, and the complete
         // record/Origin/Kind mirror. TypeWork retains both binder copies and
         // the constructor payload only after authentication succeeds.
-        const CONSTRAINT_WORK: usize = 3 * DEPTH + 13;
+        const CONSTRAINT_WORK: usize = 3 * DEPTH + 16;
         // The fixed eight cells retain the family-id slice, both nominal
         // staging/destination rows and positions, both constructor
         // carrier/position cells, and the canonical-variable staging slot.
-        const TYPE_WORK: usize = 6 * DEPTH + 13;
+        const TYPE_WORK: usize = 6 * DEPTH + 19;
         std::thread::Builder::new()
             .name("deep-combined-registry".to_owned())
             .stack_size(256 * 1024)
@@ -18994,6 +19123,7 @@ mod tests {
                     assert_eq!(type_work.used(), TYPE_WORK);
                     let owner = NominalTypeId::new(ModuleId::new(9_700), 0);
                     let constructor = ConstructorId::new(owner, 0);
+                    let effect = EffectId::new(ModuleId::new(9_700), 0);
                     let parameter = TypeVariableId::resolved(ModuleId::new(9_700), 0);
                     assert_eq!(
                         combined
@@ -19001,6 +19131,7 @@ mod tests {
                             .map(|nominal| nominal.constructors.as_ref()),
                         Some([constructor].as_slice()),
                     );
+                    assert_eq!(combined.effect(effect).unwrap().operations.len(), 1);
                     let payload = combined
                         .constructor(constructor)
                         .and_then(|constructor| constructor.payload.as_ref())

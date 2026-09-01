@@ -4239,6 +4239,7 @@ fn authenticate_linked_constructor_payloads<'a>(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LinkedBinderOwner {
     Nominal(NominalTypeId),
+    Effect(crate::types::EffectId),
     Interface(InterfaceId),
     Method(MethodId),
     Global(BinderId),
@@ -4341,6 +4342,41 @@ fn authenticate_linked_registry_facts(
     }
     if constructor_count != registry.constructors().len() {
         return Err(unknown(span));
+    }
+
+    for effect in registry.effects() {
+        charge(budget, 1, effect.span)?;
+        if !modules.contains(&effect.id.module())
+            || registry.effect(effect.id) != Some(effect)
+            || effect.operations.is_empty()
+        {
+            return Err(unknown(effect.span));
+        }
+        for parameter in &effect.parameters {
+            charge(budget, 1, parameter.origin.primary_span())?;
+            let canonical = registry
+                .type_variable(parameter.id)
+                .ok_or_else(|| unknown(parameter.origin.primary_span()))?;
+            if !same_binders_charged(
+                std::slice::from_ref(canonical),
+                std::slice::from_ref(parameter),
+                budget,
+                parameter.origin.primary_span(),
+            )? || owners
+                .insert(parameter.id, LinkedBinderOwner::Effect(effect.id))
+                .is_some()
+            {
+                return Err(unknown(parameter.origin.primary_span()));
+            }
+        }
+        for (ordinal, operation) in effect.operations.iter().enumerate() {
+            charge(budget, 1, operation.span)?;
+            if operation.id.owner() != effect.id
+                || usize::try_from(operation.id.operation()) != Ok(ordinal)
+            {
+                return Err(unknown(operation.span));
+            }
+        }
     }
 
     for group in program.groups() {

@@ -652,8 +652,6 @@ pub enum ResolveReason {
     UnknownInterface,
     /// A nominal type or type parameter was used as an interface.
     InterfaceKind,
-    /// An effect parameter used a kind other than `Type`.
-    EffectParameterKind,
     /// An effect operation did not have one pure outer function arrow.
     EffectOperationShape,
     /// A source row or request names no effect declaration.
@@ -698,7 +696,6 @@ impl fmt::Display for ResolveReason {
             Self::TypeKind => "resolve.type-kind",
             Self::UnknownInterface => "resolve.unknown-interface",
             Self::InterfaceKind => "resolve.interface-kind",
-            Self::EffectParameterKind => "effect.parameter-kind",
             Self::EffectOperationShape => "effect.operation-shape",
             Self::UnknownEffect => "effect.unknown",
             Self::EffectKind => "effect.kind",
@@ -1935,13 +1932,6 @@ impl Resolver {
             })?;
         for parameter in &declaration.parameters {
             let resolved = self.allocate_type_variable(&parameter.name, parameter.kind.as_ref())?;
-            if resolved.kind != Kind::Type {
-                return Err(error(
-                    ResolveReason::EffectParameterKind,
-                    parameter.span,
-                    "effect parameters must have kind Type",
-                ));
-            }
             parameters.push(resolved);
         }
         Ok(parameters)
@@ -5111,6 +5101,7 @@ impl Resolver {
         self.expression_registry
             .as_ref()
             .and_then(|registry| registry.effect(effect))
+            .or_else(|| self.imported.effect(effect))
             .and_then(|declaration| {
                 declaration
                     .operations

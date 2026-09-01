@@ -3,9 +3,15 @@
 use std::{collections::HashMap, error::Error, fmt, io, path::PathBuf, sync::Arc};
 
 use crate::{
-    core::{UnvalidatedProgram, ValidatedProgram, ValidationError, validate_modules},
+    core::{
+        UnvalidatedProgram, ValidatedProgram, ValidationError, validate_effect_modules,
+        validate_modules,
+    },
     diagnostic::{Diagnostic, SourceLabel, compare_source_spans},
-    elaborate::{Elaborator, TypeError, check_module_with_budget, link_modules_with_budget},
+    elaborate::{
+        EffectElaborator, Elaborator, TypeError, check_module_with_budget,
+        checked_program_contains_effect_syntax, link_modules_with_budget,
+    },
     eval::{Evaluation, ObservedHeap, RuntimeFailure, Value, evaluate},
     evidence_validation::{
         EvidenceValidationFailure, ValidatedInterfaceProgram,
@@ -544,14 +550,17 @@ impl Error for FileFailure {}
 /// Returns a structured input, source-model, compiler, source-rejection, or
 /// runtime failure.
 pub fn run_path(configuration: RunConfiguration) -> Result<Observation, FileFailure> {
-    run_path_with_consumers(
+    run_path_with_consumers_internal(
         configuration,
+        &mut InterfaceConstraintBudget::default(),
         validate_interface_evidence_with_budget,
         validate_modules,
         evaluate,
+        true,
     )
 }
 
+#[cfg(test)]
 fn run_path_with_consumers<I, V, E>(
     configuration: RunConfiguration,
     interface_validator: I,
@@ -571,21 +580,54 @@ where
     ) -> Result<ValidatedProgram, ValidationError>,
     E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
 {
-    run_path_with_consumers_and_constraint_budget(
+    run_path_with_consumers_internal(
         configuration,
         &mut InterfaceConstraintBudget::default(),
         interface_validator,
         validator,
         evaluator,
+        false,
     )
 }
 
+#[cfg(test)]
 fn run_path_with_consumers_and_constraint_budget<I, V, E>(
     configuration: RunConfiguration,
     constraint_work: &mut InterfaceConstraintBudget,
     interface_validator: I,
     validator: V,
     evaluator: E,
+) -> Result<Observation, FileFailure>
+where
+    I: FnOnce(
+        ResolvedModuleProgram,
+        &mut InterfaceConstraintBudget,
+        &mut TypeWorkBudget,
+    ) -> Result<ValidatedInterfaceProgram, EvidenceValidationFailure>,
+    V: FnOnce(
+        UnvalidatedProgram,
+        &[&SourceFile],
+        &[(ModuleId, SourceId)],
+    ) -> Result<ValidatedProgram, ValidationError>,
+    E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
+{
+    run_path_with_consumers_internal(
+        configuration,
+        constraint_work,
+        interface_validator,
+        validator,
+        evaluator,
+        false,
+    )
+}
+
+fn run_path_with_consumers_internal<I, V, E>(
+    configuration: RunConfiguration,
+    constraint_work: &mut InterfaceConstraintBudget,
+    interface_validator: I,
+    validator: V,
+    evaluator: E,
+    select_effect_core: bool,
 ) -> Result<Observation, FileFailure>
 where
     I: FnOnce(
@@ -705,31 +747,6 @@ where
     let linked = link_modules_with_budget(checked, graph.entry(), constraint_work)
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::Pipeline)?;
-    let mut linked_type_work = TypeWorkBudget::default();
-    let (ty, type_display, unchecked): (IterativeTypeOwner, String, UnvalidatedProgram) = {
-        let validated_interfaces =
-            interface_validator(linked, constraint_work, &mut linked_type_work)
-                .map_err(PipelineFailure::EvidenceValidation)
-                .map_err(FileFailure::Pipeline)?;
-        let registry = Arc::clone(validated_interfaces.registry());
-        let mut elaborator = Elaborator::for_module_program(&validated_interfaces)
-            .map_err(TypeError::Internal)
-            .map_err(PipelineFailure::Typing)
-            .map_err(FileFailure::Pipeline)?;
-        let typed = elaborator
-            .synthesize_module_program(&validated_interfaces)
-            .map_err(PipelineFailure::Typing)
-            .map_err(FileFailure::Pipeline)?;
-        let ty = IterativeTypeOwner::new(typed.ty);
-        let type_display = registry.display_type(&ty);
-        let unchecked = elaborator
-            .finish(typed.node)
-            .map_err(TypeError::Internal)
-            .map_err(PipelineFailure::Typing)
-            .map_err(FileFailure::Pipeline)?;
-        ::std::mem::drop(validated_interfaces);
-        (ty, type_display, unchecked)
-    };
     let sources = graph
         .modules()
         .iter()
@@ -740,6 +757,60 @@ where
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
+    let mut linked_type_work = TypeWorkBudget::default();
+    let (ty, type_display, unchecked): (IterativeTypeOwner, String, UnvalidatedProgram) = {
+        let validated_interfaces =
+            interface_validator(linked, constraint_work, &mut linked_type_work)
+                .map_err(PipelineFailure::EvidenceValidation)
+                .map_err(FileFailure::Pipeline)?;
+        let registry = Arc::clone(validated_interfaces.registry());
+        if select_effect_core
+            && checked_program_contains_effect_syntax(&validated_interfaces, &mut linked_type_work)
+                .map_err(PipelineFailure::Typing)
+                .map_err(FileFailure::Pipeline)?
+        {
+            let mut elaborator = EffectElaborator::for_module_program(&validated_interfaces)
+                .map_err(TypeError::Internal)
+                .map_err(PipelineFailure::Typing)
+                .map_err(FileFailure::Pipeline)?;
+            let typed = elaborator
+                .synthesize_effect_module_program(&validated_interfaces)
+                .map_err(PipelineFailure::Typing)
+                .map_err(FileFailure::Pipeline)?;
+            let unchecked = elaborator
+                .finish(typed.node)
+                .map_err(TypeError::Internal)
+                .map_err(PipelineFailure::Typing)
+                .map_err(FileFailure::Pipeline)?;
+            let validated = validate_effect_modules(unchecked, &sources, &module_sources)
+                .map_err(PipelineFailure::Validation)
+                .map_err(FileFailure::Pipeline)?;
+            drop(validated);
+            return Err(FileFailure::Pipeline(PipelineFailure::Runtime(
+                RuntimeFailure::InvalidControlState,
+            )));
+        }
+        let mut elaborator = Elaborator::for_module_program(&validated_interfaces)
+            .map_err(TypeError::Internal)
+            .map_err(PipelineFailure::Typing)
+            .map_err(FileFailure::Pipeline)?;
+        let typed = if select_effect_core {
+            elaborator.synthesize_module_program_after_effect_scan(&validated_interfaces)
+        } else {
+            elaborator.synthesize_module_program(&validated_interfaces)
+        }
+        .map_err(PipelineFailure::Typing)
+        .map_err(FileFailure::Pipeline)?;
+        let ty = IterativeTypeOwner::new(typed.ty);
+        let type_display = registry.display_type(&ty);
+        let unchecked = elaborator
+            .finish(typed.node)
+            .map_err(TypeError::Internal)
+            .map_err(PipelineFailure::Typing)
+            .map_err(FileFailure::Pipeline)?;
+        ::std::mem::drop(validated_interfaces);
+        (ty, type_display, unchecked)
+    };
     finish_observation(
         ty,
         type_display,

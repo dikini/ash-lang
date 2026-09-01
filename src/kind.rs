@@ -20,14 +20,14 @@ use crate::{
     types::{
         EffectRow, InferenceVariableId, Kind, NominalTypeId, Type, TypeVariableId, TypeWorkBudget,
         charge_kind_descendants, charge_kind_with_charge, clone_arrows_with_budget,
-        clone_kind_with_budget, render_kind_with_budget, same_kind_with_budget,
-        same_kind_with_charge,
+        clone_kind_with_budget, render_kind_with_budget, same_effect_rows_with_charge,
+        same_kind_with_budget, same_kind_with_charge,
     },
 };
 
 static TYPE_KIND: Kind = Kind::Type;
 
-fn binder_kind_is_admitted(kind: &Kind, allow_effect_row: bool) -> bool {
+pub(crate) fn binder_kind_is_admitted(kind: &Kind, allow_effect_row: bool) -> bool {
     match kind {
         Kind::Type => true,
         Kind::EffectRow => allow_effect_row,
@@ -2354,13 +2354,24 @@ impl<'a> KindEnvironments<'a> {
                                 }
                             };
                             if let Type::EffectfulFunction(_, computation) = ty {
-                                if let Some(Type::EffectfulFunction(_, mirror)) = type_mirror
-                                    && computation.effects() != mirror.effects()
-                                {
-                                    return Err(KindFailure::internal(
-                                        span,
-                                        "a linked source computation row does not match its checked row",
-                                    ));
+                                if let Some(Type::EffectfulFunction(_, mirror)) = type_mirror {
+                                    let equal = same_effect_rows_with_charge(
+                                        computation.effects(),
+                                        mirror.effects(),
+                                        |work| budget.charge(work),
+                                    )
+                                    .map_err(|()| {
+                                        KindFailure::resource(
+                                            span,
+                                            "computation-row authentication exceeded its owning work budget",
+                                        )
+                                    })?;
+                                    if !equal {
+                                        return Err(KindFailure::internal(
+                                            span,
+                                            "a linked source computation row does not match its checked row",
+                                        ));
+                                    }
                                 }
                                 self.authenticate_effect_row_tail(
                                     computation.effects(),
@@ -3343,14 +3354,6 @@ fn check_effect<'a>(
 ) -> Result<DeclarationKindOutcome, KindFailure> {
     authenticate_owner_parameters(registry, &effect.parameters, budget)?;
     environments.install_owner_parameters(&effect.parameters, budget)?;
-    for parameter in &effect.parameters {
-        if parameter.kind != Kind::Type {
-            return Err(KindFailure::internal(
-                parameter.origin.primary_span(),
-                "an effect parameter must have kind Type",
-            ));
-        }
-    }
     for operation in &effect.operations {
         environments.expect_value_type(&operation.annotation, budget)?;
     }
