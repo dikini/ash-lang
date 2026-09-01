@@ -344,11 +344,15 @@ edge.
 When a global omits its parameter list, first occurrences in its value type
 come first, followed by first occurrences found only in its requirements. When
 an implementation omits its list, first occurrences across its complete head
-argument vector become its parameters. A method list is never implicit. Every omitted
-declaration kind annotation, and every binder introduced by an omitted global
-or implementation binder list, is fixed to `Type`. Ash does not infer a kind
-for those binders. This is the current phase-dependent language constraint, not
-a commitment against a later bounded declaration-local inference rule.
+argument vector become its parameters. A method list is never implicit. Every
+omitted declaration kind annotation and every binder introduced by an omitted
+implementation binder list is fixed to `Type`. An omitted global list
+discovers ordinary free type variables and effect-row-tail variables in their
+shared first-occurrence order. A name occurring only in ordinary type positions
+has kind `Type`; one occurring only as an effect-row tail has kind `EffectRow`;
+using the same name in both roles is invalid. Ash does not infer a function
+kind from use. This is the current phase-dependent language constraint, not a
+commitment against a later bounded declaration-local inference rule.
 
 The executable test `resolution_binder_policies_are_executable_and_ordered`
 checks written order, first-occurrence order, omitted kinds, phantom nominal

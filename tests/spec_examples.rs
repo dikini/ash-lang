@@ -341,7 +341,16 @@ const CORE_KIND_MODULE: &str = concat!(
     "main () = keep(Some(42))\n",
 );
 
-const PHASE_DEPENDENT_NO_KIND_INFERENCE: &str = "Every omitted declaration kind annotation, and every binder introduced by an omitted global or implementation binder list, is fixed to `Type`. Ash does not infer a kind for those binders. This is the current phase-dependent language constraint, not a commitment against a later bounded declaration-local inference rule.";
+const PHASE_DEPENDENT_NO_KIND_INFERENCE: &str = concat!(
+    "Every omitted declaration kind annotation and every binder introduced by an\n",
+    "omitted implementation binder list is fixed to `Type`. An omitted global list\n",
+    "discovers ordinary free type variables and effect-row-tail variables in their\n",
+    "shared first-occurrence order. A name occurring only in ordinary type positions\n",
+    "has kind `Type`; one occurring only as an effect-row tail has kind `EffectRow`;\n",
+    "using the same name in both roles is invalid. Ash does not infer a function\n",
+    "kind from use. This is the current phase-dependent language constraint, not a\n",
+    "commitment against a later bounded declaration-local inference rule.",
+);
 
 const EXPLICIT_KIND_RULE_FRAGMENTS: &[(&str, &str)] = &[
     (

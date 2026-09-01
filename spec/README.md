@@ -49,11 +49,15 @@ schemes, and their defining identities.
 Ash's monomorphic kind language contains `Type`, `EffectRow`, and
 right-associative function kinds such as `Type -> Type`. Declaration parameters
 may state their kinds.
-Every omitted declaration kind annotation, and every binder introduced by an
-omitted global or implementation binder list, is fixed to `Type`; Ash does not
-infer a function kind from use. This is a phase-dependent constraint, not a
-commitment against later bounded declaration-local kind inference. A type
-constructor or parameter may remain bare or partially applied when its
+Every omitted declaration kind annotation and every binder introduced by an
+omitted implementation binder list is fixed to `Type`. An omitted global
+binder list discovers ordinary free type variables and effect-row-tail
+variables in their shared first-occurrence order. A name occurring only in
+ordinary type positions has kind `Type`; one occurring only as an effect-row
+tail has kind `EffectRow`; using the same name in both roles is invalid. Ash
+does not infer a function kind from use. This is a phase-dependent constraint,
+not a commitment against later bounded declaration-local kind inference. A
+type constructor or parameter may remain bare or partially applied when its
 resulting kind satisfies the context that owns the type.
 
 An effect declaration defines one module-owned API with one or more operations.

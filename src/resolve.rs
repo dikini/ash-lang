@@ -646,7 +646,7 @@ pub enum ResolveReason {
     UnusedTypeParameter,
     /// A source type occurrence names no declaration.
     UnknownType,
-    /// An interface identity was used where an ordinary value type is required.
+    /// An uppercase type name has the wrong sort or incompatible type roles.
     TypeKind,
     /// An interface position names no interface declaration.
     UnknownInterface,
@@ -1931,7 +1931,8 @@ impl Resolver {
                 )
             })?;
         for parameter in &declaration.parameters {
-            let resolved = self.allocate_type_variable(&parameter.name, parameter.kind.as_ref())?;
+            let resolved =
+                self.allocate_type_variable(&parameter.name, parameter.kind.as_ref(), Kind::Type)?;
             parameters.push(resolved);
         }
         Ok(parameters)
@@ -2068,7 +2069,11 @@ impl Resolver {
                 )
             })?;
         for parameter in &declaration.parameters {
-            parameters.push(self.allocate_type_variable(&parameter.name, parameter.kind.as_ref())?);
+            parameters.push(self.allocate_type_variable(
+                &parameter.name,
+                parameter.kind.as_ref(),
+                Kind::Type,
+            )?);
         }
         let first_parameter = declaration.parameters.first().ok_or_else(|| {
             error(
@@ -2090,7 +2095,7 @@ impl Resolver {
         for method in &declaration.methods {
             let explicit = method.type_parameters.as_deref();
             let mut names = Vec::new();
-            let mut seen = HashSet::new();
+            let mut seen = HashMap::new();
             self.type_work
                 .charge(declaration.parameters.len())
                 .map_err(|()| {
@@ -2109,7 +2114,7 @@ impl Resolver {
                     )
                 })?;
             for parameter in &declaration.parameters {
-                seen.insert(parameter.name.text.as_str());
+                seen.insert(parameter.name.text.as_str(), None);
             }
             let declared = validate_method_type_parameters(
                 &declaration.parameters,
@@ -2126,7 +2131,8 @@ impl Resolver {
                 &mut names,
                 &mut self.type_work,
             )?;
-            let type_parameters = self.allocate_declaration_type_parameters(explicit, &names)?;
+            let type_parameters =
+                self.allocate_declaration_type_parameters(explicit, &names, false)?;
             methods.push(type_parameters);
         }
         Ok(PendingInterfaceTypeParameters {
@@ -2305,7 +2311,7 @@ impl Resolver {
 
         let declared =
             validate_explicit_type_parameters(implementation.type_parameters.as_deref())?;
-        let mut seen = HashSet::new();
+        let mut seen = HashMap::new();
         let mut head_names = Vec::new();
         if implementation.head.arguments.is_empty() {
             return Err(error(
@@ -2328,6 +2334,7 @@ impl Resolver {
         let head_parameters = self.allocate_declaration_type_parameters(
             implementation.type_parameters.as_deref(),
             &head_names,
+            false,
         )?;
 
         let mut prerequisite_only_names = Vec::new();
@@ -2346,7 +2353,7 @@ impl Resolver {
         }
         let prerequisite_only_parameters = prerequisite_only_names
             .into_iter()
-            .map(|name| self.allocate_type_variable(&name, None))
+            .map(|free| self.allocate_type_variable(&free.name, None, Kind::Type))
             .collect::<Result<Vec<_>, _>>()?;
 
         let mut method_groups = Vec::new();
@@ -6230,7 +6237,11 @@ impl Resolver {
         validate_explicit_type_parameters(Some(&declaration.parameters))?;
         let mut parameters = Vec::with_capacity(declaration.parameters.len());
         for parameter in &declaration.parameters {
-            parameters.push(self.allocate_type_variable(&parameter.name, parameter.kind.as_ref())?);
+            parameters.push(self.allocate_type_variable(
+                &parameter.name,
+                parameter.kind.as_ref(),
+                Kind::Type,
+            )?);
         }
         Ok(parameters)
     }
@@ -6805,10 +6816,11 @@ impl Resolver {
         &mut self,
         name: &SurfaceName,
         surface_kind: Option<&SurfaceKind>,
+        implicit_kind: Kind,
     ) -> Result<ResolvedTypeVariable, ResolveError> {
         let kind = match surface_kind {
             Some(kind) => surface_kind_to_kind(kind, &mut self.type_work),
-            None => self.type_work.charge(1).map(|()| Kind::Type),
+            None => self.type_work.charge(1).map(|()| implicit_kind),
         }
         .map_err(|()| {
             error(
@@ -6848,18 +6860,27 @@ impl Resolver {
     fn allocate_declaration_type_parameters(
         &mut self,
         explicit: Option<&[SurfaceTypeParameter]>,
-        free_names: &[SurfaceName],
+        free_names: &[FreeTypeName],
+        infer_effect_row_tails: bool,
     ) -> Result<Vec<ResolvedTypeVariable>, ResolveError> {
         let Some(explicit) = explicit else {
             return free_names
                 .iter()
-                .map(|name| self.allocate_type_variable(name, None))
+                .map(|free| {
+                    let kind = if infer_effect_row_tails && free.role == FreeTypeNameRole::EffectRow
+                    {
+                        Kind::EffectRow
+                    } else {
+                        Kind::Type
+                    };
+                    self.allocate_type_variable(&free.name, None, kind)
+                })
                 .collect();
         };
 
         let free = free_names
             .iter()
-            .map(|name| name.text.as_str())
+            .map(|free| free.name.text.as_str())
             .collect::<HashSet<_>>();
         let mut parameters = Vec::with_capacity(explicit.len());
         for parameter in explicit {
@@ -6874,7 +6895,11 @@ impl Resolver {
                 diagnostic.found = Some(parameter.name.text.clone());
                 return Err(diagnostic.into());
             }
-            parameters.push(self.allocate_type_variable(&parameter.name, parameter.kind.as_ref())?);
+            parameters.push(self.allocate_type_variable(
+                &parameter.name,
+                parameter.kind.as_ref(),
+                Kind::Type,
+            )?);
         }
         Ok(parameters)
     }
@@ -6893,7 +6918,7 @@ impl Resolver {
         };
         let declared = validate_explicit_type_parameters(explicit)?;
         let mut names = Vec::new();
-        let mut seen = HashSet::new();
+        let mut seen = HashMap::new();
         match &definition.kind {
             SurfaceDefinitionKind::Equational(equational) => {
                 collect_free_type_names(
@@ -6955,7 +6980,7 @@ impl Resolver {
                 }
             }
         }
-        self.allocate_declaration_type_parameters(explicit, &names)
+        self.allocate_declaration_type_parameters(explicit, &names, true)
     }
 
     fn resolve_expr(&mut self, expression: &SurfaceExpr) -> Result<ResolvedExpr, ResolveError> {
@@ -8196,13 +8221,50 @@ fn surface_kind_to_kind(root: &SurfaceKind, budget: &mut TypeWorkBudget) -> Resu
     rebuilt.pop().ok_or(())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FreeTypeNameRole {
+    Type,
+    EffectRow,
+}
+
+struct FreeTypeName {
+    name: SurfaceName,
+    role: FreeTypeNameRole,
+}
+
+fn retain_free_type_name<'a>(
+    name: &'a SurfaceName,
+    role: FreeTypeNameRole,
+    seen: &mut HashMap<&'a str, Option<FreeTypeNameRole>>,
+    output: &mut Vec<FreeTypeName>,
+) -> Result<(), ResolveError> {
+    match seen.entry(name.text.as_str()) {
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            entry.insert(Some(role));
+            output.push(FreeTypeName {
+                name: name.clone(),
+                role,
+            });
+            Ok(())
+        }
+        std::collections::hash_map::Entry::Occupied(entry) => match entry.get() {
+            Some(existing) if *existing != role => Err(error(
+                ResolveReason::TypeKind,
+                name.span,
+                "this parameter name is used both as an ordinary type and as an effect-row tail",
+            )),
+            None | Some(_) => Ok(()),
+        },
+    }
+}
+
 fn collect_free_type_names<'a>(
     root: &'a SurfaceType,
     nominals: &HashMap<String, NominalTypeId>,
     interfaces: &HashMap<String, InterfaceId>,
     declared: &HashSet<&str>,
-    seen: &mut HashSet<&'a str>,
-    output: &mut Vec<crate::surface::SurfaceName>,
+    seen: &mut HashMap<&'a str, Option<FreeTypeNameRole>>,
+    output: &mut Vec<FreeTypeName>,
     budget: &mut TypeWorkBudget,
 ) -> Result<(), ResolveError> {
     enum Task<'a> {
@@ -8230,9 +8292,7 @@ fn collect_free_type_names<'a>(
                         "free type discovery exceeded its work budget",
                     )
                 })?;
-                if seen.insert(&tail.text) {
-                    output.push(tail.clone());
-                }
+                retain_free_type_name(tail, FreeTypeNameRole::EffectRow, seen, output)?;
                 continue;
             }
         };
@@ -8248,11 +8308,10 @@ fn collect_free_type_names<'a>(
                 let SurfaceReference::Unqualified(name) = name else {
                     continue;
                 };
-                if (declared.contains(name.text.as_str())
-                    || (!nominals.contains_key(&name.text) && !interfaces.contains_key(&name.text)))
-                    && seen.insert(&name.text)
+                if declared.contains(name.text.as_str())
+                    || (!nominals.contains_key(&name.text) && !interfaces.contains_key(&name.text))
                 {
-                    output.push(name.clone());
+                    retain_free_type_name(name, FreeTypeNameRole::Type, seen, output)?;
                 }
             }
             SurfaceTypeKind::Application {
@@ -8263,9 +8322,8 @@ fn collect_free_type_names<'a>(
                     && (declared.contains(constructor.text.as_str())
                         || (!nominals.contains_key(&constructor.text)
                             && !interfaces.contains_key(&constructor.text)))
-                    && seen.insert(&constructor.text)
                 {
-                    output.push(constructor.clone());
+                    retain_free_type_name(constructor, FreeTypeNameRole::Type, seen, output)?;
                 }
                 work.push(Task::Slice(arguments.iter()));
             }
@@ -10967,7 +11025,7 @@ mod tests {
         let mut short =
             Resolver::with_type_work(ModuleId::new(0), TypeWorkBudget::with_limit(EXACT_WORK - 1));
         let error = short
-            .allocate_type_variable(&parameter.name, parameter.kind.as_ref())
+            .allocate_type_variable(&parameter.name, parameter.kind.as_ref(), Kind::Type)
             .expect_err("one missing record unit must reject the whole binder");
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(short.type_work.used(), EXACT_WORK - 1);
@@ -10976,7 +11034,7 @@ mod tests {
         let mut exact =
             Resolver::with_type_work(ModuleId::new(0), TypeWorkBudget::with_limit(EXACT_WORK));
         let retained = exact
-            .allocate_type_variable(&parameter.name, parameter.kind.as_ref())
+            .allocate_type_variable(&parameter.name, parameter.kind.as_ref(), Kind::Type)
             .expect("the exact kind-and-record budget should retain one binder");
         assert_eq!(exact.type_work.used(), EXACT_WORK);
         assert_eq!(exact.next_type_variable, 1);
@@ -12044,7 +12102,7 @@ mod tests {
         budget
             .charge(TYPE_WORK_LIMIT - 2)
             .expect("the fixture leaves two units");
-        let mut seen = HashSet::new();
+        let mut seen = HashMap::new();
         let mut output = Vec::new();
 
         let error = collect_free_type_names(
@@ -12064,11 +12122,11 @@ mod tests {
         assert_eq!(
             output
                 .iter()
-                .map(|name| name.text.as_str())
+                .map(|free| free.name.text.as_str())
                 .collect::<Vec<_>>(),
             ["A"]
         );
-        assert_eq!(seen, HashSet::from(["A"]));
+        assert_eq!(seen.get("A"), Some(&Some(FreeTypeNameRole::Type)));
     }
 
     #[test]

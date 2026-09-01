@@ -200,6 +200,30 @@ fn open_global_relay_and_local_higher_order_function_generalize_effect_rows() {
 }
 
 #[test]
+fn omitted_global_binders_generalize_and_instantiate_type_and_row_kinds_in_order() {
+    let checked = check_source(concat!(
+        "effect Read {\nread : Unit -> Int\n}\n\n",
+        "relay : (Unit -> A ! {| R}) -> A ! {| R}\n",
+        "relay action = action ()\n\n",
+        "read : Unit -> Int ! {Read}\n",
+        "read () = perform Read.read ()\n\n",
+        "used : Unit -> Int ! {Read}\n",
+        "used () = relay(read)\n",
+    ));
+
+    let relay = checked
+        .schemes()
+        .iter()
+        .find(|scheme| scheme.spelling == "relay")
+        .expect("the checked module should retain relay");
+    assert!(matches!(
+        relay.scheme.type_parameters.as_ref(),
+        [(_, Kind::Type), (_, Kind::EffectRow)]
+    ));
+    assert_eq!(latent_effects(&checked, "used").known().len(), 1);
+}
+
+#[test]
 fn annotated_output_row_supplies_the_lacks_fact_for_one_requested_effect() {
     let checked = check_source(concat!(
         "effect Choice {\nchoose : Unit -> Int\n}\n\n",

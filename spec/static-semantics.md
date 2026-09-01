@@ -180,7 +180,14 @@ global or eligible generalized-local parameter of kind `EffectRow`; a row
 variable cannot occur in an ordinary value position, nominal or interface
 argument, effect argument, or pattern.
 
-Every omitted declaration kind annotation, and every binder introduced by an omitted global or implementation binder list, is fixed to `Type`. Ash does not infer a kind for those binders. This is the current phase-dependent language constraint, not a commitment against a later bounded declaration-local inference rule.
+Every omitted declaration kind annotation and every binder introduced by an
+omitted implementation binder list is fixed to `Type`. An omitted global list
+discovers ordinary free type variables and effect-row-tail variables in their
+shared first-occurrence order. A name occurring only in ordinary type positions
+has kind `Type`; one occurring only as an effect-row tail has kind `EffectRow`;
+using the same name in both roles is invalid. Ash does not infer a function
+kind from use. This is the current phase-dependent language constraint, not a
+commitment against a later bounded declaration-local inference rule.
 
 ### Computation types and effect rows
 
@@ -1078,14 +1085,16 @@ requirements, and its order becomes scheme order. An extra explicit binder is
 `resolve.duplicate-type-parameter`.
 
 When the declaration omits the binder list, free uppercase variables become
-outer parameters in first-occurrence order: occurrences in the value type come
-first, followed by first occurrences found only in requirements. Every such
-implicit binder has kind `Type`. In either form, a requirement without a
-determination edge requires every free variable in its complete application to
-occur in the value type. For a determined interface, every free variable in
-the determinant key slice must occur in the value type; a dependent-only binder
-may remain quantified in the constrained scheme. Determination never
-propagates between requirements.
+outer parameters in first-occurrence order: ordinary type and effect-row-tail
+occurrences in the value type share that order, followed by first occurrences
+found only in requirements. A name occurring only in ordinary type positions
+has kind `Type`; one occurring only as an effect-row tail has kind `EffectRow`;
+using the same name in both roles is invalid. In either form, a requirement
+without a determination edge requires every free variable in its complete
+application to occur in the value type. For a determined interface, every free
+variable in the determinant key slice must occur in the value type; a
+dependent-only binder may remain quantified in the constrained scheme.
+Determination never propagates between requirements.
 Here `requirement_key` is the determinant slice for a determined interface and
 the whole ordered application otherwise.
 

@@ -349,12 +349,15 @@ Parameterized constructors use the same Core instantiation form as
 polymorphic value names.
 
 An explicit global binder list establishes abstraction order. A global that
-omits the list preserves implicit first-occurrence order, with every such
-binder fixed to kind `Type`. An eligible unannotated local anonymous-function
-binding abstracts only fixed-kinded inference variables that are not free in
-the incoming environment. Other local bindings remain monomorphic. A recursive
-global body checks its self-occurrences against the same rigid parameters;
-elaboration does not instantiate recursion at a different type.
+omits the list preserves the shared first-occurrence order of ordinary type and
+effect-row-tail variables. A name occurring only in ordinary type positions
+has kind `Type`; one occurring only as an effect-row tail has kind `EffectRow`;
+using the same name in both roles is invalid. An eligible unannotated local
+anonymous-function binding abstracts only fixed-kinded inference variables that
+are not free in the incoming environment. Other local bindings remain
+monomorphic. A recursive global body checks its self-occurrences against the
+same rigid parameters; elaboration does not instantiate recursion at a
+different type.
 
 Resolved global abstraction parameters retain their resolved identities.
 Implementation-method abstractions and eligible local generalization instead
