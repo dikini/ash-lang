@@ -1048,7 +1048,7 @@ pub(crate) fn effect_row_from_owned_parts_with_budget(
     Ok(EffectRow { known, tail })
 }
 
-fn compare_effect_instances_with_budget(
+pub(crate) fn compare_effect_instances_with_budget(
     left: &EffectInstance,
     right: &EffectInstance,
     budget: &mut TypeWorkBudget,

@@ -54,11 +54,11 @@ use crate::{
     types::{
         EffectRow, EffectRowError, EffectRowVariable, InferenceVariableId, IterativeTypeOwner,
         Kind, Type, TypeVariableId, TypeWorkBudget, charge_type_cells, clone_kind_with_budget,
-        clone_kinded_type_parameters_with_budget, discard_type_iteratively,
-        effect_row_from_owned_parts_with_budget, rebuild_effect_row_with_budget,
-        replace_type_iteratively, same_kind_with_budget, same_kinded_type_parameters_with_budget,
-        same_type, same_type_with_budget, substitute_type_and_row_variables_with,
-        substitute_type_variables_with,
+        clone_kinded_type_parameters_with_budget, compare_effect_instances_with_budget,
+        discard_type_iteratively, effect_row_from_owned_parts_with_budget,
+        rebuild_effect_row_with_budget, replace_type_iteratively, same_kind_with_budget,
+        same_kinded_type_parameters_with_budget, same_type, same_type_with_budget,
+        substitute_type_and_row_variables_with, substitute_type_variables_with,
     },
 };
 
@@ -5300,9 +5300,6 @@ impl Elaborator {
             // members. Re-canonicalize after every such solution before
             // deciding which members remain on either side.
             loop {
-                if left == right {
-                    return Ok(());
-                }
                 self.type_work
                     .charge(right.known().len().saturating_add(left.known().len()))
                     .map_err(|()| UnificationFailure::Resource)?;
@@ -5317,12 +5314,24 @@ impl Elaborator {
                     .map_err(|_| UnificationFailure::Resource)?;
                 exact_left.resize(left.known().len(), false);
                 for (left_index, left_member) in left.known().iter().enumerate() {
-                    if let Some((right_index, _)) = right
-                        .known()
-                        .iter()
-                        .enumerate()
-                        .find(|(index, member)| !exact_right[*index] && *member == left_member)
-                    {
+                    let mut matched = None;
+                    for (right_index, right_member) in right.known().iter().enumerate() {
+                        if exact_right[right_index] {
+                            continue;
+                        }
+                        if compare_effect_instances_with_budget(
+                            left_member,
+                            right_member,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| UnificationFailure::Resource)?
+                            == std::cmp::Ordering::Equal
+                        {
+                            matched = Some(right_index);
+                            break;
+                        }
+                    }
+                    if let Some(right_index) = matched {
                         exact_left[left_index] = true;
                         exact_right[right_index] = true;
                     }
@@ -5334,6 +5343,12 @@ impl Elaborator {
                         continue;
                     }
                     for right_member in right.known() {
+                        compare_effect_instances_with_budget(
+                            left_member,
+                            right_member,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| UnificationFailure::Resource)?;
                         if left_member.effect() != right_member.effect()
                             || left_member.arguments().len() != right_member.arguments().len()
                         {
@@ -5399,17 +5414,25 @@ impl Elaborator {
                 .map_err(|_| UnificationFailure::Resource)?;
             right_matched.resize(right.known().len(), false);
             for (left_index, left_member) in left.known().iter().enumerate() {
-                let Some((right_index, right_member)) =
-                    right
-                        .known()
-                        .iter()
-                        .enumerate()
-                        .find(|(index, right_member)| {
-                            !right_matched[*index]
-                                && left_member.effect() == right_member.effect()
-                                && left_member.arguments().len() == right_member.arguments().len()
-                        })
-                else {
+                let mut matched = None;
+                for (right_index, right_member) in right.known().iter().enumerate() {
+                    if right_matched[right_index] {
+                        continue;
+                    }
+                    compare_effect_instances_with_budget(
+                        left_member,
+                        right_member,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| UnificationFailure::Resource)?;
+                    if left_member.effect() == right_member.effect()
+                        && left_member.arguments().len() == right_member.arguments().len()
+                    {
+                        matched = Some((right_index, right_member));
+                        break;
+                    }
+                }
+                let Some((right_index, right_member)) = matched else {
                     continue;
                 };
                 for (left_argument, right_argument) in
@@ -5431,6 +5454,28 @@ impl Elaborator {
 
             match (left.tail(), right.tail()) {
                 (None, None) if left_only_is_empty && right_only_is_empty => Ok(()),
+                (Some(left_tail), Some(right_tail))
+                    if left_only_is_empty
+                        && right_only_is_empty
+                        && left_tail.variable() == right_tail.variable()
+                        && left_tail.lacks().len() == right_tail.lacks().len() =>
+                {
+                    for (left_member, right_member) in
+                        left_tail.lacks().iter().zip(right_tail.lacks())
+                    {
+                        if compare_effect_instances_with_budget(
+                            left_member,
+                            right_member,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| UnificationFailure::Resource)?
+                            != std::cmp::Ordering::Equal
+                        {
+                            return Err(UnificationFailure::Mismatch);
+                        }
+                    }
+                    Ok(())
+                }
                 (Some(left_tail), right_tail)
                     if left_only_is_empty
                         && matches!(left_tail.variable(), EffectRowVariable::Inference(_)) =>
@@ -5510,15 +5555,6 @@ impl Elaborator {
                     )
                     .map_err(map_type_error)?;
                     let shared = EffectRowVariable::inference(shared);
-                    let shared_row = rebuild_effect_row_with_budget(
-                        std::iter::empty(),
-                        Some(shared),
-                        left_tail.lacks().iter().chain(right_tail.lacks()),
-                        clone_type_with_budget,
-                        &mut self.type_work,
-                    )
-                    .map_err(|()| UnificationFailure::Resource)?;
-                    let shared_lacks = shared_row.tail().expect("the shared row is open").lacks();
                     let left_candidate = rebuild_effect_row_with_budget(
                         right
                             .known()
@@ -5526,7 +5562,7 @@ impl Elaborator {
                             .zip(&right_matched)
                             .filter_map(|(member, matched)| (!matched).then_some(member)),
                         Some(shared),
-                        shared_lacks,
+                        left_tail.lacks().iter().chain(right_tail.lacks()),
                         clone_type_with_budget,
                         &mut self.type_work,
                     )
@@ -5537,7 +5573,7 @@ impl Elaborator {
                             .zip(&left_matched)
                             .filter_map(|(member, matched)| (!matched).then_some(member)),
                         Some(shared),
-                        shared_lacks,
+                        left_tail.lacks().iter().chain(right_tail.lacks()),
                         clone_type_with_budget,
                         &mut self.type_work,
                     )
@@ -21802,6 +21838,88 @@ mod tests {
             .expect("the wide row owner thread should start")
             .join()
             .expect("wide row success and failure teardown should fit the small stack");
+    }
+
+    #[test]
+    fn row_unification_comparisons_are_charged_exactly_and_retry_disjoint_width() {
+        const WIDTH: u32 = 16;
+        const DEPTH: usize = 128;
+        let span = row_test_span("row-comparison-budget.ash");
+        let effect = |declaration| crate::types::EffectId::new(ModuleId::new(92), declaration);
+        let deep_argument = || {
+            (0..DEPTH).fold(Type::Int, |value, _| {
+                Type::Application(Box::new(Type::Unit), Box::new(value))
+            })
+        };
+        let equal = EffectRow::singleton(crate::types::EffectInstance::new(
+            effect(WIDTH * 2),
+            Box::new([deep_argument()]),
+        ));
+        let mut zonk_only = Elaborator::new();
+        zonk_only.type_work = TypeWorkBudget::unbounded();
+        zonk_only
+            .zonk_effect_row(&equal)
+            .expect("the first comparison operand should zonk");
+        zonk_only
+            .zonk_effect_row(&equal)
+            .expect("the second comparison operand should zonk");
+        let zonk_work = zonk_only.type_work.used();
+        let mut equality = Elaborator::new();
+        equality.type_work = TypeWorkBudget::unbounded();
+        equality
+            .unify_effect_rows(&equal, &equal)
+            .expect("equal deep row arguments should unify");
+        assert!(
+            equality.type_work.used() > zonk_work,
+            "semantic row comparison work is owned after both operand zonks",
+        );
+
+        let rows = |elaborator: &mut Elaborator| {
+            let left_tail = elaborator
+                .fresh_effect_row(span)
+                .expect("the left comparison tail should fit")
+                .tail()
+                .expect("the left comparison row should be open")
+                .variable();
+            let right_tail = elaborator
+                .fresh_effect_row(span)
+                .expect("the right comparison tail should fit")
+                .tail()
+                .expect("the right comparison row should be open")
+                .variable();
+            let row = |start, tail| {
+                let mut members = (start..start + WIDTH)
+                    .map(|declaration| {
+                        crate::types::EffectInstance::new(effect(declaration), Box::new([]))
+                    })
+                    .collect::<Vec<_>>();
+                members.push(crate::types::EffectInstance::new(
+                    effect(WIDTH * 2),
+                    Box::new([deep_argument()]),
+                ));
+                EffectRow::with_tail(members.into_boxed_slice(), tail, Box::new([]))
+            };
+            (row(0, left_tail), row(WIDTH, right_tail))
+        };
+        let mut calibration = Elaborator::new();
+        let (calibration_left, calibration_right) = rows(&mut calibration);
+        calibration.type_work = TypeWorkBudget::unbounded();
+        calibration
+            .unify_effect_rows(&calibration_left, &calibration_right)
+            .expect("the measured disjoint rows should unify through a shared tail");
+        let exact_work = calibration.type_work.used();
+
+        let mut retry = Elaborator::new();
+        let (left, right) = rows(&mut retry);
+        retry.type_work = TypeWorkBudget::with_limit(exact_work - 1);
+        assert_eq!(
+            retry.unify_effect_rows(&left, &right),
+            Err(UnificationFailure::Resource),
+        );
+        assert!(retry.row_inference_solutions.is_empty());
+        retry.type_work = TypeWorkBudget::with_limit(exact_work);
+        assert_eq!(retry.unify_effect_rows(&left, &right), Ok(()));
+        assert_eq!(retry.type_work.used(), exact_work);
     }
 
     #[test]
