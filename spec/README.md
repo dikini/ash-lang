@@ -5,13 +5,14 @@ describes exactly the implemented language and runtime behavior.
 
 ## Current Ash
 
-Ash is a pure, rank-1 language whose programs are acyclic graphs of passive
-source modules. Each `.ash` source file defines one unnamed module containing
+Ash is a rank-1 language whose programs are acyclic graphs of passive source
+modules. Each `.ash` source file defines one unnamed module containing
 imports followed by nominal type declarations, method-only interface
-declarations, anonymous implementation declarations, and global function
-definitions. Global signatures may state explicit interface constraints, and
-implementation heads may state explicit prerequisite constraints. A module has
-no result expression, runtime module value, or initialization.
+declarations, effect declarations, anonymous implementation declarations, and
+global function definitions. Global signatures may state explicit interface
+constraints and latent effect rows, and implementation heads may state explicit
+prerequisite constraints. A module has no result expression, runtime module
+value, or initialization.
 
 Imports expose only public facts. A private complete import places a
 dependency's public namespaces under a module alias. A private targeted import
@@ -45,8 +46,9 @@ later facades may select explicitly. Body-free summaries preserve canonical
 interface parameter and determination records, complete applications, method
 schemes, and their defining identities.
 
-Ash's monomorphic kind language contains `Type` and right-associative function
-kinds such as `Type -> Type`. Declaration parameters may state their kinds.
+Ash's monomorphic kind language contains `Type`, `EffectRow`, and
+right-associative function kinds such as `Type -> Type`. Declaration parameters
+may state their kinds.
 Every omitted declaration kind annotation, and every binder introduced by an
 omitted global or implementation binder list, is fixed to `Type`; Ash does not
 infer a function kind from use. This is a phase-dependent constraint, not a
@@ -54,15 +56,21 @@ commitment against later bounded declaration-local kind inference. A type
 constructor or parameter may remain bare or partially applied when its
 resulting kind satisfies the context that owns the type.
 
+An effect declaration defines one module-owned API with one or more operations.
+Function computations carry rows of exact, parameterized effect identities.
+`perform` requests an operation, and an exhaustive lexical `handle` removes one
+exact instance. Each selected clause must consume its non-escaping `resume`
+capability exactly once on every normally completing path.
+
 The source path selected for execution is the entry module. It declares exactly
 one local, monomorphic, unconstrained `main : Unit -> R`, where `R` is closed.
-After checking every dependency, Ash links the module definition groups and
-evaluates `main ()`.
+Its computation row is empty. After checking every dependency, Ash links the
+module definition groups and evaluates `main ()`.
 Imports, exports, aliases, and opacity are static access rules and do not remain
 as runtime operations. Interface identities, implementation identities, and
 their checking registries also erase. Selected evidence lowers to ordinary
 functions, applications, and erased type operations; evaluation has no runtime
-module object, implementation registry, or interface lookup.
+module object, implementation registry, interface lookup, or handler registry.
 
 Ordinary source value positions remain rank-1.
 No source annotation denotes a nested scheme. Source code cannot write
@@ -75,15 +83,19 @@ evidence requires it. Every other term slot and every runtime value remains
 monomorphic.
 
 Determination adds no associated-output syntax or projection, multiple or
-partial edges, effect row or handler authority, proposition or proof evidence,
-common universal evidence, or existential pack and unpack form. Those future
-features require separate source, Core, authentication, and dynamic rules.
+partial edges, proposition or proof evidence, common universal evidence, or
+existential pack and unpack form.
 
 Within a module, Ash provides global and explicit local recursion, rank-1
 polymorphism, nominal data, structural tuples, constructor values, typed
 patterns, exhaustive matches and equations, sequential bindings, method-only
-interfaces, explicit constraints, anonymous implementations, and pure
-expressions.
+interfaces, explicit constraints, anonymous implementations, and pure and
+effectful expressions with resume-required handlers.
+
+The effect kernel has no providers, hooks, resource regions, module or local
+`newtype`, checked discard, escaping or multi-shot resume, asynchronous
+execution, or dynamic loading. A linked nonempty effect row is a source
+rejection rather than an unhandled-operation runtime result.
 
 ## Module examples
 

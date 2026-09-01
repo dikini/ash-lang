@@ -32,6 +32,13 @@ validation authenticates their ordered parameter records, optional determinant
 positions, and complete applications. Determination metadata erases during Core
 synthesis as described below.
 
+Effect declarations also produce no runtime declaration node. A checked module
+summary retains each body-free effect identity, ordered fixed-kinded
+parameters, visibility, and ordered operation identities and types. `perform`,
+`handle`, handler clauses, and `resume` remain typed semantic operations with
+their exact effect, operation, handler, and resume-owner identities. A row tail
+or effect argument is zonked before a checked summary or Core node is retained.
+
 Resolution has already replaced source type spellings with stable nominal and
 type-parameter identities. Elaboration may introduce inference variables while
 checking, but it solves and removes every inference variable before constructing
@@ -61,7 +68,8 @@ match it with the source pattern in the function body.
 ## Module linking and entry generation
 
 After every module checks, linking combines the complete defining nominal,
-constructor, interface, and implementation registries of all admitted modules.
+constructor, interface, effect, operation, and implementation registries of all
+admitted modules.
 Each checked module contributes a definition group containing its source
 definitions, global schemes, implementation-method bodies, and filled
 structural evidence slots. Linking preserves that ownership rather than
@@ -171,9 +179,43 @@ phase.
 
 Elaboration generates an occurrence of the entry module's local `main` and
 applies it to unit. This application is the innermost body of the linked module
-groups. It has the closed result type established by the entry contract.
-Module linking introduces no initialization, lookup, or runtime module value;
-the result is one pure Core expression.
+groups. It has the closed result type and empty effect row established by the
+entry contract. Module linking introduces no initialization, lookup, runtime
+module value, handler registry, or provider selection.
+
+## Effect Core lowering
+
+Ash has two production Core dialects over one arena, program, validation, and
+transform substrate. Pure Core retains the uninhabited operation family and an
+empty row at every node. A linked program whose source contains checked effect
+operations lowers to Effect Core. Importing or declaring an unused effect does
+not by itself select Effect Core.
+
+Every Effect Core node retains its structural value type, exact computation
+row, and causal origin. Ordinary value and computation nodes reuse the shared
+Pure Core families. Effect Core adds only these operation-family nodes:
+
+- `Request(effect_instance, operation, operand)` evaluates the operand and has
+  the operand row union the requested exact instance;
+- `Handler(handler, body, effect_instance, clauses)` removes that instance from
+  the body row and retains the shared output row;
+- each clause retains its operation identity, checked irrefutable pattern,
+  body, handler identity, and one resume-owner identity; and
+- `Resume(handler, owner, value)` remains a clause-scoped Core operation rather
+  than a value or function.
+
+Effect and operation declarations remain authenticated registry facts. Core
+contains no provider choice or runtime effect registration. Lowering does not
+encode continuations as Rust closures or expose evaluator frames as Core data.
+The generated entry application is retained only with an empty row.
+
+When a polymorphic occurrence instantiates an `EffectRow` binder, the shared
+`TypeApplication` node retains one complete row argument alongside the ordinary
+type arguments. Their two ordered slices follow the abstraction's one ordered
+parameter vector by kind. Pure Core type applications retain no row arguments.
+Effect Core validation checks argument cardinality, kind, scope, and complete
+result substitution; transforms preserve or rebuild the same arguments before
+revalidation, and evaluation erases the type application directly.
 
 ## Interface-evidence lowering
 
@@ -453,15 +495,36 @@ group; it cannot silently treat the members as sequential bindings.
 ## Validation boundary
 
 Every semantic binder, pattern, and expression carries its type and causal
-source origin. After linked interface-evidence validation, the existing Core
-validator receives the produced program, its combined immutable nominal,
-constructor, canonical type-binder, and method-evidence authentication facts,
-the admitted source set, and each module's source identity. It independently
-synthesizes monotype kinds, checks schemes, and checks registry closure and
-identities, module and source provenance, binder scope, node and branch types,
-constructor ownership and payloads, pattern bindings, coverage, recursive
-groups, type-variable scope, type-operation substitution, origins, child
-handles, and reachability.
+source origin. After linked interface-evidence validation, the validator for
+the selected Core dialect receives the produced program, its combined immutable
+nominal, constructor, effect, operation, canonical type-binder, and method-
+evidence authentication facts, the admitted source set, and each module's
+source identity. Both dialects independently synthesize monotype kinds, check
+schemes, and check registry closure and identities, module and source
+provenance, binder scope, node and branch types, constructor ownership and
+payloads, pattern bindings, coverage, recursive groups, type-variable scope,
+type-operation substitution, origins, child handles, and reachability.
+
+Pure Core validation additionally requires an empty row at every node and
+rejects every effect operation. Effect Core validation independently checks:
+
+- every node's value type and exact row equation;
+- effect and operation ownership, type arguments, positional kinds, and
+  substituted operation types;
+- exhaustive handler clauses, exact-instance removal, pattern scope and type,
+  and one shared handler result and output row;
+- each resume's handler and owner, input and result types, output row,
+  exactly-once structural use, and barriers against escape into functions,
+  recursive members, or nested clauses;
+- handler nesting, dialect membership, provenance, child handles, and
+  reachability; and
+- an empty row at the linked entry application.
+
+A construction API does not authenticate these relations. Identity and folding
+transforms traverse the effect operation family, preserve or rebuild its
+authentication data, and return the result to the same independent validator.
+Effect nodes presented to Pure Core, or forged rows, identities, owners, or
+scope relations presented to Effect Core, fail before evaluation.
 
 For every resolved global with a nonempty outer binder list, validation
 requires its `TypeAbstraction` to be the immediate initializer of exactly one
@@ -506,8 +569,10 @@ One cumulative validator resource ledger covers the registry, envelope, graph,
 binder, node, term-scope, and type-scope passes. It is neither reset between
 passes nor supplemented by a separate kind allowance. Core validation applies
 once to the whole linked Core program, including every module group and the
-generated entry application. Failure of this boundary is an internal compiler
-failure, not a source-language typing result.
+generated entry application. Effect instances, rows, operations, clauses,
+resume owners, and handler scopes charge that same ledger before retention or
+traversal. Failure of this boundary is an internal compiler failure, not a
+source-language typing result.
 
 This requirement does not prescribe a Rust representation, storage strategy,
 or evaluator mechanism.

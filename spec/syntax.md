@@ -21,6 +21,7 @@ module_declaration ::=
     type_declaration
   | interface_declaration
   | implementation_declaration
+  | effect_declaration
   | global_definition ;
 
 import_declaration ::=
@@ -45,9 +46,16 @@ type_parameters ::=
   "<" type_parameter { "," type_parameter } ">" ;
 type_parameter ::= upper_identifier [ ":" kind ] ;
 kind ::= kind_atom [ "->" kind ] ;
-kind_atom ::= "Type" | "(" kind ")" ;
+kind_atom ::= "Type" | "EffectRow" | "(" kind ")" ;
 constructor_declaration ::=
   upper_identifier [ "(" type { "," type } ")" ] ;
+
+effect_declaration ::=
+  [ "pub" ] "effect" upper_identifier [ type_parameters ]
+  "{" line_end
+  effect_operation { line_end effect_operation } [ line_end ]
+  "}" ;
+effect_operation ::= identifier ":" type ;
 
 interface_declaration ::=
   [ "pub" ] "interface" upper_identifier interface_parameters
@@ -80,7 +88,7 @@ equation ::= identifier pattern { pattern } "=" expression ;
 inline_operational_global ::=
   [ "pub" ] "fn" identifier [ type_parameters ]
   "(" typed_pattern { "," typed_pattern } ")"
-  "->" type [ where_clause ] block ;
+  "->" computation_type [ where_clause ] block ;
 
 where_clause ::= "where" constraint { "," constraint } ;
 constraint ::= interface_application ;
@@ -102,10 +110,24 @@ match_expression ::=
   "match" expression "{" line_end
   match_arm { line_end match_arm } [ line_end ] "}" ;
 match_arm ::= pattern "=>" expression ;
+handler_expression ::=
+  "handle" expression "with" effect_instance
+  "{" line_end
+  handler_clause { line_end handler_clause } [ line_end ]
+  "}" ;
+handler_clause ::= identifier pattern "=>" expression ;
+resume_expression ::= "resume" expression ;
 
-expression ::= block | function_expression | match_expression | equality_expression ;
+expression ::=
+    block
+  | function_expression
+  | match_expression
+  | handler_expression
+  | resume_expression
+  | equality_expression ;
 equality_expression ::= additive_expression [ "==" additive_expression ] ;
-additive_expression ::= multiplicative_expression { "+" multiplicative_expression } ;
+additive_expression ::=
+  multiplicative_expression { "+" multiplicative_expression } ;
 multiplicative_expression ::=
   application_expression { "*" application_expression } ;
 application_expression ::= primary_expression { primary_expression } ;
@@ -115,9 +137,12 @@ primary_expression ::=
   | unit
   | unqualified_term_reference
   | qualified_term_reference
+  | perform_expression
   | parenthesized_expression ;
 unqualified_term_reference ::= identifier | upper_identifier ;
 qualified_term_reference ::= upper_identifier "." import_name ;
+perform_expression ::= "perform" operation_reference primary_expression ;
+operation_reference ::= effect_reference [ type_arguments ] "." identifier ;
 parenthesized_expression ::=
   "(" expression [ "," expression { "," expression } ] ")" ;
 
@@ -137,7 +162,8 @@ parenthesized_pattern ::=
 juxtaposed_constructor_pattern ::=
   constructor_reference ( pattern | juxtaposed_constructor_pattern ) ;
 typed_pattern ::= pattern ":" type ;
-type ::= atomic_type [ "->" type ] ;
+type ::= atomic_type | atomic_type "->" computation_type ;
+computation_type ::= type [ "!" effect_row ] ;
 atomic_type ::=
   "Int"
   | "Bool"
@@ -148,6 +174,15 @@ nominal_type_reference ::=
   upper_identifier | upper_identifier "." upper_identifier ;
 type_arguments ::= "<" type { "," type } ">" ;
 parenthesized_type ::= "(" type [ "," type { "," type } ] ")" ;
+effect_row ::=
+  "{"
+    [ effect_instance { "," effect_instance } [ "|" row_variable ]
+    | "|" row_variable ]
+  "}" ;
+effect_instance ::= effect_reference [ type_arguments ] ;
+effect_reference ::=
+  upper_identifier | upper_identifier "." upper_identifier ;
+row_variable ::= upper_identifier ;
 
 identifier ::= /[a-z_][a-zA-Z0-9_]*/ ;
 upper_identifier ::= /[A-Z][a-zA-Z0-9_]*/ ;
@@ -202,7 +237,7 @@ members, as in `List.Option` and `List.Some`. Qualification has exactly these
 two components; it does not repeat the dependency's path.
 
 An unmodified declaration is private. On a declaration, `pub` marks a global,
-nominal type, interface, or implementation as public. On an import, `pub`
+nominal type, interface, effect, or implementation as public. On an import, `pub`
 re-exports the selected channels. `pub opaque type` exports the nominal name
 without exporting its constructors. `opaque` is valid only between `pub` and
 `type`; constructors cannot carry individual modifiers. An equational global
@@ -222,6 +257,13 @@ provides no associated declaration, associated-output projection, default
 method, named implementation, general determination graph, or runtime
 dictionary form.
 
+An effect declaration has zero or more ordered parameters and one or more
+operations. Each operation writes one lowercase name and one type with exactly
+one outer function domain. That outer operation result has no effect-row
+annotation; the requested instance comes from the enclosing effect. An
+operation has no parameter list, requirement, visibility modifier, body,
+default, or associated declaration.
+
 A present method `type_parameters` list is nonempty by the existing production
 and uses the same optionally kinded `type_parameter` entries as other
 declarations. An absent list is syntactically distinct. Missing separators,
@@ -229,10 +271,13 @@ kinds, or the closing angle bracket are syntax failures; recovery does not
 publish a partial method binder list.
 
 Every declaration-level type binder uses `type_parameter`. Its optional kind
-annotation contains `Type`, a function kind, or a parenthesized kind. The
-spelling `Type` is contextual: it denotes the kind only inside a kind
-annotation and remains an ordinary `upper_identifier` elsewhere. For example,
-this complete entry module declares and uses a nominal type named `Type`:
+annotation contains `Type`, `EffectRow`, a function kind, or a parenthesized
+kind. Static semantics restricts `EffectRow` to complete global and eligible
+generalized-local binders and forbids it beneath a kind arrow. The spellings
+`Type` and `EffectRow` are contextual: they denote kinds only inside a kind
+annotation and remain ordinary `upper_identifier` spellings elsewhere. For
+example, this complete entry module declares and uses a nominal type named
+`Type`:
 
 ```ash
 type Type = Type
@@ -242,9 +287,9 @@ main () = Type
 ```
 
 Nominal declarations always write a parameter list when they have parameters.
-An interface always writes its nonempty parameter list. Either global presentation may
-place an optional parameter list after the global name, and an implementation
-may place one after `impl`. [Name
+An interface always writes its nonempty parameter list. Either global
+presentation may place an optional parameter list after the global name, and
+an implementation may place one after `impl`. [Name
 resolution](name-resolution.md#type-binder-identity-and-scope) defines the
 explicit and omitted-list binder policies.
 
@@ -275,6 +320,20 @@ checks each resulting application against its kinds. Source expressions have
 no explicit type abstraction or type-application form; `value<Type>` is not an
 expression.
 
+A function result may carry a row of exact effect instances and at most one row
+tail. Omitting `! effect_row` means the empty row. A row tail is one uppercase
+variable after `|`; name resolution and static semantics require it to denote an
+admitted `EffectRow` binder. Effect arguments use the same nonempty ordered
+`type_arguments` form as named types. Empty rows write `{}`, closed rows list
+instances, and open rows either append `| R` to known instances or write only
+`| R`.
+
+`perform` consumes one primary-expression operand. A non-primary operand must be
+parenthesized. A handler contains one or more clauses, each with one operation
+name, one pattern, and one expression body. `resume` consumes one expression;
+name resolution and static semantics restrict it to its owning operation
+clause.
+
 The executable test `syntax_local_recursive_group_example_is_executable`
 checks a complete entry module containing a two-member recursive group. The
 second function retains a reference back to the first without calling it, so
@@ -303,6 +362,18 @@ multiplication, addition, and equality. Application, multiplication, and
 addition associate to the left. Equality is non-associative, so `a == b == c`
 is invalid. Function arrows associate to the right, so `Int -> Int -> Int`
 means `Int -> (Int -> Int)`.
+
+`perform` has primary-expression precedence after consuming its single primary
+operand. `handle` and `resume` have the same loose prefix boundary as `match`:
+their operand extends to the handler delimiter or the end of the surrounding
+expression. A handled or resumed expression must be parenthesized to serve as
+an application or infix operand. Therefore `resume x + y` resumes with `x + y`,
+while `(resume x) + y` resumes with `x` and then adds `y`.
+
+`!` attaches to the complete computation codomain immediately to its left after
+parentheses are applied. Thus `A -> B -> C ! {E}` is a pure call from `A` that
+returns a function whose call from `B` may request `E`. In `A -> (B -> C) !
+{E}`, the call from `A` may request `E` while returning a pure function.
 
 Kind arrows also associate to the right, so `Type -> Type -> Type` means
 `Type -> (Type -> Type)`. Parentheses may instead group a kind on either side

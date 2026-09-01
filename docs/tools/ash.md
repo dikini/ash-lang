@@ -94,6 +94,25 @@ main () = double (increment 20)
 
 Its exact standard output is `42 : Int` followed by a newline.
 
+The executable test
+`handled_effect_prints_the_resumed_value_and_pure_entry_type` runs one handled
+request through the same command-line path:
+
+```ash
+effect Ask {
+ask : Int -> Int
+}
+
+main : Unit -> Int
+main () = handle (perform Ask.ask 1) with Ask {
+ask value => resume (value + 41)
+}
+```
+
+Its exact standard output is also `42 : Int` followed by a newline. Effect rows
+are checked computation requirements, not an additional success-output field;
+the executable prints the resulting value and its ordinary value type.
+
 Global functions have module-wide recursive scope. The executable test
 `tool_recursive_example_has_exact_cli_observation` runs this mutually recursive
 module, in which the earlier equational definition refers forward to the later
@@ -370,9 +389,18 @@ namespace reports `resolve.interface-kind`. These source failures identify the
 selector that established the rejection. An unavailable private or unselected
 implementation is reported without exposing that declaration's metadata.
 
-Entry failures include `entry.missing-main`, `entry.main-polymorphic`,
-`entry.main-domain`, `entry.main-open-result`, and
-`entry.main-constrained`.
+Entry failures are ordered as `entry.missing-main`, `entry.main-polymorphic`,
+`entry.main-domain`, `entry.main-effects`, `entry.main-open-result`, and
+`entry.main-constrained`. A nonempty effect row is a source rejection, so
+execution has no source-level unhandled-operation outcome.
+
+Effect declaration and resolution failures use `effect.operation-shape`,
+`effect.unknown`, `effect.kind`, `effect.duplicate`, and
+`effect.resume-outside-clause`. Effect-row and handler checking failures use
+`effect.row-union-ambiguous`, `effect.handler-missing-input`,
+`effect.handler-coverage`, `effect.handler-refutable-pattern`,
+`effect.resume-not-consumed`, `effect.resume-already-consumed`, and
+`effect.resume-capture`.
 
 Kind failures use `kind.not-applicable` when an applied type does not have a
 function kind, `kind.argument` when a type or interface argument has the wrong
@@ -422,6 +450,11 @@ Exhausting the graph-wide interface-and-constraint work budget reports
 `internal.resource.constraint-work` with status `2`. Invalid retained evidence
 reports an `evidence.validation.*` internal failure. Both are compiler
 failures, not runtime selection failures.
+
+The effect machine reports cumulative captured-control exhaustion as
+`runtime.captured-control-capacity`. Reaching an impossible request or resume
+state after validated Core is `runtime.invalid-control-state`. Both are
+runtime-internal status-`2` failures, not source outcomes.
 
 An output write or flush failure also exits with status `2` and attempts to
 report `internal.output-write` on standard error. Standard-output bytes accepted

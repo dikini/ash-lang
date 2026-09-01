@@ -86,7 +86,7 @@ fn accepts_a_private_main_declared_in_the_entry_module() {
 }
 
 #[test]
-fn rejects_effect_syntax_before_final_pure_core_and_evaluation() {
+fn evaluates_a_handled_effect_through_effect_core() {
     let tree = TempTree::create();
     let entry = tree.write(
         "entry.ash",
@@ -99,9 +99,10 @@ fn rejects_effect_syntax_before_final_pure_core_and_evaluation() {
         ),
     );
 
-    let failure = run(&entry).expect_err("effect syntax cannot enter retained pure Core");
-    assert_eq!(failure.reason_code(), "effect.core-unavailable");
-    assert!(!failure.is_source_rejection());
+    let observation = run(&entry).expect("a fully handled effect should run through Effect Core");
+
+    assert_eq!(observation.value_display(), "()");
+    assert_eq!(observation.ty(), &Type::Unit);
 }
 
 #[test]

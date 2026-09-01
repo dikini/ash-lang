@@ -1,18 +1,21 @@
 # Static Semantics
 
 Ash has `Int`, `Bool`, `Unit`, rigid type variables, structural tuples,
-parameterized nominal algebraic data types, and unary functions. A tuple
-contains at least two element types. Surface `domain -> codomain` denotes a
-term-function type. Source kinds contain `Type` and right-associative function
-kinds.
+parameterized nominal algebraic data types, unary functions, and effect rows. A
+tuple contains at least two element types. A function has a value domain and a
+computation codomain `A ! epsilon`, where `A` is a value type and `epsilon` is
+an effect row. Source kinds contain `Type`, `EffectRow`, and right-associative
+function kinds, subject to the binder restrictions below.
 
 Type equality is one shared rule. `Int`, `Bool`, and `Unit` equal themselves;
-tuples, term functions, and unary type applications compare structurally; type
+tuples, term functions and their computation codomains, and unary type
+applications compare structurally; type
 variables compare by binder identity; nominal constructors compare by stable
 declaration identity. Equal spelling or constructor shape does not make two
 nominal declarations equal. Interface requirements are constraints rather
 than monotypes. They do not participate in monotype equality or ordinary
-unification.
+unification. Effect rows are computation requirements rather than interface
+requirements and never select implementation evidence.
 
 The typing environment `GAMMA` maps resolved `BinderId` identities to rank-1
 constrained schemes. Interface methods do not have binder identities. The
@@ -47,17 +50,25 @@ The interface parameters remain free relative to this scheme and are owned by
 the enclosing interface. A method scheme never enters `GAMMA`, and no source
 occurrence can name it without instantiating every method parameter.
 
-The judgment `GAMMA |- expression ⇒ type` synthesizes a type, while
-`GAMMA |- expression ⇐ type` checks an expression against an expected type.
+The immutable effect registry `PHI` maps every accessible `EffectId` to its
+ordered fixed-kinded parameters, ordered operations, visibility, and
+provenance. Each operation record contains its stable `OperationId`, spelling,
+and one pure value-function type. `PHI` authenticates operation typing; it is
+not a provider environment or handler registry.
+
+The judgment `GAMMA |- expression ⇒ A ! epsilon` synthesizes a value type and
+effect row, while `GAMMA |- expression ⇐ A ! epsilon` checks an expression
+against an expected computation type.
 These judgments also consult the fixed method registry `MU` and record pending
 requirements on the exact constrained-term occurrences that create them. The
-ordinary rules omit `MU` and that structural output. The interface section
-defines the distinct method-occurrence rule, and the selection section defines
-how a definition closes the pending requirements.
+ordinary rules omit `MU`, `PHI`, and that structural output. The interface
+section defines the distinct method-occurrence rule, and the selection section
+defines how a definition closes the pending requirements.
 
 ## Kinds, monotypes, and schemes
 
-Four environments determine monotype kinds:
+Four environments determine value-type kinds, and `PHI` determines effect
+instance formation:
 
 - `DELTA` maps every in-scope resolved `TypeVariableId` to exactly one declared
   kind;
@@ -75,11 +86,13 @@ facts and retain their defining identities.
 
 The total synthesis judgment
 `DELTA; OMEGA; XI |- monotype => kind` assigns a kind to every well-formed
-monotype. `all_type` means that each listed monotype synthesizes `Type` under
-the supplied environments. The last two rules are owning checks: ordinary
-value positions require `Type`, while an interface constraint requires one
-complete argument per declared interface parameter and the corresponding kind
-at every position. Arity is checked before any positional kind.
+monotype. `PHI` is an ambient input used when synthesis reaches a computation
+codomain; the ordinary judgment omits it. `all_type` means that each listed
+monotype synthesizes `Type` under the supplied environments. The last two rules
+are owning checks: ordinary value positions require `Type`, while an interface
+constraint requires one complete argument per declared interface parameter and
+the corresponding kind at every position. Arity is checked before any
+positional kind.
 
 ```sequent
 family kind-synthesis:
@@ -116,7 +129,7 @@ family kind-synthesis:
 
   K-Function :=
     DELTA; OMEGA; XI |- domain => Type
-    DELTA; OMEGA; XI |- codomain => Type
+    DELTA; OMEGA; XI; PHI |- codomain computation ok
     ===>
     DELTA; OMEGA; XI |- Function(domain, codomain) => Type
 
@@ -159,7 +172,118 @@ codomain, term-binder type, or any other source monotype. A method scheme
 remains separate in `MU`; the elaboration specification defines its sole
 authenticated compiler-generated Core evidence position.
 
+`EffectRow` is valid only as the complete kind of a global parameter or an
+eligible generalized-local parameter. It cannot be the domain or codomain of a
+kind arrow. Nominal, interface, implementation, effect, and method parameter
+lists admit only their existing ordinary kinds. A row tail must resolve to a
+global or eligible generalized-local parameter of kind `EffectRow`; a row
+variable cannot occur in an ordinary value position, nominal or interface
+argument, effect argument, or pattern.
+
 Every omitted declaration kind annotation, and every binder introduced by an omitted global or implementation binder list, is fixed to `Type`. Ash does not infer a kind for those binders. This is the current phase-dependent language constraint, not a commitment against a later bounded declaration-local inference rule.
+
+### Computation types and effect rows
+
+An effect instance is one stable `EffectId` plus a complete ordered vector of
+type arguments. Its arguments must match the declaration's arity and positional
+kinds. Two instances are equal only when their identities and all zonked
+arguments are structurally equal. An effect row is an unordered idempotent set
+of exact instances with at most one open tail. Source order does not affect row
+equality or handler order. Rendering orders known members canonically by exact
+identity and structural arguments; that presentation order has no semantic
+effect.
+
+The following rules form effect instances, rows, and computation types.
+`distinct_exact` compares the resolved identity and all zonked arguments.
+`lacks(R)` is the set of instances known absent from the row variable `R`.
+
+```sequent
+family effect-row-formation:
+  WF-Effect-Instance :=
+    PHI(effect) = parameters, operations, visibility, provenance
+    length(arguments) = length(parameters)
+    for each corresponding (argument_i, parameter_i),
+      DELTA; OMEGA; XI |- argument_i => kind(parameter_i)
+    ===>
+    DELTA; OMEGA; XI; PHI |- effect<arguments> instance ok
+
+  WF-Closed-Effect-Row :=
+    for each member_i,
+      DELTA; OMEGA; XI; PHI |- member_i instance ok
+    distinct_exact(members)
+    ===>
+    DELTA; OMEGA; XI; PHI |- { members } row ok
+
+  WF-Open-Effect-Row :=
+    DELTA(row_variable) = EffectRow
+    for each member_i,
+      DELTA; OMEGA; XI; PHI |- member_i instance ok
+    distinct_exact(members)
+    members subset-of lacks(row_variable)
+    ===>
+    DELTA; OMEGA; XI; PHI |- { members | row_variable } row ok
+
+  WF-Computation :=
+    DELTA; OMEGA; XI |- value_type => Type
+    DELTA; OMEGA; XI; PHI |- effects row ok
+    ===>
+    DELTA; OMEGA; XI; PHI |- value_type ! effects computation ok
+```
+
+`WF-Effect-Instance` checks arity before positional kinds. The row rules reject
+a repeated written member as `effect.duplicate`, even though inferred row
+operations coalesce equal members. `WF-Open-Effect-Row` records that every
+written known member is absent from its tail. `WF-Computation` keeps rows out of
+ordinary value positions.
+
+Row equality ignores known-member order and multiplicity after inference. Open
+rows are equal only when their known sets, tail identity, and accumulated lacks
+facts are equal after substitution. Type substitution descends through every
+effect argument. Row substitution replaces a tail only with a row of kind
+`EffectRow`, unions the replacement's known members with the enclosing known
+members, and preserves all accumulated lacks facts. It rejects an occurs check
+or any replacement containing an instance forbidden by those facts.
+
+Row unification is kind-preserving first-order unification: it succeeds exactly
+when a substitution makes both rows equal without violating an occurs check or
+lacks fact. It aligns known members by exact instance identity and structurally
+unifies their arguments. It never equates distinct effect identities or invents
+a lacks fact.
+
+Write `epsilon_1 union epsilon_2` for partial inferred union. It coalesces equal
+known members. It succeeds for closed rows, and may retain one open tail only
+when substitution has made the tails identical or closed the other tail and
+every added known member is already absent from the retained tail. Two distinct
+unsolved tails, or a member not known absent from a retained tail, produce
+`effect.row-union-ambiguous`. An expected row may supply an existing lacks fact;
+union never strengthens a tail merely to make the operation succeed. Schemes
+retain no qualified row-union or membership constraints.
+
+Effect weakening permits a computation inferred as `A ! epsilon_1` to check as
+`A ! epsilon_2` when every requirement of `epsilon_1` is present in
+`epsilon_2` under the same tail constraints. Synthesis retains the least row
+established by the expression rules; weakening applies only while checking
+against an expected computation. Exact removal
+`epsilon remove E` removes only an explicitly established exact instance. Thus
+`{E | R} remove E = {| R}`; removing a different instance from a closed row is
+missing, and searching an unconstrained open tail is ambiguous. No rule removes
+an effect by spelling or API shape. Rows have no semantic order or
+multiplicity, effect subtyping or masking, or implicit removal. Weakening is a
+checking relation; it does not change a synthesized least row.
+
+Surface `A -> B` denotes `Function(A, B ! {})`. A written row changes only the
+complete computation codomain to which it attaches. Consequently,
+`A -> B -> C ! {E}` is a pure call from `A` returning a function whose call may
+request `E`, while `A -> (B -> C) ! {E}` may request `E` while returning a pure
+function.
+
+The executable tests
+`closed_rows_are_unordered_idempotent_exact_instance_sets`,
+`substitution_reaches_exact_arguments_and_preserves_row_lacks`,
+`open_row_union_requires_an_existing_lacks_fact`, and
+`exact_removal_does_not_remove_another_instance_or_search_an_unknown_tail`
+check the row algebra. `row_inference_unifies_exact_members_and_rejects_occurs`
+checks row unification and its occurs check.
 
 The executable test
 `static_semantics_kind_synthesis_and_interface_argument_are_executable` checks
@@ -235,6 +359,26 @@ bad value = value
 main : Unit -> Unit
 main () = ()
 ```
+
+### Row lifting for existing expression rules
+
+The expression rules below use one row-lifting convention where they retain a
+predecessor judgment without an explicit row. A literal, variable occurrence,
+constructor occurrence, or function creation has row `{}`. An ordinary strict
+form with evaluated expression children `e_1` through `e_n` has the partial
+union of their rows, accumulated in the existing left-to-right checking order.
+A match has the scrutinee row unioned with every arm-body row. A block has every
+initializer row unioned with its remainder row. A checking judgment also
+requires the synthesized row to weaken to the expected row. The value-type,
+pattern, coverage, and interface-obligation premises remain unchanged.
+
+Thus every later displayed `GAMMA |- e ⇒ A` abbreviates
+`GAMMA |- e ⇒ A ! effects(e)`, and every `GAMMA |- e ⇐ A` abbreviates checking
+against the computation expected at that site. The convention does not apply to
+application, operation request, handler, or resume; their row equations are
+stated explicitly. Partial union failure is
+`effect.row-union-ambiguous`. Union records requirements and does not license
+evaluation reordering.
 
 ## Primitive expressions
 
@@ -316,24 +460,35 @@ special call rule.
 ## Functions and application
 
 An anonymous function checks only when an expected function type supplies its
-parameter and result types. Application first synthesizes the function, then
-checks the argument against its domain.
+parameter and computation result. Function creation is pure; the body row is
+stored in the function's latent computation codomain. Application first
+synthesizes the function, then checks the argument against its domain, and
+unions both strict-child rows with that latent row.
 
 ```sequent
 family function-typing:
-  T-Function-Check :=
+  T-Effectful-Function-Check :=
     pattern ⇐ domain => bindings
     exhaustive([pattern], domain)
-    GAMMA, bindings |- body ⇐ codomain
+    GAMMA, bindings |- body ⇐ codomain ! body_effects
     ===>
-    GAMMA |- fn(pattern) { body } ⇐ Function(domain, codomain)
+    GAMMA |- fn(pattern) { body }
+      ⇐ Function(domain, codomain ! body_effects) ! {}
 
-  T-Apply :=
-    GAMMA |- function ⇒ Function(domain, codomain)
-    GAMMA |- argument ⇐ domain
+  T-Effectful-Apply :=
+    GAMMA |- function
+      ⇒ Function(domain, codomain ! call_effects) ! function_effects
+    GAMMA |- argument ⇐ domain ! argument_effects
+    result_effects
+      = function_effects union argument_effects union call_effects
     ===>
-    GAMMA |- function argument ⇒ codomain
+    GAMMA |- function argument ⇒ codomain ! result_effects
 ```
+
+`T-Effectful-Function-Check` preserves the existing pattern and coverage
+checks. `T-Effectful-Apply` preserves strict evaluation order even though its
+effect row is unordered. Any partial union failure follows the row-algebra rule
+above.
 
 An anonymous function normally checks from an expected function type. The one
 additional synthesis site is an unannotated local binding whose initializer is
@@ -544,23 +699,27 @@ Inference variables are compiler facts, not source types. Each inference
 variable is registered in `OMEGA` with one fixed monomorphic kind before it
 enters a type. Instantiating an outer scheme copies the corresponding declared
 binder kind. Unification compares primitive and nominal identities, descends
-structurally and injectively through unary applications, tuples, and term
-functions, and checks kinds before solving a variable. It may solve a
+structurally and injectively through unary applications, tuples, term
+functions, computation codomains, and effect arguments, and checks kinds before
+solving a variable. Row unification additionally applies the exact row algebra
+and lacks constraints above. It may solve a
 higher-kinded inference variable with a constructor or partial application of
 the same kind. It cannot infer a kind, change the variable's registered kind,
 synthesize a type lambda, abstract over mismatched application arguments, or
 recover a missing or conflicting registry entry.
 
-The occurs check visits both children of every unary application and rejects a
-solution containing the variable being solved with `type.infinite`. While
+The occurs check visits both children of every unary application, each
+computation row, and every effect argument, and rejects a solution containing
+the variable being solved with `type.infinite`. While
 checking one complete module, typing accumulates the substitution `THETA` and
 records each allocated inference variable's causal origin in allocation order.
 Successful module checking requires every allocated inference variable to
 occur in the domain of `THETA`. Otherwise typing selects the first unsolved
 identity in allocation order and reports `type.ambiguous` at its retained
 causal origin. This check includes discarded expressions and unused
-initializers. Zonking removes every inference variable before a checked
-summary, linked fact, or Core program is retained.
+initializers. Every value-type and row inference variable must be solved or
+generalized. Zonking removes every inference variable before a checked summary,
+linked fact, or Core program is retained.
 
 Global type parameters and generalized local parameters are rigid within their
 definitions. A recursive self-use receives the same rigid arguments rather
@@ -575,6 +734,11 @@ monomorphic kind, but the variables remain outer scheme binders and the scheme
 body must have kind `Type`. Source expressions cannot provide explicit type
 arguments. Method schemes remain registry facts that each occurrence
 instantiates; they do not make a polymorphic value available to source typing.
+Global signatures may explicitly quantify complete `EffectRow` binders, and
+the omitted global binder list discovers their first row-tail occurrences along
+with ordinary type occurrences. Eligible local anonymous-function bindings may
+generalize row variables not free in `GAMMA`, preserving their lacks facts.
+Other local bindings remain monomorphic.
 
 The executable test `static_semantics_rank_one_polymorphism_is_executable`
 checks parameterized data, one implicitly quantified global, and one eligible
@@ -682,6 +846,135 @@ module is rejected with `type.operator-operand`:
 main : Unit -> Int
 main () = true + 1
 ```
+
+## Effects
+
+An effect declaration has a possibly empty ordered parameter vector and a
+nonempty ordered operation vector. Its parameters have the ordinary fixed
+kinds already admitted for nominal declarations; none has kind `EffectRow`.
+Operation spellings are unique within the declaration. Each operation type has
+exactly one outer pure function arrow `P -> Q`, where `P` and `Q` are value
+types formed under the effect's parameters. An operation has no local
+parameters, requirements, body, or independently selectable visibility. A
+public effect exports the whole authenticated API; a private effect remains
+local.
+
+Resolution assigns one stable `EffectId` from the defining module and
+declaration order, and one stable `OperationId` from its owner and operation
+order. Static checking authenticates those identities and the ordered
+parameters and operation types in `PHI`. Equal spellings or signatures in two
+modules remain distinct identities.
+
+For an operation request, substituting the target effect instance's arguments
+into the declared operation type produces its value domain and result. The
+operand is evaluated first, and the request adds that exact instance to its
+row.
+
+```sequent
+T-Perform :=
+  operation_type(E<arguments>.op) = parameter -> result
+  GAMMA |- operand ⇐ parameter ! operand_effects
+  request_effects = operand_effects union { E<arguments> }
+  ===>
+  GAMMA |- perform E<arguments>.op operand ⇒ result ! request_effects
+```
+
+`T-Perform` neither selects a handler nor names a provider. If an open operand
+row does not already exclude the requested instance, inferred union is
+ambiguous; checking may use a lacks fact already present in its expected row.
+
+A handler targets one exact well-kinded instance and contains exactly one
+clause for every operation of that effect, in any source order. Each clause
+pattern checks against the substituted operation domain and must be
+irrefutable. Handling removes the target from the body row. Requirements of
+other identities remain, while requirements introduced by clause evaluation,
+including a same-instance request made directly by a clause, enter the output
+row.
+
+For an operation `op_i : P_i -> Q_i`, the clause receives bindings from a
+`P_i` pattern and a fresh structural resume capability
+`resume(Q_i, A, epsilon_out)`. Every clause checks against the handler's value
+type and shared output row.
+
+```sequent
+T-Handle :=
+  GAMMA |- body ⇒ A ! ({ E<arguments> } union rho)
+  clauses cover each operation of E exactly once
+  for each op_i : P_i -> Q_i,
+    GAMMA, bindings(pattern_i : P_i);
+      resume(Q_i, A, epsilon_out)
+      |- clause_i ⇐ A ! epsilon_out, consumes-resume-once
+  rho subset-of epsilon_out
+  ===>
+  GAMMA |- handle body with E<arguments> { clauses }
+    ⇒ A ! epsilon_out
+
+T-Resume :=
+  active-resume = resume(Q, A, epsilon_out)
+  GAMMA |- value ⇐ Q ! value_effects
+  value_effects subset-of epsilon_out
+  ===>
+  GAMMA; active-resume |- resume value
+    ⇒ A ! epsilon_out, consumes-resume
+```
+
+`T-Handle` chooses the least `epsilon_out` satisfying the body remainder and
+every direct clause requirement. Effect weakening lets a clause with fewer
+requirements check against that shared row. Ordinary completion of the handled
+body passes its `A` value through; there is no source return clause.
+`T-Resume` checks the resumed value against the selected operation result,
+consumes the capability, and gives the resumed computation the handler's result
+contract.
+
+This complete handler discharges `Cell`, so `main` has a pure computation
+codomain and evaluates to `42`:
+
+```ash
+effect Cell {
+    read : Unit -> Int
+    write : Int -> Unit
+}
+
+main : Unit -> Int
+main () = handle (perform Cell.read ()) with Cell {
+    read ignored => resume 42
+    write value => resume ()
+}
+```
+
+Resume consumption is a structural dataflow judgment with states `available`
+and `consumed`. A clause starts in `available` and every normally completing
+path must finish in `consumed`. Sequential evaluation passes the outgoing state
+to the next expression. A match checks its scrutinee first, gives each arm the
+same resulting state, and requires equal outgoing states from all arms. A
+form with no resume occurrence otherwise preserves its incoming state. A
+`resume` first checks its value expression under the incoming state, then
+requires that result to remain `available` and changes it to `consumed`. Use in
+`consumed` is `effect.resume-already-consumed`, and a normally completing clause
+left in `available` is `effect.resume-not-consumed`. Divergence before a
+syntactic resume remains ordinary divergence; this structural judgment does
+not claim termination or convert divergence into discard.
+
+Anonymous-function bodies, recursive members, and nested handler clauses are
+barriers for an enclosing resume capability. An occurrence beyond one of those
+barriers is `effect.resume-capture`; a nested handler clause receives only its
+own capability. Resolution rejects `resume` outside an operation clause as
+`effect.resume-outside-clause`. A capability has no source type or binder and
+cannot be placed in a tuple, constructor, argument, result, local binding,
+scheme, or stored function body.
+
+The executable test `public_effect_identity_survives_facade_reexport` checks
+effect declaration and summary identity. The tests
+`closed_handler_discharges_exact_effect_and_keeps_main_pure`,
+`strict_children_and_branches_union_rows_before_exact_discharge`, and
+`handlers_forward_other_instances_remove_exactly_and_reintroduce_direct_requests`
+check request, strict union, forwarding, exact removal, and clause
+reintroduction. `resume_usage_accepts_exactly_once_in_every_match_branch` and
+`resume_usage_rejects_zero_double_branch_and_capture` check structural
+consumption and barriers. `written_duplicate_effect_row_has_exact_reason_code`
+checks `effect.duplicate`, while
+`effect_examples_have_exact_observations_and_reasons` checks the complete
+handled example plus `entry.main-effects` and `effect.resume-not-consumed`.
 
 ## Interfaces and constrained schemes
 
@@ -1281,10 +1574,11 @@ main () = measure(Some(1))
 An equational global signature must expose at least as many arrow layers as
 each clause has patterns. The patterns receive those domains in order, and the
 body checks against the remaining codomain. An inline operational header
-supplies its domain and result directly. One typed parameter gives that domain;
-multiple typed parameters combine into one tuple domain. Each presentation
-contributes one rank-1 constrained scheme. All local global schemes form
-`GAMMA_G` before any ordinary global or implementation method body is checked.
+supplies its domain and computation result directly. One typed parameter gives
+that domain; multiple typed parameters combine into one tuple domain. Each
+presentation contributes one rank-1 constrained scheme. All local global
+schemes form `GAMMA_G` before any ordinary global or implementation method body
+is checked.
 Imported schemes come from immutable summaries of direct dependencies.
 
 For these rules, `close_and_select` traverses the named obligation sequence in
@@ -1302,14 +1596,14 @@ family global-typing:
     patterns ⇐ domains => bindings
     useful(previous_clauses, patterns, domains)
     GAMMA, bindings; abstracts; current; effective
-      |- body ⇐ codomain, obligations
+      |- body ⇐ codomain ! effects, obligations
     ===>
     GAMMA; abstracts; current; effective |-clause name patterns = body
-      ⇐ Function(domains, codomain), obligations
+      ⇐ Function(domains, codomain ! effects), obligations
 
   T-Equational-Global :=
     checked_signature = forall parameters. requirements => definition_type
-    definition_type = Function(domains, codomain)
+    definition_type = Function(domains, codomain ! effects)
     abstracts = ordered abstract evidence for requirements
     current = none
     effective = module's effective implementation environment
@@ -1326,8 +1620,10 @@ family global-typing:
       ⇒ name : checked_signature, selections
 
   T-Operational-Global :=
-    checked_signature = forall parameters. requirements => Function(domain, codomain)
-    definition = fn name(header_pattern : domain) -> codomain where requirements { body }
+    checked_signature
+      = forall parameters. requirements => Function(domain, codomain ! effects)
+    definition
+      = fn name(header_pattern : domain) -> codomain ! effects where requirements { body }
     abstracts = ordered abstract evidence for requirements
     current = none
     effective = module's effective implementation environment
@@ -1335,7 +1631,7 @@ family global-typing:
     header_pattern ⇐ domain => bindings
     exhaustive([header_pattern], domain)
     GAMMA, bindings; abstracts; current; effective
-      |- body ⇐ codomain, obligations
+      |- body ⇐ codomain ! effects, obligations
     close_and_select(abstracts, current, effective, empty_active, obligations)
       = selections
     ===>
@@ -1362,20 +1658,22 @@ pattern and one tuple domain. Singleton exhaustiveness requires that pattern to
 be irrefutable.
 
 Module checking receives resolved identities and headers. Import admission
-first authenticates immutable body-free nominal, binder, scheme, interface, and
-implementation facts. It rejects a duplicate or mismatched canonical binder,
-an invalid nominal-kind derivation, an unbound type variable, or any kind-invalid
-imported type as an internal dependency-summary failure. An alias, facade,
-opacity boundary, transitive route, or dependency diamond cannot recompute a
-defining kind.
+first authenticates immutable body-free nominal, binder, scheme, effect,
+interface, and implementation facts. It rejects a duplicate or mismatched
+canonical binder, an invalid nominal-kind derivation, an unbound type variable,
+or any kind-invalid imported type or effect instance as an internal
+dependency-summary failure. An alias, facade, opacity boundary, transitive
+route, or dependency diamond cannot recompute a defining kind or effect
+identity.
 
 After resolution allocates all local nominal and parameter identities, kind
 checking derives and freezes every local nominal constructor kind and every
-canonical local interface parameter vector and determinant record before
-entering declaration-order checking. It then checks constructor payloads, global signatures, interface
-methods, implementation heads, and prerequisites in deterministic dependency,
+canonical local effect and interface parameter vector and interface determinant
+record before entering declaration-order checking. It then checks constructor
+payloads, effect operations, global signatures, interface methods,
+implementation heads, and prerequisites in deterministic dependency,
 declaration, binder, and type traversal order. No body or public summary can
-observe a partially admitted kind registry.
+observe a partially admitted kind or effect registry.
 
 The remaining static stages check interface declarations and admit
 implementation headers, build and check the effective implementation
@@ -1391,10 +1689,12 @@ family module-and-program-typing:
     imported kinded facts authenticate from direct dependency summaries
     allocate all local nominal and declaration-parameter identities
     XI = imported nominal kinds plus derived local nominal kinds
+    PHI = authenticated imported effects plus checked local effects
     IOTA = imported interface parameter vectors and determinant positions
       plus pre-frozen local interface parameter vectors and determinant positions
     for each local constructor payload, DELTA; empty_OMEGA; XI |- value payload ok
     GAMMA_D = checked kinded schemes imported from direct dependency summaries
+    each local effect satisfies the declaration checks above
     for each local interface, |-interface interface ok
     admitted_impls = admitted local implementation headers
     selected_impls = explicitly selected implementation facts from dependency summaries
@@ -1420,7 +1720,7 @@ family module-and-program-typing:
       summaries(direct_dependencies_i) |-module module_i ⇒ checked_module_i, summary_i
     checked_program = checked_modules in dependency order
     main is a local checked scheme in entry
-    main is monomorphic Function(Unit, result_type) with no requirements
+    main is monomorphic Function(Unit, result_type ! {}) with no requirements
     closed(result_type)
     ===>
     |-program checked_program, entry ⇒ result_type
@@ -1439,13 +1739,13 @@ variable or relationship is invalid.
 `freeze_module_and_public` constructs the returned checked module from
 `checked_definitions` and derives its body-free checked summary in one atomic
 publication after the complete module succeeds. Any failure publishes neither
-result. Public local declarations and implementations retain the facts
-established by their owning judgments. The summary retains public
-kinds and the hidden kind and identity closure required by public schemes,
-constructors, interfaces, ordered parameters and determinant positions,
-ordered method binders and bodies, complete implementation heads,
-prerequisites, and selected evidence. Publicly selected name and
-implementation re-exports preserve the
+result. Public local declarations, effects, and implementations retain the facts
+established by their owning judgments. The summary retains public kinds,
+effects and operations, and the hidden kind and identity closure required by
+public schemes, constructors, effects, interfaces, ordered parameters and
+determinant positions, ordered method binders and bodies, complete
+implementation heads, prerequisites, and selected evidence. Publicly selected
+name and implementation re-exports preserve the
 checked facts and defining identities from their dependency summary while
 adding the current public spelling or authorization hop. Any import admission,
 kind, header, overlap, membership, body, inference-closure, or selection failure
@@ -1466,11 +1766,15 @@ neither validation nor synthesis selects implementations again.
 `T-Program` checks each module after all its dependencies. The entry must
 declare exactly one local `main`; an imported `main` cannot satisfy the
 premise. Its checked scheme must have no type parameters, domain `Unit`, a
-closed result, and no requirements. Entry failures have this order: missing
-local `main`, polymorphic scheme, wrong domain, open result, then constrained
-scheme. The closed `result_type` is the type observed for the whole program,
-and `main` need not be public. Every evidence obligation in a well-shaped
-`main` body must therefore select concrete evidence at its occurrence.
+closed result, no requirements, and an empty latent effect row. The linked
+entry must preserve that empty row. Entry failures have this order: missing
+local `main`, polymorphic scheme, wrong domain, nonempty row, open result, then
+constrained scheme. A nonempty row is `entry.main-effects`; no later boundary
+reclassifies it. This insertion preserves the relative order of the predecessor
+entry-shape failures. The closed `result_type` is the type observed for the
+whole program, and `main` need not be public. Every evidence obligation in a
+well-shaped `main` body must therefore select concrete evidence at its
+occurrence.
 
 Semicolons in these judgments separate semantic fields and are not source
 punctuation. Resolution has already ensured global-name freshness and
@@ -1497,6 +1801,18 @@ checking owns missing or extra arguments as `interface.argument-count` before
 kind checking owns an arity-correct positional failure. Interface admission
 owns an invalid partition as `interface.determination-parameter` and an
 incomplete method seed as `interface.method-parameter`.
+
+Lexing owns the reserved effect keywords. Parsing owns malformed effect
+declarations, rows, requests, handlers, clauses, and resume forms. Resolution
+owns unknown effects or operations, namespace and visibility failures, stable
+identity assignment, row-tail scope, and `resume` outside a clause. Effect
+instance arity precedes positional kind checking. Kind checking owns an invalid
+effect argument, row tail, or forbidden use of `EffectRow`. Row formation owns
+a duplicate written member and an unsatisfied lacks fact. Ordinary expression
+typing owns operation operand and latent-row failures. Handler checking owns
+target membership, clause coverage and patterns, the shared result and output
+rows, and resume consumption and barriers. Entry checking owns a nonempty
+linked entry row.
 
 Implementation requirement pairs, visibility, head, prerequisite, coverage,
 orphan, and termination failures belong to header admission. Effective-
@@ -1527,9 +1843,11 @@ by static checking.
 
 Within one source unit, causal precedence is:
 
-1. parsing and recovery;
-2. name resolution;
-3. interface-application arity, then positional argument kinds;
+1. parsing and recovery, including effect forms;
+2. name resolution, including effect identities, row-tail scope, and resume
+   scope;
+3. complete application arity, then positional argument kinds, followed by
+   effect-row formation;
 4. determination partition admission;
 5. method-binder and method-kind checks, then method seed and function shape;
 6. implementation prerequisites in current-then-earlier source order with
@@ -1537,12 +1855,12 @@ Within one source unit, causal precedence is:
    determination coverage, orphan, decrease, and privacy;
 7. effective-environment pair coherence;
 8. implementation method membership and bodies;
-9. per-occurrence ordinary unification, unresolved-key ambiguity, atomic
-   improvement and dependent conflict, remaining dependent ambiguity,
-   full-application selection, active-goal cycle detection, and unsatisfied
-   evidence; and
-10. whole-module method ambiguity and publication, then summary admission,
-    linking, elaboration, and Core validation.
+9. per-occurrence ordinary and row unification, effect expression and handler
+   checking, unresolved-key ambiguity, atomic improvement and dependent
+   conflict, remaining dependent ambiguity, full-application selection,
+   active-goal cycle detection, and unsatisfied evidence; and
+10. whole-module inference closure and publication, entry checking, summary
+    admission, linking, elaboration, and Core validation.
 
 An earlier failure prevents publication to later boundaries. Existing
 predecessor diagnostics within one listed family retain their internal order
@@ -1572,6 +1890,16 @@ retained selection work. Existing type-inference, Core-construction, and Core-
 validation budgets remain separate, and the Core budgets begin only after
 linked interface-evidence validation succeeds.
 
+Effect syntax charges the existing syntax ledger. Effect and operation facts,
+effect instances, computation codomains, row variables, row members, and lacks
+facts charge the type-work ledger of the stage that visits or retains them.
+Row equality, substitution, unification, union, weakening, and exact removal
+charge each visited member, pending comparison, and lacks relation before the
+work or retention occurs. Effect summaries, linked facts, and Core validation
+charge their existing owning ledgers; they do not introduce a separate effect
+budget. Exhaustion publishes no partial row, checked module, summary, or Core
+program.
+
 Kind traversal, cloning, equality, hashing, rendering, substitution,
 unification, matching, summary admission, validation, and disposal use
 iteration or explicit bounded work stacks. Resolved kind checking,
@@ -1590,8 +1918,8 @@ charges one comparison unit in the traversal's owning ledger. A failed
 operation publishes no partial checked fact or summary.
 
 These ledgers are bounded compiler-resource policy. They do not add runtime kind
-values or evaluator work, and this specification transition does not change
-evaluation behavior or make a resource ceiling part of Ash value semantics.
+values or evaluator work, alter effect evaluation, or make a resource ceiling
+part of Ash value semantics.
 
 Ash has no kind polymorphism, general higher-rank source values, explicit
 source term type application, type lambdas, higher-order unification, broad
@@ -1606,6 +1934,6 @@ interface-specific Core mechanism. Nominal declarations may refer to
 themselves and to other nominal declarations in the same module. Recursive
 global visibility does not cross a module boundary. The interface evidence
 family is not effect-handler or provider authority, proof or proposition
-evidence, common universal evidence, or an existential package. Effects,
-proofs, and existentials require their own future source, Core,
-authentication, and dynamic rules; none is inferred from determination.
+evidence, common universal evidence, or an existential package. An effect row
+is a computation requirement, and a lexical handler interprets only its exact
+effect instance; neither is inferred from interface determination.

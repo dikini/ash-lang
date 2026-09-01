@@ -46,6 +46,17 @@ const TREE_PRESENTATIONS_MODULE: &str = "type Tree =\n    Tip(Int)\n    | Fork(T
 const HIGHER_ORDER_CONSTRUCTOR_MODULE: &str = "type Wrapped =\n    Wrap(Int)\n\nfn build(make : Int -> Wrapped) -> Wrapped {\n    make 42\n}\n\nmain : Unit -> Int\nmain () = match build Wrap {\n    Wrap(value) => value\n}\n";
 const CYCLIC_STREAM_MODULE: &str = "type Stream =\n    Next(Int, Stream)\n\nmain : Unit -> Stream\nmain () = {\n    let rec ones : Stream = Next(1, ones)\n    ones\n}\n";
 const RANK_ONE_POLYMORPHISM_MODULE: &str = "type Option<A> =\n    None\n    | Some(A)\n\nid : A -> A\nid value = value\n\nmain : Unit -> (Option<Int>, Bool)\nmain () = {\n    let local = fn(value) {\n        value\n    }\n    (id(Some(42)), local(false))\n}\n";
+const EFFECT_MODULE: &str = concat!(
+    "effect Cell {\n",
+    "    read : Unit -> Int\n",
+    "    write : Int -> Unit\n",
+    "}\n\n",
+    "main : Unit -> Int\n",
+    "main () = handle (perform Cell.read ()) with Cell {\n",
+    "    read ignored => resume 42\n",
+    "    write value => resume ()\n",
+    "}\n",
+);
 
 const MAIN_MODULE: &str = "main : Unit -> Int\nmain () = 42\n";
 const SIBLING_ENTRY_MODULE: &str =
@@ -625,6 +636,33 @@ fn exact_last_range(source: &str, needle: &str) -> (u32, u32) {
 fn overview_main_application_example_is_executable() {
     assert_observation("main.ash", MAIN_MODULE, "42", "Int");
     assert_documented("README.md", MAIN_MODULE);
+}
+
+#[test]
+fn effect_examples_have_exact_observations_and_reasons() {
+    assert_observation("effect-positive.ash", EFFECT_MODULE, "42", "Int");
+    assert_documented("spec/static-semantics.md", EFFECT_MODULE);
+
+    let nonempty_entry = concat!(
+        "effect Choice {\nchoose : Unit -> Int\n}\n",
+        "main : Unit -> Int ! {Choice}\n",
+        "main () = perform Choice.choose ()\n",
+    );
+    assert_eq!(
+        run("effect-entry-row.ash", nonempty_entry)
+            .expect_err("an entry effect must be handled")
+            .reason_code(),
+        "entry.main-effects",
+    );
+
+    let unconsumed_resume =
+        EFFECT_MODULE.replace("read ignored => resume 42", "read ignored => 42");
+    assert_eq!(
+        run("effect-resume-required.ash", &unconsumed_resume)
+            .expect_err("a handler clause must consume its resume capability")
+            .reason_code(),
+        "effect.resume-not-consumed",
+    );
 }
 
 #[test]

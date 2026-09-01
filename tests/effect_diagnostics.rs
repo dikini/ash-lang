@@ -5,7 +5,9 @@ use std::{
 };
 
 use ash::{
-    elaborate::{ElaborationFailure, Elaborator, TypeContext, TypeError, TypeReason, check_module},
+    elaborate::{
+        EffectElaborator, ElaborationFailure, TypeContext, TypeError, TypeReason, check_module,
+    },
     module::{ModuleRoots, load_module_graph},
     resolve::{ResolveModuleError, ResolveReason, resolve_module},
     resolved::{ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind, ResolvedModule},
@@ -150,6 +152,30 @@ fn resume_outside_a_handler_clause_is_rejected_by_resolution() {
 }
 
 #[test]
+fn written_duplicate_effect_row_has_exact_reason_code() {
+    let fixture = TempModule::write(concat!(
+        "effect Cell {\nread : Unit -> Int\n}\n\n",
+        "duplicate : Unit -> Unit ! {Cell, Cell}\n",
+        "duplicate () = ()\n\n",
+        "main : Unit -> Unit\nmain () = ()\n",
+    ));
+    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
+        .expect("the duplicate-row fixture should load");
+    let module = graph
+        .modules()
+        .iter()
+        .find(|module| module.id() == graph.entry())
+        .expect("the graph should retain its entry");
+    let ResolveModuleError::Resolution(error) =
+        resolve_module(module, &[]).expect_err("a written duplicate row should be rejected")
+    else {
+        panic!("the duplicate row should retain a resolution diagnostic")
+    };
+
+    assert_eq!(error.diagnostic().reason.to_string(), "effect.duplicate");
+}
+
+#[test]
 fn handler_coverage_patterns_and_exact_input_have_stable_diagnostics() {
     let cases = [
         (
@@ -253,15 +279,17 @@ fn annotation_and_open_union_failures_are_stable_and_poison_partial_elaboration(
     let ResolvedExprKind::Perform(request) = &handler.body.kind else {
         panic!("the poisoning fixture should resolve a request");
     };
-    let mut elaborator = Elaborator::for_resolved_expression(&resolved, expression)
+    let mut elaborator = EffectElaborator::for_resolved_expression(&resolved, expression)
         .expect("the poisoning fixture should reserve its binders");
     let prior = elaborator
         .synthesize(&request.operand, &TypeContext::new())
         .expect("the independent request operand should synthesize");
-    assert!(matches!(
-        elaborator.synthesize(expression, &TypeContext::new()),
-        Err(TypeError::Source(diagnostic)) if diagnostic.reason == TypeReason::HandlerCoverage
-    ));
+    match elaborator.synthesize(expression, &TypeContext::new()) {
+        Err(TypeError::Source(diagnostic)) => {
+            assert_eq!(diagnostic.reason, TypeReason::HandlerCoverage)
+        }
+        result => panic!("expected handler coverage after prior synthesis, found {result:?}"),
+    }
     assert!(matches!(
         elaborator.finish(prior.node),
         Err(ElaborationFailure::InvalidState)

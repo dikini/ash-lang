@@ -39,22 +39,22 @@ select the first reported failure deterministically.
 
 A complete import binds the dependency's public namespaces under its uppercase
 alias. It does not copy declarations or change their identities. Public globals,
-nominal types, interfaces, methods, and constructors are available through
-qualified occurrences such as `List.map`, `List.Option`, `List.Equal`,
-`List.equal`, and `List.Some`. A qualified occurrence must use an alias bound by
-an import in the same module. A complete import is private and selects no
-implementation facts.
+nominal types, interfaces, effects, methods, operations, and constructors are
+available through qualified occurrences such as `List.map`, `List.Option`,
+`List.Equal`, `List.State`, `List.State.get`, `List.equal`, and `List.Some`. A
+qualified occurrence must use an alias bound by an import in the same module. A
+complete import is private and selects no implementation facts.
 
 A targeted name item binds only the selected public spelling as an unqualified
 name. An `as` clause changes the local spelling without changing the imported
 identity. One name item considers the term namespace, the shared
-nominal-type/interface name namespace, and the constructor namespace. If a
-public nominal type or interface and a constructor share the selected uppercase
-spelling, the item imports both exported declarations; constraint, type,
-expression, and pattern syntax still distinguish their uses. A public method
-may be targeted independently of its interface, and an interface may be
-targeted without importing any method spelling. A rename changes the local
-spelling in every namespace selected by that item.
+nominal-type/interface/effect name namespace, and the constructor namespace. If
+a public nominal type, interface, or effect and a constructor share the selected
+uppercase spelling, the item imports both exported declarations; constraint,
+type, effect, expression, and pattern syntax still distinguish their uses. A
+public method may be targeted independently of its interface, and an interface
+may be targeted without importing any method spelling. A rename changes the
+local spelling in every namespace selected by that item.
 
 A targeted implementation item has the form `impl Interface`. Resolution uses
 the uppercase spelling in the dependency's public interface namespace and
@@ -70,19 +70,23 @@ facts available only in the importing module. A public import must be targeted.
 It creates the same local bindings and implementation availability, then stages
 each selected name under its local spelling and each selected implementation
 fact for the module's checked public summary. Re-exporting a name preserves its
-original global binder, nominal, constructor, interface, or method identity.
-Re-exporting an implementation preserves its original `ImplId`, checked head,
+original global binder, nominal, constructor, interface, effect, method, or
+operation identity. Re-exporting an implementation preserves its original
+`ImplId`, checked head,
 prerequisites, method identities, and defining method binders. A facade creates
 no forwarding declaration or implementation.
 
 The module-level term namespace contains global functions, interface methods,
-and constructors. Interface spellings occupy the nominal-type name namespace,
-although an interface does not denote an ordinary value type. Module aliases
-occupy a distinct syntactic role but may not share their file-wide spelling
-with another alias, targeted binding, or local module declaration. Imported
+and constructors. Interface and effect spellings occupy the nominal-type name
+namespace, although neither denotes an ordinary value type. Operations remain
+inside their owning effect and do not enter the module-level term namespace.
+Module aliases occupy a distinct syntactic role but may not share their
+file-wide spelling with another alias, targeted binding, or local module
+declaration. Imported
 globals, methods, and constructors may not conflict in the expression
-namespace, and imported nominal types and interfaces may not conflict in their
-shared type-name namespace. A second import or later module declaration never
+namespace, and imported nominal types, interfaces, and effects may not conflict
+in their shared uppercase namespace. A second import or later module
+declaration never
 silently shadows an imported file-wide binding. Block-local binders retain
 their ordinary lexical shadowing behavior.
 
@@ -126,9 +130,10 @@ implementation closure.
 Resolution uses each already checked dependency's immutable export summary.
 The summary supplies public local and re-exported names under their selected
 spellings, checked constrained rank-1 schemes with kinded binders, accessible
-constructor facts, the public implementation closure with authorization
-routes, and hidden kind, identity, or interface-shape facts required to close
-those public facts. The compiler produces this body-free summary only after
+constructor and effect-operation facts, the public implementation closure with
+authorization routes, and hidden kind, identity, interface-shape, or
+effect-signature facts required to close those public facts. The compiler
+produces this body-free summary only after
 checking the complete module; Ash source does not declare it. It contains no
 dependency body, implementation body, forwarding declaration, or mutable
 dependency scope. Importing a scheme does not infer or generalize it again.
@@ -143,6 +148,11 @@ For each public method scheme, admission also authenticates the complete
 method-parameter set, written order, method owner, kinds, body scope, identity,
 and provenance. A dependent checks from that body-free fact without importing
 the interface or implementation body.
+
+For each public effect, admission authenticates its defining module, ordered
+parameters, `EffectId`, ordered operation signatures, and `OperationId` values.
+A dependent preserves those facts without importing an effect body or creating
+a local identity.
 
 A public constrained global, public implementation, or re-exported fact may
 refer to declarations defined by an earlier module. The summary retains the
@@ -207,7 +217,7 @@ The missing selector, not the implementation declaration, owns the absence
 from the entry's effective environment. Adding `impl Equal` to the targeted
 list makes that fact available without changing the two name bindings.
 
-Imports are installed in source order. Nominal types, interfaces,
+Imports are installed in source order. Nominal types, interfaces, effects,
 implementations, and globals share one interleaved local declaration order.
 Resolution allocates declaration identities before resolving bodies, and
 allocates local type-variable identities in that declaration order as
@@ -221,6 +231,8 @@ declaration order:
 - an `InterfaceId` combines the defining `ModuleId` with the interface
   declaration;
 - a `MethodId` combines its `InterfaceId` with method declaration order;
+- an `EffectId` combines the defining `ModuleId` with effect declaration order;
+- an `OperationId` combines its `EffectId` with operation declaration order;
 - an `ImplId` combines the defining `ModuleId` with the anonymous
   implementation declaration;
 - an `ImplMethodId` combines its `ImplId` with the implemented `MethodId`;
@@ -229,13 +241,21 @@ declaration order:
 - each implementation method receives a hidden `BinderId` qualified by its
   defining module.
 
+Aliases, targeted renames, imports, and re-exports preserve `EffectId` and
+`OperationId`. An effect instance is the exact pair of one `EffectId` and its
+ordered type arguments; equal source spellings or separately declared effects
+do not make instances equal. Effect visibility is whole-API visibility: a
+public effect exposes all of its operation signatures, while a private effect
+exposes none. An operation cannot be imported or renamed independently of its
+owner.
+
 Aliases, targeted renames, and alternate routes never participate in these
-identities. Every interface, method, implementation, implementation method,
-requirement, and hidden implementation-method binder is allocated before a
-global or implementation-method body is resolved. An implementation method
-head resolves its spelling to the interface's `MethodId`; it does not introduce
-a lexical term binding. The hidden binder names the checked method body for
-later compiler phases, not for Ash source.
+identities. Every interface, method, effect, operation, implementation,
+implementation method, requirement, and hidden implementation-method binder is
+allocated before a global or implementation-method body is resolved. An
+implementation method head resolves its spelling to the interface's `MethodId`;
+it does not introduce a lexical term binding. The hidden binder names the
+checked method body for later compiler phases, not for Ash source.
 
 An interface application is valid only in a constraint or implementation head.
 It retains the complete ordered argument vector. Arity and positional kinds are
@@ -252,6 +272,12 @@ with lowercase terms or constructors in their distinct syntactic namespaces.
 These conflicts use `resolve.duplicate-type`, `resolve.duplicate-global`, or
 `resolve.import-conflict` according to the declarations involved.
 
+A local effect conflicts with a nominal type, interface, effect, targeted
+uppercase binding, or module alias of the same spelling. Two operations in one
+effect cannot share a spelling. Operations do not conflict with module-level
+lowercase terms because operation references resolve through their owning
+effect.
+
 ## Type binder identity and scope
 
 The defining resolved binder record owns the spelling, source origin, and
@@ -259,15 +285,18 @@ canonical kind of each `TypeVariableId`. A type occurrence retains that
 identity instead of copying an independently authoritative kind. Resolution
 allocates source-origin type-variable identities from one module-wide sequence
 in declaration source order, then in binder encounter order within each
-declaration. Interleaving a nominal type, interface, implementation, or global
+declaration. Interleaving a nominal type, interface, effect, implementation, or
+global
 therefore does not regroup its binders by declaration family. Free type-name
 candidates later rejected by the interface method or implementation
 prerequisite rules retain the same encounter order, but their allocation does
 not make them valid binders.
 
-Nominal parameters use their written set and order and may be phantom. An
-interface has a nonempty ordered written parameter vector. A kind annotation
-fixes its binder's kind; an omitted annotation fixes it at `Type`.
+Nominal and effect parameters use their written set and order and may be
+phantom. Effect parameters scope over all operation signatures in their
+declaration and cannot have kind `EffectRow`. An interface has a nonempty
+ordered written parameter vector. A kind annotation fixes its binder's kind;
+an omitted annotation fixes it at `Type`.
 
 For an interface declaration, binder encounter order starts with the interface
 parameters in written order, then visits methods in declaration order and each
@@ -288,6 +317,13 @@ that complete head set; a variable
 that is unlisted and occurs only in a prerequisite remains
 `impl.prerequisite-variable`. Listing such a variable does not add it to the
 head's free-variable set and instead makes that explicit binder unused.
+
+A row tail resolves only to a global parameter or eligible generalized-local
+parameter of kind `EffectRow`. Explicit global parameters state that kind;
+omitted global parameters follow the existing first-occurrence policy across
+the complete computation type and requirements. A row-tail occurrence does not
+resolve as an ordinary value type, nominal argument, interface argument, or
+pattern type.
 
 An absent method parameter list binds no method-local parameter.
 A present method parameter list is an ordered bijection with the method type's
@@ -545,6 +581,15 @@ spelling cannot occur twice in one pattern. Match-arm binders are visible only
 in that arm body. Equation-pattern binders are visible only in their clause
 body. A local `let` pattern contributes its binders to the later block
 remainder, not to its initializer.
+
+Each handler clause receives one hidden `ResumeId` owned by that clause. The
+clause's operation pattern and resume capability scope only over its body;
+`resume` outside such a scope is `effect.resume-outside-clause`. A nested
+handler's handled expression remains in the outer clause scope, while each of
+the nested handler's clauses receives its own resume scope and cannot use the
+outer capability. Nested functions and recursive members cannot capture a
+resume capability; static semantics owns the non-escape and exactly-once
+checks.
 
 Forward references exist only among globals declared in one module and members
 of one explicit local recursive group. An ordinary `let` does not see itself or

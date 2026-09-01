@@ -6,7 +6,10 @@ fresh for one evaluation and maps numeric locations to tuples, completed
 constructors, uninitialized recursive data slots, or aliases. Tuple elements
 and constructor payloads are runtime values. The environment maps resolved term
 identities to runtime values. The continuation records the remaining strict
-work.
+work, including ordered lexical handler boundaries. A selected operation moves
+one suffix of that continuation into a clause-owned captured continuation. The
+suffix is moved, not copied. Its clause boundary records whether the unique
+resume capability still owns that captured control or has consumed it.
 
 Runtime values are arbitrary-precision integers, Booleans, unit, lexical
 functions, payload-constructor functions, or heap locations. A function
@@ -19,10 +22,11 @@ runtime values, do not extend the environment, and allocate no heap cells.
 
 ## Initial configuration
 
-Elaboration produces one linked pure Core expression: dependency-ordered
+Elaboration produces one validated linked Core expression: dependency-ordered
 recursive global groups around the generated application of the entry module's
-local `main` to unit. Evaluation starts with that expression as control, a
-fresh empty heap and environment, and an empty continuation:
+local `main` to unit. Static checking has already established an empty entry
+effect row. Evaluation starts with that expression as control, a fresh empty
+heap and environment, and an empty continuation:
 
 ```sequent
 E-Program-Start :=
@@ -33,11 +37,11 @@ E-Program-Start :=
 ```
 
 `linked_program` is the dependency-ordered groups around `main ()` described in
-[Elaboration](elaboration.md). The second premise requires the independent
-whole-program validation boundary before evaluation. Neither premise performs
-module loading at runtime. The ordinary recursive-binding and application rules
-enter the linked groups and call `main`. Imports have no initialization step,
-and modules are not runtime values.
+[Elaboration](elaboration.md). The second premise requires independent
+whole-program validation before evaluation. Neither premise performs module
+loading at runtime. The ordinary recursive-binding and application rules enter
+the linked groups and call `main`. Imports have no initialization step, and
+modules are not runtime values.
 
 ## Type erasure
 
@@ -369,6 +373,101 @@ over Boolean values. The left rules propagate a step in the left operand. The
 right rules apply only after the left operand is an integer value. The value
 rules compute the primitive result.
 
+## Effect handlers and resume
+
+`HANDLER(handler, instance, clauses, environment)` is an ordered lexical
+continuation boundary. `REQUEST(operation)` and `RESUME(handler, owner)` are
+ordinary strict frames for their operands. `CLAUSE(handler, owner, state)` is
+the selected clause boundary; its state is either `live(captured)` or
+`consumed`. The captured value owns the selected handler boundary and all
+intervening continuation entries up to the request. It contains no source
+value and cannot escape the clause.
+
+Entering a handler evaluates its body with a new innermost boundary. Ordinary
+completion removes that boundary and passes the value outward:
+
+```sequent
+family handler-boundary-steps:
+  E-Handle-Enter :=
+    ===>
+    CONFIG(heap, environment, handle body with instance { clauses }, continuation) -> CONFIG(heap, environment, body, HANDLER(handler, instance, clauses, environment) :: continuation)
+
+  E-Handle-Return :=
+    ===>
+    CONFIG(heap, environment_value, value, HANDLER(handler, instance, clauses, handler_environment) :: continuation) -> CONFIG(heap, environment_value, value, continuation)
+```
+
+The static handler identity determines `handler`. Its clauses are exhaustive
+for `instance`, so ordinary body return and operation selection are the only
+reachable ways to leave the boundary.
+
+A request first evaluates its one operand. Once that operand is a value,
+`select_nearest` searches outward through continuation boundaries for the
+nearest handler whose exact effect identity and zonked type arguments equal the
+operation's instance. It returns the matching clause, the handler's saved
+environment, an owner identity, the moved segment through that boundary, and
+the continuation outside it:
+
+```sequent
+family request-steps:
+  E-Perform-Operand :=
+    ===>
+    CONFIG(heap, environment, perform operation operand, continuation) -> CONFIG(heap, environment, operand, REQUEST(operation) :: continuation)
+
+  E-Request-Select :=
+    select_nearest(continuation, instance(operation)) = clause, handler_environment, handler, owner, captured, outer
+    clause = operation pattern => body
+    match(heap, operand_value, pattern) = bindings
+    clause_environment = extend(handler_environment, bindings)
+    ===>
+    CONFIG(heap, environment_value, operand_value, REQUEST(operation) :: continuation) -> CONFIG(heap, clause_environment, body, CLAUSE(handler, owner, live(captured)) :: outer)
+```
+
+The move performed by `E-Request-Select` removes the selected handler and every
+intervening nonmatching boundary while the clause runs. An operation requested
+directly by that clause therefore reaches only handlers in `outer`. Row order
+does not participate in `select_nearest`.
+
+`resume` first evaluates its argument under the surrounding clause control.
+When the argument is a value, `restore` atomically consumes the matching live
+owner and reinstalls the selected handler plus the captured intervening
+control in their original lexical nesting. The clause continuation stays below
+that restored segment:
+
+```sequent
+family resume-steps:
+  E-Resume-Operand :=
+    nearest_clause_owner(continuation, handler, owner) = live(captured)
+    ===>
+    CONFIG(heap, environment, resume(handler, owner, expression), continuation) -> CONFIG(heap, environment, expression, RESUME(handler, owner) :: continuation)
+
+  E-Resume-Restore :=
+    continuation = RESUME(handler, owner) :: clause_control
+    split_owner(clause_control, handler, owner) = clause_prefix, live(captured), outer
+    restored = restore(captured, clause_prefix ++ CLAUSE(handler, owner, consumed) :: outer)
+    ===>
+    CONFIG(heap, environment_value, value, continuation) -> CONFIG(heap, environment_value, value, restored)
+
+  E-Clause-Return :=
+    ===>
+    CONFIG(heap, environment_value, value, CLAUSE(handler, owner, consumed) :: outer) -> CONFIG(heap, environment_value, value, outer)
+```
+
+`restore` preserves the captured order: the selected handler surrounds the
+resumed computation, and any crossed handlers regain their original
+outer-to-inner nesting inside it. The ordinary continuation rules evaluate the
+restored computation. When that computation returns through the restored
+segment, `clause_prefix` continues after the `resume` expression. After the
+remaining clause control finishes, `E-Clause-Return` removes the consumed
+clause boundary and returns the clause value to `outer`. There is no transition
+that clones a captured continuation or changes `consumed` back to `live`.
+
+Static checking and Effect Core validation make an unmatched request, a
+missing owner, a second resume, or an invalid capture boundary unreachable from
+accepted source. If one appears after successful validation, evaluation
+reports an internal malformed-Core or machine failure. Ash has no source-level
+unhandled-operation, abort, exception, cancellation, or unwind result.
+
 ## Observation
 
 Successful evaluation of the generated entry application retains the heap
@@ -380,9 +479,10 @@ the active rendering path renders as `<cycle>`. Removing a location from the
 active path after its subtree means shared acyclic data renders in full at each
 occurrence. Function values render as `<function>`.
 
-Evaluation reports uninitialized access, alias loops, invalid locations, and an
-impossible complete-pattern failure as structured internal runtime failures.
-They are not source-language error outcomes.
+Evaluation reports uninitialized access, alias loops, invalid locations, an
+impossible complete-pattern failure, malformed effect control, and captured-
+control capacity exhaustion as structured internal runtime failures. They are
+not source-language error outcomes.
 
 The executable test `dynamic_cyclic_data_observation_is_finite` checks guarded
 allocation and active-path rendering:
@@ -436,6 +536,7 @@ distinct lexical identities.
 | `V-002` | `dynamic_application_derivation_example_v002_is_executable` | `E-Beta`, `E-Add-Values` |
 | `V-004` | `dynamic_capture_derivation_example_v004_is_executable` | `E-Let-Enter`, `E-Let-Continue`, `E-Beta`, `E-Add-Values` |
 | `V-008` | `dynamic_nested_application_derivation_example_v008_is_executable` | Strict application frames, two `E-Beta` steps, and integer primitives |
+| `EFFECT-001` | `nested_forwarding_restores_intervening_handlers_in_original_order` | `E-Handle-Enter`, `E-Perform-Operand`, `E-Request-Select`, `E-Resume-Operand`, `E-Resume-Restore`, `E-Clause-Return` |
 
 ### Binding and shadowing: V-003
 
@@ -521,3 +622,40 @@ environment; it allocates no data slots. After the common entry `E-Beta` enters
 the body of `main`, strict application frames evaluate `increment 20` before
 applying `double`: `E-Beta` enters `20 + 1`, then `E-Add-Values` produces `21`.
 The outer `E-Beta` enters `21 * 2`, and `E-Multiply-Values` produces `42`.
+
+### Forwarding and deep resume: EFFECT-001
+
+```ash
+effect Ask {
+    ask : Int -> Int
+}
+
+effect Mark {
+    mark : Int -> Int
+}
+
+main : Unit -> Int
+main () = handle (
+    handle ({
+        let answered = perform Ask.ask 1
+        perform Mark.mark answered
+    }) with Mark {
+        mark value => resume (value + 10)
+    }
+) with Ask {
+    ask value => {
+        let continued = resume (value + 1)
+        continued + 100
+    }
+}
+```
+
+The two `E-Handle-Enter` steps activate `Ask` outside `Mark`. The `Ask.ask`
+request crosses the nonmatching `Mark` boundary, so `E-Request-Select` moves
+that boundary with the selected `Ask` boundary and enters the `Ask` clause with
+both absent. `E-Resume-Restore` reinstalls `Ask` around the captured remainder
+and restores `Mark` inside it. The resumed `Mark.mark 2` request therefore
+selects `Mark`; its clause resumes with `12`. `E-Clause-Return` first returns
+from the `Mark` clause and then from the `Ask` clause after the final addition,
+producing `112`. The executable trace asserts this exact selection,
+restoration, request, resume, and clause-return order.
