@@ -3053,6 +3053,7 @@ impl EvidenceSelector {
                                     argument,
                                     replacements.as_map(),
                                     |cells| type_work.charge(cells),
+                                    || (),
                                 )
                                 .map_err(|()| SelectionFailure::TypeResource)?,
                             );
@@ -3426,6 +3427,9 @@ impl EvidenceSelector {
                 });
             }
             nominals.push(crate::resolved::ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id,
                 spelling: "Nominal".to_owned(),
                 constructors: Box::new([]),
@@ -3755,9 +3759,12 @@ fn substitute_dependent_positions(
             key_index += 1;
         } else {
             dependents.0.push(
-                substitute_type_variables_with(argument, replacements, |cells| {
-                    type_work.charge(cells)
-                })
+                substitute_type_variables_with(
+                    argument,
+                    replacements,
+                    |cells| type_work.charge(cells),
+                    || (),
+                )
                 .map_err(|()| SelectionFailure::TypeResource)?,
             );
         }
@@ -7302,6 +7309,7 @@ mod tests {
         const GOAL_ENVIRONMENT_TYPE_WORK: usize = 2 * 4;
         const MATCHED_SUBSTITUTION_TYPE_WORK: usize = 1;
         const REPLACEMENT_INDEX_AND_VALUE_WORK: usize = 2;
+        // Replacement retention plus the retained three-cell prerequisite result.
         const PREREQUISITE_SUBSTITUTION_WORK: usize = 1 + 3;
         const SELECTION_ARGUMENT_WORK: usize = 1 + 3;
         // Closing and publication each move one complete application through
@@ -7336,6 +7344,9 @@ mod tests {
         let setup = || {
             let registry = ResolvedRegistry::new(
                 vec![ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: option,
                     spelling: "Option".into(),
                     constructors: Box::new([]),
@@ -9413,6 +9424,9 @@ mod tests {
         let dependent_parameter = TypeVariableId::resolved(module, 1);
         let nominals = (0..WIDTH - 1)
             .map(|index| ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: NominalTypeId::new(
                     module,
                     u32::try_from(index).expect("the nominal index should fit"),

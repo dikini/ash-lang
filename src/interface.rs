@@ -3020,6 +3020,9 @@ mod tests {
         let constructor_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
         let registry = ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: option,
                 spelling: "Option".into(),
                 constructors: Box::new([]),
@@ -3360,6 +3363,9 @@ mod tests {
             .span(ByteRange::new(0, 6).expect("the canonical matcher range is ordered"))
             .expect("the canonical matcher span should fit");
         let nominal = |id, spelling| ResolvedNominalType {
+            representation_provenance: None,
+            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             id,
             spelling,
             constructors: Box::new([]),
@@ -4170,6 +4176,9 @@ mod tests {
         let constructor_kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
         let registry = ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: option,
                 spelling: "Option".into(),
                 constructors: Box::new([]),

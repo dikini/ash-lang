@@ -19,6 +19,7 @@ an EBNF production; it is not Ash source punctuation.
 module ::= { import_declaration line_end } { module_declaration line_end } ;
 module_declaration ::=
     type_declaration
+  | newtype_declaration
   | interface_declaration
   | implementation_declaration
   | global_definition ;
@@ -48,6 +49,10 @@ kind ::= kind_atom [ "->" kind ] ;
 kind_atom ::= "Type" | "(" kind ")" ;
 constructor_declaration ::=
   upper_identifier [ "(" type { "," type } ")" ] ;
+newtype_declaration ::=
+  [ "pub" [ "opaque" ] ]
+  "newtype" upper_identifier [ type_parameters ] "="
+  upper_identifier "(" type ")" ;
 
 interface_declaration ::=
   [ "pub" ] "interface" upper_identifier interface_parameters
@@ -202,10 +207,13 @@ members, as in `List.Option` and `List.Some`. Qualification has exactly these
 two components; it does not repeat the dependency's path.
 
 An unmodified declaration is private. On a declaration, `pub` marks a global,
-nominal type, interface, or implementation as public. On an import, `pub`
-re-exports the selected channels. `pub opaque type` exports the nominal name
-without exporting its constructors. `opaque` is valid only between `pub` and
-`type`; constructors cannot carry individual modifiers. An equational global
+nominal data type, `newtype`, interface, or implementation as public. On an
+import, `pub` re-exports the selected channels. `pub opaque type` exports the
+nominal name without exporting its constructors; `pub opaque newtype` applies
+the same access rule to the sole newtype constructor. `pub type` and `pub newtype`
+export the nominal name and accessible constructor or constructor family.
+`opaque` is valid only between `pub` and `type` or `newtype`;
+constructors cannot carry individual modifiers. An equational global
 writes `pub` once before its global signature, not on its equation heads. An
 inline operational global writes `pub` before `fn`.
 
@@ -267,7 +275,11 @@ arbitrary initializer expression so static semantics can distinguish safe
 function- or constructor-rooted initialization from malformed syntax.
 
 A nominal declaration binds its ordered type parameters only in its
-constructor payload types. A named source type may occur without arguments or
+constructor payload or representation types. A `newtype` has exactly one
+constructor, parentheses, and exactly one field. Parsing owns a missing
+constructor, nullary constructor, extra field, or extra constructor. Name
+resolution requires the constructor spelling to equal the nominal spelling.
+A named source type may occur without arguments or
 with one or more comma-separated arguments. Syntax does not require a nominal
 constructor to be saturated and does not distinguish nominal constructors from
 type parameters. Resolution distinguishes them by identity; static semantics

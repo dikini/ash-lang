@@ -106,9 +106,20 @@ pub enum SurfaceTypeVisibility {
     PublicTransparent,
 }
 
+/// The source declaration kind for one nominal type declaration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SurfaceNominalDeclarationKind {
+    /// An ordinary allocating nominal data declaration.
+    Data,
+    /// A representation-preserving nominal declaration.
+    Newtype,
+}
+
 /// One source nominal type declaration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceTypeDeclaration {
+    /// Whether this declaration is ordinary data or a representation-preserving newtype.
+    pub declaration_kind: SurfaceNominalDeclarationKind,
     /// The declaration's module export mode.
     pub visibility: SurfaceTypeVisibility,
     /// The declared type spelling.

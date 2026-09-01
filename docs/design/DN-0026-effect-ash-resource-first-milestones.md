@@ -38,12 +38,15 @@ provides explicit first-order evaluator state while leaving surface and Core
 continuations unchosen. These boundaries make later effect work localizable,
 but they do not supply effect semantics.
 
-After `lib-ash`, the following capabilities would still be absent:
+At the post-`lib-ash` baseline from which this outline was written, the
+following capabilities were absent. The module-`newtype` product branch now
+implements the representation-preserving module case; it does not change the
+remaining absences or make the wider milestone current on `main`:
 
 - effect API declarations, effect rows, handlers, and typed continuation
   contracts;
-- representation-preserving `newtype` declarations, local type declarations,
-  or runtime-established fresh identities;
+- local type declarations or runtime-established fresh identities; module
+  `newtype` was the first separately authorized product input;
 - resource acquisition scopes, identity-indexed resource values, ownership or
   usage checking, and deterministic cleanup;
 - runtime provider relationships and a checked foreign-provider boundary;

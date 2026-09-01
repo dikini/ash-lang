@@ -879,19 +879,30 @@ pub(crate) fn substitute_type_variables_with<E>(
     ty: &Type,
     replacements: &HashMap<TypeVariableId, Type>,
     mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
 ) -> Result<Type, E> {
     enum ChargeTask<'a> {
         Visit(&'a Type, bool),
         Slice(std::slice::Iter<'a, Type>, bool),
+        EnterForall(&'a [(TypeVariableId, Kind)]),
+        ExitForall(&'a [(TypeVariableId, Kind)]),
     }
 
+    let mut active_shadows = HashMap::new();
     let mut work = vec![ChargeTask::Visit(ty, true)];
     while let Some(task) = work.pop() {
         match task {
-            ChargeTask::Visit(Type::Variable(identity), true)
-                if replacements.contains_key(identity) =>
-            {
-                work.push(ChargeTask::Visit(&replacements[identity], false));
+            ChargeTask::Visit(Type::Variable(identity), true) => {
+                if active_shadows
+                    .get(identity)
+                    .is_some_and(|count| *count != 0)
+                {
+                    charge(1)?;
+                } else if replacements.contains_key(identity) {
+                    work.push(ChargeTask::Visit(&replacements[identity], false));
+                } else {
+                    charge(1)?;
+                }
             }
             ChargeTask::Visit(Type::Tuple(elements), substitute) => {
                 charge(1)?;
@@ -920,11 +931,13 @@ pub(crate) fn substitute_type_variables_with<E>(
                         }
                     }
                 }
-                let substitute = substitute
-                    && !parameters
-                        .iter()
-                        .any(|(parameter, _)| replacements.contains_key(parameter));
-                work.push(ChargeTask::Visit(body, substitute));
+                if substitute {
+                    work.push(ChargeTask::ExitForall(parameters));
+                    work.push(ChargeTask::Visit(body, substitute));
+                    work.push(ChargeTask::EnterForall(parameters));
+                } else {
+                    work.push(ChargeTask::Visit(body, substitute));
+                }
             }
             ChargeTask::Visit(
                 Type::Int
@@ -941,16 +954,59 @@ pub(crate) fn substitute_type_variables_with<E>(
                     work.push(ChargeTask::Visit(element, substitute));
                 }
             }
+            ChargeTask::EnterForall(parameters) => {
+                for (parameter, _) in parameters {
+                    if !replacements.contains_key(parameter) {
+                        continue;
+                    }
+                    if !active_shadows.contains_key(parameter) {
+                        charge(1)?;
+                        active_shadows
+                            .try_reserve(1)
+                            .map_err(|_| allocation_error())?;
+                        active_shadows.insert(*parameter, 0usize);
+                    }
+                    charge(1)?;
+                    let count = active_shadows
+                        .get_mut(parameter)
+                        .expect("an overlapping shadow key was retained before entry");
+                    *count = count
+                        .checked_add(1)
+                        .expect("an active shadow count cannot exceed source nesting");
+                }
+            }
+            ChargeTask::ExitForall(parameters) => {
+                for (parameter, _) in parameters {
+                    let Some(count) = active_shadows.get_mut(parameter) else {
+                        continue;
+                    };
+                    charge(1)?;
+                    *count = count
+                        .checked_sub(1)
+                        .expect("each exited shadow must have been entered");
+                }
+            }
         }
     }
+    debug_assert!(active_shadows.values().all(|count| *count == 0));
 
-    Ok(substitute_type_variables(ty, replacements))
+    Ok(substitute_type_variables(
+        ty,
+        replacements,
+        &mut active_shadows,
+    ))
 }
 
-fn substitute_type_variables(ty: &Type, replacements: &HashMap<TypeVariableId, Type>) -> Type {
+fn substitute_type_variables(
+    ty: &Type,
+    replacements: &HashMap<TypeVariableId, Type>,
+    active_shadows: &mut HashMap<TypeVariableId, usize>,
+) -> Type {
     enum Task<'a> {
         Visit(&'a Type, bool),
         Sequence(std::slice::Iter<'a, Type>, bool),
+        EnterForall(&'a [(TypeVariableId, Kind)]),
+        ExitForall(&'a [(TypeVariableId, Kind)]),
         FinishTuple(usize),
         FinishApplication,
         FinishFunction,
@@ -961,8 +1017,17 @@ fn substitute_type_variables(ty: &Type, replacements: &HashMap<TypeVariableId, T
     let mut rebuilt = Vec::new();
     while let Some(task) = work.pop() {
         match task {
-            Task::Visit(Type::Variable(identity), true) if replacements.contains_key(identity) => {
-                work.push(Task::Visit(&replacements[identity], false));
+            Task::Visit(Type::Variable(identity), true) => {
+                if active_shadows
+                    .get(identity)
+                    .is_some_and(|count| *count != 0)
+                {
+                    rebuilt.push(Type::Variable(*identity));
+                } else if replacements.contains_key(identity) {
+                    work.push(Task::Visit(&replacements[identity], false));
+                } else {
+                    rebuilt.push(Type::Variable(*identity));
+                }
             }
             Task::Visit(Type::Int, _) => rebuilt.push(Type::Int),
             Task::Visit(Type::Bool, _) => rebuilt.push(Type::Bool),
@@ -986,16 +1051,36 @@ fn substitute_type_variables(ty: &Type, replacements: &HashMap<TypeVariableId, T
             }
             Task::Visit(Type::Forall(parameters, body), substitute) => {
                 work.push(Task::FinishForall(parameters.clone()));
-                let substitute = substitute
-                    && !parameters
-                        .iter()
-                        .any(|(parameter, _)| replacements.contains_key(parameter));
-                work.push(Task::Visit(body, substitute));
+                if substitute {
+                    work.push(Task::ExitForall(parameters));
+                    work.push(Task::Visit(body, substitute));
+                    work.push(Task::EnterForall(parameters));
+                } else {
+                    work.push(Task::Visit(body, substitute));
+                }
             }
             Task::Sequence(mut remaining, substitute) => {
                 if let Some(ty) = remaining.next() {
                     work.push(Task::Sequence(remaining, substitute));
                     work.push(Task::Visit(ty, substitute));
+                }
+            }
+            Task::EnterForall(parameters) => {
+                for (parameter, _) in parameters {
+                    if let Some(count) = active_shadows.get_mut(parameter) {
+                        *count = count
+                            .checked_add(1)
+                            .expect("an active shadow count cannot exceed source nesting");
+                    }
+                }
+            }
+            Task::ExitForall(parameters) => {
+                for (parameter, _) in parameters {
+                    if let Some(count) = active_shadows.get_mut(parameter) {
+                        *count = count
+                            .checked_sub(1)
+                            .expect("each exited shadow must have been entered");
+                    }
                 }
             }
             Task::FinishTuple(count) => {
@@ -1018,6 +1103,7 @@ fn substitute_type_variables(ty: &Type, replacements: &HashMap<TypeVariableId, T
             }
         }
     }
+    debug_assert!(active_shadows.values().all(|count| *count == 0));
     rebuilt.pop().expect("one reconstructed type")
 }
 
@@ -2271,13 +2357,19 @@ mod tests {
         );
         let replacements =
             HashMap::from([(function, Type::Nominal(owner)), (argument, Type::Bool)]);
+        // One application plus two expanded scalar replacements.
         let mut exact = 3usize;
         let mut short = 2usize;
 
-        let rebuilt = substitute_type_variables_with(&application, &replacements, |cells| {
-            exact = exact.checked_sub(cells).ok_or(())?;
-            Ok::<(), ()>(())
-        })
+        let rebuilt = substitute_type_variables_with(
+            &application,
+            &replacements,
+            |cells| {
+                exact = exact.checked_sub(cells).ok_or(())?;
+                Ok::<(), ()>(())
+            },
+            || (),
+        )
         .expect("the exact rebuilt application should fit");
         assert_eq!(
             rebuilt,
@@ -2285,10 +2377,15 @@ mod tests {
         );
         assert_eq!(exact, 0);
         assert_eq!(
-            substitute_type_variables_with(&application, &replacements, |cells| {
-                short = short.checked_sub(cells).ok_or(())?;
-                Ok::<(), ()>(())
-            }),
+            substitute_type_variables_with(
+                &application,
+                &replacements,
+                |cells| {
+                    short = short.checked_sub(cells).ok_or(())?;
+                    Ok::<(), ()>(())
+                },
+                || ()
+            ),
             Err(()),
         );
     }
@@ -2317,13 +2414,166 @@ mod tests {
         )]);
         let mut remaining = 128_usize;
 
-        let result = substitute_type_variables_with(&source, &replacements, |cells| {
-            remaining = remaining.checked_sub(cells).ok_or(())?;
-            Ok(())
-        });
+        let result = substitute_type_variables_with(
+            &source,
+            &replacements,
+            |cells| {
+                remaining = remaining.checked_sub(cells).ok_or(())?;
+                Ok(())
+            },
+            || (),
+        );
 
         assert_eq!(result, Err(()));
         assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn nested_forall_substitution_uses_linear_active_shadow_counts() {
+        const DEPTH: usize = 2_048;
+        const WIDTH: usize = 2_048;
+        // One overlapping replacement-key shadow-map record; D retained forall nodes,
+        // binder records, and Kind nodes; enter and exit transitions for the
+        // shadowed key at every depth; one tuple, one directly shadowed
+        // variable, and W non-recursive replacement variables.
+        const EXACT_WORK: usize = 1 + (3 * DEPTH) + (2 * DEPTH) + 1 + 1 + WIDTH;
+
+        std::thread::Builder::new()
+            .name("nested-forall-substitution-shadow-counts".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let shadowed = TypeVariableId::new(0);
+                let substituted = TypeVariableId::new(1);
+                let mut body = Type::Tuple(
+                    std::iter::once(Type::Variable(shadowed))
+                        .chain(std::iter::repeat_n(Type::Variable(substituted), WIDTH))
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                );
+                for _ in 0..DEPTH {
+                    body = Type::Forall(Box::new([(shadowed, Kind::Type)]), Box::new(body));
+                }
+                let replacements = HashMap::from([
+                    (shadowed, Type::Unit),
+                    (substituted, Type::Variable(shadowed)),
+                ]);
+
+                let mut short = EXACT_WORK - 1;
+                let short_result = substitute_type_variables_with(
+                    &body,
+                    &replacements,
+                    |cells| {
+                        short = short.checked_sub(cells).ok_or(())?;
+                        Ok::<(), ()>(())
+                    },
+                    || (),
+                );
+                if let Ok(rebuilt) = short_result {
+                    discard_type_iteratively(rebuilt);
+                    panic!("the one-short source-plus-expansion budget unexpectedly fit");
+                }
+                assert_eq!(short, 0);
+
+                for attempt in 0..2 {
+                    let mut exact = EXACT_WORK;
+                    let rebuilt = substitute_type_variables_with(
+                        &body,
+                        &replacements,
+                        |cells| {
+                            exact = exact.checked_sub(cells).ok_or(())?;
+                            Ok::<(), ()>(())
+                        },
+                        || (),
+                    )
+                    .unwrap_or_else(|()| {
+                        panic!("linear nested-forall attempt {attempt} should fit")
+                    });
+                    assert_eq!(exact, 0);
+                    let mut current = &rebuilt;
+                    for depth in 0..DEPTH {
+                        let Type::Forall(parameters, inner) = current else {
+                            panic!("forall layer {depth} is missing");
+                        };
+                        assert_eq!(parameters.as_ref(), [(shadowed, Kind::Type)]);
+                        current = inner;
+                    }
+                    let Type::Tuple(elements) = current else {
+                        panic!("the rebuilt nested body must remain a tuple");
+                    };
+                    assert_eq!(elements.len(), WIDTH + 1);
+                    assert!(elements.iter().all(
+                        |element| matches!(element, Type::Variable(found) if *found == shadowed)
+                    ));
+                    discard_type_iteratively(rebuilt);
+                }
+                discard_type_iteratively(body);
+            })
+            .expect("the nested-forall substitution thread should start")
+            .join()
+            .expect("nested-forall substitution should tear down on 256 KiB");
+    }
+
+    #[test]
+    fn wide_unrelated_forall_parameter_inspection_is_exact_and_retryable() {
+        const WIDTH: usize = 2_048;
+        // One forall node, W binder records and W Kind nodes, and one scalar
+        // replacement visit. Unrelated binders retain no shadow state.
+        const EXACT_WORK: usize = 1 + (2 * WIDTH) + 1;
+
+        let substituted = TypeVariableId::new(0);
+        let source = Type::Forall(
+            (0..WIDTH)
+                .map(|index| {
+                    (
+                        TypeVariableId::new(
+                            u32::try_from(index + 1).expect("the test width fits in u32"),
+                        ),
+                        Kind::Type,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+            Box::new(Type::Variable(substituted)),
+        );
+        let replacements = HashMap::from([(substituted, Type::Unit)]);
+
+        let mut short = EXACT_WORK - 1;
+        let short_result = substitute_type_variables_with(
+            &source,
+            &replacements,
+            |cells| {
+                short = short.checked_sub(cells).ok_or(())?;
+                Ok::<(), ()>(())
+            },
+            || (),
+        );
+        if let Ok(rebuilt) = short_result {
+            discard_type_iteratively(rebuilt);
+            panic!("the one-short unrelated-binder inspection budget unexpectedly fit");
+        }
+        assert_eq!(short, 0);
+
+        for attempt in 0..2 {
+            let mut exact = EXACT_WORK;
+            let rebuilt = substitute_type_variables_with(
+                &source,
+                &replacements,
+                |cells| {
+                    exact = exact.checked_sub(cells).ok_or(())?;
+                    Ok::<(), ()>(())
+                },
+                || (),
+            )
+            .unwrap_or_else(|()| panic!("exact unrelated-binder attempt {attempt} should fit"));
+            assert_eq!(exact, 0);
+            assert!(matches!(
+                &rebuilt,
+                Type::Forall(parameters, body)
+                    if parameters.len() == WIDTH && matches!(body.as_ref(), Type::Unit)
+            ));
+            discard_type_iteratively(rebuilt);
+        }
+        discard_type_iteratively(source);
     }
 
     #[test]
@@ -2333,7 +2583,7 @@ mod tests {
         // Replacing the sole source variable retains every node of a left-deep
         // unary application: one nominal, D applications, and D arguments.
         const DEEP_RESULT_CELLS: usize = 2 * DEPTH + 1;
-        // The tuple wrapper plus one scalar replacement per source element.
+        // The tuple plus one scalar replacement per source element.
         const WIDE_RESULT_CELLS: usize = 1 + WIDTH;
 
         fn assert_deep_application(ty: &Type, depth: usize, owner: NominalTypeId) {
@@ -2371,7 +2621,7 @@ mod tests {
                     substitute_type_variables_with(&source, &replacements, |cells| {
                         deep_short = deep_short.checked_sub(cells).ok_or(())?;
                         Ok::<(), ()>(())
-                    }),
+                    }, || ()),
                     Err(()),
                 );
                 assert_eq!(deep_short, 0);
@@ -2391,6 +2641,7 @@ mod tests {
                         deep_exact = deep_exact.checked_sub(cells).ok_or(())?;
                         Ok::<(), ()>(())
                     },
+                    || (),
                 )
                 .expect("the exact deep expanded-result budget should fit");
                 assert_eq!(deep_exact, 0);
@@ -2411,7 +2662,7 @@ mod tests {
                     substitute_type_variables_with(&wide_source, &wide_replacements, |cells| {
                         wide_short = wide_short.checked_sub(cells).ok_or(())?;
                         Ok::<(), ()>(())
-                    }),
+                    }, || ()),
                     Err(()),
                 );
                 assert_eq!(wide_short, 0);
@@ -2430,6 +2681,7 @@ mod tests {
                         wide_exact = wide_exact.checked_sub(cells).ok_or(())?;
                         Ok::<(), ()>(())
                     },
+                    || (),
                 )
                 .expect("the exact wide expanded-result budget should fit");
                 assert_eq!(wide_exact, 0);

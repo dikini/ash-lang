@@ -16,6 +16,8 @@ identity or observable mutation.
 
 Core type abstractions and applications are static evidence. They are not
 runtime values, do not extend the environment, and allocate no heap cells.
+Validated newtype conversions are likewise erased static operations rather
+than values.
 
 ## Initial configuration
 
@@ -54,11 +56,19 @@ family type-erasure-steps:
   E-Type-Application :=
     ===>
     CONFIG(heap, environment, TypeApplication(function, arguments), continuation) -> CONFIG(heap, environment, function, continuation)
+
+  E-Newtype-Conversion :=
+    ===>
+    CONFIG(heap, environment, NewtypeConversion(owner, direction, child), continuation) -> CONFIG(heap, environment, child, continuation)
 ```
 
 The unchanged heap and environment make erasure observable only as progress in
 the machine. No source program can inspect a type parameter or type argument.
 Method-local type arguments erase through `E-Type-Application`.
+`E-Newtype-Conversion` also leaves the continuation unchanged. Independent
+Core validation has already authenticated the owner, direction, child and
+result types, representation substitution, and provenance, so evaluation does
+not inspect conversion metadata or consult a registry.
 
 ## Generated interface evidence
 
@@ -286,6 +296,11 @@ stores their runtime values. A nullary constructor occurrence allocates its comp
 constructor cell. A payload constructor occurrence produces the callable value
 used by `E-Constructor-Apply`.
 
+Those allocation and tag-inspection rules apply to ordinary data constructors.
+A newtype constructor and pattern have already lowered to validated wrap and
+unwrap conversions. `E-Newtype-Conversion` enters their child without a heap
+cell, tag comparison, copy, frame, or new failure mode.
+
 A match evaluates its scrutinee exactly once. Pattern matching follows aliases
 only when it must inspect a tuple or constructor. It compares constructor
 identities, visits tuple and payload components left to right, and returns the
@@ -379,6 +394,13 @@ payload renders its components as constructor fields. A location already on
 the active rendering path renders as `<cycle>`. Removing a location from the
 active path after its subtree means shared acyclic data renders in full at each
 occurrence. Function values render as `<function>`.
+
+A completed `newtype` value renders exactly as its representation value because
+no wrapper or constructor tag reaches the heap. The observation's separately
+retained closed result type still renders the nominal newtype spelling and its
+applied type arguments. Nested ordinary data in a representation keeps its
+ordinary structural rendering and allocation. Observation performs no runtime
+nominal-registry lookup and adds no special newtype value case.
 
 Evaluation reports uninitialized access, alias loops, invalid locations, and an
 impossible complete-pattern failure as structured internal runtime failures.

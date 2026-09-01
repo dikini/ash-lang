@@ -14,7 +14,7 @@ starts with an ASCII uppercase letter and has the same continuation characters.
 Resolution determines the meaning of an uppercase occurrence from its
 syntactic position and scope.
 
-The reserved words `fn`, `let`, `rec`, `and`, `type`, `interface`, `impl`,
+The reserved words `fn`, `let`, `rec`, `and`, `type`, `newtype`, `interface`, `impl`,
 `where`, `match`, `import`, `as`, `pub`, `opaque`, `Int`, `Bool`, `Unit`,
 `true`, and `false` cannot be identifiers. The single spelling `_` is the
 wildcard token rather than an ordinary identifier; spellings such as `_tail`

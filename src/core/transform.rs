@@ -211,6 +211,7 @@ fn rebuild_with_initial_type_work(
                 PureComputation::Apply(_)
                 | PureComputation::Primitive(_)
                 | PureComputation::Tuple(_)
+                | PureComputation::NewtypeConversion(_)
                 | PureComputation::TypeAbstraction(_)
                 | PureComputation::TypeApplication(_),
             ) => {}
@@ -432,6 +433,20 @@ fn rebuild_node(
             let origin = expression.origin.clone();
             builder
                 .match_expression(scrutinee, arms, ty.into_inner(), origin)
+                .map_err(TransformError::from)
+        }
+        PureExprKind::Computation(PureComputation::NewtypeConversion(node)) => {
+            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let child = remap(remapped, node.child())?;
+            let origin = expression.origin.clone();
+            builder
+                .newtype_conversion(
+                    node.owner(),
+                    node.direction(),
+                    child,
+                    ty.into_inner(),
+                    origin,
+                )
                 .map_err(TransformError::from)
         }
         PureExprKind::Computation(PureComputation::TypeAbstraction(node)) => {
@@ -670,6 +685,7 @@ fn node_index(id: NodeId) -> Result<usize, TransformError> {
 mod tests {
     use super::*;
     use crate::{
+        core::NewtypeConversionDirection,
         elaborate::{Elaborator, check_module, link_modules},
         module::{ModuleGraph, ModuleRoots, load_module_graph},
         resolve::{DependencyExports, resolve_module},
@@ -1802,5 +1818,120 @@ mod tests {
             .expect("small-stack match-pattern thread should start")
             .join()
             .expect("missing-remap pattern teardown must fit the small stack");
+    }
+
+    #[test]
+    fn transforms_rebuild_validated_newtype_conversions() {
+        const REMAP_WORK: usize = 2; // one slot per input node
+        const CHILD_COPY_WORK: usize = 2; // clone + admit `Unit`
+        const CONVERSION_COPY_WORK: usize = 2; // clone + admit `Unit`
+        const EXACT_WORK: usize = REMAP_WORK + CHILD_COPY_WORK + CONVERSION_COPY_WORK;
+        let source = SourceFile::new("transform-conversion.ash", "()").expect("test source");
+        let origin = Origin::Source(
+            source
+                .span(ByteRange::new(0, 2).expect("ordered range"))
+                .expect("source span"),
+        );
+        let owner = NominalTypeId::new(source.id(), 0);
+        let mut builder = CoreBuilder::new();
+        let child = builder
+            .unit(Type::Unit, origin.clone())
+            .expect("the conversion child should fit");
+        let root = builder
+            .newtype_conversion(
+                owner,
+                NewtypeConversionDirection::Wrap,
+                child,
+                Type::Unit,
+                origin,
+            )
+            .expect("the conversion carrier should fit");
+        let program = super::super::dialect::forge_validated_for_test(
+            builder.finish(root).expect("the conversion should finish"),
+        );
+
+        let identity = identity_traversal(&program).expect("identity must rebuild the conversion");
+        let folded =
+            fold_literal_primitives(&program).expect("folding must rebuild the conversion");
+        for rebuilt in [&identity, &folded] {
+            assert!(matches!(
+                rebuilt.expression_kinds_for_test().nth(1),
+                Some(PureExprKind::Computation(PureComputation::NewtypeConversion(
+                    conversion,
+                ))) if conversion.owner() == owner
+                    && conversion.direction() == NewtypeConversionDirection::Wrap
+            ));
+        }
+        for fold_literal_primitives in [false, true] {
+            assert_eq!(
+                rebuild_with_initial_type_work(
+                    &program,
+                    fold_literal_primitives,
+                    TYPE_WORK_LIMIT - (EXACT_WORK - 1),
+                )
+                .expect_err("one-short newtype transform must reject"),
+                TransformError::Build(BuildError::TypeWorkExceeded),
+            );
+            for _ in 0..2 {
+                let rebuilt = rebuild_with_initial_type_work(
+                    &program,
+                    fold_literal_primitives,
+                    TYPE_WORK_LIMIT - EXACT_WORK,
+                )
+                .expect("exact newtype transform should retry");
+                assert_eq!(rebuilt.expression_kinds_for_test().count(), 2);
+                drop(rebuilt);
+            }
+        }
+    }
+
+    #[test]
+    fn transform_conversion_rebuild_and_teardown_fit_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("transform-newtype-conversion-rebuild".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source =
+                    SourceFile::new("transform-conversion-chain.ash", "()").expect("test source");
+                let origin = Origin::Source(
+                    source
+                        .span(ByteRange::new(0, 2).expect("ordered range"))
+                        .expect("source span"),
+                );
+                let owner = NominalTypeId::new(source.id(), 0);
+                let mut builder = CoreBuilder::new();
+                let mut root = builder
+                    .unit(Type::Unit, origin.clone())
+                    .expect("the conversion leaf should fit");
+                for index in 0..DEPTH {
+                    root = builder
+                        .newtype_conversion(
+                            owner,
+                            if index % 2 == 0 {
+                                NewtypeConversionDirection::Wrap
+                            } else {
+                                NewtypeConversionDirection::Unwrap
+                            },
+                            root,
+                            Type::Unit,
+                            origin.clone(),
+                        )
+                        .expect("the conversion chain should fit");
+                }
+                let program = super::super::dialect::forge_validated_for_test(
+                    builder.finish(root).expect("the conversion should finish"),
+                );
+                let identity = identity_traversal(&program)
+                    .expect("identity must rebuild the conversion chain");
+                let folded = fold_literal_primitives(&program)
+                    .expect("folding must rebuild the conversion chain");
+                drop(identity);
+                drop(folded);
+            })
+            .expect("the transform rebuild thread should start")
+            .join()
+            .expect("transform conversion rebuilding must fit a small stack");
     }
 }

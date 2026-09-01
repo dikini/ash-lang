@@ -13,8 +13,8 @@ use crate::{
         CanonicalNominalKind, ResolvedConstructor, ResolvedDefinition, ResolvedDefinitionKind,
         ResolvedExpr, ResolvedExprKind, ResolvedImplementation, ResolvedInterfaceApplication,
         ResolvedInterfaceDeclaration, ResolvedLocalDeclaration, ResolvedModuleParts,
-        ResolvedRecursiveMember, ResolvedRegistry, ResolvedType, ResolvedTypeProvenance,
-        ResolvedTypeProvenanceNode,
+        ResolvedNominalDeclarationKind, ResolvedRecursiveMember, ResolvedRegistry, ResolvedType,
+        ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
     },
     source::Span,
     types::{
@@ -2426,9 +2426,19 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                         "a nominal has incomplete constructor payload provenance",
                     ));
                 }
-                for (constructor_id, payload_provenance) in
-                    nominal.constructors.iter().zip(payload_provenance)
-                {
+                if nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype {
+                    let [constructor_id] = nominal.constructors.as_ref() else {
+                        return Err(KindFailure::internal(
+                            nominal.origin.primary_span(),
+                            "a newtype does not retain exactly one constructor identity",
+                        ));
+                    };
+                    let [payload_provenance] = payload_provenance.as_slice() else {
+                        return Err(KindFailure::internal(
+                            nominal.origin.primary_span(),
+                            "a newtype does not retain exactly one representation provenance",
+                        ));
+                    };
                     budget.charge(1).map_err(|()| {
                         KindFailure::resource(
                             nominal.origin.primary_span(),
@@ -2444,21 +2454,70 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                     let constructor = required_lookup(
                         module.registry.constructor(*constructor_id),
                         nominal.origin.primary_span(),
-                        "a nominal names a missing canonical constructor",
+                        "a newtype names a missing canonical constructor",
                         budget,
                     )?;
-                    if constructor.id != *constructor_id || constructor.owner != nominal.id {
+                    if constructor.owner != nominal.id || constructor.payload.is_some() {
                         return Err(KindFailure::internal(
                             constructor.origin.primary_span(),
-                            "canonical constructor ownership disagrees with its nominal",
+                            "a newtype constructor retains an ordinary payload",
                         ));
                     }
-                    check_constructor_payload(
-                        constructor,
-                        payload_provenance,
-                        &environments,
+                    let [field] = payload_provenance.fields.as_slice() else {
+                        return Err(KindFailure::internal(
+                            constructor.origin.primary_span(),
+                            "a newtype representation does not retain exactly one field provenance",
+                        ));
+                    };
+                    let representation = nominal.representation.as_ref().ok_or_else(|| {
+                        KindFailure::internal(
+                            nominal.origin.primary_span(),
+                            "a newtype does not retain its canonical representation",
+                        )
+                    })?;
+                    environments.expect_value_type_parts(
+                        representation,
+                        field,
+                        field
+                            .span()
+                            .unwrap_or_else(|| constructor.origin.primary_span()),
                         budget,
                     )?;
+                } else {
+                    for (constructor_id, payload_provenance) in
+                        nominal.constructors.iter().zip(payload_provenance)
+                    {
+                        budget.charge(1).map_err(|()| {
+                        KindFailure::resource(
+                            nominal.origin.primary_span(),
+                            "constructor provenance authentication exceeded its type-work budget",
+                        )
+                    })?;
+                        if payload_provenance.constructor != *constructor_id {
+                            return Err(KindFailure::internal(
+                                nominal.origin.primary_span(),
+                                "constructor payload provenance is paired with the wrong identity",
+                            ));
+                        }
+                        let constructor = required_lookup(
+                            module.registry.constructor(*constructor_id),
+                            nominal.origin.primary_span(),
+                            "a nominal names a missing canonical constructor",
+                            budget,
+                        )?;
+                        if constructor.id != *constructor_id || constructor.owner != nominal.id {
+                            return Err(KindFailure::internal(
+                                constructor.origin.primary_span(),
+                                "canonical constructor ownership disagrees with its nominal",
+                            ));
+                        }
+                        check_constructor_payload(
+                            constructor,
+                            payload_provenance,
+                            &environments,
+                            budget,
+                        )?;
+                    }
                 }
                 DeclarationKindOutcome::Checked
             }
@@ -5492,6 +5551,9 @@ mod tests {
         let mut missing_parameters = empty_module_parts(span);
         missing_parameters.registry = Arc::new(ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: nominal_id,
                 spelling: "MissingParameters".into(),
                 constructors: Vec::new().into_boxed_slice(),
@@ -5511,6 +5573,9 @@ mod tests {
         assert_exact_internal(&invalid_order, &[], "out of source order index");
 
         let nominal = |constructors: Vec<ConstructorId>| ResolvedNominalType {
+            representation_provenance: None,
+            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             id: nominal_id,
             spelling: "Pairing".into(),
             constructors: constructors.into_boxed_slice(),
@@ -5589,11 +5654,62 @@ mod tests {
     }
 
     #[test]
+    fn newtype_payload_provenance_identity_is_authenticated_before_representation_work() {
+        let span = span();
+        let module = ModuleId::new(0);
+        let nominal_id = NominalTypeId::new(module, 0);
+        let constructor_id = ConstructorId::new(nominal_id, 0);
+        let forged_constructor_id = ConstructorId::new(nominal_id, 1);
+        let origin = Origin::Source(span);
+        let nominal = ResolvedNominalType {
+            representation_provenance: Some(crate::resolved::ResolvedTypeProvenance::new(
+                vec![crate::resolved::ResolvedTypeProvenanceNode::Fact(span)],
+                0,
+            )),
+            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Newtype,
+            representation: Some(Type::Nominal(nominal_id)),
+            id: nominal_id,
+            spelling: "Loop".into(),
+            constructors: vec![constructor_id].into_boxed_slice(),
+            origin: origin.clone(),
+        };
+        let constructor = ResolvedConstructor {
+            id: constructor_id,
+            owner: nominal_id,
+            spelling: "Loop".into(),
+            payload: None,
+            origin,
+        };
+        let mut parts = empty_module_parts(span);
+        parts.registry = Arc::new(
+            ResolvedRegistry::new(vec![nominal], vec![constructor])
+                .with_type_parameters(vec![(nominal_id, Vec::new())]),
+        );
+        parts.declaration_order = vec![ResolvedDeclarationIndex::Type(0)];
+        let provenance = [vec![crate::resolve::ConstructorPayloadProvenance {
+            constructor: forged_constructor_id,
+            fields: vec![crate::resolved::ResolvedTypeProvenance::new(
+                vec![crate::resolved::ResolvedTypeProvenanceNode::Fact(span)],
+                0,
+            )],
+        }]];
+
+        assert_exact_internal(
+            &parts,
+            &provenance,
+            "constructor payload provenance is paired with the wrong identity",
+        );
+    }
+
+    #[test]
     fn declaration_order_is_a_complete_exact_and_atomic_partition() {
         fn nominal_parts(count: usize, span: Span) -> ResolvedModuleParts {
             let module = ModuleId::new(0);
             let nominals = (0..count)
                 .map(|index| ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: NominalTypeId::new(module, index as u32),
                     spelling: format!("T{index}"),
                     constructors: Vec::new().into_boxed_slice(),
@@ -5681,6 +5797,9 @@ mod tests {
             origin: origin.clone(),
         };
         let nominal = ResolvedNominalType {
+            representation_provenance: None,
+            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             id: nominal_id,
             spelling: "Owner".into(),
             constructors: Vec::new().into_boxed_slice(),
@@ -5737,6 +5856,9 @@ mod tests {
                 }
                 let registry = ResolvedRegistry::new(
                     vec![ResolvedNominalType {
+                        representation_provenance: None,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                        representation: None,
                         id: nominal_id,
                         spelling: "Deep".into(),
                         constructors: Box::new([constructor_id]),

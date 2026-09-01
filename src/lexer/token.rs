@@ -36,6 +36,8 @@ pub enum TokenKind {
     And,
     /// The `type` reserved word.
     Type,
+    /// The `newtype` reserved word.
+    Newtype,
     /// The `match` reserved word.
     Match,
     /// The `import` reserved word.

@@ -805,6 +805,30 @@ fn accepts_private_impl_for_private_interface() {
 }
 
 #[test]
+fn representation_does_not_supply_nominal_interface_evidence() {
+    let error = check_error(concat!(
+        "newtype UserId = UserId(Int)\n\n",
+        "interface Render<A> {\nrender : A -> Int\n}\n\n",
+        "impl Render<Int> {\nrender value = value\n}\n\n",
+        "main : Unit -> Int\n",
+        "main () = render(UserId(41))\n",
+    ));
+
+    assert_eq!(reason(&error), "constraint.unsatisfied");
+}
+
+#[test]
+fn explicit_nominal_newtype_implementation_supplies_its_own_evidence() {
+    check_valid(concat!(
+        "newtype UserId = UserId(Int)\n\n",
+        "interface Render<A> {\nrender : A -> Int\n}\n\n",
+        "impl Render<UserId> {\nrender (UserId(value)) = value\n}\n\n",
+        "main : Unit -> Int\n",
+        "main () = render(UserId(41))\n",
+    ));
+}
+
+#[test]
 fn rejects_public_impl_with_private_prerequisite() {
     let error = check_error(concat!(
         "type Option<A> =\nNone\n| Some(A)\n",

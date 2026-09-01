@@ -3,24 +3,29 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use ash::{
     core::{
-        AshPureDialect, CoreBuilder, NodeId, Primitive, PureComputation, PureExprKind, PureValue,
-        TypedExpr, ValidatedProgram,
+        AshPureDialect, CoreBuilder, NewtypeConversionDirection, NodeId, Primitive,
+        PureComputation, PureExprKind, PureValue, TypedExpr, ValidatedProgram,
         binding::BindingNode,
         data::{ConstructorNode, MatchNode, TupleNode},
         function::{ApplicationNode, FunctionNode},
         literal::{BooleanNode, IntegerNode, UnitNode},
         primitive::PrimitiveNode,
         recursion::RecursiveBindingNode,
-        type_ops::{TypeAbstractionNode, TypeApplicationNode},
+        type_ops::{NewtypeConversionNode, TypeAbstractionNode, TypeApplicationNode},
         validate,
         variable::VariableNode,
     },
+    elaborate::{Elaborator, check_module, link_modules},
+    evidence_validation::validate_interface_evidence,
     integer::Integer,
-    resolved::BinderId,
+    module::{ModuleRoots, load_module_graph},
+    resolve::resolve_module,
+    resolved::{BinderId, ResolvedNominalDeclarationKind},
     source::{ByteRange, Origin, SourceFile, Span},
     types::{Kind, Type},
 };
@@ -618,6 +623,23 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::ElaborationTaskBuffer.0", FieldMixedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTreeAndTransientWork),
     kind_site!("src/elaborate.rs::Elaborator.base_context", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::Elaborator.current_implementation_method", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionBinderBuffer.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionColumn.ty", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionColumnArena.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionContinuation.application_types", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionContinuationArena.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionFlattenScratch.work", FieldTransientCarrierRetentionPreservedCarrierElaborationCoreTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionFlattenTask.FinishConstructor.ty", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionFlattenTask.FinishTuple.ty", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionFlattenTask.Visit.0", FieldTransientCarrierRetentionPreservedCarrierElaborationCoreTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionFlattenWork.0", FieldTransientCarrierRetentionPreservedCarrierElaborationCoreTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionPattern.ty", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionPatternArena.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionTask.FinishBinding.binder", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionTask.FinishBinding.result_type", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionTask.FinishMatch.patterns", FieldTransientCarrierRetentionPreservedCarrierElaborationCoreTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionTask.FinishMatch.result_type", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::PatternDecisionWork.0", FieldTransientCarrierRetentionPreservedCarrierElaborationCoreTypeTransientWork),
     kind_site!("src/elaborate.rs::Elaborator.builder", FieldMixedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeCoreTreeAndRegistryTree),
     kind_site!("src/elaborate.rs::Elaborator.evidence_lowering", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::Elaborator.generated_type_variables", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
@@ -885,6 +907,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::AuthorizedImplementationFact.fact", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::CanonicalNominalKind.Frozen.kind", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/resolved.rs::CanonicalNominalKind.Parameters.parameters", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeRegistryTree),
+    kind_site!("src/resolved.rs::CanonicalRepresentationFact.representation", FieldSummaryValueTypeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::CheckedDefinition.source", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
     kind_site!("src/resolved.rs::CheckedGlobalScheme.scheme", FieldCheckedSchemeSchemeValueInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CheckedImplementationBody.source", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree, Mixed),
@@ -916,10 +939,12 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::CheckedModuleParts.schemes", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CombinedRegistryBuilder.canonical_variables", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::CombinedRegistryBuilder.constructors", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
+    kind_site!("src/resolved.rs::CombinedRegistryBuilder.nominals", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::CombinedRegistryBuilder.nominal_parameters", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::CombinedRegistryBuilder.parameter_rows", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::CombinedRegistryBuilder.type_variables", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::ExportSummary.constructors", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolved.rs::ExportSummary.canonical_representations", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportSummary.hidden_constructors", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportSummary.hidden_interfaces", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportSummary.hidden_nominals", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
@@ -931,10 +956,13 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ExportedConstructor.scheme", FieldSummarySchemeSchemeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportedGlobal.scheme", FieldSummarySchemeSchemeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportedHiddenType.parameters", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolved.rs::ExportedHiddenType.representation", FieldSummaryValueTypeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ExportedType.parameters", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolved.rs::ExportedType.representation", FieldSummaryValueTypeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedConstructorFact.payload", FieldSummaryValueTypeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedConstructorFact.scheme", FieldSummarySchemeSchemeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedFacts.constructors", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolved.rs::ImportedFacts.canonical_representations", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedFacts.globals", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedFacts.implementations", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedFacts.interfaces", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
@@ -943,7 +971,9 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ImportedImplementationFact.fact", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedInterfaceFact.fact", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedNominalFact.parameters", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolved.rs::ImportedNominalFact.representation", FieldSummaryValueTypeValueResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::ImportedNominalFactRef.parameters", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree, Borrowed),
+    kind_site!("src/resolved.rs::ImportedNominalFactRef.representation", FieldSummaryValueTypeValueResolutionResolutionTypeSummaryTree, Borrowed),
     kind_site!("src/resolved.rs::NonMaterializedNominalKindFact.kind", FieldRegistryCarrierRetentionPreservedCarrierElaborationInferenceTypeRegistryTree),
     kind_site!("src/resolved.rs::PreparedImportedNominalAction.Insert.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::PreparedImportedNominalMerge.action", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
@@ -1019,6 +1049,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ResolvedModuleProgram.groups", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedModuleProgram.registry", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree, Shared),
     kind_site!("src/resolved.rs::ResolvedModuleProgram.result", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/resolved.rs::ResolvedNominalBuffer.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedNominalParameterBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::ResolvedNominalParameterVecBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::ResolvedOccurrence.evidence", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Shared),
@@ -1027,9 +1058,11 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ResolvedRecursiveMember.initializer", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedRegistry.abstract_nominal_kinds", FieldRegistryCarrierRetentionPreservedCarrierElaborationInferenceTypeRegistryTree),
     kind_site!("src/resolved.rs::ResolvedRegistry.constructors", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),
+    kind_site!("src/resolved.rs::ResolvedRegistry.nominals", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),
     kind_site!("src/resolved.rs::ResolvedRegistry.nominal_parameters", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),
     kind_site!("src/resolved.rs::ResolvedRegistry.type_variables", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),
     kind_site!("src/resolved.rs::ResolvedRequirement.application", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolved.rs::ResolvedNominalType.representation", FieldResolvedValueTypeValueResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedType.ty", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::ResolvedTypeVariableBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::ResolvedTypeVariable.kind", FieldResolvedDeclaredKindDeclaredResolutionResolutionTypeResolvedTree),
@@ -1136,8 +1169,12 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/types.rs::$fn_same_type_with_budget::Task.Compare.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_same_type_with_budget::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_substitute_type_variables::Task.FinishForall.0", FieldTransientCarrierRetentionPreservedCarrierTypeOperationTypeTransientWork),
+    kind_site!("src/types.rs::$fn_substitute_type_variables::Task.EnterForall.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_substitute_type_variables::Task.ExitForall.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_substitute_type_variables::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_substitute_type_variables::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_substitute_type_variables_with::ChargeTask.EnterForall.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_substitute_type_variables_with::ChargeTask.ExitForall.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_substitute_type_variables_with::ChargeTask.Slice.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_substitute_type_variables_with::ChargeTask.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_write_kind::Task.kind", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
@@ -6718,6 +6755,7 @@ enum ShadowPureComputation {
     Primitive(PrimitiveNode),
     Tuple(TupleNode),
     Match(MatchNode),
+    NewtypeConversion(NewtypeConversionNode),
     TypeAbstraction(TypeAbstractionNode),
     TypeApplication(TypeApplicationNode),
 }
@@ -6741,6 +6779,9 @@ fn assemble_shadow(expression: &TypedExpr) -> ShadowTypedExpr {
             PureComputation::Primitive(node) => ShadowPureComputation::Primitive(*node),
             PureComputation::Tuple(node) => ShadowPureComputation::Tuple(node.clone()),
             PureComputation::Match(node) => ShadowPureComputation::Match(node.clone()),
+            PureComputation::NewtypeConversion(node) => {
+                ShadowPureComputation::NewtypeConversion(*node)
+            }
             PureComputation::TypeAbstraction(node) => {
                 ShadowPureComputation::TypeAbstraction(node.clone())
             }
@@ -6858,6 +6899,25 @@ fn validate_shadow_computation(
                     .iter()
                     .all(|arm| facts.node_type(arm.body()) == Some(ty))
         }
+        ShadowPureComputation::NewtypeConversion(node) => {
+            let Some(owner) = facts.program.registry().nominal(node.owner()) else {
+                return false;
+            };
+            let Some(representation) = owner.representation.as_ref() else {
+                return false;
+            };
+            owner.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+                && match node.direction() {
+                    NewtypeConversionDirection::Wrap => {
+                        facts.node_type(node.child()) == Some(representation)
+                            && ty == &Type::Nominal(owner.id)
+                    }
+                    NewtypeConversionDirection::Unwrap => {
+                        facts.node_type(node.child()) == Some(&Type::Nominal(owner.id))
+                            && ty == representation
+                    }
+                }
+        }
         ShadowPureComputation::TypeAbstraction(node) => {
             matches!(ty, Type::Forall(parameters, body)
                 if parameters.as_ref() == node.parameters()
@@ -6893,6 +6953,7 @@ fn traverse_shadow(expression: &ShadowTypedExpr) -> Vec<NodeId> {
             ShadowPureComputation::Match(node) => std::iter::once(node.scrutinee())
                 .chain(node.arms().iter().map(|arm| arm.body()))
                 .collect(),
+            ShadowPureComputation::NewtypeConversion(node) => vec![node.child()],
             ShadowPureComputation::TypeAbstraction(node) => vec![node.body()],
             ShadowPureComputation::TypeApplication(node) => vec![node.function()],
         },
@@ -6940,6 +7001,9 @@ fn transform_shadow(expression: &ShadowTypedExpr) -> ShadowTransformPlan {
                     .chain(node.arms().iter().map(|arm| arm.body()))
                     .collect(),
             ),
+            ShadowPureComputation::NewtypeConversion(node) => {
+                ShadowTransformPlan::Preserve(vec![node.child()])
+            }
             ShadowPureComputation::TypeAbstraction(node) => {
                 ShadowTransformPlan::Preserve(vec![node.body()])
             }
@@ -6968,6 +7032,7 @@ fn consume_shadow(expression: &ShadowTypedExpr) -> &'static str {
             ShadowPureComputation::Primitive(_) => "primitive",
             ShadowPureComputation::Tuple(_) => "tuple",
             ShadowPureComputation::Match(_) => "match",
+            ShadowPureComputation::NewtypeConversion(_) => "newtype conversion",
             ShadowPureComputation::TypeAbstraction(_) => "type abstraction",
             ShadowPureComputation::TypeApplication(_) => "type application",
         },
@@ -7103,6 +7168,66 @@ fn representative_program() -> Representative {
     }
 }
 
+static NEWTYPE_SHADOW_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
+
+fn validated_newtype_shadow_program() -> ValidatedProgram {
+    let directory = loop {
+        let id = NEWTYPE_SHADOW_FIXTURE_IDS.fetch_add(1, Ordering::Relaxed);
+        let candidate =
+            std::env::temp_dir().join(format!("ash-newtype-shadow-{}-{id}", std::process::id(),));
+        match fs::create_dir(&candidate) {
+            Ok(()) => break candidate,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("newtype shadow fixture should be creatable: {error}"),
+        }
+    };
+    let entry = directory.join("entry.ash");
+    fs::write(
+        &entry,
+        concat!(
+            "newtype Wrapped = Wrapped(Int)\n",
+            "main : Unit -> Wrapped\n",
+            "main () = Wrapped(42)\n",
+        ),
+    )
+    .expect("newtype shadow fixture should be writable");
+    let graph = load_module_graph(&entry, &ModuleRoots::empty())
+        .expect("newtype shadow fixture should load");
+    let module = graph
+        .module(graph.entry())
+        .expect("newtype shadow entry should remain loaded");
+    let checked =
+        check_module(resolve_module(module, &[]).expect("newtype shadow fixture should resolve"))
+            .expect("newtype shadow fixture should check");
+    let linked =
+        link_modules(vec![checked], graph.entry()).expect("newtype shadow fixture should link");
+    let linked = validate_interface_evidence(linked)
+        .expect("newtype shadow fixture has no interface evidence");
+    let mut elaborator =
+        Elaborator::for_module_program(&linked).expect("newtype shadow namespace should fit");
+    let typed = elaborator
+        .synthesize_module_program(&linked)
+        .expect("newtype shadow fixture should lower");
+    let unchecked = elaborator
+        .finish(typed.node)
+        .expect("newtype shadow Core should finish");
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let program = ash::core::validate_modules(unchecked, &sources, &module_sources)
+        .expect("newtype shadow conversion should authenticate");
+    drop(graph);
+    fs::remove_dir_all(directory).expect("newtype shadow fixture should clean up");
+    program
+}
+
 #[test]
 fn pure_dialect_is_named_and_has_no_inhabited_operation_family() {
     assert_eq!(AshPureDialect::NAME, "ash.pure");
@@ -7191,6 +7316,37 @@ fn one_mock_pure_feature_changes_only_the_recorded_closed_sites() {
         );
         assert_eq!(consume_shadow(&shadow), label);
     }
+
+    let newtype_program = validated_newtype_shadow_program();
+    let newtype_facts = ShadowFacts {
+        program: &newtype_program,
+        binders: &HashMap::new(),
+    };
+    let mut pending = vec![newtype_program.root()];
+    let mut conversion_count = 0;
+    while let Some(id) = pending.pop() {
+        let expression = newtype_program
+            .node(id)
+            .expect("newtype shadow node should remain validated");
+        pending.extend(
+            (0..expression.kind.child_count()).filter_map(|index| expression.kind.child_at(index)),
+        );
+        if !matches!(
+            expression.kind,
+            PureExprKind::Computation(PureComputation::NewtypeConversion(_))
+        ) {
+            continue;
+        }
+        let shadow = assemble_shadow(expression);
+        assert!(validate_shadow(&shadow, &newtype_facts));
+        assert_eq!(
+            transform_shadow(&shadow),
+            ShadowTransformPlan::Preserve(traverse_shadow(&shadow))
+        );
+        assert_eq!(consume_shadow(&shadow), "newtype conversion");
+        conversion_count += 1;
+    }
+    assert_eq!(conversion_count, 1);
 
     let mock = mock_shadow();
     assert!(validate_shadow(&mock, &facts));

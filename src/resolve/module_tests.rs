@@ -2975,6 +2975,9 @@ fn scheme_only_nominal_retention_charges_only_hidden_metadata() {
     exact
         .retain_scheme_nominal_fact(
             ImportedNominalFactRef {
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
+                representation_provenance: None,
                 id: nominal,
                 parameter_count: 0,
                 constructor_count: constructors.len(),
@@ -3007,6 +3010,9 @@ fn scheme_only_nominal_retention_charges_only_hidden_metadata() {
     let error = short
         .retain_scheme_nominal_fact(
             ImportedNominalFactRef {
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
+                representation_provenance: None,
                 id: nominal,
                 parameter_count: 1,
                 constructor_count: constructors.len(),

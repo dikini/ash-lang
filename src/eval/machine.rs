@@ -514,6 +514,9 @@ fn dispatch_entry(
         PureExprKind::Computation(PureComputation::Match(match_node)) => {
             enter_match(match_node, environment)
         }
+        PureExprKind::Computation(PureComputation::NewtypeConversion(operation)) => {
+            Transition::direct(Control::Evaluate(operation.child(), environment))
+        }
         PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
             enter_type_abstraction(operation, environment)
         }
@@ -1038,7 +1041,7 @@ mod tests {
     use super::*;
     use crate::{
         core::{
-            CoreBuilder,
+            CoreBuilder, NewtypeConversionDirection,
             binding::BindingNode,
             function::ApplicationNode,
             function::FunctionNode,
@@ -1051,7 +1054,10 @@ mod tests {
             variable::VariableNode,
         },
         integer::Integer,
-        resolved::{ResolvedConstructor, ResolvedNominalType, ResolvedRegistry},
+        resolved::{
+            ResolvedConstructor, ResolvedNominalType, ResolvedRegistry, ResolvedTypeProvenance,
+            ResolvedTypeProvenanceNode,
+        },
         source::{ByteRange, Origin, SourceFile},
         types::{ConstructorId, NominalTypeId, Type, TypeVariableId},
     };
@@ -1443,6 +1449,9 @@ mod tests {
         let second_constructor = ConstructorId::new(nominal, 1);
         let registry = Arc::new(ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: nominal,
                 spelling: "Flag".into(),
                 constructors: vec![first_constructor, second_constructor].into_boxed_slice(),
@@ -1891,5 +1900,215 @@ mod tests {
         worker
             .join()
             .expect("recursive template environment should drop iteratively");
+    }
+
+    #[test]
+    fn evaluator_enters_a_validated_newtype_conversion_child_directly() {
+        let source = SourceFile::new("runtime-conversion.ash", "()").expect("test source");
+        let origin = Origin::Source(
+            source
+                .span(ByteRange::new(0, 2).expect("ordered range"))
+                .expect("source span"),
+        );
+        let owner = NominalTypeId::new(source.id(), 0);
+        let mut builder = CoreBuilder::new();
+        let child = builder
+            .unit(Type::Unit, origin.clone())
+            .expect("the conversion child should fit");
+        let root = builder
+            .newtype_conversion(
+                owner,
+                NewtypeConversionDirection::Unwrap,
+                child,
+                Type::Unit,
+                origin,
+            )
+            .expect("the conversion carrier should fit");
+        let program = crate::core::dialect::forge_validated_for_test(
+            builder.finish(root).expect("the conversion should finish"),
+        );
+        let shared = program.shared();
+        let mut heap = Vec::new();
+
+        let transition = dispatch_entry(&shared, root, Environment::new(), &mut heap)
+            .expect("dispatch should enter the conversion child");
+        let Control::Evaluate(entered, _) = transition.control else {
+            panic!("conversion dispatch should directly evaluate its child");
+        };
+        assert_eq!(entered, child);
+        assert!(transition.frame.is_none());
+        assert!(heap.is_empty());
+        let evaluation = evaluate(&program).expect("evaluation should erase the conversion");
+        assert!(matches!(evaluation.value, Value::Unit));
+        assert_eq!(evaluation.heap.cell_count(), 0);
+        assert_eq!(evaluation.max_frame_depth, 0);
+    }
+
+    #[test]
+    fn module_newtype_wrapper_allocates_no_constructor_cell() {
+        let source = SourceFile::new(
+            "runtime-newtype-allocation.ash",
+            "type Box = Box(Int)\nnewtype Wrapped = Wrapped(Box)\n",
+        )
+        .expect("test source");
+        let span = |start, end| {
+            source
+                .span(ByteRange::new(start, end).expect("ordered range"))
+                .expect("source span")
+        };
+        let origin = Origin::Source(span(0, 50));
+        let box_declaration_origin = Origin::Source(span(0, 19));
+        let box_constructor_origin = Origin::Source(span(11, 19));
+        let wrapped_declaration_origin = Origin::Source(span(20, 50));
+        let wrapped_constructor_origin = Origin::Source(span(38, 50));
+        let wrapped_representation_span = span(46, 49);
+        let module = source.id();
+        let box_owner = NominalTypeId::new(module, 0);
+        let wrapped_owner = NominalTypeId::new(module, 1);
+        let box_constructor = ConstructorId::new(box_owner, 0);
+        let wrapped_constructor = ConstructorId::new(wrapped_owner, 0);
+        let registry = Arc::new(
+            ResolvedRegistry::new(
+                vec![
+                    ResolvedNominalType {
+                        id: box_owner,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                        spelling: "Box".to_owned(),
+                        constructors: Box::new([box_constructor]),
+                        representation: None,
+                        representation_provenance: None,
+                        origin: box_declaration_origin,
+                    },
+                    ResolvedNominalType {
+                        id: wrapped_owner,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Newtype,
+                        spelling: "Wrapped".to_owned(),
+                        constructors: Box::new([wrapped_constructor]),
+                        representation: Some(Type::Nominal(box_owner)),
+                        representation_provenance: Some(ResolvedTypeProvenance::new(
+                            vec![ResolvedTypeProvenanceNode::Fact(
+                                wrapped_representation_span,
+                            )],
+                            0,
+                        )),
+                        origin: wrapped_declaration_origin,
+                    },
+                ],
+                vec![
+                    ResolvedConstructor {
+                        id: box_constructor,
+                        owner: box_owner,
+                        spelling: "Box".to_owned(),
+                        payload: Some(Type::Int),
+                        origin: box_constructor_origin,
+                    },
+                    ResolvedConstructor {
+                        id: wrapped_constructor,
+                        owner: wrapped_owner,
+                        spelling: "Wrapped".to_owned(),
+                        payload: None,
+                        origin: wrapped_constructor_origin,
+                    },
+                ],
+            )
+            .with_type_parameters(vec![(box_owner, Vec::new()), (wrapped_owner, Vec::new())]),
+        );
+        let mut builder = CoreBuilder::with_registry(registry);
+        let constructor = builder
+            .constructor(
+                box_constructor,
+                Type::Function(Box::new(Type::Int), Box::new(Type::Nominal(box_owner))),
+                origin.clone(),
+            )
+            .expect("the ordinary constructor should fit");
+        let payload = builder
+            .integer(
+                Integer::parse_decimal("42").expect("42 should parse"),
+                Type::Int,
+                origin.clone(),
+            )
+            .expect("the representation payload should fit");
+        let representation = builder
+            .application(
+                constructor,
+                payload,
+                Type::Nominal(box_owner),
+                origin.clone(),
+            )
+            .expect("the ordinary representation should fit");
+        let root = builder
+            .newtype_conversion(
+                wrapped_owner,
+                NewtypeConversionDirection::Wrap,
+                representation,
+                Type::Nominal(wrapped_owner),
+                origin,
+            )
+            .expect("the newtype wrapper should fit");
+        let program = validate(
+            builder
+                .finish(root)
+                .expect("the wrapped value should finish"),
+            &[&source],
+        )
+        .expect("the canonical conversion should independently authenticate");
+
+        let evaluation = evaluate(&program).expect("the validated conversion should erase");
+        assert!(matches!(evaluation.value, Value::Data(_)));
+        assert_eq!(
+            evaluation.heap.cell_count(),
+            1,
+            "only the ordinary representation constructor may allocate",
+        );
+    }
+
+    #[test]
+    fn evaluator_conversion_erasure_and_teardown_fit_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("runtime-newtype-conversion-erasure".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source =
+                    SourceFile::new("runtime-conversion-chain.ash", "()").expect("test source");
+                let origin = Origin::Source(
+                    source
+                        .span(ByteRange::new(0, 2).expect("ordered range"))
+                        .expect("source span"),
+                );
+                let owner = NominalTypeId::new(source.id(), 0);
+                let mut builder = CoreBuilder::new();
+                let mut root = builder
+                    .unit(Type::Unit, origin.clone())
+                    .expect("the conversion leaf should fit");
+                for index in 0..DEPTH {
+                    root = builder
+                        .newtype_conversion(
+                            owner,
+                            if index % 2 == 0 {
+                                NewtypeConversionDirection::Wrap
+                            } else {
+                                NewtypeConversionDirection::Unwrap
+                            },
+                            root,
+                            Type::Unit,
+                            origin.clone(),
+                        )
+                        .expect("the conversion chain should fit");
+                }
+                let program = crate::core::dialect::forge_validated_for_test(
+                    builder.finish(root).expect("the conversion should finish"),
+                );
+                let evaluation =
+                    evaluate(&program).expect("evaluation must erase the conversion chain");
+                assert!(matches!(evaluation.value, Value::Unit));
+                assert_eq!(evaluation.trace.len(), DEPTH + 1);
+                assert_eq!(evaluation.max_frame_depth, 0);
+                assert_eq!(evaluation.heap.cell_count(), 0);
+            })
+            .expect("the evaluator erasure thread should start")
+            .join()
+            .expect("evaluator conversion erasure must fit a small stack");
     }
 }

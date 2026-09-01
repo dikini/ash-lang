@@ -26,7 +26,8 @@ use crate::{
     module::ModuleId,
     pattern::{UsefulnessBudget, missing_witness_for_types_with_budget, usefulness_with_budget},
     resolved::{
-        BinderId, ResolvedConstructor, ResolvedNominalType, ResolvedTypeVariable,
+        BinderId, ResolvedConstructor, ResolvedNominalDeclarationKind, ResolvedNominalType,
+        ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResolvedTypeVariable,
         same_resolved_type_variables_with_charge,
     },
     source::{Origin, SourceFile, SourceId, Span},
@@ -190,6 +191,8 @@ pub enum ValidationReason {
     TypeOperation,
     /// A Core type variable occurs outside its abstraction scope.
     TypeScope,
+    /// A module-newtype conversion does not match its canonical representation relation.
+    NewtypeConversion,
 }
 
 impl fmt::Display for ValidationReason {
@@ -211,6 +214,7 @@ impl fmt::Display for ValidationReason {
             Self::Resource => "core.validation.resource",
             Self::TypeOperation => "core.validation.type-operation",
             Self::TypeScope => "core.validation.type-scope",
+            Self::NewtypeConversion => "core.validation.newtype-conversion",
         })
     }
 }
@@ -273,6 +277,21 @@ fn constructor_belongs_to_owner(owner: &ResolvedNominalType, constructor: Constr
         .ok()
         .and_then(|index| owner.constructors.get(index))
         .is_some_and(|owned| *owned == constructor)
+}
+
+fn span_contains(outer: Span, inner: Span) -> bool {
+    outer.source() == inner.source()
+        && outer.range().start() <= inner.range().start()
+        && inner.range().end() <= outer.range().end()
+}
+
+fn representation_provenance_span(node: &ResolvedTypeProvenanceNode) -> Span {
+    match node {
+        ResolvedTypeProvenanceNode::Fact(span)
+        | ResolvedTypeProvenanceNode::Tuple { span, .. }
+        | ResolvedTypeProvenanceNode::Function { span, .. }
+        | ResolvedTypeProvenanceNode::Application { span, .. } => *span,
+    }
 }
 
 /// Consumes unchecked Core and returns the capability required by consumers.
@@ -386,6 +405,8 @@ struct Validator<'program, 'source> {
     #[cfg(test)]
     owner_parameter_index_work: Cell<usize>,
     #[cfg(test)]
+    newtype_conversion_parameter_work: Cell<usize>,
+    #[cfg(test)]
     type_validation_pending_peak: Cell<usize>,
 }
 
@@ -402,6 +423,8 @@ impl<'program, 'source> Validator<'program, 'source> {
             type_work: Cell::new(0),
             #[cfg(test)]
             owner_parameter_index_work: Cell::new(0),
+            #[cfg(test)]
+            newtype_conversion_parameter_work: Cell::new(0),
             #[cfg(test)]
             type_validation_pending_peak: Cell::new(0),
         }
@@ -1461,10 +1484,12 @@ impl<'program, 'source> Validator<'program, 'source> {
         {
             replacements.insert_replacing(*parameter, self.clone_type_charged(argument)?);
         }
-        let body =
-            substitute_type_variables_with(&method.value_type, replacements.as_map(), |cells| {
-                self.charge_type_work(cells)
-            })?;
+        let body = substitute_type_variables_with(
+            &method.value_type,
+            replacements.as_map(),
+            |cells| self.charge_type_work(cells),
+            || ValidationError::new(ValidationReason::Resource, None),
+        )?;
         let mut parameters = Vec::new();
         self.charge_type_work(method.parameters.len())?;
         parameters
@@ -1798,6 +1823,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                                 linked,
                                 scope_replacements.as_map(),
                                 |cells| self.charge_type_work(cells),
+                                || ValidationError::new(ValidationReason::Resource, None),
                             )?);
                         if !self.same_type_charged(actual, &expected_argument)? {
                             return Ok(false);
@@ -1879,6 +1905,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             expected_body,
             replacements.as_map(),
             |cells| self.charge_type_work(cells),
+            || ValidationError::new(ValidationReason::Resource, None),
         )?);
         self.same_type_charged(&renamed, actual_body)
     }
@@ -1980,6 +2007,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 expected,
                 scope_replacements.as_map(),
                 |cells| self.charge_type_work(cells),
+                || ValidationError::new(ValidationReason::Resource, None),
             )?);
             if !self.same_type_charged(&expected, actual)? {
                 return Err(ValidationError::new(
@@ -1993,6 +2021,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 expected,
                 scope_replacements.as_map(),
                 |cells| self.charge_type_work(cells),
+                || ValidationError::new(ValidationReason::Resource, None),
             )?);
             if !self.same_type_charged(&expected, &stored.ty)? {
                 return Err(ValidationError::new(
@@ -2534,6 +2563,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             &edge.value_type,
             interface_replacement.as_map(),
             |cells| self.charge_type_work(cells),
+            || ValidationError::new(ValidationReason::Resource, None),
         )?;
         let expected_domain = if edge.method_parameters.is_empty() {
             IterativeTypeOwner::new(expected_body)
@@ -2952,6 +2982,11 @@ impl<'program, 'source> Validator<'program, 'source> {
                 }
                 previous_parameter_start = Some(parameter_range.start());
             }
+            self.validate_nominal_representation(
+                nominal,
+                registry_source.expect("validated registry source exists"),
+                &parameter_owners,
+            )?;
         }
         let mut previous_constructor_start = None;
         for constructor in registry.constructors() {
@@ -3230,6 +3265,11 @@ impl<'program, 'source> Validator<'program, 'source> {
                 }
                 previous_parameter_start = Some(parameter_range.start());
             }
+            let source = relation
+                .get(&nominal.id.module())
+                .copied()
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            self.validate_nominal_representation(nominal, source, &parameter_owners)?;
         }
 
         let mut constructor_ids = HashSet::new();
@@ -3313,6 +3353,160 @@ impl<'program, 'source> Validator<'program, 'source> {
         }
         self.validate_global_parameter_rows(&parameter_owners)?;
         Ok(parameter_owners)
+    }
+
+    fn validate_nominal_representation(
+        &self,
+        nominal: &ResolvedNominalType,
+        source: SourceId,
+        parameter_owners: &HashMap<crate::types::TypeVariableId, crate::types::NominalTypeId>,
+    ) -> Result<(), ValidationError> {
+        match nominal.declaration_kind {
+            ResolvedNominalDeclarationKind::Data => {
+                if nominal.representation.is_some() || nominal.representation_provenance.is_some() {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+            }
+            ResolvedNominalDeclarationKind::Newtype => {
+                let [constructor] = nominal.constructors.as_ref() else {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                };
+                let Some(constructor) = self.program.registry.constructor(*constructor) else {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                };
+                let (Some(representation), Some(provenance)) = (
+                    nominal.representation.as_ref(),
+                    nominal.representation_provenance.as_ref(),
+                ) else {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                };
+                if !matches!(nominal.origin, Origin::Source(_))
+                    || !matches!(constructor.origin, Origin::Source(_))
+                    || constructor.owner != nominal.id
+                    || constructor.spelling != nominal.spelling
+                    || constructor.payload.is_some()
+                    || !self.valid_registry_payload(
+                        Some(representation),
+                        nominal.id,
+                        parameter_owners,
+                    )?
+                    || !self.valid_registry_payload_kind(
+                        Some(representation),
+                        nominal.id,
+                        parameter_owners,
+                    )?
+                    || !self.valid_representation_provenance(
+                        representation,
+                        provenance,
+                        source,
+                        constructor.origin.primary_span(),
+                    )?
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn valid_representation_provenance(
+        &self,
+        representation: &Type,
+        provenance: &ResolvedTypeProvenance,
+        source: SourceId,
+        declaration: Span,
+    ) -> Result<bool, ValidationError> {
+        let nodes = provenance.nodes();
+        if nodes.is_empty() || provenance.root() >= nodes.len() {
+            return Ok(false);
+        }
+        self.charge_type_work(nodes.len())?;
+        let mut visited = HashSet::new();
+        visited
+            .try_reserve(nodes.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        let mut work = Vec::new();
+        self.charge_type_work(1)?;
+        work.try_reserve(1)
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        work.push((representation, provenance.root(), declaration));
+        while let Some((ty, index, parent)) = work.pop() {
+            self.charge_type_work(1)?;
+            let Some(node) = nodes.get(index) else {
+                return Ok(false);
+            };
+            if !visited.insert(index) {
+                return Ok(false);
+            }
+            let span = representation_provenance_span(node);
+            if span.source() != source
+                || span.range().start() >= span.range().end()
+                || !span_contains(parent, span)
+            {
+                return Ok(false);
+            }
+            match (ty, node) {
+                (
+                    Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_),
+                    ResolvedTypeProvenanceNode::Fact(_),
+                ) => {}
+                (
+                    Type::Application(function, argument),
+                    ResolvedTypeProvenanceNode::Application {
+                        function: function_index,
+                        argument: argument_index,
+                        argument_span,
+                        ..
+                    },
+                ) => {
+                    if nodes
+                        .get(*argument_index)
+                        .is_none_or(|node| representation_provenance_span(node) != *argument_span)
+                    {
+                        return Ok(false);
+                    }
+                    self.charge_type_work(2)?;
+                    work.try_reserve(2)
+                        .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                    work.push((argument, *argument_index, span));
+                    work.push((function, *function_index, span));
+                }
+                (
+                    Type::Tuple(elements),
+                    ResolvedTypeProvenanceNode::Tuple {
+                        elements: provenance_elements,
+                        ..
+                    },
+                ) if elements.len() == provenance_elements.len() => {
+                    self.charge_type_work(elements.len())?;
+                    work.try_reserve(elements.len())
+                        .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                    work.extend(
+                        elements
+                            .iter()
+                            .zip(provenance_elements.iter().copied())
+                            .rev()
+                            .map(|(element, index)| (element, index, span)),
+                    );
+                }
+                (
+                    Type::Function(domain, codomain),
+                    ResolvedTypeProvenanceNode::Function {
+                        domain: domain_index,
+                        codomain: codomain_index,
+                        ..
+                    },
+                ) => {
+                    self.charge_type_work(2)?;
+                    work.try_reserve(2)
+                        .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                    work.push((codomain, *codomain_index, span));
+                    work.push((domain, *domain_index, span));
+                }
+                (Type::Forall(_, _) | Type::Inference(_), _) | (_, _) => return Ok(false),
+            }
+        }
+        Ok(visited.len() == nodes.len())
     }
 
     fn valid_type(&self, root: Option<&Type>) -> Result<bool, ValidationError> {
@@ -3602,6 +3796,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 argument,
                 replacements,
                 |cells| self.charge_type_work(cells),
+                || ValidationError::new(ValidationReason::Resource, None),
             )?);
         }
         Ok(InterfaceApplication::new(
@@ -4243,6 +4438,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                     PureComputation::Apply(_)
                     | PureComputation::Primitive(_)
                     | PureComputation::Tuple(_)
+                    | PureComputation::NewtypeConversion(_)
                     | PureComputation::TypeAbstraction(_)
                     | PureComputation::TypeApplication(_),
                 ) => {}
@@ -4484,6 +4680,17 @@ impl<'program, 'source> Validator<'program, 'source> {
                 else {
                     return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
                 };
+                if self
+                    .program
+                    .registry
+                    .nominal(info.owner)
+                    .is_some_and(|owner| {
+                        owner.declaration_kind
+                            == crate::resolved::ResolvedNominalDeclarationKind::Newtype
+                    })
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                }
                 let parameters = self
                     .program
                     .registry
@@ -4679,6 +4886,14 @@ impl<'program, 'source> Validator<'program, 'source> {
                     return Err(ValidationError::new(ValidationReason::Coverage, Some(id)));
                 }
             }
+            PureComputation::NewtypeConversion(conversion) => {
+                if !self.valid_newtype_conversion(node, *conversion, type_binders)? {
+                    return Err(ValidationError::new(
+                        ValidationReason::NewtypeConversion,
+                        Some(id),
+                    ));
+                }
+            }
             PureComputation::TypeAbstraction(abstraction) => {
                 let body = self.node(abstraction.body())?;
                 let Type::Forall(parameters, scheme_body) = &node.ty else {
@@ -4769,6 +4984,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                     body,
                     replacements.as_map(),
                     |cells| self.charge_type_work(cells),
+                    || ValidationError::new(ValidationReason::Resource, None),
                 )?);
                 if !self.same_type_charged(&node.ty, &instantiated)? {
                     return Err(ValidationError::new(
@@ -4779,6 +4995,91 @@ impl<'program, 'source> Validator<'program, 'source> {
             }
         }
         Ok(())
+    }
+
+    fn valid_newtype_conversion(
+        &self,
+        node: &StoredNode,
+        conversion: super::NewtypeConversionNode,
+        type_binders: &CoreTypeBinders<'program>,
+    ) -> Result<bool, ValidationError> {
+        let Some(owner) = self.program.registry.nominal(conversion.owner()) else {
+            return Ok(false);
+        };
+        if owner.declaration_kind != ResolvedNominalDeclarationKind::Newtype {
+            return Ok(false);
+        }
+        let Some(representation) = owner.representation.as_ref() else {
+            return Ok(false);
+        };
+        let Some(parameters) = self.program.registry.nominal_parameters(owner.id) else {
+            return Ok(false);
+        };
+        let child = self.node(conversion.child())?;
+        let (nominal, actual_representation) = match conversion.direction() {
+            super::NewtypeConversionDirection::Wrap => (&node.ty, &child.ty),
+            super::NewtypeConversionDirection::Unwrap => (&child.ty, &node.ty),
+        };
+
+        self.charge_type_work(parameters.len())?;
+        #[cfg(test)]
+        self.newtype_conversion_parameter_work
+            .set(self.newtype_conversion_parameter_work.get() + parameters.len());
+        let mut arguments = Vec::new();
+        arguments
+            .try_reserve(parameters.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        let spine_work = parameters
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?;
+        self.charge_type_work(spine_work)?;
+        #[cfg(test)]
+        self.newtype_conversion_parameter_work
+            .set(self.newtype_conversion_parameter_work.get() + spine_work);
+        let mut head = nominal;
+        while let Type::Application(function, argument) = head {
+            if arguments.len() == parameters.len() {
+                return Ok(false);
+            }
+            arguments.push(argument.as_ref());
+            head = function;
+        }
+        if head != &Type::Nominal(owner.id) || arguments.len() != parameters.len() {
+            return Ok(false);
+        }
+
+        let mut replacements = TypeReplacementMap::new();
+        self.charge_type_work(parameters.len())?;
+        #[cfg(test)]
+        self.newtype_conversion_parameter_work
+            .set(self.newtype_conversion_parameter_work.get() + parameters.len());
+        replacements
+            .try_reserve(parameters.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        self.charge_type_work(parameters.len())?;
+        #[cfg(test)]
+        self.newtype_conversion_parameter_work
+            .set(self.newtype_conversion_parameter_work.get() + parameters.len());
+        for (parameter, argument) in parameters.iter().zip(arguments.into_iter().rev()) {
+            let Some(argument_kind) =
+                self.synthesize_monotype_kind(argument, MonotypeVariableKinds::Core(type_binders))?
+            else {
+                return Ok(false);
+            };
+            if !self.same_kind_charged(&parameter.kind, &argument_kind)? {
+                return Ok(false);
+            }
+            replacements.insert_replacing(parameter.id, self.clone_type_charged(argument)?);
+        }
+
+        let expected = IterativeTypeOwner::new(substitute_type_variables_with(
+            representation,
+            replacements.as_map(),
+            |cells| self.charge_type_work(cells),
+            || ValidationError::new(ValidationReason::Resource, None),
+        )?);
+        self.same_type_charged(&expected, actual_representation)
     }
 
     fn guarded_data_root(
@@ -5056,6 +5357,17 @@ impl<'program, 'source> Validator<'program, 'source> {
                     let Some(info) = self.program.registry.constructor(*constructor) else {
                         return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
                     };
+                    if self
+                        .program
+                        .registry
+                        .nominal(info.owner)
+                        .is_some_and(|owner| {
+                            owner.declaration_kind
+                                == crate::resolved::ResolvedNominalDeclarationKind::Newtype
+                        })
+                    {
+                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                    }
                     if info.owner != owner {
                         return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
                     }
@@ -5087,6 +5399,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                             payload,
                             replacements.as_map(),
                             |cells| self.charge_type_work(cells),
+                            || ValidationError::new(ValidationReason::Resource, None),
                         )?))
                     } else {
                         None
@@ -5226,7 +5539,8 @@ impl<'program, 'source> Validator<'program, 'source> {
                         | PureExprKind::Computation(
                             PureComputation::Apply(_)
                             | PureComputation::Primitive(_)
-                            | PureComputation::Tuple(_),
+                            | PureComputation::Tuple(_)
+                            | PureComputation::NewtypeConversion(_),
                         ) => {}
                     }
                     requirements[self.index(id)?] = Some(free);
@@ -5500,6 +5814,9 @@ impl<'program, 'source> Validator<'program, 'source> {
                         PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
                             self.requirements_for(&requirements, operation.function())?
                         }
+                        PureExprKind::Computation(PureComputation::NewtypeConversion(
+                            operation,
+                        )) => self.requirements_for(&requirements, operation.child())?,
                         PureExprKind::Value(
                             PureValue::Integer(_)
                             | PureValue::Boolean(_)
@@ -5598,13 +5915,14 @@ mod tests {
     use super::*;
     use crate::{
         core::{
-            CoreBuilder, PureValue,
+            CoreBuilder, NewtypeConversionDirection, PureValue,
             binding::BindingNode,
             function::{ApplicationNode, FunctionNode},
             transform::{fold_literal_primitives, identity_traversal},
             type_ops::{TypeAbstractionNode, TypeApplicationNode},
         },
         elaborate::{Elaborator, check_module, link_modules},
+        integer::Integer,
         module::{ModuleGraph, ModuleRoots, load_module_graph},
         resolve::{DependencyExports, resolve_module},
         resolved::{CheckedModule, CoreGlobalParameterRowMutationForTest},
@@ -7623,6 +7941,7 @@ mod tests {
                     PureComputation::Apply(_)
                     | PureComputation::Primitive(_)
                     | PureComputation::Tuple(_)
+                    | PureComputation::NewtypeConversion(_)
                     | PureComputation::TypeAbstraction(_),
                 ) => {}
             }
@@ -8079,7 +8398,8 @@ mod tests {
                 | PureExprKind::Computation(
                     PureComputation::Apply(_)
                     | PureComputation::Primitive(_)
-                    | PureComputation::Tuple(_),
+                    | PureComputation::Tuple(_)
+                    | PureComputation::NewtypeConversion(_),
                 ) => {}
             }
         }
@@ -10296,7 +10616,8 @@ mod tests {
             | PureExprKind::Computation(
                 PureComputation::Apply(_)
                 | PureComputation::Primitive(_)
-                | PureComputation::Tuple(_),
+                | PureComputation::Tuple(_)
+                | PureComputation::NewtypeConversion(_),
             ) => false,
         }
     }
@@ -10448,6 +10769,7 @@ mod tests {
                 PureComputation::Apply(_)
                 | PureComputation::Primitive(_)
                 | PureComputation::Tuple(_)
+                | PureComputation::NewtypeConversion(_)
                 | PureComputation::TypeAbstraction(_),
             ) => {}
         }
@@ -10519,6 +10841,7 @@ mod tests {
                     | PureComputation::Primitive(_)
                     | PureComputation::Tuple(_)
                     | PureComputation::Match(_)
+                    | PureComputation::NewtypeConversion(_)
                     | PureComputation::TypeAbstraction(_)
                     | PureComputation::TypeApplication(_),
                 ) => {}
@@ -10601,6 +10924,7 @@ mod tests {
                     | PureComputation::Primitive(_)
                     | PureComputation::Tuple(_)
                     | PureComputation::Match(_)
+                    | PureComputation::NewtypeConversion(_)
                     | PureComputation::TypeAbstraction(_)
                     | PureComputation::TypeApplication(_),
                 ) => {}
@@ -11277,6 +11601,204 @@ mod tests {
         Origin::Source(source.span(range).expect("source span"))
     }
 
+    fn newtype_registry(
+        source: &SourceFile,
+    ) -> (
+        Arc<crate::resolved::ResolvedRegistry>,
+        crate::types::NominalTypeId,
+        ConstructorId,
+    ) {
+        let owner = crate::types::NominalTypeId::new(source.id(), 0);
+        let constructor = ConstructorId::new(owner, 0);
+        let node_origin = origin(source);
+        let representation_span = node_origin.primary_span();
+        let registry = crate::resolved::ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                representation_provenance: Some(ResolvedTypeProvenance::new(
+                    vec![ResolvedTypeProvenanceNode::Fact(representation_span)],
+                    0,
+                )),
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Newtype,
+                representation: Some(Type::Int),
+                id: owner,
+                spelling: "UserId".to_owned(),
+                constructors: Box::new([constructor]),
+                origin: node_origin.clone(),
+            }],
+            vec![ResolvedConstructor {
+                id: constructor,
+                owner,
+                spelling: "UserId".to_owned(),
+                payload: None,
+                origin: node_origin,
+            }],
+        )
+        .with_type_parameters(vec![(owner, Vec::new())]);
+        (Arc::new(registry), owner, constructor)
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum NewtypeRegistryTamper {
+        OrdinaryKind,
+        NominalGeneratedOrigin,
+        ConstructorGeneratedOrigin,
+        WrongShape,
+        WrongSource,
+        EmptyRange,
+        OutsideConstructor,
+        SharedNode,
+        OrphanNode,
+    }
+
+    fn tampered_newtype_registry(
+        source: &SourceFile,
+        foreign: &SourceFile,
+        tamper: NewtypeRegistryTamper,
+    ) -> Arc<crate::resolved::ResolvedRegistry> {
+        let owner = crate::types::NominalTypeId::new(source.id(), 0);
+        let constructor = ConstructorId::new(owner, 0);
+        let declaration_span = source
+            .span(ByteRange::new(0, 30).expect("declaration range"))
+            .expect("declaration span");
+        let constructor_span = source
+            .span(ByteRange::new(18, 30).expect("constructor range"))
+            .expect("constructor span");
+        let representation_span = source
+            .span(ByteRange::new(26, 29).expect("representation range"))
+            .expect("representation span");
+        let outside_constructor = source
+            .span(ByteRange::new(8, 15).expect("name range"))
+            .expect("name span");
+        let empty_span = source
+            .span(ByteRange::new(26, 26).expect("empty range"))
+            .expect("empty span");
+        let foreign_span = foreign
+            .span(ByteRange::new(0, 3).expect("foreign range"))
+            .expect("foreign span");
+        let source_origin = Origin::Source(declaration_span);
+        let generated_origin = Origin::Generated {
+            cause: Box::new(source_origin.clone()),
+            reason: crate::source::GeneratedReason::TypeChecking,
+        };
+        let (representation, provenance) = match tamper {
+            NewtypeRegistryTamper::WrongShape => (
+                Type::Int,
+                ResolvedTypeProvenance::new(
+                    vec![ResolvedTypeProvenanceNode::Tuple {
+                        span: representation_span,
+                        elements: Box::new([]),
+                    }],
+                    0,
+                ),
+            ),
+            NewtypeRegistryTamper::WrongSource => (
+                Type::Int,
+                ResolvedTypeProvenance::new(
+                    vec![ResolvedTypeProvenanceNode::Fact(foreign_span)],
+                    0,
+                ),
+            ),
+            NewtypeRegistryTamper::EmptyRange => (
+                Type::Int,
+                ResolvedTypeProvenance::new(vec![ResolvedTypeProvenanceNode::Fact(empty_span)], 0),
+            ),
+            NewtypeRegistryTamper::OutsideConstructor => (
+                Type::Int,
+                ResolvedTypeProvenance::new(
+                    vec![ResolvedTypeProvenanceNode::Fact(outside_constructor)],
+                    0,
+                ),
+            ),
+            NewtypeRegistryTamper::SharedNode => (
+                Type::Tuple(Box::new([Type::Int, Type::Int])),
+                ResolvedTypeProvenance::new(
+                    vec![
+                        ResolvedTypeProvenanceNode::Fact(representation_span),
+                        ResolvedTypeProvenanceNode::Tuple {
+                            span: representation_span,
+                            elements: Box::new([0, 0]),
+                        },
+                    ],
+                    1,
+                ),
+            ),
+            NewtypeRegistryTamper::OrphanNode => (
+                Type::Int,
+                ResolvedTypeProvenance::new(
+                    vec![
+                        ResolvedTypeProvenanceNode::Fact(representation_span),
+                        ResolvedTypeProvenanceNode::Fact(representation_span),
+                    ],
+                    0,
+                ),
+            ),
+            NewtypeRegistryTamper::OrdinaryKind
+            | NewtypeRegistryTamper::NominalGeneratedOrigin
+            | NewtypeRegistryTamper::ConstructorGeneratedOrigin => (
+                Type::Int,
+                ResolvedTypeProvenance::new(
+                    vec![ResolvedTypeProvenanceNode::Fact(representation_span)],
+                    0,
+                ),
+            ),
+        };
+        let nominal_origin = if matches!(tamper, NewtypeRegistryTamper::NominalGeneratedOrigin) {
+            generated_origin.clone()
+        } else {
+            source_origin.clone()
+        };
+        let constructor_origin =
+            if matches!(tamper, NewtypeRegistryTamper::ConstructorGeneratedOrigin) {
+                generated_origin
+            } else {
+                Origin::Source(constructor_span)
+            };
+        let declaration_kind = if matches!(tamper, NewtypeRegistryTamper::OrdinaryKind) {
+            ResolvedNominalDeclarationKind::Data
+        } else {
+            ResolvedNominalDeclarationKind::Newtype
+        };
+        Arc::new(
+            crate::resolved::ResolvedRegistry::new(
+                vec![ResolvedNominalType {
+                    id: owner,
+                    declaration_kind,
+                    spelling: "Wrapped".to_owned(),
+                    constructors: Box::new([constructor]),
+                    representation: Some(representation),
+                    representation_provenance: Some(provenance),
+                    origin: nominal_origin,
+                }],
+                vec![ResolvedConstructor {
+                    id: constructor,
+                    owner,
+                    spelling: "Wrapped".to_owned(),
+                    payload: None,
+                    origin: constructor_origin,
+                }],
+            )
+            .with_type_parameters(vec![(owner, Vec::new())]),
+        )
+    }
+
+    fn unit_program_with_registry(
+        source: &SourceFile,
+        registry: Arc<crate::resolved::ResolvedRegistry>,
+    ) -> UnvalidatedProgram {
+        let mut builder = CoreBuilder::with_registry(registry);
+        let root = builder
+            .unit(
+                Type::Unit,
+                Origin::Source(
+                    source
+                        .span(ByteRange::new(0, 30).expect("root range"))
+                        .expect("root span"),
+                ),
+            )
+            .expect("unit root should fit");
+        builder.finish(root).expect("unit root should finish")
+    }
+
     fn range_origin(source: &SourceFile, start: u32, end: u32) -> Origin {
         Origin::Source(
             source
@@ -11314,12 +11836,18 @@ mod tests {
             crate::resolved::ResolvedRegistry::new(
                 vec![
                     crate::resolved::ResolvedNominalType {
+                        representation_provenance: None,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                        representation: None,
                         id: first_nominal,
                         spelling: "Shared".into(),
                         constructors: vec![first_constructor].into_boxed_slice(),
                         origin: range_origin(first_source, 0, 13),
                     },
                     crate::resolved::ResolvedNominalType {
+                        representation_provenance: None,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                        representation: None,
                         id: second_nominal,
                         spelling: "Shared".into(),
                         constructors: vec![second_constructor].into_boxed_slice(),
@@ -11516,6 +12044,9 @@ mod tests {
     ) {
         (
             crate::resolved::ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: owner,
                 spelling: spelling.into(),
                 constructors: Box::new([]),
@@ -12435,6 +12966,9 @@ mod tests {
             .collect();
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![crate::resolved::ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: owner,
                 spelling: "Wide".into(),
                 constructors: vec![constructor].into_boxed_slice(),
@@ -12613,6 +13147,9 @@ mod tests {
             .collect::<Vec<_>>()
             .into_boxed_slice();
         let owner = crate::resolved::ResolvedNominalType {
+            representation_provenance: None,
+            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             id: nominal,
             spelling: "Wide".into(),
             constructors,
@@ -12649,6 +13186,9 @@ mod tests {
             .collect::<Vec<_>>();
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![crate::resolved::ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: nominal,
                 spelling: "Wide".into(),
                 constructors: constructors.clone().into_boxed_slice(),
@@ -12745,6 +13285,9 @@ mod tests {
             );
             let registry = crate::resolved::ResolvedRegistry::new(
                 vec![crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: nominal,
                     spelling: "Holder".into(),
                     constructors: Box::new([constructor]),
@@ -12888,6 +13431,9 @@ mod tests {
             let parameter = crate::types::TypeVariableId::new(0);
             let registry = crate::resolved::ResolvedRegistry::new(
                 vec![crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: owner,
                     spelling: "Holder".into(),
                     constructors: Box::new([constructor]),
@@ -12972,6 +13518,9 @@ mod tests {
         let parameter = crate::types::TypeVariableId::new(0);
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![crate::resolved::ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: owner,
                 spelling: "Holder".into(),
                 constructors: Box::new([]),
@@ -13024,18 +13573,27 @@ mod tests {
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![
                 crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: pair,
                     spelling: "Pair".into(),
                     constructors: Box::new([]),
                     origin: origin(&file),
                 },
                 crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: higher,
                     spelling: "Higher".into(),
                     constructors: Box::new([]),
                     origin: origin(&file),
                 },
                 crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: owner,
                     spelling: "Use".into(),
                     constructors: Box::new([]),
@@ -13105,6 +13663,9 @@ mod tests {
         let parameter = crate::types::TypeVariableId::new(0);
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![crate::resolved::ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: owner,
                 spelling: "Holder".into(),
                 constructors: Box::new([]),
@@ -13342,6 +13903,9 @@ mod tests {
         let malformed_constructor = NodeId::new(arena, 4);
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![crate::resolved::ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: nominal,
                 spelling: "Wide".into(),
                 constructors: vec![constructor_id].into_boxed_slice(),
@@ -13488,12 +14052,18 @@ mod tests {
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![
                 crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: monomorphic,
                     spelling: "Mono".into(),
                     constructors: vec![mono_nullary, mono_payload].into_boxed_slice(),
                     origin: node_origin.clone(),
                 },
                 crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: parameterized,
                     spelling: "Poly".into(),
                     constructors: vec![poly_nullary, poly_payload].into_boxed_slice(),
@@ -13610,6 +14180,9 @@ mod tests {
                 let constructor_node = NodeId::new(arena, 2);
                 let registry = crate::resolved::ResolvedRegistry::new(
                     vec![crate::resolved::ResolvedNominalType {
+                        representation_provenance: None,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                        representation: None,
                         id: nominal,
                         spelling: "Deep".into(),
                         constructors: vec![constructor].into_boxed_slice(),
@@ -13970,6 +14543,9 @@ mod tests {
                 let registry = crate::resolved::ResolvedRegistry::new(
                     vec![
                         crate::resolved::ResolvedNominalType {
+                            representation_provenance: None,
+                            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                            representation: None,
                             id: owner,
                             spelling: "Deep".into(),
                             constructors: vec![constructor].into_boxed_slice(),
@@ -14062,6 +14638,9 @@ mod tests {
                 let registry = crate::resolved::ResolvedRegistry::new(
                     vec![
                         crate::resolved::ResolvedNominalType {
+                            representation_provenance: None,
+                            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                            representation: None,
                             id: owner,
                             spelling: "Deep".into(),
                             constructors: vec![constructor].into_boxed_slice(),
@@ -14143,6 +14722,495 @@ mod tests {
 
         let error = validate(program, &[&file]).expect_err("foreign dialect");
         assert_eq!(error.reason(), ValidationReason::DialectMembership);
+    }
+
+    #[test]
+    fn independent_validation_rejects_a_conversion_without_a_canonical_relation() {
+        let file = source();
+        let owner = crate::types::NominalTypeId::new(file.id(), 0);
+        let mut builder = CoreBuilder::new();
+        let child = builder
+            .unit(Type::Unit, origin(&file))
+            .expect("the conversion child should fit");
+        let root = builder
+            .newtype_conversion(
+                owner,
+                NewtypeConversionDirection::Wrap,
+                child,
+                Type::Unit,
+                origin(&file),
+            )
+            .expect("the unchecked conversion carrier should fit");
+
+        let error = validate(
+            builder.finish(root).expect("the conversion should finish"),
+            &[&file],
+        )
+        .expect_err("a conversion without a registry relation must not validate");
+        assert_eq!(error.reason(), ValidationReason::NewtypeConversion);
+        assert_eq!(error.node(), Some(root));
+    }
+
+    #[test]
+    fn both_registry_validators_reject_newtype_provenance_tampering() {
+        for tamper in [
+            NewtypeRegistryTamper::OrdinaryKind,
+            NewtypeRegistryTamper::NominalGeneratedOrigin,
+            NewtypeRegistryTamper::ConstructorGeneratedOrigin,
+            NewtypeRegistryTamper::WrongShape,
+            NewtypeRegistryTamper::WrongSource,
+            NewtypeRegistryTamper::EmptyRange,
+            NewtypeRegistryTamper::OutsideConstructor,
+            NewtypeRegistryTamper::SharedNode,
+            NewtypeRegistryTamper::OrphanNode,
+        ] {
+            let source = SourceFile::new(
+                "newtype-registry-tamper.ash",
+                "newtype Wrapped = Wrapped(Int)",
+            )
+            .expect("test source");
+            let foreign = SourceFile::new("foreign.ash", "Int").expect("foreign source");
+
+            let registry = tampered_newtype_registry(&source, &foreign, tamper);
+            let error = validate(
+                unit_program_with_registry(&source, registry),
+                &[&source, &foreign],
+            )
+            .expect_err("single-source Core must reject the tampered canonical fact");
+            assert_eq!(error.reason(), ValidationReason::Registry, "{tamper:?}");
+            assert_eq!(error.node(), None, "{tamper:?}");
+
+            let registry = tampered_newtype_registry(&source, &foreign, tamper);
+            let owner_module = registry
+                .nominals()
+                .first()
+                .expect("the tampered registry should retain its owner")
+                .id
+                .module();
+            let error = validate_modules(
+                unit_program_with_registry(&source, registry),
+                &[&source, &foreign],
+                &[(owner_module, source.id())],
+            )
+            .expect_err("module Core must reject the tampered canonical fact");
+            assert_eq!(error.reason(), ValidationReason::Registry, "{tamper:?}");
+            assert_eq!(error.node(), None, "{tamper:?}");
+        }
+    }
+
+    #[test]
+    fn linked_newtype_conversion_rejects_each_independent_relation_tamper() {
+        #[derive(Clone, Copy, Debug)]
+        enum Case {
+            Direction,
+            OrdinaryOwner,
+            MissingArgument,
+            OverApplication,
+            WrongArgumentKind,
+            ParameterOrder,
+            FreshBinderSubstitution,
+            ChildType,
+            ResultType,
+            ForeignOrigin,
+        }
+
+        for case in [
+            Case::Direction,
+            Case::OrdinaryOwner,
+            Case::MissingArgument,
+            Case::OverApplication,
+            Case::WrongArgumentKind,
+            Case::ParameterOrder,
+            Case::FreshBinderSubstitution,
+            Case::ChildType,
+            Case::ResultType,
+            Case::ForeignOrigin,
+        ] {
+            let mut fixture = LinkedCoreValidationFixture::compile(
+                "",
+                concat!(
+                    "type Carrier = Carrier(Int)\n",
+                    "type Higher<A> = Higher(A)\n",
+                    "newtype Box<A, B> = Box((A, B))\n",
+                    "main : Unit -> Box<Int, Bool>\n",
+                    "main () = Box((42, true))\n",
+                ),
+                &[],
+            );
+            let conversion_index = fixture
+                .program
+                .nodes
+                .iter()
+                .position(|node| {
+                    matches!(
+                        node.kind,
+                        PureExprKind::Computation(PureComputation::NewtypeConversion(_))
+                    )
+                })
+                .expect("the parameterized constructor should lower one conversion");
+            let PureExprKind::Computation(PureComputation::NewtypeConversion(conversion)) =
+                fixture.program.nodes[conversion_index].kind
+            else {
+                unreachable!("the selected node is a conversion")
+            };
+            let owner = conversion.owner();
+            let child = conversion.child();
+            let ordinary = fixture
+                .program
+                .registry
+                .nominals()
+                .iter()
+                .find(|nominal| nominal.spelling == "Carrier")
+                .expect("the ordinary owner should remain registered")
+                .id;
+            let higher = fixture
+                .program
+                .registry
+                .nominals()
+                .iter()
+                .find(|nominal| nominal.spelling == "Higher")
+                .expect("the higher-kinded owner should remain registered")
+                .id;
+            match case {
+                Case::Direction => {
+                    fixture.program.nodes[conversion_index].kind =
+                        PureExprKind::Computation(PureComputation::NewtypeConversion(
+                            super::super::NewtypeConversionNode::new(
+                                owner,
+                                NewtypeConversionDirection::Unwrap,
+                                child,
+                            ),
+                        ));
+                }
+                Case::OrdinaryOwner => {
+                    fixture.program.nodes[conversion_index].kind =
+                        PureExprKind::Computation(PureComputation::NewtypeConversion(
+                            super::super::NewtypeConversionNode::new(
+                                ordinary,
+                                NewtypeConversionDirection::Wrap,
+                                child,
+                            ),
+                        ));
+                }
+                Case::MissingArgument => {
+                    fixture.program.nodes[conversion_index].ty = Type::Nominal(owner);
+                }
+                Case::OverApplication => {
+                    let original = std::mem::replace(
+                        &mut fixture.program.nodes[conversion_index].ty,
+                        Type::Unit,
+                    );
+                    fixture.program.nodes[conversion_index].ty =
+                        Type::Application(Box::new(original), Box::new(Type::Unit));
+                }
+                Case::WrongArgumentKind => {
+                    fixture.program.nodes[conversion_index].ty = Type::Application(
+                        Box::new(Type::Application(
+                            Box::new(Type::Nominal(owner)),
+                            Box::new(Type::Nominal(higher)),
+                        )),
+                        Box::new(Type::Bool),
+                    );
+                }
+                Case::ParameterOrder => {
+                    let Type::Application(function, second) =
+                        fixture.program.nodes[conversion_index].ty.clone()
+                    else {
+                        panic!("Box should retain its second applied argument");
+                    };
+                    let Type::Application(_, first) = *function else {
+                        panic!("Box should retain its first applied argument");
+                    };
+                    fixture.program.nodes[conversion_index].ty = Type::Application(
+                        Box::new(Type::Application(Box::new(Type::Nominal(owner)), second)),
+                        first,
+                    );
+                }
+                Case::FreshBinderSubstitution => {
+                    fixture.program.nodes[conversion_index].ty = Type::Application(
+                        Box::new(Type::Application(
+                            Box::new(Type::Nominal(owner)),
+                            Box::new(Type::Int),
+                        )),
+                        Box::new(Type::Bool),
+                    );
+                }
+                Case::ChildType => {
+                    fixture.program.nodes[child.index().expect("child index")].ty = Type::Bool;
+                }
+                Case::ResultType => {
+                    fixture.program.nodes[conversion_index].ty = Type::Bool;
+                }
+                Case::ForeignOrigin => {
+                    let foreign = SourceFile::new("foreign-conversion.ash", "Box")
+                        .expect("foreign conversion source");
+                    fixture.program.nodes[conversion_index].origin = Some(Origin::Source(
+                        foreign
+                            .span(ByteRange::new(0, 3).expect("foreign range"))
+                            .expect("foreign span"),
+                    ));
+                }
+            }
+
+            let conversion_id = NodeId::new(
+                fixture.program.arena,
+                u32::try_from(conversion_index).expect("conversion index fits"),
+            );
+            let error = fixture
+                .validate()
+                .expect_err("each relation mutation must reject before evaluation");
+            let (reason, node) = match case {
+                Case::MissingArgument | Case::OverApplication | Case::WrongArgumentKind => {
+                    (ValidationReason::NodeType, conversion_id)
+                }
+                Case::ChildType => (ValidationReason::NodeType, child),
+                Case::ForeignOrigin => (ValidationReason::Provenance, conversion_id),
+                Case::Direction
+                | Case::OrdinaryOwner
+                | Case::ParameterOrder
+                | Case::FreshBinderSubstitution
+                | Case::ResultType => (ValidationReason::NewtypeConversion, conversion_id),
+            };
+            assert_eq!(error.reason(), reason, "{case:?}");
+            assert_eq!(error.node(), Some(node), "{case:?}");
+        }
+    }
+
+    #[test]
+    fn parameterized_newtype_validation_is_exact_atomic_and_retryable() {
+        fn fixture() -> LinkedCoreValidationFixture {
+            LinkedCoreValidationFixture::compile(
+                "",
+                concat!(
+                    "newtype Box<Left, Right> = Box((Left, Right))\n",
+                    "main : Unit -> Box<Int, Bool>\n",
+                    "main () = Box((42, true))\n",
+                ),
+                &[],
+            )
+        }
+
+        fn attempt(initial_type_work: usize) -> ConsumingModuleValidationAttempt {
+            let LinkedCoreValidationFixture {
+                directory,
+                graph,
+                program,
+                module_sources,
+                globals: _,
+            } = fixture();
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let attempt = validate_modules_with_initial_type_work_for_test(
+                program,
+                &sources,
+                &module_sources,
+                initial_type_work,
+            );
+            drop(graph);
+            drop(directory);
+            attempt
+        }
+
+        let measured = fixture();
+        let sources = linked_fixture_sources(&measured);
+        let mut validator =
+            Validator::new_modules(&measured.program, &sources, &measured.module_sources)
+                .expect("the canonical module/source relation should initialize");
+        run_module_validation_phases_for_test(&mut validator)
+            .expect("the canonical parameterized conversion should validate");
+        let exact_work = validator.type_work.get();
+        // P argument slots + (P + 1) spine inspections + P replacement slots
+        // + P parameter/argument rows = 4P + 1.
+        const NEWTYPE_PARAMETER_WORK: usize = 4 * 2 + 1;
+        // All fixed registry and node validation for this concrete fixture is
+        // independent of the conversion's parameter-width term.
+        const VALIDATION_ENVELOPE_WORK: usize = 518;
+        const EXACT_WORK: usize = VALIDATION_ENVELOPE_WORK + NEWTYPE_PARAMETER_WORK;
+        assert_eq!(
+            validator.newtype_conversion_parameter_work.get(),
+            NEWTYPE_PARAMETER_WORK,
+            "two arguments require 2P carriers, P row traversal, and P+1 spine inspection",
+        );
+        assert_eq!(exact_work, EXACT_WORK);
+        assert!(exact_work < CORE_VALIDATION_TYPE_WORK_LIMIT);
+        drop(validator);
+        drop(measured);
+
+        let exact = attempt(CORE_VALIDATION_TYPE_WORK_LIMIT - exact_work);
+        assert!(exact.result.is_ok());
+        assert_eq!(exact.type_work, CORE_VALIDATION_TYPE_WORK_LIMIT);
+
+        let one_short = attempt(CORE_VALIDATION_TYPE_WORK_LIMIT - (exact_work - 1));
+        let error = one_short
+            .result
+            .expect_err("one missing unit must reject before publication");
+        assert_eq!(error.reason(), ValidationReason::Resource);
+        assert_eq!(one_short.type_work, CORE_VALIDATION_TYPE_WORK_LIMIT);
+
+        let retry = attempt(CORE_VALIDATION_TYPE_WORK_LIMIT - exact_work);
+        assert!(retry.result.is_ok());
+        assert_eq!(retry.type_work, CORE_VALIDATION_TYPE_WORK_LIMIT);
+    }
+
+    #[test]
+    fn independent_validation_rejects_newtypes_in_the_ordinary_constructor_route() {
+        let file = source();
+        let (registry, owner, constructor) = newtype_registry(&file);
+        let mut builder = CoreBuilder::with_registry(registry);
+        let root = builder
+            .constructor(constructor, Type::Nominal(owner), origin(&file))
+            .expect("the forged ordinary constructor should fit unchecked Core");
+
+        let error = validate(
+            builder.finish(root).expect("the constructor should finish"),
+            &[&file],
+        )
+        .expect_err("a newtype must never validate as an ordinary constructor");
+        assert_eq!(error.reason(), ValidationReason::Registry);
+        assert_eq!(error.node(), Some(root));
+    }
+
+    #[test]
+    fn independent_validation_rejects_newtypes_in_ordinary_constructor_patterns() {
+        let file = source();
+        let (registry, owner, constructor) = newtype_registry(&file);
+        let node_origin = origin(&file);
+        let mut builder = CoreBuilder::with_registry(registry);
+        let parameter = builder
+            .binder(Type::Nominal(owner), node_origin.clone())
+            .expect("the nominal parameter should fit");
+        let scrutinee = builder
+            .variable(parameter.id(), Type::Nominal(owner), node_origin.clone())
+            .expect("the scrutinee should fit");
+        let body = builder
+            .unit(Type::Unit, node_origin.clone())
+            .expect("the arm body should fit");
+        let pattern = CorePattern::new(
+            Type::Nominal(owner),
+            node_origin.clone(),
+            CorePatternKind::Constructor {
+                constructor,
+                payload: None,
+            },
+        );
+        let matched = builder
+            .match_expression(
+                scrutinee,
+                vec![super::super::CoreMatchArm::new(
+                    pattern,
+                    body,
+                    node_origin.clone(),
+                )],
+                Type::Unit,
+                node_origin.clone(),
+            )
+            .expect("the forged constructor pattern should fit unchecked Core");
+        let root = builder
+            .function(
+                parameter,
+                matched,
+                Type::Function(Box::new(Type::Nominal(owner)), Box::new(Type::Unit)),
+                node_origin,
+            )
+            .expect("the enclosing function should fit");
+
+        let error = validate(
+            builder.finish(root).expect("the function should finish"),
+            &[&file],
+        )
+        .expect_err("a newtype must never validate as an ordinary constructor pattern");
+        assert_eq!(error.reason(), ValidationReason::Pattern);
+        assert_eq!(error.node(), Some(matched));
+    }
+
+    #[test]
+    fn canonical_newtype_conversion_chains_validate_and_reject_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("newtype-conversion-validation-deep".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let file = source();
+                let (registry, owner, _) = newtype_registry(&file);
+                let mut builder = CoreBuilder::with_registry(registry);
+                let mut root = builder
+                    .integer(
+                        Integer::parse_decimal("0").expect("zero should parse"),
+                        Type::Int,
+                        origin(&file),
+                    )
+                    .expect("the conversion leaf should fit");
+                for index in 0..DEPTH {
+                    root = builder
+                        .newtype_conversion(
+                            owner,
+                            if index % 2 == 0 {
+                                NewtypeConversionDirection::Wrap
+                            } else {
+                                NewtypeConversionDirection::Unwrap
+                            },
+                            root,
+                            if index % 2 == 0 {
+                                Type::Nominal(owner)
+                            } else {
+                                Type::Int
+                            },
+                            origin(&file),
+                        )
+                        .expect("the unchecked conversion chain should fit");
+                }
+                let accepted = validate(
+                    builder.finish(root).expect("the conversion should finish"),
+                    &[&file],
+                )
+                .expect("the canonical conversion chain should validate");
+                drop(accepted);
+
+                let (registry, owner, _) = newtype_registry(&file);
+                let mut builder = CoreBuilder::with_registry(registry);
+                let mut root = builder
+                    .integer(
+                        Integer::parse_decimal("0").expect("zero should parse"),
+                        Type::Int,
+                        origin(&file),
+                    )
+                    .expect("the conversion leaf should fit");
+                for index in 0..DEPTH {
+                    let direction = if index + 1 == DEPTH || index % 2 == 0 {
+                        NewtypeConversionDirection::Wrap
+                    } else {
+                        NewtypeConversionDirection::Unwrap
+                    };
+                    root = builder
+                        .newtype_conversion(
+                            owner,
+                            direction,
+                            root,
+                            if index % 2 == 0 {
+                                Type::Nominal(owner)
+                            } else {
+                                Type::Int
+                            },
+                            origin(&file),
+                        )
+                        .expect("the rejected conversion chain should fit");
+                }
+                let error = validate(
+                    builder
+                        .finish(root)
+                        .expect("the rejected chain should finish"),
+                    &[&file],
+                )
+                .expect_err("the late wrong direction must reject");
+                assert_eq!(error.reason(), ValidationReason::NewtypeConversion);
+            })
+            .expect("the conversion validation thread should start")
+            .join()
+            .expect("accepted and rejected conversion teardown must fit a small stack");
     }
 
     #[test]

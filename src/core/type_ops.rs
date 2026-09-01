@@ -2,8 +2,61 @@
 
 use super::NodeId;
 use crate::types::{
-    Kind, Type, TypeVariableId, discard_type_iteratively, replace_type_iteratively,
+    Kind, NominalTypeId, Type, TypeVariableId, discard_type_iteratively, replace_type_iteratively,
 };
+
+/// The direction of one explicit module-newtype representation conversion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NewtypeConversionDirection {
+    /// Converts the representation into its distinct nominal owner.
+    Wrap,
+    /// Converts the nominal owner into its representation.
+    Unwrap,
+}
+
+/// One typed, erased module-newtype representation conversion.
+///
+/// Child and result types remain on their ordinary Core expression envelopes;
+/// this payload retains only the canonical nominal identity needed to
+/// authenticate their relation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NewtypeConversionNode {
+    owner: NominalTypeId,
+    direction: NewtypeConversionDirection,
+    child: NodeId,
+}
+
+impl NewtypeConversionNode {
+    pub(crate) const fn new(
+        owner: NominalTypeId,
+        direction: NewtypeConversionDirection,
+        child: NodeId,
+    ) -> Self {
+        Self {
+            owner,
+            direction,
+            child,
+        }
+    }
+
+    /// Returns the stable nominal identity whose representation is converted.
+    #[must_use]
+    pub const fn owner(self) -> NominalTypeId {
+        self.owner
+    }
+
+    /// Returns whether this conversion wraps or unwraps its child.
+    #[must_use]
+    pub const fn direction(self) -> NewtypeConversionDirection {
+        self.direction
+    }
+
+    /// Returns the sole converted child expression.
+    #[must_use]
+    pub const fn child(self) -> NodeId {
+        self.child
+    }
+}
 
 /// A type-erased abstraction over one or more rank-1 type parameters.
 #[derive(Clone, Debug, Eq, PartialEq)]
