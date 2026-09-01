@@ -1761,7 +1761,15 @@ pub type EffectElaborator = CoreElaborator<EffectOperationFamily>;
 )]
 pub trait CoreLoweringFamily: CoreOperationFamily {
     const EFFECTS: bool;
+    #[allow(
+        clippy::result_unit_err,
+        reason = "the unit error preserves the shared type-work budget boundary"
+    )]
     fn project_type(ty: &Type, budget: &mut TypeWorkBudget) -> Result<Type, ()>;
+    #[allow(
+        clippy::result_unit_err,
+        reason = "the unit error preserves the shared type-work budget boundary"
+    )]
     fn project_parameters(
         parameters: &[(TypeVariableId, Kind)],
         budget: &mut TypeWorkBudget,
@@ -6301,7 +6309,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         );
         let right = clone_type_with_budget(right, &mut self.type_work)
             .map_err(|()| UnificationFailure::Resource)?;
-        let result = (|| {
+        (|| {
             let mut work = Work(vec![Task::Pair(left.into_inner(), right)]);
             while let Some(task) = work.0.pop() {
                 let (left, right) = match task {
@@ -6511,8 +6519,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 }
             }
             Ok(())
-        })();
-        result
+        })()
     }
 
     fn expose_expected_function(
@@ -7612,7 +7619,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             .into_iter()
                             .flat_map(|row| row.known()),
                     ),
-                    |argument, budget| clone_type_with_budget(argument, budget),
+                    clone_type_with_budget,
                     &mut self.type_work,
                 )
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
@@ -9154,7 +9161,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         let TypedNode {
                             node: initializer_node,
                             ty: initializer_ty,
-                            provenance: _,
                             ..
                         } = initializer.into_inner();
                         let binder = self.builder.resolved_binder(
@@ -15662,6 +15668,10 @@ fn zonk_type(ty: &Type, solutions: &HashMap<InferenceVariableId, Type>) -> Type 
         .expect("an in-memory type can be zonked under an unbounded ledger")
 }
 
+#[allow(
+    clippy::type_complexity,
+    reason = "the local traversal shape mirrors the effect-row carrier without a public alias"
+)]
 fn zonk_owned_type_with_rows(
     ty: Type,
     solutions: &HashMap<InferenceVariableId, Type>,
@@ -15816,10 +15826,7 @@ fn zonk_owned_type_with_rows(
             Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
                 let crate::types::ComputationType { value, mut effects } = *codomain;
                 let mut visited = HashSet::new();
-                loop {
-                    let Some(tail) = effects.tail() else {
-                        break;
-                    };
+                while let Some(tail) = effects.tail() {
                     let EffectRowVariable::Inference(identity) = tail.variable() else {
                         break;
                     };
@@ -24410,7 +24417,7 @@ mod tests {
                 .tail()
                 .expect("the generalized row remains open")
                 .lacks(),
-            &[lacks.clone()],
+            std::slice::from_ref(&lacks),
         );
 
         let fact = TypeFact {

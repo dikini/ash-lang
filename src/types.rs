@@ -240,6 +240,10 @@ pub(crate) fn charge_kinded_type_parameters<B: TypeWorkMeter>(
     Ok(())
 }
 
+#[allow(
+    clippy::type_complexity,
+    reason = "the local traversal shape mirrors the effect-row carrier without a public alias"
+)]
 pub(crate) fn clone_type_with_budget<B: TypeWorkMeter>(
     ty: &Type,
     budget: &mut B,
@@ -714,6 +718,10 @@ impl EffectRow {
         self.tail.as_ref()
     }
 
+    #[allow(
+        clippy::type_complexity,
+        reason = "the pair is the direct owned form of the row's known members and optional tail"
+    )]
     pub(crate) fn into_parts(
         mut self,
     ) -> (
@@ -795,21 +803,21 @@ impl EffectRow {
                 known,
                 None,
                 std::iter::empty(),
-                |argument, budget| clone_type_with_budget(argument, budget),
+                clone_type_with_budget,
                 budget,
             )?,
             (Some(tail), None) | (None, Some(tail)) => rebuild_effect_row_with_budget(
                 known,
                 Some(tail.variable),
                 tail.lacks.iter(),
-                |argument, budget| clone_type_with_budget(argument, budget),
+                clone_type_with_budget,
                 budget,
             )?,
             (Some(left), Some(right)) => rebuild_effect_row_with_budget(
                 known,
                 Some(left.variable),
                 left.lacks.iter().chain(right.lacks.iter()),
-                |argument, budget| clone_type_with_budget(argument, budget),
+                clone_type_with_budget,
                 budget,
             )?,
         };
@@ -837,7 +845,7 @@ impl EffectRow {
                     .chain(self.known[index + 1..].iter()),
                 self.tail.as_ref().map(|tail| tail.variable),
                 self.tail.iter().flat_map(|tail| tail.lacks.iter()),
-                |argument, budget| clone_type_with_budget(argument, budget),
+                clone_type_with_budget,
                 budget,
             )
             .map(Ok);
@@ -2477,6 +2485,10 @@ pub(crate) fn substitute_type_and_row_variables_with<E>(
     substitute_type_and_row_variables(ty, replacements, row_replacements, &mut charge)
 }
 
+#[allow(
+    clippy::type_complexity,
+    reason = "the local traversal shape mirrors substitution state without a module-level alias"
+)]
 fn substitute_type_and_row_variables<E>(
     ty: &Type,
     replacements: &HashMap<TypeVariableId, Type>,
@@ -4252,7 +4264,7 @@ mod tests {
         let union_work = union_measure.used();
         let mut union_short = TypeWorkBudget::with_limit(union_work - 1);
         assert_eq!(left.union_with_budget(&right, &mut union_short), Err(()));
-        assert_eq!(left.known(), &[left_member.clone()]);
+        assert_eq!(left.known(), std::slice::from_ref(&left_member));
         let mut union_exact = TypeWorkBudget::with_limit(union_work);
         let union = left
             .union_with_budget(&right, &mut union_exact)
@@ -4308,26 +4320,17 @@ mod tests {
 
         let mut map_measure = TypeWorkBudget::unbounded();
         replacement
-            .map_type_arguments_with_budget(
-                |argument, budget| clone_type_with_budget(argument, budget),
-                &mut map_measure,
-            )
+            .map_type_arguments_with_budget(clone_type_with_budget, &mut map_measure)
             .expect("the measured row-argument map should fit");
         let map_work = map_measure.used();
         let mut map_short = TypeWorkBudget::with_limit(map_work - 1);
         assert_eq!(
-            replacement.map_type_arguments_with_budget(
-                |argument, budget| clone_type_with_budget(argument, budget),
-                &mut map_short,
-            ),
+            replacement.map_type_arguments_with_budget(clone_type_with_budget, &mut map_short,),
             Err(()),
         );
         let mut map_exact = TypeWorkBudget::with_limit(map_work);
         assert_eq!(
-            replacement.map_type_arguments_with_budget(
-                |argument, budget| clone_type_with_budget(argument, budget),
-                &mut map_exact,
-            ),
+            replacement.map_type_arguments_with_budget(clone_type_with_budget, &mut map_exact,),
             Ok(replacement),
         );
         assert_eq!(map_exact.used(), map_work);
@@ -4386,7 +4389,7 @@ mod tests {
 
         let mut one_short = TypeWorkBudget::with_limit(exact - 1);
         assert_eq!(left.union_with_budget(&right, &mut one_short), Err(()));
-        assert_eq!(left.known(), &[member.clone()]);
+        assert_eq!(left.known(), std::slice::from_ref(&member));
 
         let mut retry = TypeWorkBudget::with_limit(exact);
         assert_eq!(left.union_with_budget(&right, &mut retry), Ok(Ok(left)));
@@ -4640,10 +4643,7 @@ mod tests {
                 ));
                 let mut short = TypeWorkBudget::with_limit(2 + FIRST_ARGUMENT_WORK);
                 assert_eq!(
-                    row.map_type_arguments_with_budget(
-                        |argument, budget| clone_type_with_budget(argument, budget),
-                        &mut short,
-                    ),
+                    row.map_type_arguments_with_budget(clone_type_with_budget, &mut short,),
                     Err(()),
                 );
                 drop(row);

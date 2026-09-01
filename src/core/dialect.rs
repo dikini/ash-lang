@@ -2689,6 +2689,13 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
     /// The rewrite callback owns cumulative structural construction work. Core
     /// rechecks depth and cumulatively charges the quantifier identities added
     /// to rewritten storage.
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "the complete-arena rewrite seam is retained for its focused Core tests"
+        )
+    )]
     pub(crate) fn rewrite_types<R>(&mut self, mut rewrite: R) -> Result<(), BuildError>
     where
         R: FnMut(&Type) -> Result<Type, BuildError>,
@@ -2725,6 +2732,10 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         Ok(())
     }
 
+    #[allow(
+        clippy::type_complexity,
+        reason = "the optional row callback keeps the shared rewrite traversal local"
+    )]
     fn rewrite_types_from<R>(
         &mut self,
         checkpoint: TypeRewriteCheckpoint,

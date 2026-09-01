@@ -8268,6 +8268,10 @@ fn retain_free_type_name<'a>(
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "free-name discovery keeps the reviewed omitted-global correction in one pass"
+)]
 fn collect_free_type_names<'a>(
     root: &'a SurfaceType,
     nominals: &HashMap<String, NominalTypeId>,

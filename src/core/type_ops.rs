@@ -42,6 +42,13 @@ pub struct TypeApplicationNode {
 }
 
 impl TypeApplicationNode {
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "validation and transform tests construct pure type applications directly"
+        )
+    )]
     pub(crate) fn new(function: NodeId, arguments: Vec<Type>) -> Self {
         Self::new_with_row_arguments(function, arguments, Vec::new())
     }

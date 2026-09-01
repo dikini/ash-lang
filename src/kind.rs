@@ -1925,7 +1925,7 @@ impl<'a> KindEnvironments<'a> {
         &'environment self,
         row: &EffectRow,
         allowed_variables: Option<&HashSet<TypeVariableId>>,
-        mut visited_variables: Option<&mut HashSet<TypeVariableId>>,
+        visited_variables: Option<&mut HashSet<TypeVariableId>>,
         span: Span,
         budget: &mut SynthesisLedger<'_>,
     ) -> Result<(), KindFailure>
@@ -1943,7 +1943,7 @@ impl<'a> KindEnvironments<'a> {
                         "an effect row references a non-owner tail",
                     ));
                 }
-                if let Some(visited) = visited_variables.as_deref_mut() {
+                if let Some(visited) = visited_variables {
                     visited.insert(identity);
                 }
                 self.delta.get(&identity).ok_or_else(|| {
