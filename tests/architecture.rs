@@ -1298,8 +1298,6 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/types.rs::$fn_substitute_type_and_row_variables::Task.FinishForall.0", FieldTransientCarrierRetentionPreservedCarrierTypeOperationTypeTransientWork),
     kind_site!("src/types.rs::$fn_substitute_type_and_row_variables::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_substitute_type_and_row_variables::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
-    kind_site!("src/types.rs::$fn_substitute_type_and_row_variables_with::ChargeTask.Slice.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
-    kind_site!("src/types.rs::$fn_substitute_type_and_row_variables_with::ChargeTask.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_write_kind::Task.kind", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/types.rs::$fn_write_type::Task.ApplicationSpine.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_write_type::Task.EffectInstance.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
