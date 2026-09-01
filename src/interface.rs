@@ -15,9 +15,9 @@ use crate::{
     resolved::{BinderId, ResolvedRegistry},
     source::{Origin, Span, discard_origin_iteratively},
     types::{
-        EffectRow, Kind, NominalTypeId, Type, TypeVariableId, TypeWorkBudget,
-        charge_kind_with_charge, clone_kinded_type_parameters_with_budget, clone_type_with_budget,
-        discard_type_iteratively, same_kinded_type_parameters_with_charge, same_type,
+        Kind, NominalTypeId, Type, TypeVariableId, TypeWorkBudget, charge_kind_with_charge,
+        clone_kinded_type_parameters_with_budget, clone_type_with_budget, discard_type_iteratively,
+        same_kinded_type_parameters_with_charge, same_type,
     },
 };
 
@@ -511,46 +511,48 @@ fn same_type_with_constraint_budget_inner(
         if let (Some(left_function), Some(right_function)) =
             (left.function_view(), right.function_view())
         {
-            let (effect_members, effect_pairs) =
-                match (left_function.effects(), right_function.effects()) {
-                    (None, None) => (0, 0),
-                    (Some(left_effects), Some(right_effects))
-                        if left_effects.known().len() == right_effects.known().len()
-                            && match (left_effects.tail(), right_effects.tail()) {
-                                (None, None) => true,
-                                (Some(left), Some(right)) => {
-                                    left.variable() == right.variable()
-                                        && left.lacks().len() == right.lacks().len()
-                                }
-                                _ => false,
-                            } =>
-                    {
-                        let work = effect_row_constraint_work(left_effects)?;
-                        let left_members = left_effects.known().iter().chain(
-                            left_effects
-                                .tail()
-                                .into_iter()
-                                .flat_map(|tail| tail.lacks()),
-                        );
-                        let right_members = right_effects.known().iter().chain(
-                            right_effects
-                                .tail()
-                                .into_iter()
-                                .flat_map(|tail| tail.lacks()),
-                        );
-                        for (left_member, right_member) in left_members.zip(right_members) {
-                            if left_member.effect() != right_member.effect()
-                                || left_member.arguments().len() != right_member.arguments().len()
-                            {
-                                return Ok(false);
+            let effect_pairs = match (left_function.effects(), right_function.effects()) {
+                (None, None) => 0,
+                (Some(left_effects), Some(right_effects))
+                    if left_effects.known().len() == right_effects.known().len()
+                        && match (left_effects.tail(), right_effects.tail()) {
+                            (None, None) => true,
+                            (Some(left), Some(right)) => {
+                                left.variable() == right.variable()
+                                    && left.lacks().len() == right.lacks().len()
                             }
+                            _ => false,
+                        } =>
+                {
+                    let mut argument_pairs = 0usize;
+                    let left_members = left_effects.known().iter().chain(
+                        left_effects
+                            .tail()
+                            .into_iter()
+                            .flat_map(|tail| tail.lacks()),
+                    );
+                    let right_members = right_effects.known().iter().chain(
+                        right_effects
+                            .tail()
+                            .into_iter()
+                            .flat_map(|tail| tail.lacks()),
+                    );
+                    for (left_member, right_member) in left_members.zip(right_members) {
+                        budget.charge(1)?;
+                        if left_member.effect() != right_member.effect()
+                            || left_member.arguments().len() != right_member.arguments().len()
+                        {
+                            return Ok(false);
                         }
-                        work
+                        argument_pairs = argument_pairs
+                            .checked_add(left_member.arguments().len())
+                            .ok_or(())?;
                     }
-                    _ => return Ok(false),
-                };
+                    argument_pairs
+                }
+                _ => return Ok(false),
+            };
             let pending_pairs = effect_pairs.checked_add(2).ok_or(())?;
-            budget.charge(effect_members)?;
             budget.charge(pending_pairs)?;
             pending.try_reserve(pending_pairs).map_err(|_| ())?;
             if let (Some(left_effects), Some(right_effects)) =
@@ -630,20 +632,6 @@ fn same_type_with_constraint_budget_inner(
         }
     }
     Ok(true)
-}
-
-pub(crate) fn effect_row_constraint_work(row: &EffectRow) -> Result<(usize, usize), ()> {
-    let mut members = row.known().len();
-    let mut arguments = row.known().iter().try_fold(0usize, |count, member| {
-        count.checked_add(member.arguments().len()).ok_or(())
-    })?;
-    if let Some(tail) = row.tail() {
-        members = members.checked_add(tail.lacks().len()).ok_or(())?;
-        arguments = tail.lacks().iter().try_fold(arguments, |count, member| {
-            count.checked_add(member.arguments().len()).ok_or(())
-        })?;
-    }
-    Ok((members, arguments))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

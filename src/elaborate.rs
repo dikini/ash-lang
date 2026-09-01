@@ -14656,6 +14656,7 @@ fn type_contains_unsolved_row_inference(
                                     .into_iter()
                                     .flat_map(|tail| tail.lacks().iter()),
                             ) {
+                                budget.charge(1)?;
                                 for argument in argument.arguments() {
                                     schedule(&mut work, argument, budget)?;
                                 }
@@ -14663,8 +14664,17 @@ fn type_contains_unsolved_row_inference(
                         }
                     }
                 }
-                for argument in codomain.effect_arguments() {
-                    schedule(&mut work, argument, budget)?;
+                for member in codomain.effects().known().iter().chain(
+                    codomain
+                        .effects()
+                        .tail()
+                        .into_iter()
+                        .flat_map(|tail| tail.lacks().iter()),
+                ) {
+                    budget.charge(1)?;
+                    for argument in member.arguments() {
+                        schedule(&mut work, argument, budget)?;
+                    }
                 }
                 schedule(&mut work, codomain.value(), budget)?;
                 schedule(&mut work, domain, budget)?;
@@ -21798,6 +21808,52 @@ mod tests {
             .expect("the complete deep row-solution zonk owner should start")
             .join()
             .expect("failure and success teardown must fit a small host stack");
+
+        const NARROW: u32 = 1;
+        const WIDE: u32 = 8;
+        let closed = |width| {
+            let members = (0..width)
+                .map(|declaration| {
+                    crate::types::EffectInstance::new(
+                        crate::types::EffectId::new(ModuleId::new(1), declaration),
+                        Box::new([]),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            Type::function_computation(
+                Type::Unit,
+                crate::types::ComputationType::new(Type::Bool, EffectRow::closed(members)),
+            )
+        };
+        let measure = |ty: &Type| {
+            let mut elaborator = Elaborator::new();
+            elaborator.type_work = TypeWorkBudget::unbounded();
+            let zonked = elaborator
+                .zonk_with_status(ty)
+                .expect("the measured closed row should zonk");
+            (zonked, elaborator.type_work.used())
+        };
+        let (_, narrow_work) = measure(&closed(NARROW));
+        let wide = closed(WIDE);
+        let (zonked, exact) = measure(&wide);
+        assert_eq!(
+            exact - narrow_work,
+            2 * (WIDE - NARROW) as usize,
+            "the fused traversal and final scanner each own every nullary member"
+        );
+
+        let mut retry = Elaborator::new();
+        retry.type_work = TypeWorkBudget::with_limit(exact - 1);
+        assert_eq!(
+            retry.zonk_with_status(&wide),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        );
+        retry.type_work = TypeWorkBudget::with_limit(exact);
+        assert_eq!(retry.zonk_with_status(&wide), Ok(zonked));
+        assert_eq!(retry.type_work.used(), exact);
     }
 
     #[test]

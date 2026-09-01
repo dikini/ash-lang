@@ -17,7 +17,6 @@ use crate::{
         CheckedRequirement, ConstrainedScheme, EvidenceNode, EvidenceNodeId, EvidenceSelection,
         EvidenceSubstitution, ImplId, ImplMethodId, InterfaceApplication,
         InterfaceConstraintBudget, InterfaceId, MethodId, RequirementId, RequirementOwner,
-        effect_row_constraint_work,
         same_type_with_constraint_budget as same_semantic_type_with_constraint_budget,
     },
     kind::{
@@ -2098,16 +2097,19 @@ fn collect_linked_constraint_variables(
             if effects.is_some_and(|effects| effects.tail().is_some()) {
                 return Err(unknown(span));
             }
-            let (effect_members, effect_argument_count) = effects
-                .map(effect_row_constraint_work)
-                .transpose()
-                .map_err(|()| resource(span))?
-                .unwrap_or((0, 0));
+            let mut effect_argument_count = 0usize;
+            if let Some(effects) = effects {
+                for member in effects.known() {
+                    charge(budget, 1, span)?;
+                    effect_argument_count = effect_argument_count
+                        .checked_add(member.arguments().len())
+                        .ok_or_else(|| resource(span))?;
+                }
+            }
             let effect_arguments = effects
                 .into_iter()
                 .flat_map(|effects| effects.known())
                 .flat_map(|instance| instance.arguments());
-            charge(budget, effect_members, span)?;
             let children = effect_argument_count
                 .checked_add(2)
                 .ok_or_else(|| resource(span))?;
@@ -5571,16 +5573,19 @@ fn validate_type_with_application_policy(
                     if effects.is_some_and(|effects| effects.tail().is_some()) {
                         return Err(invalid_root(span));
                     }
-                    let (effect_members, effect_argument_count) = effects
-                        .map(effect_row_constraint_work)
-                        .transpose()
-                        .map_err(|()| resource(span))?
-                        .unwrap_or((0, 0));
+                    let mut effect_argument_count = 0usize;
+                    if let Some(effects) = effects {
+                        for member in effects.known() {
+                            charge(budget, 1, span)?;
+                            effect_argument_count = effect_argument_count
+                                .checked_add(member.arguments().len())
+                                .ok_or_else(|| resource(span))?;
+                        }
+                    }
                     let effect_arguments = effects
                         .into_iter()
                         .flat_map(|effects| effects.known())
                         .flat_map(|instance| instance.arguments());
-                    charge(budget, effect_members, span)?;
                     let children = effect_argument_count
                         .checked_add(2)
                         .ok_or_else(|| resource(span))?;
@@ -5889,19 +5894,16 @@ fn substitute_evidence_type(
                 if effects.tail().is_some() {
                     return Err(invalid_root(span));
                 }
-                let (member_count, argument_count) =
-                    effect_row_constraint_work(effects).map_err(|()| resource(span))?;
-                charge(budget, member_count, span)?;
                 let mut known = Vec::new();
-                known
-                    .try_reserve(member_count)
-                    .map_err(|_| resource(span))?;
-                known.extend(
-                    effects
-                        .known()
-                        .iter()
-                        .map(|instance| (instance.effect(), instance.arguments().len())),
-                );
+                let mut argument_count = 0usize;
+                for instance in effects.known() {
+                    charge(budget, 1, span)?;
+                    argument_count = argument_count
+                        .checked_add(instance.arguments().len())
+                        .ok_or_else(|| resource(span))?;
+                    known.try_reserve(1).map_err(|_| resource(span))?;
+                    known.push((instance.effect(), instance.arguments().len()));
+                }
                 let known = known.into_boxed_slice();
                 let tasks = argument_count
                     .checked_add(3)
@@ -9102,6 +9104,37 @@ mod tests {
         let mut retry = InterfaceConstraintBudget::with_limit(exact);
         exercise(&wide, &mut retry).expect("the exact ledger should retry successfully");
         assert_eq!(retry.used(), exact);
+
+        let late_mismatch = closed(WIDE - 1);
+        let Type::EffectfulFunction(domain, computation) = late_mismatch else {
+            panic!("the fixture is effectful")
+        };
+        let mut members = computation.effects().known().to_vec();
+        members.push(crate::types::EffectInstance::new(
+            crate::types::EffectId::new(ModuleId::new(77), 99),
+            Box::new([]),
+        ));
+        let late_mismatch = Type::function_computation(
+            *domain,
+            crate::types::ComputationType::new(
+                computation.value().clone(),
+                crate::types::EffectRow::closed(members.into_boxed_slice()),
+            ),
+        );
+        let mismatch_work = WIDE as usize + 2;
+        let mut mismatch_short = InterfaceConstraintBudget::with_limit(mismatch_work - 1);
+        assert_eq!(
+            same_type_charged(&wide, &late_mismatch, &mut mismatch_short, span)
+                .expect_err("one short must fail before the late member comparison")
+                .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted
+        );
+        let mut mismatch_exact = InterfaceConstraintBudget::with_limit(mismatch_work);
+        assert_eq!(
+            same_type_charged(&wide, &late_mismatch, &mut mismatch_exact, span),
+            Ok(false)
+        );
+        assert_eq!(mismatch_exact.used(), mismatch_work);
     }
 
     fn forged_fresh_current_node(
