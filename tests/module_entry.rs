@@ -120,6 +120,24 @@ fn rejects_a_main_whose_domain_is_not_unit() {
 }
 
 #[test]
+fn rejects_a_nonempty_entry_effect_row_before_core_lowering() {
+    let tree = TempTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "effect Choice {\nchoose : Unit -> Int\n}\n",
+            "main : Unit -> Int ! {Choice}\n",
+            "main () = perform Choice.choose ()\n",
+        ),
+    );
+
+    let failure = run(&entry).expect_err("the linked entry row must be empty");
+
+    assert_eq!(failure.reason_code(), "entry.main-effects");
+    assert!(failure.is_source_rejection());
+}
+
+#[test]
 fn rejects_a_polymorphic_main_before_inspecting_its_domain() {
     let tree = TempTree::create();
     let entry = tree.write("entry.ash", "main : A -> A\nmain value = value\n");

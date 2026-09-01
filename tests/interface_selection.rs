@@ -265,6 +265,12 @@ fn occurrences_in_expressions(
                 expressions.push(matched.scrutinee.as_ref());
                 expressions.extend(matched.arms.iter().map(|arm| &arm.body));
             }
+            ResolvedExprKind::Perform(request) => expressions.push(&request.operand),
+            ResolvedExprKind::Handle(handler) => {
+                expressions.push(&handler.body);
+                expressions.extend(handler.clauses.iter().map(|clause| &clause.body));
+            }
+            ResolvedExprKind::Resume(resume) => expressions.push(&resume.value),
         }
     }
     occurrences

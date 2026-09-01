@@ -4102,6 +4102,17 @@ fn collect_method_evidence_expression_occurrences(
                 pending.extend(matched.arms.iter().rev().map(|arm| &arm.body));
                 pending.push(&matched.scrutinee);
             }
+            ResolvedExprKind::Perform(request) => pending.push(&request.operand),
+            ResolvedExprKind::Handle(handler) => {
+                let child_count = handler.clauses.len().saturating_add(1);
+                charge(constraint_work, child_count, expression.span)?;
+                pending
+                    .try_reserve(child_count)
+                    .map_err(|_| resource(expression.span))?;
+                pending.extend(handler.clauses.iter().rev().map(|clause| &clause.body));
+                pending.push(&handler.body);
+            }
+            ResolvedExprKind::Resume(resume) => pending.push(&resume.value),
         }
     }
     Ok(())
@@ -4749,6 +4760,14 @@ fn validate_pending_expressions<'a>(
                 pending.extend(matched.arms.iter().rev().map(|arm| &arm.body));
                 pending.push(matched.scrutinee.as_ref());
             }
+            ResolvedExprKind::Perform(request) => pending.push(request.operand.as_ref()),
+            ResolvedExprKind::Handle(handler) => {
+                let additional = handler.clauses.len().saturating_add(1);
+                reserve_expressions(pending, additional, budget, expression.span)?;
+                pending.extend(handler.clauses.iter().rev().map(|clause| &clause.body));
+                pending.push(handler.body.as_ref());
+            }
+            ResolvedExprKind::Resume(resume) => pending.push(resume.value.as_ref()),
         }
     }
     Ok(())

@@ -48,17 +48,18 @@ use crate::{
         ResolvedExprKind, ResolvedLocalDeclaration, ResolvedModule, ResolvedModuleGroup,
         ResolvedModuleProgram, ResolvedPattern, ResolvedPatternKind, ResolvedRecursiveGroup,
         ResolvedRegistry, ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
-        clone_resolved_type_variable_with_budget,
+        ResumeId, clone_resolved_type_variable_with_budget,
     },
     source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
     types::{
-        EffectRow, EffectRowError, EffectRowVariable, InferenceVariableId, IterativeTypeOwner,
-        Kind, Type, TypeVariableId, TypeWorkBudget, charge_type_cells, clone_kind_with_budget,
-        clone_kinded_type_parameters_with_budget, compare_effect_instances_with_budget,
-        discard_type_iteratively, effect_row_from_owned_parts_with_budget,
-        rebuild_effect_row_with_budget, replace_type_iteratively, same_kind_with_budget,
-        same_kinded_type_parameters_with_budget, same_type, same_type_with_budget,
-        substitute_type_and_row_variables_with, substitute_type_variables_with,
+        ComputationType, EffectInstance, EffectRow, EffectRowError, EffectRowVariable,
+        InferenceVariableId, IterativeTypeOwner, Kind, Type, TypeVariableId, TypeWorkBudget,
+        charge_type_cells, clone_kind_with_budget, clone_kinded_type_parameters_with_budget,
+        compare_effect_instances_with_budget, discard_type_iteratively,
+        effect_row_from_owned_parts_with_budget, rebuild_effect_row_with_budget,
+        replace_type_iteratively, same_kind_with_budget, same_kinded_type_parameters_with_budget,
+        same_type, same_type_with_budget, substitute_type_and_row_variables_with,
+        substitute_type_variables_with,
     },
 };
 
@@ -107,6 +108,163 @@ pub enum TypeReason {
     AmbiguousType,
     /// A recursive use requires distinct instantiations.
     PolymorphicRecursion,
+    /// An effect-row union has no unqualified principal result.
+    AmbiguousEffectRow,
+    /// A handler body does not request the exact handled instance.
+    MissingHandledEffect,
+    /// Handler clauses do not cover each operation exactly once.
+    HandlerCoverage,
+    /// A handler operation pattern can fail.
+    RefutableHandlerPattern,
+    /// A resume form occurs outside an operation clause.
+    ResumeOutsideClause,
+    /// A clause can complete without consuming its resume capability.
+    ResumeNotConsumed,
+    /// One control-flow path consumes a resume capability more than once.
+    ResumeAlreadyConsumed,
+    /// A nested scope attempts to capture a resume capability.
+    ResumeCapture,
+}
+
+/// Projects source computation arrows onto the predecessor pure-Core type
+/// grammar used while this checkpoint checks bodies but does not retain Core.
+/// Source schemes and expression rows remain unchanged; effect Core lowering
+/// owns the corresponding computation nodes in the next checkpoint.
+fn pure_core_type_with_budget(ty: &Type, budget: &mut TypeWorkBudget) -> Result<Type, ()> {
+    charge_type_cells(ty, budget)?;
+    pure_core_type_from_precharged(ty)
+}
+
+fn pure_core_type_from_precharged(ty: &Type) -> Result<Type, ()> {
+    enum Task<'a> {
+        Visit(&'a Type),
+        Sequence(std::slice::Iter<'a, Type>),
+        Tuple(usize),
+        Application,
+        Function,
+        Forall(Box<[(TypeVariableId, Kind)]>),
+    }
+
+    let mut work = vec![Task::Visit(ty)];
+    let mut rebuilt = OwnedTypeBuffer(Vec::new());
+    while let Some(task) = work.pop() {
+        match task {
+            Task::Visit(Type::Int) => rebuilt.push(Type::Int),
+            Task::Visit(Type::Bool) => rebuilt.push(Type::Bool),
+            Task::Visit(Type::Unit) => rebuilt.push(Type::Unit),
+            Task::Visit(Type::Nominal(identity)) => rebuilt.push(Type::Nominal(*identity)),
+            Task::Visit(Type::Variable(identity)) => rebuilt.push(Type::Variable(*identity)),
+            Task::Visit(Type::Inference(identity)) => rebuilt.push(Type::Inference(*identity)),
+            Task::Visit(Type::Tuple(elements)) => {
+                work.push(Task::Tuple(elements.len()));
+                work.push(Task::Sequence(elements.iter()));
+            }
+            Task::Visit(Type::Application(function, argument)) => {
+                work.push(Task::Application);
+                work.push(Task::Visit(argument));
+                work.push(Task::Visit(function));
+            }
+            Task::Visit(Type::Function(domain, codomain)) => {
+                work.push(Task::Function);
+                work.push(Task::Visit(codomain));
+                work.push(Task::Visit(domain));
+            }
+            Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
+                work.push(Task::Function);
+                work.push(Task::Visit(codomain.value()));
+                work.push(Task::Visit(domain));
+            }
+            Task::Visit(Type::Forall(parameters, body)) => {
+                work.push(Task::Forall(parameters.clone()));
+                work.push(Task::Visit(body));
+            }
+            Task::Sequence(mut remaining) => {
+                if let Some(next) = remaining.next() {
+                    work.push(Task::Sequence(remaining));
+                    work.push(Task::Visit(next));
+                }
+            }
+            Task::Tuple(count) => {
+                let elements = rebuilt.split_off(rebuilt.len() - count);
+                rebuilt.push(Type::Tuple(elements.into_boxed_slice()));
+            }
+            Task::Application => {
+                let argument = IterativeTypeOwner::new(rebuilt.pop().ok_or(())?);
+                let function = IterativeTypeOwner::new(rebuilt.pop().ok_or(())?);
+                rebuilt.push(Type::Application(
+                    Box::new(function.into_inner()),
+                    Box::new(argument.into_inner()),
+                ));
+            }
+            Task::Function => {
+                let codomain = IterativeTypeOwner::new(rebuilt.pop().ok_or(())?);
+                let domain = IterativeTypeOwner::new(rebuilt.pop().ok_or(())?);
+                rebuilt.push(Type::Function(
+                    Box::new(domain.into_inner()),
+                    Box::new(codomain.into_inner()),
+                ));
+            }
+            Task::Forall(parameters) => {
+                let body = IterativeTypeOwner::new(rebuilt.pop().ok_or(())?);
+                rebuilt.push(Type::Forall(parameters, Box::new(body.into_inner())));
+            }
+        }
+    }
+    if rebuilt.len() == 1 {
+        rebuilt.pop().ok_or(())
+    } else {
+        Err(())
+    }
+}
+
+fn pure_core_type_parameters_with_budget(
+    parameters: &[(TypeVariableId, Kind)],
+    budget: &mut TypeWorkBudget,
+) -> Result<Vec<(TypeVariableId, Kind)>, ()> {
+    let retained = parameters
+        .iter()
+        .filter(|(_, kind)| !matches!(kind, Kind::EffectRow))
+        .count();
+    budget.charge(retained)?;
+    let mut core = Vec::new();
+    core.try_reserve_exact(retained).map_err(|_| ())?;
+    for (identity, kind) in parameters {
+        if matches!(kind, Kind::EffectRow) {
+            continue;
+        }
+        core.push((*identity, clone_kind_with_budget(kind, budget)?));
+    }
+    Ok(core)
+}
+
+fn requires_pure_core_projection(ty: &Type) -> bool {
+    let mut work = vec![ty];
+    while let Some(current) = work.pop() {
+        match current {
+            Type::EffectfulFunction(_, _) => return true,
+            Type::Tuple(elements) => work.extend(elements.iter()),
+            Type::Application(function, argument) | Type::Function(function, argument) => {
+                work.push(argument);
+                work.push(function);
+            }
+            Type::Forall(parameters, body) => {
+                if parameters
+                    .iter()
+                    .any(|(_, kind)| matches!(kind, Kind::EffectRow))
+                {
+                    return true;
+                }
+                work.push(body);
+            }
+            Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Nominal(_)
+            | Type::Variable(_)
+            | Type::Inference(_) => {}
+        }
+    }
+    false
 }
 
 impl fmt::Display for TypeReason {
@@ -137,6 +295,16 @@ impl fmt::Display for TypeReason {
             Self::InfiniteType => formatter.write_str("type.infinite"),
             Self::AmbiguousType => formatter.write_str("type.ambiguous"),
             Self::PolymorphicRecursion => formatter.write_str("type.polymorphic-recursion"),
+            Self::AmbiguousEffectRow => formatter.write_str("effect.row-union-ambiguous"),
+            Self::MissingHandledEffect => formatter.write_str("effect.handler-missing-input"),
+            Self::HandlerCoverage => formatter.write_str("effect.handler-coverage"),
+            Self::RefutableHandlerPattern => {
+                formatter.write_str("effect.handler-refutable-pattern")
+            }
+            Self::ResumeOutsideClause => formatter.write_str("effect.resume-outside-clause"),
+            Self::ResumeNotConsumed => formatter.write_str("effect.resume-not-consumed"),
+            Self::ResumeAlreadyConsumed => formatter.write_str("effect.resume-already-consumed"),
+            Self::ResumeCapture => formatter.write_str("effect.resume-capture"),
         }
     }
 }
@@ -783,6 +951,21 @@ impl ProvenancedType {
         })
     }
 
+    fn function_computation_with_budget(
+        domain: Self,
+        codomain: Self,
+        effects: EffectRow,
+        span: Option<Span>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, TypeError> {
+        let mut function = Self::function_with_budget(domain, codomain, span, budget)?;
+        let Type::Function(domain, value) = function.ty else {
+            return Err(invalid_state());
+        };
+        function.ty = Type::function_computation(*domain, ComputationType::new(*value, effects));
+        Ok(function)
+    }
+
     fn into_function_parts(self) -> Result<(Self, Self), TypeError> {
         let value = ProvenancedTypeOwner::new(self);
         let (domain_provenance, codomain_provenance) =
@@ -900,6 +1083,8 @@ pub struct TypedNode {
     pub node: NodeId,
     /// Structural result type.
     pub ty: Type,
+    /// Least effect row requested while evaluating this expression.
+    pub effects: EffectRow,
     provenance: TypeProvenance,
 }
 
@@ -988,6 +1173,10 @@ impl TypedNodeOwner {
 
     fn set_provenance(&mut self, provenance: TypeProvenance) {
         self.0.as_mut().expect("typed node remains live").provenance = provenance;
+    }
+
+    fn replace_effects(&mut self, effects: EffectRow) {
+        self.0.as_mut().expect("typed node remains live").effects = effects;
     }
 }
 
@@ -1503,6 +1692,21 @@ pub struct Elaborator {
     constraint_work: InterfaceConstraintBudget,
     coverage_work: UsefulnessBudget,
     base_context: TypeContext,
+    active_resumes: Vec<ActiveResume>,
+}
+
+#[derive(Debug)]
+struct ActiveResume {
+    owner: ResumeId,
+    input: Type,
+    result: Type,
+}
+
+impl Drop for ActiveResume {
+    fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.input, Type::Unit));
+        discard_type_iteratively(std::mem::replace(&mut self.result, Type::Unit));
+    }
 }
 
 #[derive(Debug)]
@@ -1558,6 +1762,7 @@ impl Elaborator {
             constraint_work: InterfaceConstraintBudget::default(),
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
+            active_resumes: Vec::new(),
         }
     }
 
@@ -1646,6 +1851,7 @@ impl Elaborator {
             constraint_work: InterfaceConstraintBudget::default(),
             coverage_work,
             base_context,
+            active_resumes: Vec::new(),
         })
     }
 
@@ -1701,6 +1907,7 @@ impl Elaborator {
             constraint_work: InterfaceConstraintBudget::default(),
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
+            active_resumes: Vec::new(),
         };
         elaborator.evidence_lowering = Some(elaborator.build_evidence_lowering(program).map_err(
             |error| match error {
@@ -1944,7 +2151,12 @@ impl Elaborator {
                 type_parameters.into_boxed_slice(),
             )
         } else {
-            (None, original_type_parameters)
+            let type_parameters = pure_core_type_parameters_with_budget(
+                &original_type_parameters,
+                &mut self.type_work,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            (None, type_parameters.into_boxed_slice())
         };
         let mut requirements = Vec::new();
         requirements
@@ -2025,13 +2237,13 @@ impl Elaborator {
             });
         }
 
-        let mut core_body = IterativeTypeOwner::new(self.clone_type(&value_type)?);
+        let mut core_body = IterativeTypeOwner::new(self.pure_core_type(&value_type)?);
         for requirement in requirements.iter().rev() {
             for method in requirement.methods.iter().rev() {
                 self.type_work
                     .charge(1)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                let domain = self.clone_type(&method.ty)?;
+                let domain = self.pure_core_type(&method.ty)?;
                 core_body = IterativeTypeOwner::new(Type::Function(
                     Box::new(domain),
                     Box::new(core_body.into_inner()),
@@ -2126,6 +2338,7 @@ impl Elaborator {
             constraint_work: InterfaceConstraintBudget::default(),
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
+            active_resumes: Vec::new(),
         })
     }
 
@@ -2723,9 +2936,10 @@ impl Elaborator {
                             &operational.header.result_type,
                             &mut self.type_work,
                         )?);
-                    let function = ProvenancedType::function_with_budget(
+                    let function = ProvenancedType::function_computation_with_budget(
                         domain.into_inner(),
                         codomain.into_inner(),
+                        operational.header.result_effects.clone(),
                         Some(operational.header.span),
                         &mut self.type_work,
                     )?;
@@ -3451,18 +3665,28 @@ impl Elaborator {
                         Err(invalid_state())
                     };
                 };
-                if scheme.type_parameters.len() != arguments.len()
+                let ordinary_parameter_count = scheme
+                    .type_parameters
+                    .iter()
+                    .filter(|(_, kind)| !matches!(kind, Kind::EffectRow))
+                    .count();
+                if ordinary_parameter_count != arguments.len()
                     || scheme.requirements.len() != occurrence.evidence.len()
                 {
                     return Err(invalid_state());
                 }
                 self.type_work
-                    .charge(scheme.type_parameters.len())
+                    .charge(ordinary_parameter_count)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 replacements
-                    .try_reserve(scheme.type_parameters.len())
+                    .try_reserve(ordinary_parameter_count)
                     .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                for ((parameter, _), argument) in scheme.type_parameters.iter().zip(arguments) {
+                for ((parameter, _), argument) in scheme
+                    .type_parameters
+                    .iter()
+                    .filter(|(_, kind)| !matches!(kind, Kind::EffectRow))
+                    .zip(arguments)
+                {
                     if replacements
                         .try_insert_unique(*parameter, self.clone_type(argument)?)
                         .is_err()
@@ -3695,6 +3919,7 @@ impl Elaborator {
             Ok(TypedNode {
                 node,
                 ty: ty.into_inner(),
+                effects: EffectRow::empty(),
                 provenance,
             })
         })();
@@ -3803,6 +4028,7 @@ impl Elaborator {
             let provenance = self.at_span_provenance(&ty, declaration_span)?;
             Ok(TypedNode {
                 node: selected.node,
+                effects: EffectRow::empty(),
                 provenance,
                 ty: ty.into_inner(),
             })
@@ -4463,6 +4689,7 @@ impl Elaborator {
         Ok(TypedNode {
             node,
             ty: ty.into_inner(),
+            effects: EffectRow::empty(),
             provenance,
         })
     }
@@ -4799,6 +5026,7 @@ impl Elaborator {
                                         origin.clone(),
                                     )?,
                                     ty: core_scheme.into_inner(),
+                                    effects: EffectRow::empty(),
                                     provenance,
                                 });
                                 let mut adapter_parameters = Vec::new();
@@ -5164,6 +5392,46 @@ impl Elaborator {
     fn clone_type(&mut self, ty: &Type) -> Result<Type, TypeError> {
         clone_type_with_budget(ty, &mut self.type_work)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+    }
+
+    fn pure_core_type(&mut self, ty: &Type) -> Result<Type, TypeError> {
+        pure_core_type_with_budget(ty, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+    }
+
+    fn pure_core_scheme(&mut self, fact: &TypeFact) -> Result<Type, TypeError> {
+        if !fact
+            .quantified
+            .iter()
+            .any(|(_, kind)| matches!(kind, Kind::EffectRow))
+            && !requires_pure_core_projection(&fact.ty)
+        {
+            charge_type_cells(&fact.ty, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let body = zonk_type(&fact.ty, &HashMap::new());
+            if fact.quantified.is_empty() {
+                return Ok(body);
+            }
+            self.type_work
+                .charge(1)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let parameters =
+                clone_kinded_type_parameters_with_budget(&fact.quantified, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            return Ok(Type::Forall(parameters.into_boxed_slice(), Box::new(body)));
+        }
+        let zonked = IterativeTypeOwner::new(self.zonk(&fact.ty)?);
+        let body = self.pure_core_type(&zonked)?;
+        let parameters =
+            pure_core_type_parameters_with_budget(&fact.quantified, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        if parameters.is_empty() {
+            return Ok(body);
+        }
+        self.type_work
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        Ok(Type::Forall(parameters.into_boxed_slice(), Box::new(body)))
     }
 
     fn clone_types(&mut self, types: &[Type]) -> Result<Box<[Type]>, TypeError> {
@@ -6587,7 +6855,7 @@ impl Elaborator {
                             &equational.interface.annotation,
                             &mut self.type_work,
                         )?);
-                    if !matches!(function_type.ty, Type::Function(_, _)) {
+                    if function_type.ty.function_view().is_none() {
                         return Err(equation_interface_not_function(
                             &equational.interface.annotation,
                             &equational.equations.first().ok_or_else(invalid_state)?.name,
@@ -6614,9 +6882,10 @@ impl Elaborator {
                         )?);
                     (
                         &operational.header.name,
-                        ProvenancedType::function_with_budget(
+                        ProvenancedType::function_computation_with_budget(
                             domain.into_inner(),
                             codomain.into_inner(),
+                            operational.header.result_effects.clone(),
                             Some(operational.header.span),
                             &mut self.type_work,
                         )?,
@@ -6642,21 +6911,18 @@ impl Elaborator {
                 ));
             }
             let quantified = quantified.into_boxed_slice();
-            let binder_body = IterativeTypeOwner::new(self.clone_type(&function_type.ty)?);
-            let binder_type = if quantified.is_empty() {
+            let binder_body = IterativeTypeOwner::new(self.pure_core_type(&function_type.ty)?);
+            let core_quantified =
+                pure_core_type_parameters_with_budget(&quantified, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let binder_type = if core_quantified.is_empty() {
                 binder_body
             } else {
                 self.type_work
                     .charge(1)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                let binder_parameters =
-                    clone_kinded_type_parameters_with_budget(&quantified, &mut self.type_work)
-                        .map_err(|()| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?
-                        .into_boxed_slice();
                 IterativeTypeOwner::new(Type::Forall(
-                    binder_parameters,
+                    core_quantified.into_boxed_slice(),
                     Box::new(binder_body.into_inner()),
                 ))
             };
@@ -6698,9 +6964,14 @@ impl Elaborator {
                     .as_ref()
                     .and_then(|lowering| lowering.global_schemes.get(&name.id))
                     .ok_or_else(invalid_state)?;
+                let expected_core_quantified =
+                    pure_core_type_parameters_with_budget(&quantified, &mut self.type_work)
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
                 if !same_kinded_type_parameters_with_budget(
                     &lowered.type_parameters,
-                    &quantified,
+                    &expected_core_quantified,
                     &mut self.type_work,
                 )
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
@@ -6788,7 +7059,7 @@ impl Elaborator {
                             &equational.interface.annotation,
                             &mut self.type_work,
                         )?);
-                    if !matches!(function_type.ty, Type::Function(_, _)) {
+                    if function_type.ty.function_view().is_none() {
                         return Err(equation_interface_not_function(
                             &equational.interface.annotation,
                             &equational.equations.first().ok_or_else(invalid_state)?.name,
@@ -6816,9 +7087,10 @@ impl Elaborator {
                             &operational.header.result_type,
                             &mut self.type_work,
                         )?);
-                    let function_type = ProvenancedType::function_with_budget(
+                    let function_type = ProvenancedType::function_computation_with_budget(
                         domain.into_inner(),
                         codomain.into_inner(),
+                        operational.header.result_effects.clone(),
                         Some(operational.header.span),
                         &mut self.type_work,
                     )?;
@@ -6880,20 +7152,21 @@ impl Elaborator {
             .quantifiers
             .get(&name.id)
             .ok_or_else(invalid_state)?;
-        if !quantified.is_empty() {
+        let core_quantified =
+            pure_core_type_parameters_with_budget(quantified, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        if !core_quantified.is_empty() {
             self.type_work
                 .charge(1)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let scheme_parameters =
-                clone_kinded_type_parameters_with_budget(quantified, &mut self.type_work)
-                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
-                    .into_boxed_slice();
-            let scheme_body = self.clone_type(&function.ty)?;
-            let scheme =
-                IterativeTypeOwner::new(Type::Forall(scheme_parameters, Box::new(scheme_body)));
+            let scheme_body = self.pure_core_type(&function.ty)?;
             let abstraction_parameters =
-                clone_kinded_type_parameters_with_budget(quantified, &mut self.type_work)
+                clone_kinded_type_parameters_with_budget(&core_quantified, &mut self.type_work)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let scheme = IterativeTypeOwner::new(Type::Forall(
+                core_quantified.into_boxed_slice(),
+                Box::new(scheme_body),
+            ));
             let node = self.builder.type_abstraction(
                 abstraction_parameters,
                 function.node,
@@ -6956,9 +7229,9 @@ impl Elaborator {
             result.set_provenance(provenance);
         }
         let ambiguous = (0..self.next_inference).find(|identity| {
-            !self
-                .inference_solutions
-                .contains_key(&InferenceVariableId::new(*identity))
+            let identity = InferenceVariableId::new(*identity);
+            !self.inference_solutions.contains_key(&identity)
+                && !self.row_inference_solutions.contains_key(&identity)
         });
         if let Some(identity) = ambiguous {
             let origin = self
@@ -6973,6 +7246,312 @@ impl Elaborator {
             ));
         }
         Ok(result.into_inner())
+    }
+
+    fn union_effects(
+        &mut self,
+        left: &EffectRow,
+        right: &EffectRow,
+        span: Span,
+    ) -> Result<EffectRow, TypeError> {
+        if left.is_empty() && right.is_empty() {
+            return Ok(EffectRow::empty());
+        }
+        let left = self.zonk_effect_row(left)?;
+        let right = self.zonk_effect_row(right)?;
+        left.union_with_budget(&right, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+            .map_err(|_| {
+                inference_failure(
+                    TypeReason::AmbiguousEffectRow,
+                    span,
+                    "this strict expression has no principal effect-row union",
+                )
+            })
+    }
+
+    fn operation_signature(
+        &mut self,
+        instance: &EffectInstance,
+        operation: crate::types::OperationId,
+        span: Span,
+    ) -> Result<(Type, Type), TypeError> {
+        let declaration = self
+            .registry
+            .effect(instance.effect())
+            .ok_or_else(invalid_state)?;
+        if declaration.parameters.len() != instance.arguments().len()
+            || operation.owner() != declaration.id
+        {
+            return Err(inference_failure(
+                TypeReason::HandlerCoverage,
+                span,
+                "this effect instance does not match its declaration",
+            ));
+        }
+        let operation = declaration
+            .operations
+            .iter()
+            .find(|candidate| candidate.id == operation)
+            .ok_or_else(invalid_state)?;
+        let parameters = declaration
+            .parameters
+            .iter()
+            .map(|parameter| parameter.id)
+            .collect::<Vec<_>>();
+        let annotation = clone_type_with_budget(&operation.annotation.ty, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut replacements = HashMap::new();
+        replacements
+            .try_reserve(parameters.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for (parameter, argument) in parameters.into_iter().zip(instance.arguments()) {
+            replacements.insert(parameter, self.clone_type(argument)?);
+        }
+        let instantiated = IterativeTypeOwner::new(
+            substitute_type_variables_with(&annotation, &replacements, |cells| {
+                self.type_work.charge(cells)
+            })
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+        );
+        let function = instantiated.function_view().ok_or_else(invalid_state)?;
+        Ok((
+            self.clone_type(function.domain())?,
+            self.clone_type(function.value())?,
+        ))
+    }
+
+    fn synthesize_perform(
+        &mut self,
+        request: &crate::resolved::ResolvedPerformExpr,
+        span: Span,
+        context: &mut TypeContext,
+    ) -> Result<TypedNode, TypeError> {
+        let (domain, result) = self.operation_signature(
+            &request.effect.instance,
+            request.operation,
+            request.effect.span,
+        )?;
+        let domain = IterativeTypeOwner::new(domain);
+        let result = IterativeTypeOwner::new(result);
+        let expected_domain = self.clone_type(&domain)?;
+        let expected_provenance = self.at_span_provenance(&domain, request.effect.span)?;
+        let operand = TypedNodeOwner::new(self.elaborate_expression_with_context(
+            ElaborationTask::Check {
+                expression: &request.operand,
+                expected: ProvenancedType {
+                    ty: expected_domain,
+                    provenance: expected_provenance,
+                },
+                kind: CheckKind::General,
+            },
+            context,
+        )?);
+        let requested = EffectRow::singleton(request.effect.instance.clone());
+        let effects = self.union_effects(&operand.effects, &requested, span)?;
+        let ty = result.into_inner();
+        let core_ty = self.pure_core_type(&ty)?;
+        let node = self.builder.unit(core_ty, Origin::Source(span))?;
+        let provenance = self.at_span_provenance(&ty, span)?;
+        Ok(TypedNode {
+            node,
+            ty,
+            effects,
+            provenance,
+        })
+    }
+
+    fn synthesize_resume(
+        &mut self,
+        resume: &crate::resolved::ResolvedResumeExpr,
+        span: Span,
+        context: &mut TypeContext,
+    ) -> Result<TypedNode, TypeError> {
+        let owner = resume.owner.ok_or_else(|| {
+            inference_failure(
+                TypeReason::ResumeOutsideClause,
+                span,
+                "resume is available only inside an operation clause",
+            )
+        })?;
+        let active_position = self
+            .active_resumes
+            .iter()
+            .rev()
+            .position(|active| active.owner == owner)
+            .map(|offset| self.active_resumes.len() - offset - 1)
+            .ok_or_else(|| {
+                inference_failure(
+                    TypeReason::ResumeCapture,
+                    span,
+                    "this nested scope cannot capture the clause resume capability",
+                )
+            })?;
+        let input = IterativeTypeOwner::new(
+            clone_type_with_budget(
+                &self.active_resumes[active_position].input,
+                &mut self.type_work,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+        );
+        let result = IterativeTypeOwner::new(
+            clone_type_with_budget(
+                &self.active_resumes[active_position].result,
+                &mut self.type_work,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+        );
+        let expected_input = self.clone_type(&input)?;
+        let expected_provenance = self.at_span_provenance(&input, span)?;
+        let value = TypedNodeOwner::new(self.elaborate_expression_with_context(
+            ElaborationTask::Check {
+                expression: &resume.value,
+                expected: ProvenancedType {
+                    ty: expected_input,
+                    provenance: expected_provenance,
+                },
+                kind: CheckKind::General,
+            },
+            context,
+        )?);
+        let ty = result.into_inner();
+        let core_ty = self.pure_core_type(&ty)?;
+        let node = self.builder.unit(core_ty, Origin::Source(span))?;
+        let effects = value.effects.clone();
+        let provenance = self.at_span_provenance(&ty, span)?;
+        Ok(TypedNode {
+            node,
+            ty,
+            effects,
+            provenance,
+        })
+    }
+
+    fn synthesize_handler(
+        &mut self,
+        handler: &crate::resolved::ResolvedHandleExpr,
+        span: Span,
+        context: &mut TypeContext,
+    ) -> Result<TypedNode, TypeError> {
+        let body = TypedNodeOwner::new(self.elaborate_expression_with_context(
+            ElaborationTask::Synthesize {
+                expression: &handler.body,
+                cause: None,
+            },
+            context,
+        )?);
+        let mut output = body
+            .effects
+            .remove_exact_with_budget(&handler.effect.instance, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+            .map_err(|_| {
+                inference_failure(
+                    TypeReason::MissingHandledEffect,
+                    handler.effect.span,
+                    "the handled computation does not request this exact effect instance",
+                )
+            })?;
+        let result_type = IterativeTypeOwner::new(self.clone_type(&body.ty)?);
+        let declaration = self
+            .registry
+            .effect(handler.effect.instance.effect())
+            .ok_or_else(invalid_state)?;
+        let required = declaration
+            .operations
+            .iter()
+            .map(|operation| operation.id)
+            .collect::<Vec<_>>();
+        if handler.clauses.len() != required.len() {
+            return Err(inference_failure(
+                TypeReason::HandlerCoverage,
+                span,
+                "a handler must contain one clause for every operation",
+            ));
+        }
+        let mut seen = HashSet::new();
+        for clause in &handler.clauses {
+            if !required.contains(&clause.operation) || !seen.insert(clause.operation) {
+                return Err(inference_failure(
+                    TypeReason::HandlerCoverage,
+                    clause.span,
+                    "a handler operation clause is duplicate or does not belong to this effect",
+                ));
+            }
+        }
+        if seen.len() != required.len() {
+            return Err(inference_failure(
+                TypeReason::HandlerCoverage,
+                span,
+                "a handler must contain one clause for every operation",
+            ));
+        }
+
+        for clause in &handler.clauses {
+            check_clause_resume_usage(&clause.body, clause.resume)?;
+            let (domain, resume_result) =
+                self.operation_signature(&handler.effect.instance, clause.operation, clause.span)?;
+            let domain = IterativeTypeOwner::new(domain);
+            let resume_result = IterativeTypeOwner::new(resume_result);
+            let mut binders = Vec::new();
+            let checked = self.check_core_pattern(
+                &clause.pattern,
+                &domain,
+                context,
+                &mut binders,
+                GeneratedReason::BindingLowering,
+            )?;
+            let matrix = vec![vec![checked.pattern]];
+            if let Some(witness) = missing_witness_for_types_with_budget(
+                &matrix,
+                std::slice::from_ref(&*domain),
+                &self.registry,
+                &mut self.coverage_work,
+            )? {
+                self.remove_pattern_binders(context, &binders)?;
+                return Err(case_error(
+                    TypeReason::RefutableHandlerPattern,
+                    clause.pattern.span,
+                    "this handler operation pattern can fail",
+                    Some(display_witness(&witness, &self.registry)),
+                ));
+            }
+            let active_result = self.clone_type(&result_type)?;
+            self.active_resumes.push(ActiveResume {
+                owner: clause.resume,
+                input: resume_result.into_inner(),
+                result: active_result,
+            });
+            let expected_result = self.clone_type(&result_type)?;
+            let expected_provenance = self.at_span_provenance(&result_type, clause.span)?;
+            let checked_body = self.elaborate_expression_with_context(
+                ElaborationTask::Check {
+                    expression: &clause.body,
+                    expected: ProvenancedType {
+                        ty: expected_result,
+                        provenance: expected_provenance,
+                    },
+                    kind: CheckKind::General,
+                },
+                context,
+            );
+            let active = self.active_resumes.pop().ok_or_else(invalid_state)?;
+            drop(active);
+            let cleanup = self.remove_pattern_binders(context, &binders);
+            let checked_body = TypedNodeOwner::new(checked_body?);
+            cleanup?;
+            output = self.union_effects(&output, &checked_body.effects, clause.span)?;
+        }
+
+        let ty = result_type.into_inner();
+        let core_ty = self.pure_core_type(&ty)?;
+        let node = self.builder.unit(core_ty, Origin::Source(span))?;
+        let provenance = self.at_span_provenance(&ty, span)?;
+        Ok(TypedNode {
+            node,
+            ty,
+            effects: output,
+            provenance,
+        })
     }
 
     fn elaborate_expression_with_context<'a>(
@@ -7006,6 +7585,7 @@ impl Elaborator {
                         values.push(TypedNode {
                             node,
                             ty,
+                            effects: EffectRow::empty(),
                             provenance: TypeProvenance::atom(Some(current.span)),
                         });
                     }
@@ -7019,6 +7599,7 @@ impl Elaborator {
                         values.push(TypedNode {
                             node,
                             ty,
+                            effects: EffectRow::empty(),
                             provenance: TypeProvenance::atom(Some(current.span)),
                         });
                     }
@@ -7030,6 +7611,7 @@ impl Elaborator {
                         values.push(TypedNode {
                             node,
                             ty,
+                            effects: EffectRow::empty(),
                             provenance: TypeProvenance::atom(Some(current.span)),
                         });
                     }
@@ -7075,6 +7657,7 @@ impl Elaborator {
                                             occurrence.origin.clone(),
                                         )?,
                                         ty: core_scheme.into_inner(),
+                                        effects: EffectRow::empty(),
                                         provenance: provenance.clone(),
                                     });
                                     let mut current_arguments = OwnedTypeBuffer(Vec::new());
@@ -7191,24 +7774,14 @@ impl Elaborator {
                                     &arguments,
                                     current.span,
                                 )?;
-                                let scheme = clone_scheme_with_budget(fact, &mut self.type_work)
-                                    .map_err(|()| {
-                                        TypeError::Internal(
-                                            ElaborationFailure::TypeResourceExhausted,
-                                        )
-                                    })?;
+                                let scheme = self.pure_core_scheme(fact)?;
                                 let mut node = self.builder.variable(
                                     binder,
                                     scheme,
                                     occurrence.origin.clone(),
                                 )?;
                                 if !arguments.is_empty() {
-                                    let core_ty = clone_type_with_budget(&ty, &mut self.type_work)
-                                        .map_err(|()| {
-                                            TypeError::Internal(
-                                                ElaborationFailure::TypeResourceExhausted,
-                                            )
-                                        })?;
+                                    let core_ty = self.pure_core_type(&ty)?;
                                     node = self.builder.type_application(
                                         node,
                                         arguments.into_vec(),
@@ -7219,6 +7792,7 @@ impl Elaborator {
                                 values.push(TypedNode {
                                     node,
                                     ty: ty.into_inner(),
+                                    effects: EffectRow::empty(),
                                     provenance,
                                 });
                             }
@@ -7353,6 +7927,7 @@ impl Elaborator {
                         let provenance = self.at_span_provenance(&ty, declaration_span)?;
                         values.push(TypedNode {
                             node,
+                            effects: EffectRow::empty(),
                             provenance,
                             ty: ty.into_inner(),
                         });
@@ -7403,25 +7978,23 @@ impl Elaborator {
                             &mut self.type_work,
                         )?;
                     }
-                    ResolvedExprKind::Function(_) => {
+                    ResolvedExprKind::Perform(request) => {
+                        let typed = self.synthesize_perform(request, current.span, context)?;
+                        values.push(typed);
+                    }
+                    ResolvedExprKind::Handle(handler) => {
+                        let typed = self.synthesize_handler(handler, current.span, context)?;
+                        values.push(typed);
+                    }
+                    ResolvedExprKind::Resume(resume) => {
+                        let typed = self.synthesize_resume(resume, current.span, context)?;
+                        values.push(typed);
+                    }
+                    ResolvedExprKind::Function(function) => {
                         if !matches!(cause, Some(SynthesisCause::Binding(_))) {
                             return Err(function_needs_context(current.span, cause));
                         }
-                        self.type_work.charge(3).map_err(|()| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
-                        let domain = self.fresh_inference(&Kind::Type, current.span)?;
-                        let codomain = self.fresh_inference(&Kind::Type, current.span)?;
-                        let expected_ty = Type::Function(Box::new(domain), Box::new(codomain));
-                        let expected = ProvenancedType {
-                            provenance: self.unknown_provenance(&expected_ty)?,
-                            ty: expected_ty,
-                        };
-                        tasks.push(ElaborationTask::Check {
-                            expression: current,
-                            expected,
-                            kind: CheckKind::General,
-                        });
+                        self.schedule_inferred_function(function, current.span, &mut tasks)?;
                     }
                 },
                 ElaborationTask::Check {
@@ -7457,6 +8030,7 @@ impl Elaborator {
                             presentation: anonymous_function_origin(expression.span, function),
                             function_type: expected.into_inner(),
                             body_check: kind,
+                            infer_effects: false,
                         });
                     }
                     ResolvedExprKind::Block(block) => {
@@ -7548,6 +8122,7 @@ impl Elaborator {
                     let TypedNode {
                         node,
                         ty: synthesized_ty,
+                        effects,
                         provenance,
                     } = synthesized.into_inner();
                     let ty = IterativeTypeOwner::new(self.zonk_owned(synthesized_ty)?);
@@ -7556,6 +8131,7 @@ impl Elaborator {
                     values.push(TypedNode {
                         node,
                         ty: ty.into_inner(),
+                        effects,
                         provenance,
                     });
                 }
@@ -7567,6 +8143,7 @@ impl Elaborator {
                     presentation,
                     function_type,
                     body_check,
+                    infer_effects,
                 } => {
                     self.schedule_function_check(
                         context,
@@ -7580,6 +8157,7 @@ impl Elaborator {
                             presentation,
                             function_type,
                             body_check,
+                            infer_effects,
                         },
                     )?;
                 }
@@ -7592,11 +8170,13 @@ impl Elaborator {
                     ty,
                     origin,
                     provenance,
+                    infer_effects,
                 } => {
+                    let effect_span = origin.primary_span();
                     let origin = OriginOwner::new(origin);
                     let mut pattern = CorePatternOwner::new(pattern);
                     let domain = domain.map(IterativeTypeOwner::new);
-                    let ty = IterativeTypeOwner::new(ty);
+                    let mut ty = IterativeTypeOwner::new(ty);
                     let mut body = values.pop().ok_or_else(invalid_state)?;
                     if let Some(binder) = direct_binder
                         && !context.remove_and_discard(binder)
@@ -7604,6 +8184,59 @@ impl Elaborator {
                         return Err(invalid_state());
                     }
                     self.remove_pattern_binders(context, &pattern_binders)?;
+                    if infer_effects && !body.effects.is_empty() {
+                        let effects = self.zonk_effect_row(&body.effects)?;
+                        let zonked = IterativeTypeOwner::new(self.zonk(&ty)?);
+                        let source = zonked.into_inner();
+                        let Type::Function(domain, codomain) = source else {
+                            discard_type_iteratively(source);
+                            return Err(invalid_state());
+                        };
+                        ty.replace(Type::function_computation(
+                            *domain,
+                            ComputationType::new(*codomain, effects),
+                        ));
+                    } else if !infer_effects {
+                        let expected_effects = ty
+                            .function_view()
+                            .and_then(|function| function.effects())
+                            .cloned()
+                            .unwrap_or_else(EffectRow::empty);
+                        let expected_is_inference = expected_effects.tail().is_some_and(|tail| {
+                            matches!(tail.variable(), EffectRowVariable::Inference(_))
+                        });
+                        if expected_is_inference {
+                            self.unify_effect_rows(&expected_effects, &body.effects)
+                                .map_err(|failure| match failure {
+                                    UnificationFailure::Resource => TypeError::Internal(
+                                        ElaborationFailure::TypeResourceExhausted,
+                                    ),
+                                    UnificationFailure::Infinite => inference_failure(
+                                        TypeReason::AmbiguousEffectRow,
+                                        effect_span,
+                                        "this function would require an infinite latent effect row",
+                                    ),
+                                    UnificationFailure::Mismatch
+                                    | UnificationFailure::Invariant => inference_failure(
+                                        TypeReason::AmbiguousEffectRow,
+                                        effect_span,
+                                        "this function body does not match its latent effect row",
+                                    ),
+                                })?;
+                            let zonked = self.zonk(&ty)?;
+                            ty.replace(zonked);
+                        } else {
+                            let weakened =
+                                self.union_effects(&body.effects, &expected_effects, effect_span)?;
+                            if weakened != expected_effects {
+                                return Err(inference_failure(
+                                    TypeReason::AmbiguousEffectRow,
+                                    effect_span,
+                                    "this function body requests effects outside its declared row",
+                                ));
+                            }
+                        }
+                    }
                     if pattern.0.is_some() {
                         let domain = domain.ok_or_else(invalid_state)?;
                         let pattern_span = pattern.origin.primary_span();
@@ -7649,13 +8282,14 @@ impl Elaborator {
                         )?;
                         body.set_node(match_node);
                     }
-                    let core_ty = self.clone_type(&ty)?;
+                    let core_ty = self.pure_core_type(&ty)?;
                     let node =
                         self.builder
                             .function(binder, body.node, core_ty, origin.into_inner())?;
                     values.push(TypedNode {
                         node,
                         ty: ty.into_inner(),
+                        effects: EffectRow::empty(),
                         provenance,
                     });
                 }
@@ -7665,83 +8299,15 @@ impl Elaborator {
                     argument,
                     recursive_call,
                 } => {
-                    let mut function = values.pop().ok_or_else(invalid_state)?;
-                    let source_function_ty = function.take_type();
-                    let mut function_ty =
-                        IterativeTypeOwner::new(self.zonk_owned(source_function_ty.into_inner())?);
-                    if matches!(&*function_ty, Type::Inference(_)) {
-                        self.type_work.charge(3).map_err(|()| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
-                        let domain = self.fresh_inference(&Kind::Type, function_span)?;
-                        let codomain = self.fresh_inference(&Kind::Type, function_span)?;
-                        let exposed = Type::Function(Box::new(domain), Box::new(codomain));
-                        self.unify(&function_ty, &exposed)
-                            .map_err(|failure| match failure {
-                                UnificationFailure::Infinite => inference_failure(
-                                    TypeReason::InfiniteType,
-                                    function_span,
-                                    "this application would require an infinite type",
-                                ),
-                                UnificationFailure::Mismatch => not_applicable(
-                                    function_span,
-                                    whole_span,
-                                    &function_ty,
-                                    &self.registry,
-                                ),
-                                UnificationFailure::Resource => {
-                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                                }
-                                UnificationFailure::Invariant => invalid_state(),
-                            })?;
-                        let zonked = self.zonk(&exposed)?;
-                        function_ty.replace(zonked);
-                    }
-                    if function_ty.function_view().is_none() {
-                        return Err(not_applicable(
-                            function_span,
-                            whole_span,
-                            &function_ty,
-                            &self.registry,
-                        ));
-                    }
-                    let provenance = if function.provenance.aligns(&function_ty) {
-                        function.provenance.clone()
-                    } else {
-                        self.unknown_provenance(&function_ty)?
-                    };
-                    let (domain_provenance, codomain_provenance) =
-                        provenance.function_parts(&function_ty)?;
-                    let (domain_ty, codomain_ty) =
-                        clone_function_parts_with_budget(&function_ty, &mut self.type_work)
-                            .map_err(|()| {
-                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                            })?;
-                    function.replace_type(function_ty.into_inner());
-                    let domain = ProvenancedTypeOwner::new(ProvenancedType {
-                        ty: domain_ty,
-                        provenance: domain_provenance,
-                    });
-                    let codomain = ProvenancedTypeOwner::new(ProvenancedType {
-                        ty: codomain_ty,
-                        provenance: codomain_provenance,
-                    });
-                    tasks.push(ElaborationTask::FinishApplication {
+                    let function = values.pop().ok_or_else(invalid_state)?;
+                    self.schedule_application_argument(
                         whole_span,
                         function_span,
-                        argument_span: argument.span,
-                        function: function.into_inner(),
-                        codomain: codomain.into_inner(),
-                    });
-                    tasks.push(ElaborationTask::Check {
-                        expression: argument,
-                        expected: domain.into_inner(),
-                        kind: CheckKind::Argument {
-                            function_span,
-                            whole_span,
-                            recursive_call,
-                        },
-                    });
+                        argument,
+                        recursive_call,
+                        function.into_inner(),
+                        &mut tasks,
+                    )?;
                 }
                 ElaborationTask::FinishApplication {
                     whole_span,
@@ -7749,36 +8315,18 @@ impl Elaborator {
                     argument_span,
                     function,
                     codomain,
+                    latent_effects,
                 } => {
-                    let function = TypedNodeOwner::new(function);
-                    let codomain = ProvenancedTypeOwner::new(codomain);
                     let argument = values.pop().ok_or_else(invalid_state)?;
-                    let core_codomain = IterativeTypeOwner::new(self.clone_type(&codomain.ty)?);
-                    let ProvenancedType {
-                        ty: codomain_ty,
-                        provenance: codomain_provenance,
-                    } = codomain.into_inner();
-                    let ty = IterativeTypeOwner::new(self.zonk_owned(codomain_ty)?);
-                    let provenance = if codomain_provenance.aligns(&ty) {
-                        codomain_provenance
-                    } else {
-                        self.unknown_provenance(&ty)?
-                    };
-                    let origin = Origin::Related {
-                        primary: Box::new(Origin::Source(whole_span)),
-                        related: vec![function_span, argument_span],
-                    };
-                    let node = self.builder.application(
-                        function.node,
-                        argument.node,
-                        core_codomain.into_inner(),
-                        origin,
-                    )?;
-                    values.push(TypedNode {
-                        node,
-                        ty: ty.into_inner(),
-                        provenance,
-                    });
+                    values.push(self.finish_application(
+                        whole_span,
+                        function_span,
+                        argument_span,
+                        function,
+                        codomain,
+                        latent_effects,
+                        argument.into_inner(),
+                    )?);
                 }
                 ElaborationTask::AfterLeft {
                     primitive,
@@ -7826,9 +8374,11 @@ impl Elaborator {
                         ty.clone(),
                         origin,
                     )?;
+                    let effects = self.union_effects(&left.effects, &right.effects, whole_span)?;
                     values.push(TypedNode {
                         node,
                         ty,
+                        effects,
                         provenance: TypeProvenance::atom(Some(operator_span)),
                     });
                 }
@@ -7879,6 +8429,7 @@ impl Elaborator {
                 } => {
                     let expected = expected.map(ProvenancedTypeOwner::new);
                     let mut initializer = values.pop().ok_or_else(invalid_state)?;
+                    let initializer_effects = initializer.effects.clone();
                     if let Some(marker) = evidence_marker {
                         self.close_evidence_obligations(marker)?;
                     }
@@ -7925,11 +8476,13 @@ impl Elaborator {
                             let TypedNode {
                                 node,
                                 ty,
+                                effects,
                                 provenance,
                             } = initializer.into_inner();
                             initializer = TypedNodeOwner::new(TypedNode {
                                 node,
                                 ty: Type::Unit,
+                                effects,
                                 provenance: TypeProvenance::atom(None),
                             });
                             ProvenancedType { ty, provenance }
@@ -7993,15 +8546,22 @@ impl Elaborator {
                                 TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                             })?
                             .into_boxed_slice();
-                            let abstraction = if quantified.is_empty() {
+                            let core_quantified = pure_core_type_parameters_with_budget(
+                                &quantified,
+                                &mut self.type_work,
+                            )
+                            .map_err(|()| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?;
+                            let abstraction = if core_quantified.is_empty() {
                                 None
                             } else {
                                 self.type_work.charge(1).map_err(|()| {
                                     TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                                 })?;
-                                let scheme_body = self.clone_type(&binding_type.ty)?;
+                                let scheme_body = self.pure_core_type(&binding_type.ty)?;
                                 let scheme = IterativeTypeOwner::new(Type::Forall(
-                                    quantified,
+                                    core_quantified.into_boxed_slice(),
                                     Box::new(scheme_body),
                                 ));
                                 let binder_scheme =
@@ -8042,6 +8602,7 @@ impl Elaborator {
                             declarations.push(ElaboratedDeclaration::Binding {
                                 binder,
                                 initializer: initializer.node,
+                                effects: initializer_effects,
                                 origin,
                             });
                         }
@@ -8050,6 +8611,7 @@ impl Elaborator {
                             declarations.push(ElaboratedDeclaration::PatternBinding {
                                 pattern,
                                 initializer: initializer.node,
+                                effects: initializer_effects,
                                 origin,
                             });
                         }
@@ -8108,12 +8670,16 @@ impl Elaborator {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     })?;
                     initializers.reverse();
+                    let mut effects = EffectRow::empty();
                     for member in &group.members {
                         let initializer = initializers.pop().ok_or_else(invalid_state)?;
+                        effects =
+                            self.union_effects(&effects, &initializer.effects, member.span)?;
                         let TypedNode {
                             node: initializer_node,
                             ty: initializer_ty,
                             provenance: _,
+                            ..
                         } = initializer.into_inner();
                         let binder = self.builder.resolved_binder(
                             member.binder.id,
@@ -8127,6 +8693,7 @@ impl Elaborator {
                     }
                     declarations.push(ElaboratedDeclaration::Recursive {
                         members,
+                        effects,
                         origin: recursive_group_origin(group),
                     });
                 }
@@ -8185,6 +8752,7 @@ impl Elaborator {
                     let body = values.pop().ok_or_else(invalid_state)?;
                     self.remove_pattern_binders(context, &binders)?;
                     let body_node = body.node;
+                    let body_effects = body.effects.clone();
                     if progress.result_type.is_none() {
                         let TypedNode { ty, provenance, .. } = body.into_inner();
                         progress.set_result_type(
@@ -8193,7 +8761,7 @@ impl Elaborator {
                         )?;
                     }
                     progress.push_row(row.into_vec());
-                    progress.push_arm_body((body_node, arm_span));
+                    progress.push_arm_body((body_node, arm_span, body_effects));
                     self.schedule_match_arm(progress.into_inner(), context, &mut tasks)?;
                 }
                 ElaborationTask::FinishMatch(progress) => {
@@ -8215,7 +8783,11 @@ impl Elaborator {
                     })?;
                     let matrix = progress.take_matrix();
                     let arm_bodies = progress.take_arm_bodies();
-                    for (row, (body, arm_span)) in matrix.into_sequence().zip(arm_bodies) {
+                    let mut effects = progress.scrutinee.effects.clone();
+                    for (row, (body, arm_span, arm_effects)) in
+                        matrix.into_sequence().zip(arm_bodies)
+                    {
+                        effects = self.union_effects(&effects, &arm_effects, arm_span)?;
                         let mut row = CorePatternBuffer(row);
                         let mut pattern = row.pop().ok_or_else(invalid_state)?;
                         if !row.is_empty() {
@@ -8238,6 +8810,7 @@ impl Elaborator {
                     values.push(TypedNode {
                         node,
                         ty,
+                        effects,
                         provenance,
                     });
                 }
@@ -8255,34 +8828,68 @@ impl Elaborator {
                     while !retained_declarations.is_empty() {
                         let core_body_type = self.clone_type(&body.ty)?;
                         let declaration = retained_declarations.pop().ok_or_else(invalid_state)?;
-                        let node = match declaration.into_inner() {
+                        let (node, initializer_effects, effect_span) = match declaration
+                            .into_inner()
+                        {
                             ElaboratedDeclaration::Binding {
                                 binder,
                                 initializer,
+                                effects,
                                 origin,
-                            } => self.builder.binding(
-                                binder,
-                                initializer,
-                                body.node,
-                                core_body_type,
-                                origin,
-                            )?,
+                            } => {
+                                let effect_span = origin.primary_span();
+                                (
+                                    self.builder.binding(
+                                        binder,
+                                        initializer,
+                                        body.node,
+                                        core_body_type,
+                                        origin,
+                                    )?,
+                                    effects,
+                                    effect_span,
+                                )
+                            }
                             ElaboratedDeclaration::PatternBinding {
                                 pattern,
                                 initializer,
+                                effects,
                                 origin,
-                                ..
-                            } => self.builder.match_expression(
-                                initializer,
-                                vec![CoreMatchArm::new(pattern, body.node, origin.clone())],
-                                core_body_type,
+                            } => {
+                                let effect_span = origin.primary_span();
+                                (
+                                    self.builder.match_expression(
+                                        initializer,
+                                        vec![CoreMatchArm::new(pattern, body.node, origin.clone())],
+                                        core_body_type,
+                                        origin,
+                                    )?,
+                                    effects,
+                                    effect_span,
+                                )
+                            }
+                            ElaboratedDeclaration::Recursive {
+                                members,
+                                effects,
                                 origin,
-                            )?,
-                            ElaboratedDeclaration::Recursive { members, origin } => self
-                                .builder
-                                .recursive_binding(members, body.node, core_body_type, origin)?,
+                            } => {
+                                let effect_span = origin.primary_span();
+                                (
+                                    self.builder.recursive_binding(
+                                        members,
+                                        body.node,
+                                        core_body_type,
+                                        origin,
+                                    )?,
+                                    effects,
+                                    effect_span,
+                                )
+                            }
                         };
+                        let effects =
+                            self.union_effects(&initializer_effects, &body.effects, effect_span)?;
                         body.set_node(node);
+                        body.replace_effects(effects);
                     }
                     for declaration in source_declarations {
                         match declaration {
@@ -8316,6 +8923,141 @@ impl Elaborator {
         }
     }
 
+    fn schedule_application_argument<'a>(
+        &mut self,
+        whole_span: Span,
+        function_span: Span,
+        argument: &'a ResolvedExpr,
+        recursive_call: bool,
+        function: TypedNode,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+    ) -> Result<(), TypeError> {
+        let mut function = TypedNodeOwner::new(function);
+        let source_function_ty = function.take_type();
+        let mut function_ty =
+            IterativeTypeOwner::new(self.zonk_owned(source_function_ty.into_inner())?);
+        if matches!(&*function_ty, Type::Inference(_)) {
+            self.type_work
+                .charge(3)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let domain = self.fresh_inference(&Kind::Type, function_span)?;
+            let codomain = self.fresh_inference(&Kind::Type, function_span)?;
+            let effects = self.fresh_effect_row(function_span)?;
+            let exposed =
+                Type::function_computation(domain, ComputationType::new(codomain, effects));
+            self.unify(&function_ty, &exposed)
+                .map_err(|failure| match failure {
+                    UnificationFailure::Infinite => inference_failure(
+                        TypeReason::InfiniteType,
+                        function_span,
+                        "this application would require an infinite type",
+                    ),
+                    UnificationFailure::Mismatch => {
+                        not_applicable(function_span, whole_span, &function_ty, &self.registry)
+                    }
+                    UnificationFailure::Resource => {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    }
+                    UnificationFailure::Invariant => invalid_state(),
+                })?;
+            let zonked = self.zonk(&exposed)?;
+            function_ty.replace(zonked);
+        }
+        if function_ty.function_view().is_none() {
+            return Err(not_applicable(
+                function_span,
+                whole_span,
+                &function_ty,
+                &self.registry,
+            ));
+        }
+        let provenance = if function.provenance.aligns(&function_ty) {
+            function.provenance.clone()
+        } else {
+            self.unknown_provenance(&function_ty)?
+        };
+        let (domain_provenance, codomain_provenance) = provenance.function_parts(&function_ty)?;
+        let (domain_ty, codomain_ty) =
+            clone_function_parts_with_budget(&function_ty, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let latent_effects = function_ty
+            .function_view()
+            .and_then(|function| function.effects())
+            .cloned()
+            .unwrap_or_else(EffectRow::empty);
+        function.replace_type(function_ty.into_inner());
+        let domain = ProvenancedTypeOwner::new(ProvenancedType {
+            ty: domain_ty,
+            provenance: domain_provenance,
+        });
+        let codomain = ProvenancedTypeOwner::new(ProvenancedType {
+            ty: codomain_ty,
+            provenance: codomain_provenance,
+        });
+        tasks.push(ElaborationTask::FinishApplication {
+            whole_span,
+            function_span,
+            argument_span: argument.span,
+            function: function.into_inner(),
+            codomain: codomain.into_inner(),
+            latent_effects,
+        });
+        tasks.push(ElaborationTask::Check {
+            expression: argument,
+            expected: domain.into_inner(),
+            kind: CheckKind::Argument {
+                function_span,
+                whole_span,
+                recursive_call,
+            },
+        });
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finish_application(
+        &mut self,
+        whole_span: Span,
+        function_span: Span,
+        argument_span: Span,
+        function: TypedNode,
+        codomain: ProvenancedType,
+        latent_effects: EffectRow,
+        argument: TypedNode,
+    ) -> Result<TypedNode, TypeError> {
+        let function = TypedNodeOwner::new(function);
+        let codomain = ProvenancedTypeOwner::new(codomain);
+        let core_codomain = IterativeTypeOwner::new(self.pure_core_type(&codomain.ty)?);
+        let ProvenancedType {
+            ty: codomain_ty,
+            provenance: codomain_provenance,
+        } = codomain.into_inner();
+        let ty = IterativeTypeOwner::new(self.zonk_owned(codomain_ty)?);
+        let provenance = if codomain_provenance.aligns(&ty) {
+            codomain_provenance
+        } else {
+            self.unknown_provenance(&ty)?
+        };
+        let origin = Origin::Related {
+            primary: Box::new(Origin::Source(whole_span)),
+            related: vec![function_span, argument_span],
+        };
+        let node = self.builder.application(
+            function.node,
+            argument.node,
+            core_codomain.into_inner(),
+            origin,
+        )?;
+        let effects = self.union_effects(&function.effects, &argument.effects, whole_span)?;
+        let effects = self.union_effects(&effects, &latent_effects, whole_span)?;
+        Ok(TypedNode {
+            node,
+            ty: ty.into_inner(),
+            effects,
+            provenance,
+        })
+    }
+
     fn elaborate_tuple(
         &mut self,
         elements: &[ResolvedExpr],
@@ -8327,6 +9069,7 @@ impl Elaborator {
         }
         let mut nodes = Vec::with_capacity(elements.len());
         let mut types = OwnedTypeBuffer(Vec::with_capacity(elements.len()));
+        let mut effects = EffectRow::empty();
         for element in elements {
             let typed = self.elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
@@ -8335,6 +9078,7 @@ impl Elaborator {
                 },
                 context,
             )?;
+            effects = self.union_effects(&effects, &typed.effects, element.span)?;
             nodes.push(typed.node);
             types.push(typed.ty);
         }
@@ -8346,6 +9090,7 @@ impl Elaborator {
         let node = self.builder.tuple(nodes, core_ty, Origin::Source(span))?;
         Ok(TypedNode {
             node,
+            effects,
             provenance: TypeProvenance::atom(Some(span)),
             ty: ty.into_inner(),
         })
@@ -8474,9 +9219,11 @@ impl Elaborator {
                     .binders
                     .try_reserve(1)
                     .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let core_expected = pure_core_type_from_precharged(&expected)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 let typed = self.builder.resolved_binder(
                     binder.id,
-                    (*expected).clone(),
+                    core_expected,
                     Origin::Generated {
                         cause: Box::new(binder.origin.clone()),
                         reason: binder_reason,
@@ -8579,8 +9326,10 @@ impl Elaborator {
             }
         };
         debug_assert!(!rebuild_expected);
+        let core_expected = pure_core_type_from_precharged(&expected)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         Ok(CheckedPattern {
-            pattern: CorePattern::new(expected.into_inner(), Origin::Source(pattern.span), kind),
+            pattern: CorePattern::new(core_expected, Origin::Source(pattern.span), kind),
             inference_changed,
         })
     }
@@ -8741,9 +9490,11 @@ impl Elaborator {
             }
             _ => return Err(constructor_mismatch(whole_pattern.span)),
         };
+        let core_expected = pure_core_type_from_precharged(&expected)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         Ok(CheckedPattern {
             pattern: CorePattern::new(
-                expected.into_inner(),
+                core_expected,
                 Origin::Source(whole_pattern.span),
                 CorePatternKind::Constructor {
                     constructor,
@@ -8767,6 +9518,48 @@ impl Elaborator {
         Ok(())
     }
 
+    fn schedule_inferred_function<'a>(
+        &mut self,
+        function: &'a crate::resolved::ResolvedFunctionExpr,
+        span: Span,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+    ) -> Result<(), TypeError> {
+        self.type_work
+            .charge(3)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let domain = self.fresh_inference(&Kind::Type, span)?;
+        let codomain = self.fresh_inference(&Kind::Type, span)?;
+        let expected_ty = Type::Function(Box::new(domain), Box::new(codomain));
+        let expected = ProvenancedTypeOwner::new(ProvenancedType {
+            provenance: self.unknown_provenance(&expected_ty)?,
+            ty: expected_ty,
+        });
+        let (domain_ty, codomain_ty) =
+            clone_function_parts_with_budget(&expected.ty, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let domain_ty = IterativeTypeOwner::new(domain_ty);
+        let codomain_ty = IterativeTypeOwner::new(codomain_ty);
+        let (domain_provenance, codomain_provenance) =
+            expected.provenance.function_parts(&expected.ty)?;
+        tasks.push(ElaborationTask::CheckFunction {
+            parameter: &function.pattern,
+            domain: ProvenancedType {
+                ty: domain_ty.into_inner(),
+                provenance: domain_provenance,
+            },
+            codomain: ProvenancedType {
+                ty: codomain_ty.into_inner(),
+                provenance: codomain_provenance,
+            },
+            body: FunctionBody::Block(&function.body),
+            presentation: anonymous_function_origin(span, function),
+            function_type: expected.into_inner(),
+            body_check: CheckKind::General,
+            infer_effects: true,
+        });
+        Ok(())
+    }
+
     fn schedule_function_check<'a>(
         &mut self,
         context: &mut TypeContext,
@@ -8782,6 +9575,7 @@ impl Elaborator {
             presentation,
             function_type,
             body_check,
+            infer_effects,
         } = check;
         let presentation = OriginOwner::new(presentation);
         let mut domain = ProvenancedTypeOwner::new(domain);
@@ -8824,12 +9618,10 @@ impl Elaborator {
                 function_type.set_provenance(provenance);
             }
         }
-        let function_parts_align = matches!(
-            &function_type.ty,
-            Type::Function(expected_domain, expected_codomain)
-                if structurally_equal(expected_domain, &domain.ty)
-                    && structurally_equal(expected_codomain, &codomain.ty)
-        );
+        let function_parts_align = function_type.ty.function_view().is_some_and(|function| {
+            structurally_equal(function.domain(), &domain.ty)
+                && structurally_equal(function.value(), &codomain.ty)
+        });
         if !function_parts_align || !function_type.provenance.aligns(&function_type.ty) {
             return Err(invalid_state());
         }
@@ -8839,9 +9631,11 @@ impl Elaborator {
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 let context_type = IterativeTypeOwner::new(self.clone_type(&domain.ty)?);
                 let ProvenancedType {
-                    ty: binder_type,
+                    ty: source_binder_type,
                     provenance: domain_provenance,
                 } = domain.into_inner();
+                let binder_type = pure_core_type_from_precharged(&source_binder_type)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 let binder = self.builder.resolved_binder(
                     source_binder.id,
                     binder_type,
@@ -8859,7 +9653,7 @@ impl Elaborator {
                 }
                 (binder, None, None, Some(source_binder.id))
             } else {
-                let binder_type = self.clone_type(&domain.ty)?;
+                let binder_type = self.pure_core_type(&domain.ty)?;
                 let binder = self.builder.binder(
                     binder_type,
                     Origin::Generated {
@@ -8888,6 +9682,7 @@ impl Elaborator {
             ty: function_type.ty,
             origin,
             provenance: function_type.provenance,
+            infer_effects,
         });
         match body {
             FunctionBody::Block(block) => schedule_block(
@@ -8955,6 +9750,7 @@ impl Elaborator {
         domains
             .try_reserve(arity)
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut expected_body_effects = EffectRow::empty();
         for _ in 0..arity {
             if remainder.ty.function_view().is_none() {
                 return Err(case_error(
@@ -8964,6 +9760,12 @@ impl Elaborator {
                     None,
                 ));
             }
+            expected_body_effects = remainder
+                .ty
+                .function_view()
+                .and_then(|function| function.effects())
+                .cloned()
+                .unwrap_or_else(EffectRow::empty);
             let (domain, codomain) = remainder.into_inner().into_function_parts()?;
             domains.push(domain);
             remainder = ProvenancedTypeOwner::new(codomain);
@@ -8974,7 +9776,7 @@ impl Elaborator {
             .try_reserve(arity)
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         for domain in domains.iter() {
-            let parameter_type = self.clone_type(&domain.ty)?;
+            let parameter_type = self.pure_core_type(&domain.ty)?;
             parameters.push(self.builder.binder(
                 parameter_type,
                 Origin::Generated {
@@ -9062,6 +9864,15 @@ impl Elaborator {
                 .map(TypedNodeOwner::new);
             self.remove_pattern_binders(context, &binder_ids)?;
             let body = body_result?;
+            let weakened =
+                self.union_effects(&body.effects, &expected_body_effects, clause.body.span)?;
+            if weakened != expected_body_effects {
+                return Err(inference_failure(
+                    TypeReason::AmbiguousEffectRow,
+                    clause.body.span,
+                    "this function body requests effects outside its declared row",
+                ));
+            }
             coverage_matrix.push(patterns.into_vec());
             clause_bodies.push((body.node, clause.span));
         }
@@ -9150,7 +9961,7 @@ impl Elaborator {
                 .try_reserve(parameters.len())
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             for (parameter, domain) in parameters.iter().zip(domains.iter()) {
-                let variable_type = self.clone_type(&domain.ty)?;
+                let variable_type = self.pure_core_type(&domain.ty)?;
                 arguments.push(self.builder.variable(
                     parameter.id(),
                     variable_type,
@@ -9174,7 +9985,7 @@ impl Elaborator {
                 self.builder
                     .tuple(arguments, ty, Origin::Source(definition_span))?
             };
-            let core_remainder = self.clone_type(&remainder.ty)?;
+            let core_remainder = self.pure_core_type(&remainder.ty)?;
             self.builder.match_expression(
                 scrutinee,
                 arms,
@@ -9182,12 +9993,12 @@ impl Elaborator {
                 Origin::Source(definition_span),
             )?
         };
-        let mut body_type = IterativeTypeOwner::new(self.clone_type(&remainder.ty)?);
+        let mut body_type = IterativeTypeOwner::new(self.pure_core_type(&remainder.ty)?);
         for (parameter, domain) in parameters.into_iter().zip(domains.iter()).rev() {
             self.type_work
                 .charge(1)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let domain_type = self.clone_type(&domain.ty)?;
+            let domain_type = self.pure_core_type(&domain.ty)?;
             let ty = IterativeTypeOwner::new(Type::Function(
                 Box::new(domain_type),
                 Box::new(body_type.into_inner()),
@@ -9204,17 +10015,19 @@ impl Elaborator {
             )?;
             body_type = ty;
         }
-        if !same_type(&body_type, &function_type.ty) {
+        let projected_function_type =
+            IterativeTypeOwner::new(self.pure_core_type(&function_type.ty)?);
+        if !same_type(&body_type, &projected_function_type) {
             return Err(invalid_state());
         }
         let ProvenancedType {
             ty: original_function_type,
             provenance,
         } = function_type.into_inner();
-        discard_type_iteratively(original_function_type);
         Ok(TypedNode {
             node: body_node,
-            ty: body_type.into_inner(),
+            ty: original_function_type,
+            effects: EffectRow::empty(),
             provenance,
         })
     }
@@ -9375,6 +10188,7 @@ impl Elaborator {
         Ok(TypedNode {
             node,
             ty: function_type.ty,
+            effects: EffectRow::empty(),
             provenance: function_type.provenance,
         })
     }
@@ -11945,6 +12759,7 @@ enum ElaborationTask<'a> {
         presentation: Origin,
         function_type: ProvenancedType,
         body_check: CheckKind,
+        infer_effects: bool,
     },
     FinishFunction {
         direct_binder: Option<BinderId>,
@@ -11955,6 +12770,7 @@ enum ElaborationTask<'a> {
         ty: Type,
         origin: Origin,
         provenance: TypeProvenance,
+        infer_effects: bool,
     },
     AfterApplicationFunction {
         whole_span: Span,
@@ -11968,6 +12784,7 @@ enum ElaborationTask<'a> {
         argument_span: Span,
         function: TypedNode,
         codomain: ProvenancedType,
+        latent_effects: EffectRow,
     },
     AfterMatchScrutinee {
         expression: &'a crate::resolved::ResolvedMatchExpr,
@@ -12022,7 +12839,7 @@ struct MatchProgress<'a> {
     scrutinee: TypedNode,
     next_arm: usize,
     matrix: Vec<Vec<CorePattern>>,
-    arm_bodies: Vec<(NodeId, Span)>,
+    arm_bodies: Vec<(NodeId, Span, EffectRow)>,
     result_type: Option<(Type, TypeProvenance, CheckKind)>,
 }
 
@@ -12073,7 +12890,7 @@ impl<'a> MatchProgressOwner<'a> {
             .push(row);
     }
 
-    fn push_arm_body(&mut self, body: (NodeId, Span)) {
+    fn push_arm_body(&mut self, body: (NodeId, Span, EffectRow)) {
         self.0
             .as_deref_mut()
             .expect("match progress remains live")
@@ -12091,7 +12908,7 @@ impl<'a> MatchProgressOwner<'a> {
         ))
     }
 
-    fn take_arm_bodies(&mut self) -> Vec<(NodeId, Span)> {
+    fn take_arm_bodies(&mut self) -> Vec<(NodeId, Span, EffectRow)> {
         std::mem::take(
             &mut self
                 .0
@@ -12188,6 +13005,7 @@ struct FunctionCheck<'a> {
     presentation: Origin,
     function_type: ProvenancedType,
     body_check: CheckKind,
+    infer_effects: bool,
 }
 
 struct CheckedPattern {
@@ -12244,15 +13062,18 @@ enum ElaboratedDeclaration {
     Binding {
         binder: TypedBinder,
         initializer: NodeId,
+        effects: EffectRow,
         origin: Origin,
     },
     PatternBinding {
         pattern: CorePattern,
         initializer: NodeId,
+        effects: EffectRow,
         origin: Origin,
     },
     Recursive {
         members: Vec<(TypedBinder, NodeId)>,
+        effects: EffectRow,
         origin: Origin,
     },
 }
@@ -12396,6 +13217,10 @@ impl OwnedTypeBuffer {
 
     fn pop(&mut self) -> Option<Type> {
         self.0.pop()
+    }
+
+    fn split_off(&mut self, at: usize) -> Self {
+        Self(self.0.split_off(at))
     }
 
     fn reverse(&mut self) {
@@ -12679,6 +13504,7 @@ fn discard_provenanced_type(provenanced: ProvenancedType) {
 
 fn discard_typed_node(node: TypedNode) {
     discard_type_iteratively(node.ty);
+    drop(node.effects);
     drop(node.provenance);
 }
 
@@ -12796,7 +13622,9 @@ fn discard_elaborated_declaration(declaration: ElaboratedDeclaration) {
             pattern.discard_iteratively();
             discard_origin_iteratively(origin);
         }
-        ElaboratedDeclaration::Recursive { members, origin } => {
+        ElaboratedDeclaration::Recursive {
+            members, origin, ..
+        } => {
             for (binder, _) in members {
                 binder.discard_metadata();
             }
@@ -13311,21 +14139,41 @@ fn candidate_kind_environment<'a>(
                 schedule!(function);
             }
             Type::EffectfulFunction(domain, codomain) => {
-                if let Some(crate::types::EffectRowVariable::Rigid(variable)) =
-                    codomain.tail_variable()
-                    && !environments.contains_declared(variable)
-                {
-                    let parameter = registry
-                        .type_variable(variable)
-                        .ok_or(UnificationFailure::Invariant)?;
-                    environments
-                        .insert_declared(
-                            variable,
-                            &parameter.kind,
-                            parameter.origin.primary_span(),
-                            budget,
-                        )
-                        .map_err(kind_failure_for_unification)?;
+                if let Some(variable) = codomain.tail_variable() {
+                    match variable {
+                        EffectRowVariable::Rigid(variable)
+                            if !environments.contains_declared(variable) =>
+                        {
+                            let parameter = registry
+                                .type_variable(variable)
+                                .ok_or(UnificationFailure::Invariant)?;
+                            environments
+                                .insert_declared(
+                                    variable,
+                                    &parameter.kind,
+                                    parameter.origin.primary_span(),
+                                    budget,
+                                )
+                                .map_err(kind_failure_for_unification)?;
+                        }
+                        EffectRowVariable::Inference(variable)
+                            if !environments.contains_inference(variable) =>
+                        {
+                            let fact = inference_variables
+                                .fact(variable, budget)
+                                .map_err(inference_registry_failure_for_unification)?;
+                            environments
+                                .insert_inference(
+                                    variable,
+                                    &fact.kind,
+                                    Some(fact.origin),
+                                    budget,
+                                    fact.origin,
+                                )
+                                .map_err(kind_failure_for_unification)?;
+                        }
+                        EffectRowVariable::Rigid(_) | EffectRowVariable::Inference(_) => {}
+                    }
                 }
                 for argument in codomain.effect_arguments() {
                     schedule!(argument);
@@ -13612,6 +14460,12 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
                 work.push(&match_expression.scrutinee);
                 work.extend(match_expression.arms.iter().map(|arm| &arm.body));
             }
+            ResolvedExprKind::Perform(request) => work.push(&request.operand),
+            ResolvedExprKind::Handle(handler) => {
+                work.push(&handler.body);
+                work.extend(handler.clauses.iter().map(|clause| &clause.body));
+            }
+            ResolvedExprKind::Resume(resume) => work.push(&resume.value),
             ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
@@ -13924,19 +14778,6 @@ fn same_interface_application_with_budget(
     Ok(true)
 }
 
-fn clone_scheme_with_budget(fact: &TypeFact, budget: &mut TypeWorkBudget) -> Result<Type, ()> {
-    charge_type_cells(&fact.ty, budget)?;
-    if fact.quantified.is_empty() {
-        return Ok(zonk_type(&fact.ty, &HashMap::new()));
-    }
-    budget.charge(1)?;
-    let quantified = clone_kinded_type_parameters_with_budget(&fact.quantified, budget)?;
-    Ok(Type::Forall(
-        quantified.into_boxed_slice(),
-        Box::new(zonk_type(&fact.ty, &HashMap::new())),
-    ))
-}
-
 fn charge_pattern_binder_storage(ty: &Type, budget: &mut TypeWorkBudget) -> Result<(), ()> {
     charge_type_cells(ty, budget)?;
     charge_type_cells(ty, budget)?;
@@ -14032,6 +14873,9 @@ fn compare_concrete_types(
         match (left, right) {
             (Type::Inference(_) | Type::Forall(_, _), _)
             | (_, Type::Inference(_) | Type::Forall(_, _)) => return Ok(None),
+            (Type::EffectfulFunction(_, _), _) | (_, Type::EffectfulFunction(_, _)) => {
+                return Ok(None);
+            }
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
             (Type::Variable(left), Type::Variable(right)) if left == right => {}
@@ -14808,6 +15652,210 @@ fn inference_failure(reason: TypeReason, span: Span, message: &str) -> TypeError
     )))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResumeUsage {
+    Available,
+    Consumed,
+}
+
+fn check_clause_resume_usage(expression: &ResolvedExpr, owner: ResumeId) -> Result<(), TypeError> {
+    match resume_usage(expression, owner, ResumeUsage::Available)? {
+        ResumeUsage::Consumed => Ok(()),
+        ResumeUsage::Available => Err(inference_failure(
+            TypeReason::ResumeNotConsumed,
+            expression.span,
+            "this operation clause can complete without resuming",
+        )),
+    }
+}
+
+fn resume_usage(
+    expression: &ResolvedExpr,
+    owner: ResumeId,
+    state: ResumeUsage,
+) -> Result<ResumeUsage, TypeError> {
+    match &expression.kind {
+        ResolvedExprKind::Integer(_)
+        | ResolvedExprKind::Boolean(_)
+        | ResolvedExprKind::Unit
+        | ResolvedExprKind::Occurrence(_)
+        | ResolvedExprKind::Constructor(_) => Ok(state),
+        ResolvedExprKind::Tuple(elements) => elements
+            .iter()
+            .try_fold(state, |state, element| resume_usage(element, owner, state)),
+        ResolvedExprKind::Apply(application) => {
+            let state = resume_usage(&application.function, owner, state)?;
+            resume_usage(&application.argument, owner, state)
+        }
+        ResolvedExprKind::Add(binary)
+        | ResolvedExprKind::Multiply(binary)
+        | ResolvedExprKind::Equal(binary) => {
+            let state = resume_usage(&binary.left, owner, state)?;
+            resume_usage(&binary.right, owner, state)
+        }
+        ResolvedExprKind::Block(block) => {
+            let mut state = state;
+            for declaration in &block.declarations {
+                match declaration {
+                    ResolvedLocalDeclaration::Binding(binding) => {
+                        state = resume_usage(&binding.initializer, owner, state)?;
+                    }
+                    ResolvedLocalDeclaration::Recursive(group) => {
+                        if group
+                            .members
+                            .iter()
+                            .any(|member| contains_resume_owner(&member.initializer, owner))
+                        {
+                            return Err(inference_failure(
+                                TypeReason::ResumeCapture,
+                                group.span,
+                                "a recursive member cannot capture the clause resume capability",
+                            ));
+                        }
+                    }
+                }
+            }
+            resume_usage(&block.result, owner, state)
+        }
+        ResolvedExprKind::Function(function) => {
+            if contains_resume_owner(&function.body.result, owner)
+                || function
+                    .body
+                    .declarations
+                    .iter()
+                    .any(|declaration| match declaration {
+                        ResolvedLocalDeclaration::Binding(binding) => {
+                            contains_resume_owner(&binding.initializer, owner)
+                        }
+                        ResolvedLocalDeclaration::Recursive(group) => group
+                            .members
+                            .iter()
+                            .any(|member| contains_resume_owner(&member.initializer, owner)),
+                    })
+            {
+                Err(inference_failure(
+                    TypeReason::ResumeCapture,
+                    expression.span,
+                    "a nested function cannot capture the clause resume capability",
+                ))
+            } else {
+                Ok(state)
+            }
+        }
+        ResolvedExprKind::Match(matched) => {
+            let incoming = resume_usage(&matched.scrutinee, owner, state)?;
+            let mut outgoing = None;
+            for arm in &matched.arms {
+                let arm_state = resume_usage(&arm.body, owner, incoming)?;
+                if outgoing.is_some_and(|previous| previous != arm_state) {
+                    return Err(inference_failure(
+                        TypeReason::ResumeNotConsumed,
+                        arm.span,
+                        "every match branch must leave the same resume usage state",
+                    ));
+                }
+                outgoing = Some(arm_state);
+            }
+            Ok(outgoing.unwrap_or(incoming))
+        }
+        ResolvedExprKind::Perform(request) => resume_usage(&request.operand, owner, state),
+        ResolvedExprKind::Handle(handler) => {
+            if handler
+                .clauses
+                .iter()
+                .any(|clause| contains_resume_owner(&clause.body, owner))
+            {
+                return Err(inference_failure(
+                    TypeReason::ResumeCapture,
+                    expression.span,
+                    "a nested handler clause cannot capture the outer resume capability",
+                ));
+            }
+            resume_usage(&handler.body, owner, state)
+        }
+        ResolvedExprKind::Resume(resume) => {
+            let state = resume_usage(&resume.value, owner, state)?;
+            if resume.owner != Some(owner) {
+                return Ok(state);
+            }
+            match state {
+                ResumeUsage::Available => Ok(ResumeUsage::Consumed),
+                ResumeUsage::Consumed => Err(inference_failure(
+                    TypeReason::ResumeAlreadyConsumed,
+                    expression.span,
+                    "this control-flow path already consumed the resume capability",
+                )),
+            }
+        }
+    }
+}
+
+fn contains_resume_owner(expression: &ResolvedExpr, owner: ResumeId) -> bool {
+    let mut pending = vec![expression];
+    while let Some(expression) = pending.pop() {
+        match &expression.kind {
+            ResolvedExprKind::Resume(resume) => {
+                if resume.owner == Some(owner) {
+                    return true;
+                }
+                pending.push(&resume.value);
+            }
+            ResolvedExprKind::Tuple(elements) => pending.extend(elements),
+            ResolvedExprKind::Apply(application) => {
+                pending.push(&application.argument);
+                pending.push(&application.function);
+            }
+            ResolvedExprKind::Add(binary)
+            | ResolvedExprKind::Multiply(binary)
+            | ResolvedExprKind::Equal(binary) => {
+                pending.push(&binary.right);
+                pending.push(&binary.left);
+            }
+            ResolvedExprKind::Block(block) => {
+                pending.push(&block.result);
+                for declaration in &block.declarations {
+                    match declaration {
+                        ResolvedLocalDeclaration::Binding(binding) => {
+                            pending.push(&binding.initializer)
+                        }
+                        ResolvedLocalDeclaration::Recursive(group) => {
+                            pending.extend(group.members.iter().map(|member| &member.initializer))
+                        }
+                    }
+                }
+            }
+            ResolvedExprKind::Function(function) => {
+                pending.push(&function.body.result);
+                for declaration in &function.body.declarations {
+                    match declaration {
+                        ResolvedLocalDeclaration::Binding(binding) => {
+                            pending.push(&binding.initializer)
+                        }
+                        ResolvedLocalDeclaration::Recursive(group) => {
+                            pending.extend(group.members.iter().map(|member| &member.initializer))
+                        }
+                    }
+                }
+            }
+            ResolvedExprKind::Match(matched) => {
+                pending.push(&matched.scrutinee);
+                pending.extend(matched.arms.iter().map(|arm| &arm.body));
+            }
+            ResolvedExprKind::Perform(request) => pending.push(&request.operand),
+            ResolvedExprKind::Handle(handler) => {
+                pending.push(&handler.body);
+                pending.extend(handler.clauses.iter().map(|clause| &clause.body));
+            }
+            ResolvedExprKind::Integer(_)
+            | ResolvedExprKind::Boolean(_)
+            | ResolvedExprKind::Unit
+            | ResolvedExprKind::Occurrence(_)
+            | ResolvedExprKind::Constructor(_) => {}
+        }
+    }
+    false
+}
+
 fn resolved_module_binders(module: &ResolvedModule) -> Vec<BinderId> {
     let mut binders = Vec::new();
     let mut expressions = Vec::new();
@@ -14907,6 +15955,15 @@ fn collect_expression_binders(binders: &mut Vec<BinderId>, mut expressions: Vec<
                     expressions.push(&arm.body);
                 }
             }
+            ResolvedExprKind::Perform(request) => expressions.push(&request.operand),
+            ResolvedExprKind::Handle(handler) => {
+                expressions.push(&handler.body);
+                for clause in &handler.clauses {
+                    collect_pattern_binders(&clause.pattern, binders);
+                    expressions.push(&clause.body);
+                }
+            }
+            ResolvedExprKind::Resume(resume) => expressions.push(&resume.value),
             ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
@@ -17543,39 +18600,6 @@ mod tests {
             .expect("the exact retained match cost should fit");
         assert_eq!(typed.ty, Type::Int);
         assert_eq!(exact.type_work.charge(1), Err(()));
-    }
-
-    #[test]
-    fn retained_scheme_clones_precharge_body_quantifiers_and_wrapper() {
-        let fact = TypeFact {
-            ty: Type::Tuple(vec![Type::Int, Type::Bool, Type::Unit].into_boxed_slice()),
-            provenance: TypeProvenance::atom(None),
-            quantified: vec![
-                (TypeVariableId::new(0), Kind::Type),
-                (TypeVariableId::new(1), Kind::Type),
-                (TypeVariableId::new(2), Kind::Type),
-            ]
-            .into_boxed_slice(),
-        };
-
-        let mut short = TypeWorkBudget::default();
-        short
-            .charge(crate::types::TYPE_WORK_LIMIT - 10)
-            .expect("the fixture leaves one fewer unit than the complete scheme copy");
-        assert_eq!(clone_scheme_with_budget(&fact, &mut short), Err(()));
-
-        let mut exact = TypeWorkBudget::default();
-        exact
-            .charge(crate::types::TYPE_WORK_LIMIT - 11)
-            .expect("the fixture leaves the body, quantifiers, and wrapper");
-        assert_eq!(
-            clone_scheme_with_budget(&fact, &mut exact),
-            Ok(Type::Forall(
-                fact.quantified.clone(),
-                Box::new(fact.ty.clone())
-            ))
-        );
-        assert_eq!(exact.charge(1), Err(()));
     }
 
     #[test]
@@ -20240,6 +21264,7 @@ mod tests {
                             ty: deep_application_type(DEPTH),
                             origin: origin.clone(),
                             provenance: TypeProvenance::atom(Some(span)),
+                            infer_effects: false,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -20418,6 +21443,7 @@ mod tests {
                                 ty: function_ty,
                             },
                             body_check: CheckKind::General,
+                            infer_effects: false,
                         },
                     ),
                     Err(TypeError::Internal(
@@ -20459,6 +21485,7 @@ mod tests {
                             ty: Type::Unit,
                             origin: deep_generated_origin(DEPTH, span),
                             provenance: TypeProvenance::atom(Some(span)),
+                            infer_effects: false,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -20495,6 +21522,7 @@ mod tests {
                     initial.borrow_mut().push(TypedNode {
                         node: body,
                         ty: Type::Unit,
+                        effects: EffectRow::empty(),
                         provenance: TypeProvenance::atom(Some(span)),
                     });
                 });
@@ -20515,6 +21543,7 @@ mod tests {
                             ty: Type::Unit,
                             origin: Origin::Source(span),
                             provenance: TypeProvenance::atom(Some(span)),
+                            infer_effects: false,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -20553,6 +21582,7 @@ mod tests {
                     initial.borrow_mut().push(TypedNode {
                         node: body,
                         ty: deep_application_type(DEPTH),
+                        effects: EffectRow::empty(),
                         provenance: TypeProvenance::atom(Some(span)),
                     });
                 });
@@ -20574,6 +21604,7 @@ mod tests {
                             ty: Type::Unit,
                             origin: Origin::Source(span),
                             provenance: TypeProvenance::atom(Some(span)),
+                            infer_effects: false,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -20613,6 +21644,7 @@ mod tests {
                     initial.borrow_mut().push(TypedNode {
                         node: argument_node,
                         ty: Type::Unit,
+                        effects: EffectRow::empty(),
                         provenance: TypeProvenance::atom(Some(span)),
                     });
                 });
@@ -20636,9 +21668,11 @@ mod tests {
                             function: TypedNode {
                                 node: function_node,
                                 ty: Type::Unit,
+                                effects: EffectRow::empty(),
                                 provenance: TypeProvenance::atom(Some(span)),
                             },
                             codomain,
+                            latent_effects: EffectRow::empty(),
                         },
                         &mut TypeContext::new(),
                     ),
@@ -21128,6 +22162,7 @@ mod tests {
                                 ty: function_ty,
                             },
                             body_check: CheckKind::General,
+                            infer_effects: false,
                         },
                     ),
                     Err(TypeError::Internal(

@@ -26,19 +26,20 @@ use crate::{
         ResolvedBinaryExpr, ResolvedBinding, ResolvedBlock, ResolvedBuildFailure,
         ResolvedConstructor, ResolvedConstructorOccurrence, ResolvedDefinition,
         ResolvedDefinitionKind, ResolvedDeterminationParameter, ResolvedDeterminationSide,
-        ResolvedEffectDeclaration, ResolvedEffectOperation, ResolvedEquation,
-        ResolvedEquationalGlobal, ResolvedExportCandidate, ResolvedExpr, ResolvedExprKind,
-        ResolvedExternalInterface, ResolvedFunctionExpr, ResolvedImplementation,
-        ResolvedImplementationMethodGroup, ResolvedInlineOperationalGlobal,
-        ResolvedInlineOperationalHeader, ResolvedInterfaceApplication,
-        ResolvedInterfaceDeclaration, ResolvedInterfaceDetermination, ResolvedInterfaceMethod,
-        ResolvedInterfaceOccurrence, ResolvedLocalDeclaration, ResolvedMatchArm, ResolvedMatchExpr,
-        ResolvedModule, ResolvedModuleParts, ResolvedNominalType, ResolvedOccurrence,
-        ResolvedPattern, ResolvedPatternKind, ResolvedRecursiveGroup, ResolvedRecursiveMember,
-        ResolvedRegistry, ResolvedRequirement, ResolvedTermName, ResolvedType,
+        ResolvedEffectDeclaration, ResolvedEffectInstance, ResolvedEffectOperation,
+        ResolvedEquation, ResolvedEquationalGlobal, ResolvedExportCandidate, ResolvedExpr,
+        ResolvedExprKind, ResolvedExternalInterface, ResolvedFunctionExpr, ResolvedHandleExpr,
+        ResolvedHandlerClause, ResolvedImplementation, ResolvedImplementationMethodGroup,
+        ResolvedInlineOperationalGlobal, ResolvedInlineOperationalHeader,
+        ResolvedInterfaceApplication, ResolvedInterfaceDeclaration, ResolvedInterfaceDetermination,
+        ResolvedInterfaceMethod, ResolvedInterfaceOccurrence, ResolvedLocalDeclaration,
+        ResolvedMatchArm, ResolvedMatchExpr, ResolvedModule, ResolvedModuleParts,
+        ResolvedNominalType, ResolvedOccurrence, ResolvedPattern, ResolvedPatternKind,
+        ResolvedPerformExpr, ResolvedRecursiveGroup, ResolvedRecursiveMember, ResolvedRegistry,
+        ResolvedRequirement, ResolvedResumeExpr, ResolvedTermName, ResolvedType,
         ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResolvedTypeVariable,
-        ResolvedTypedPattern, ValidatedImportedNominalMerge, WithheldExport, WithheldExportKind,
-        WithheldNamespace, clone_resolved_effect_with_budget,
+        ResolvedTypedPattern, ResumeId, ValidatedImportedNominalMerge, WithheldExport,
+        WithheldExportKind, WithheldNamespace, clone_resolved_effect_with_budget,
         clone_resolved_type_variable_with_budget, clone_resolved_type_variables_with_budget,
         discard_resolved_definition_iteratively, discard_resolved_effect_iteratively,
         discard_resolved_equation_iteratively, discard_resolved_expression_iteratively,
@@ -1385,6 +1386,9 @@ struct Resolver {
     public_implementation_route_ranks: HashMap<ImplId, ImplementationRouteRank>,
     type_scopes: Vec<HashMap<String, TypeVariableId>>,
     nominal_parameter_counts: HashMap<NominalTypeId, usize>,
+    expression_registry: Option<Arc<ResolvedRegistry>>,
+    active_resumes: Vec<ResumeId>,
+    next_resume: u32,
     type_work: TypeWorkBudget,
     constraint_work: InterfaceConstraintBudget,
     #[cfg(test)]
@@ -1625,6 +1629,9 @@ impl Resolver {
             public_implementation_route_ranks: HashMap::new(),
             type_scopes: Vec::new(),
             nominal_parameter_counts: HashMap::new(),
+            expression_registry: None,
+            active_resumes: Vec::new(),
+            next_resume: 0,
             type_work,
             constraint_work,
             #[cfg(test)]
@@ -5060,6 +5067,63 @@ impl Resolver {
         build_source_effect_row_with_budget(resolved_instances, tail, row.span, &mut self.type_work)
     }
 
+    fn resolve_effect_instance_parts(
+        &mut self,
+        effect: &SurfaceReference,
+        arguments: &[SurfaceType],
+        span: crate::source::Span,
+    ) -> Result<ResolvedEffectInstance, ResolveError> {
+        let identity = self.effect_reference(effect)?;
+        self.type_work.charge(arguments.len()).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "effect-argument storage exceeded its type-work budget",
+            )
+        })?;
+        let mut resolved = Vec::new();
+        resolved.try_reserve_exact(arguments.len()).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "effect-argument storage exceeded its type-work budget",
+            )
+        })?;
+        for argument in arguments {
+            let ResolvedType { ty, .. } = self.resolve_type(argument)?;
+            resolved.push(ty);
+        }
+        Ok(ResolvedEffectInstance {
+            instance: EffectInstance::new(identity, resolved.into_boxed_slice()),
+            origin: Origin::Source(effect.span()),
+            span,
+        })
+    }
+
+    fn resolved_operation(
+        &self,
+        effect: EffectId,
+        operation: &SurfaceName,
+    ) -> Result<OperationId, ResolveError> {
+        self.expression_registry
+            .as_ref()
+            .and_then(|registry| registry.effect(effect))
+            .and_then(|declaration| {
+                declaration
+                    .operations
+                    .iter()
+                    .find(|candidate| candidate.spelling == operation.text)
+            })
+            .map(|operation| operation.id)
+            .ok_or_else(|| {
+                error(
+                    ResolveReason::UnknownName,
+                    operation.span,
+                    "this operation is not declared by the selected effect",
+                )
+            })
+    }
+
     fn resolve_requirements(
         &mut self,
         owner: RequirementOwner,
@@ -5655,6 +5719,7 @@ impl Resolver {
                 )
                 .with_effects(registry_effects),
         );
+        self.expression_registry = Some(Arc::clone(&registry));
         let mut global_binders = vec![None; surface_definitions.len()];
         for declaration in &surface.declaration_order {
             match *declaration {
@@ -7424,14 +7489,100 @@ impl Resolver {
                     span: expression.span,
                 });
             }
-            SurfaceExprKind::Perform(_)
-            | SurfaceExprKind::Handle(_)
-            | SurfaceExprKind::Resume(_) => {
-                return Err(error(
-                    ResolveReason::InternalState,
-                    expression.span,
-                    "effect expression resolution is not installed",
-                ));
+            SurfaceExprKind::Perform(request) => {
+                let effect = self.resolve_effect_instance_parts(
+                    &request.effect,
+                    &request.arguments,
+                    request.effect.span(),
+                )?;
+                let operation =
+                    self.resolved_operation(effect.instance.effect(), &request.operation)?;
+                let operand = self.resolve_expr(&request.operand)?;
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Perform(ResolvedPerformExpr {
+                        effect,
+                        operation,
+                        spelling: request.operation.text.clone(),
+                        operand: Box::new(operand),
+                        origin: Origin::Source(request.operation.span),
+                    }),
+                    span: expression.span,
+                });
+            }
+            SurfaceExprKind::Handle(handler) => {
+                let effect = self.resolve_effect_instance_parts(
+                    &handler.effect.effect,
+                    &handler.effect.arguments,
+                    handler.effect.span,
+                )?;
+                let body = ResolvedExpressionOwner::new(self.resolve_expr(&handler.body)?);
+                let mut clauses = Vec::new();
+                clauses
+                    .try_reserve_exact(handler.clauses.len())
+                    .map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            expression.span,
+                            "handler clause storage exceeded its type-work budget",
+                        )
+                    })?;
+                for clause in &handler.clauses {
+                    let operation =
+                        self.resolved_operation(effect.instance.effect(), &clause.operation)?;
+                    let resume = ResumeId::new(self.next_resume);
+                    self.next_resume = self.next_resume.checked_add(1).ok_or_else(|| {
+                        error(
+                            ResolveReason::BinderIdExhausted,
+                            clause.span,
+                            "handler resume identity space is exhausted",
+                        )
+                    })?;
+                    let (patterns, binders) =
+                        self.resolve_pattern_vector(std::slice::from_ref(&clause.pattern))?;
+                    let mut patterns = ResolvedPatternBuffer(patterns);
+                    let pattern = ResolvedPatternOwner::new(patterns.pop().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            clause.pattern.span,
+                            "the resolver produced no handler pattern",
+                        )
+                    })?);
+                    let scope_checkpoint = self.scopes.len();
+                    let resume_checkpoint = self.active_resumes.len();
+                    self.push_binder_scope_many(&binders);
+                    self.active_resumes.push(resume);
+                    let resolved_body = self
+                        .resolve_expr(&clause.body)
+                        .map(ResolvedExpressionOwner::new);
+                    self.active_resumes.truncate(resume_checkpoint);
+                    self.scopes.truncate(scope_checkpoint);
+                    clauses.push(ResolvedHandlerClause {
+                        operation,
+                        spelling: clause.operation.text.clone(),
+                        resume,
+                        pattern: pattern.into_inner(),
+                        body: resolved_body?.into_inner(),
+                        span: clause.span,
+                    });
+                }
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Handle(ResolvedHandleExpr {
+                        body: Box::new(body.into_inner()),
+                        effect,
+                        clauses,
+                    }),
+                    span: expression.span,
+                });
+            }
+            SurfaceExprKind::Resume(value) => {
+                let value = self.resolve_expr(value)?;
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Resume(ResolvedResumeExpr {
+                        owner: self.active_resumes.last().copied(),
+                        value: Box::new(value),
+                    }),
+                    span: expression.span,
+                });
             }
         }
         Ok(())
@@ -8028,19 +8179,33 @@ fn collect_free_type_names<'a>(
     enum Task<'a> {
         Visit(&'a SurfaceType),
         Slice(std::slice::Iter<'a, SurfaceType>),
+        RowTail(&'a SurfaceName),
     }
 
     let mut work = vec![Task::Visit(root)];
     while let Some(task) = work.pop() {
-        let Task::Visit(ty) = task else {
-            let Task::Slice(mut remaining) = task else {
-                unreachable!("free type discovery task is closed")
-            };
-            if let Some(next) = remaining.next() {
-                work.push(Task::Slice(remaining));
-                work.push(Task::Visit(next));
+        let ty = match task {
+            Task::Visit(ty) => ty,
+            Task::Slice(mut remaining) => {
+                if let Some(next) = remaining.next() {
+                    work.push(Task::Slice(remaining));
+                    work.push(Task::Visit(next));
+                }
+                continue;
             }
-            continue;
+            Task::RowTail(tail) => {
+                budget.charge(1).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        tail.span,
+                        "free type discovery exceeded its work budget",
+                    )
+                })?;
+                if seen.insert(&tail.text) {
+                    output.push(tail.clone());
+                }
+                continue;
+            }
         };
         budget.charge(1).map_err(|()| {
             error(
@@ -8077,6 +8242,14 @@ fn collect_free_type_names<'a>(
             }
             SurfaceTypeKind::Tuple(elements) => work.push(Task::Slice(elements.iter())),
             SurfaceTypeKind::Function(function) => {
+                if let Some(effects) = &function.effects {
+                    if let Some(tail) = &effects.tail {
+                        work.push(Task::RowTail(tail));
+                    }
+                    for effect in effects.effects.iter().rev() {
+                        work.push(Task::Slice(effect.arguments.iter()));
+                    }
+                }
                 work.push(Task::Visit(&function.codomain));
                 work.push(Task::Visit(&function.domain));
             }

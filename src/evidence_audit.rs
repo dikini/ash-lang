@@ -116,6 +116,16 @@ where
                 pending.push(matched.scrutinee.as_ref());
                 pending.extend(matched.arms.iter().map(|arm| &arm.body));
             }
+            ResolvedExprKind::Perform(request) => pending.push(&request.operand),
+            ResolvedExprKind::Handle(handler) => {
+                reserve_and_extend(
+                    &mut pending,
+                    handler.clauses.iter().map(|clause| &clause.body),
+                    budget,
+                )?;
+                reserve_and_extend(&mut pending, std::iter::once(handler.body.as_ref()), budget)?;
+            }
+            ResolvedExprKind::Resume(resume) => pending.push(&resume.value),
         }
     }
     Ok(())

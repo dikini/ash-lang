@@ -44,6 +44,8 @@ pub enum EntryReason {
     MainPolymorphic,
     /// The local `main` domain is not `Unit`.
     MainDomain,
+    /// The local `main` computation has an outstanding effect requirement.
+    MainEffects,
     /// The local `main` result is not closed.
     MainOpenResult,
     /// The local `main` requires interface evidence.
@@ -56,6 +58,7 @@ impl fmt::Display for EntryReason {
             Self::MissingMain => "entry.missing-main",
             Self::MainPolymorphic => "entry.main-polymorphic",
             Self::MainDomain => "entry.main-domain",
+            Self::MainEffects => "entry.main-effects",
             Self::MainOpenResult => "entry.main-open-result",
             Self::MainConstrained => "entry.main-constrained",
         })
@@ -75,6 +78,7 @@ impl EntryFailure {
             EntryReason::MissingMain => "this entry module declares no local main",
             EntryReason::MainPolymorphic => "this main has a polymorphic scheme",
             EntryReason::MainDomain => "this main does not accept Unit",
+            EntryReason::MainEffects => "this main has an outstanding effect requirement",
             EntryReason::MainOpenResult => "this main result is not closed",
             EntryReason::MainConstrained => "this main requires interface evidence",
         };
@@ -666,11 +670,16 @@ where
     if !main.scheme.type_parameters.is_empty() {
         return Err(entry_failure(EntryReason::MainPolymorphic, main_span));
     }
-    let result_type = match &main.scheme.value_type {
+    let (result_type, main_has_effects) = match &main.scheme.value_type {
         Type::Forall(_, _) => {
             return Err(entry_failure(EntryReason::MainPolymorphic, main_span));
         }
-        Type::Function(domain, result) if matches!(domain.as_ref(), Type::Unit) => result.as_ref(),
+        Type::Function(domain, result) if matches!(domain.as_ref(), Type::Unit) => {
+            (result.as_ref(), false)
+        }
+        Type::EffectfulFunction(domain, computation) if matches!(domain.as_ref(), Type::Unit) => {
+            (computation.value(), !computation.effects().is_empty())
+        }
         Type::Function(_, _)
         | Type::EffectfulFunction(_, _)
         | Type::Int
@@ -684,6 +693,9 @@ where
             return Err(entry_failure(EntryReason::MainDomain, main_span));
         }
     };
+    if main_has_effects {
+        return Err(entry_failure(EntryReason::MainEffects, main_span));
+    }
     if !closed_entry_result(result_type) {
         return Err(entry_failure(EntryReason::MainOpenResult, main_span));
     }

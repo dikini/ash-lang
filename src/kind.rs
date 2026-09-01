@@ -4192,6 +4192,34 @@ fn check_expression_work<'a>(
                         budget,
                     )?;
                 }
+                ResolvedExprKind::Perform(request) => push_body_work(
+                    &mut work,
+                    BodyWork::Expression(&request.operand),
+                    request.operand.span,
+                    budget,
+                )?,
+                ResolvedExprKind::Handle(handler) => {
+                    for clause in handler.clauses.iter().rev() {
+                        push_body_work(
+                            &mut work,
+                            BodyWork::Expression(&clause.body),
+                            clause.body.span,
+                            budget,
+                        )?;
+                    }
+                    push_body_work(
+                        &mut work,
+                        BodyWork::Expression(&handler.body),
+                        handler.body.span,
+                        budget,
+                    )?;
+                }
+                ResolvedExprKind::Resume(resume) => push_body_work(
+                    &mut work,
+                    BodyWork::Expression(&resume.value),
+                    resume.value.span,
+                    budget,
+                )?,
                 ResolvedExprKind::Integer(_)
                 | ResolvedExprKind::Boolean(_)
                 | ResolvedExprKind::Unit

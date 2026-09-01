@@ -2604,7 +2604,10 @@ impl ResolvedModuleProgram {
                 | ResolvedExprKind::Equal(_)
                 | ResolvedExprKind::Block(_)
                 | ResolvedExprKind::Function(_)
-                | ResolvedExprKind::Match(_) => None,
+                | ResolvedExprKind::Match(_)
+                | ResolvedExprKind::Perform(_)
+                | ResolvedExprKind::Handle(_)
+                | ResolvedExprKind::Resume(_) => None,
             })
         else {
             return false;
@@ -16345,6 +16348,87 @@ pub enum ResolvedExprKind {
     Function(ResolvedFunctionExpr),
     /// A structured match.
     Match(ResolvedMatchExpr),
+    /// One exact operation request.
+    Perform(ResolvedPerformExpr),
+    /// A lexical handler for one exact effect instance.
+    Handle(ResolvedHandleExpr),
+    /// A use of the nearest clause-scoped resume capability.
+    Resume(ResolvedResumeExpr),
+}
+
+/// Stable identity for one lexical handler clause's resume capability.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ResumeId(u32);
+
+impl ResumeId {
+    /// Creates one resolver-allocated clause capability identity.
+    #[must_use]
+    pub const fn new(identity: u32) -> Self {
+        Self(identity)
+    }
+}
+
+/// One resolved exact effect instance occurrence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedEffectInstance {
+    /// Canonical semantic instance.
+    pub instance: crate::types::EffectInstance,
+    /// Causal source provenance.
+    pub origin: Origin,
+    /// Complete instance span.
+    pub span: Span,
+}
+
+/// One resolved operation request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedPerformExpr {
+    /// Exact owner instance.
+    pub effect: ResolvedEffectInstance,
+    /// Canonical owner-local operation identity.
+    pub operation: crate::types::OperationId,
+    /// Exact source operation spelling.
+    pub spelling: String,
+    /// Strict operation operand.
+    pub operand: Box<ResolvedExpr>,
+    /// Operation-name provenance.
+    pub origin: Origin,
+}
+
+/// One resolved lexical handler.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedHandleExpr {
+    /// Handled computation.
+    pub body: Box<ResolvedExpr>,
+    /// Exact handled instance.
+    pub effect: ResolvedEffectInstance,
+    /// Source-ordered clauses.
+    pub clauses: Vec<ResolvedHandlerClause>,
+}
+
+/// One resolved operation clause.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedHandlerClause {
+    /// Canonical owner-local operation identity.
+    pub operation: crate::types::OperationId,
+    /// Exact source operation spelling.
+    pub spelling: String,
+    /// Clause-scoped resume identity.
+    pub resume: ResumeId,
+    /// Operation-domain pattern.
+    pub pattern: ResolvedPattern,
+    /// Clause body.
+    pub body: ResolvedExpr,
+    /// Complete clause span.
+    pub span: Span,
+}
+
+/// One resolved resume use.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedResumeExpr {
+    /// Nearest owning clause, or `None` for a source-invalid outside use.
+    pub owner: Option<ResumeId>,
+    /// Strict resumed value expression.
+    pub value: Box<ResolvedExpr>,
 }
 
 /// One resolved constructor occurrence.
@@ -16604,6 +16688,20 @@ fn discard_resolved_body_work(
                     expressions.push(arm.body);
                 }
             }
+            ResolvedExprKind::Perform(request) => {
+                expressions.push(*request.operand);
+                discard_origin_iteratively(request.effect.origin);
+                discard_origin_iteratively(request.origin);
+            }
+            ResolvedExprKind::Handle(handler) => {
+                expressions.push(*handler.body);
+                discard_origin_iteratively(handler.effect.origin);
+                for clause in handler.clauses {
+                    patterns.push(clause.pattern);
+                    expressions.push(clause.body);
+                }
+            }
+            ResolvedExprKind::Resume(resume) => expressions.push(*resume.value),
         }
     }
     while let Some(pattern) = patterns.pop() {
