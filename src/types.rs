@@ -2671,15 +2671,13 @@ fn substitute_type_and_row_variables<E>(
                                 )
                             })
                             .collect::<Vec<_>>()
-                            .into_boxed_slice()
                     };
                 let known = rebuild_instances(shape.known, &mut arguments);
-                let effects = if let Some((variable, lacks)) = shape.tail {
-                    EffectRow::with_tail(known, variable, rebuild_instances(lacks, &mut arguments))
-                } else {
-                    EffectRow::closed(known)
-                };
+                let tail = shape
+                    .tail
+                    .map(|(variable, lacks)| (variable, rebuild_instances(lacks, &mut arguments)));
                 debug_assert!(arguments.next().is_none());
+                let effects = effect_row_from_owned_parts_with_budget(known, tail, charge)?;
                 let effects = if let Some((target, replacement)) = shape.replacement {
                     let substituted =
                         effects.substitute_tail_once_with_budget(target, replacement, charge)?;
@@ -4555,39 +4553,42 @@ mod tests {
             assert_eq!(retry.used(), exact);
         }
 
-        let mut deep = Type::Unit;
-        for _ in 0..4_096 {
-            deep = Type::Application(Box::new(Type::Unit), Box::new(deep));
-        }
-        let deep_replacements = HashMap::from([(
-            binder,
-            EffectRow::singleton(EffectInstance::new(effect, Box::new([deep]))),
-        )]);
-        let mut prefix = 0;
-        substitute_type_and_row_variables_with(
-            &source,
-            &HashMap::new(),
-            &HashMap::new(),
-            |cells| {
-                prefix += cells;
-                Ok::<(), ()>(())
-            },
-        )
-        .unwrap()
-        .unwrap();
-        let mut used = 0_usize;
+        let deep = || {
+            (0..1_024).fold(Type::Unit, |ty, _| {
+                Type::Application(Box::new(Type::Unit), Box::new(ty))
+            })
+        };
+        let instance = |ordinal| {
+            EffectInstance::new(EffectId::new(ModuleId::new(0), ordinal), Box::new([deep()]))
+        };
+        let deep_source = Type::function_computation(
+            Type::Unit,
+            ComputationType::new(
+                Type::Bool,
+                EffectRow::with_tail(
+                    Box::new([instance(1), instance(2)]),
+                    EffectRowVariable::rigid(binder),
+                    Box::new([instance(3), instance(4)]),
+                ),
+            ),
+        );
+        let mut prefix = TypeWorkBudget::default();
+        charge_type_cells(&deep_source, &mut prefix).unwrap();
+        let mut short = TypeWorkBudget::with_limit(prefix.used());
         let mut rejected = None;
         assert!(
             substitute_type_and_row_variables_with(
-                &source,
+                &deep_source,
                 &HashMap::new(),
-                &deep_replacements,
+                &HashMap::from([(
+                    binder,
+                    EffectRow::open(EffectRowVariable::rigid(binder), Box::new([])),
+                )]),
                 |cells| {
-                    if used.checked_add(cells).is_none_or(|next| next > prefix) {
+                    if short.charge(cells).is_err() {
                         rejected = Some(cells);
                         Err(())
                     } else {
-                        used += cells;
                         Ok(())
                     }
                 },
@@ -4595,6 +4596,29 @@ mod tests {
             .is_err()
         );
         assert_eq!(rejected, Some(1), "failure must interrupt row work");
+
+        let deep_replacements = HashMap::from([(binder, EffectRow::empty())]);
+        let mut measured = TypeWorkBudget::default();
+        substitute_type_and_row_variables_with(
+            &deep_source,
+            &HashMap::new(),
+            &deep_replacements,
+            |cells| measured.charge(cells),
+        )
+        .unwrap()
+        .unwrap();
+        for _ in 0..2 {
+            let mut retry = TypeWorkBudget::with_limit(measured.used());
+            substitute_type_and_row_variables_with(
+                &deep_source,
+                &HashMap::new(),
+                &deep_replacements,
+                |cells| retry.charge(cells),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(retry.used(), measured.used());
+        }
     }
 
     #[test]
