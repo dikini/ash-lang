@@ -1,17 +1,19 @@
-//! Loop-driven control transitions for the pure Ash machine.
+//! Loop-driven control transitions for validated Ash Core families.
 
 use std::{error::Error, fmt, sync::Arc};
 
 use super::{
     Closure, Value,
-    value::{HeapCell, Location, ObservedHeap, ObservedValue},
+    value::{ExecutableNode, ExecutableProgram, HeapCell, Location, ObservedHeap, ObservedValue},
 };
 use crate::{
     core::{
-        CoreMatchArm, CorePattern, CorePatternKind, NodeId, Primitive, PureComputation,
-        PureExprKind, PureProgram, PureValue, ValidatedProgram,
+        CoreMatchArm, CorePattern, CorePatternKind, EffectExprKind, EffectOperation, HandlerId,
+        NodeId, Primitive, PureComputation, PureExprKind, PureValue, ValidatedEffectProgram,
+        ValidatedProgram,
     },
-    resolved::BinderId,
+    resolved::{BinderId, ResumeId},
+    types::{EffectInstance, OperationId, same_type},
 };
 
 /// Inspectable lexical values available while evaluating one expression.
@@ -141,7 +143,7 @@ impl Environment {
         self.head.is_none()
     }
 
-    fn lookup(&self, binder: BinderId, program: &Arc<PureProgram>) -> Option<Value> {
+    fn lookup(&self, binder: BinderId, program: &ExecutableProgram) -> Option<Value> {
         let mut current = self.head.as_ref();
         while let Some(entry) = current {
             match &entry.kind {
@@ -161,7 +163,7 @@ impl Environment {
                             } => Value::Function(Closure {
                                 parameter: *parameter,
                                 body: *body,
-                                program: Arc::clone(program),
+                                program: program.clone(),
                                 environment: Self {
                                     head: Some(Arc::clone(entry)),
                                     len: entry.visible_len,
@@ -246,6 +248,25 @@ pub enum TraceEvent {
     Enter(NodeId),
 }
 
+/// Observational effect-boundary transitions, absent from pure evaluation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EffectTraceEvent {
+    /// A lexical handler boundary became active.
+    HandlerActivated(HandlerId),
+    /// A request reached dynamic handler selection.
+    Request(OperationId),
+    /// The nearest exact handler was selected and removed for its clause.
+    HandlerSelected(HandlerId),
+    /// A selected operation clause began evaluating.
+    ClauseEntered(HandlerId, OperationId),
+    /// A clause consumed its resume capability.
+    Resume(HandlerId),
+    /// A captured handler boundary was restored around resumed control.
+    HandlerRestored(HandlerId),
+    /// Resumed control returned and the selected clause completed.
+    ClauseReturned(HandlerId),
+}
+
 /// A completed value, its retained heap, and its observational machine trace.
 ///
 /// The heap remains owned when the visible value is a scalar or closure because
@@ -258,12 +279,19 @@ pub struct Evaluation {
     pub trace: Vec<TraceEvent>,
     /// Greatest number of explicit frames retained by the machine.
     pub max_frame_depth: usize,
+    effect_trace: Option<Box<[EffectTraceEvent]>>,
     heap: Arc<ObservedHeap>,
 }
 
 impl Evaluation {
     pub(crate) fn into_observation_parts(self) -> (Value, Arc<ObservedHeap>) {
         (self.value, self.heap)
+    }
+
+    /// Returns effect-boundary observations, or an empty slice for pure Core.
+    #[must_use]
+    pub fn effect_trace(&self) -> &[EffectTraceEvent] {
+        self.effect_trace.as_deref().unwrap_or_default()
     }
 }
 
@@ -286,6 +314,8 @@ pub enum RuntimeFailure {
     InvalidControlState,
     /// The per-evaluation heap cannot represent another cell.
     HeapCapacity,
+    /// A captured continuation cannot retain another control frame.
+    CapturedControlCapacity,
     /// A heap location is outside the current evaluation.
     InvalidLocation,
     /// Evaluation forced a recursive slot before initialization.
@@ -309,6 +339,7 @@ impl RuntimeFailure {
             Self::EnvironmentCapacity => "runtime.environment-capacity",
             Self::InvalidControlState => "runtime.invalid-control-state",
             Self::HeapCapacity => "runtime.heap-capacity",
+            Self::CapturedControlCapacity => "runtime.captured-control-capacity",
             Self::InvalidLocation => "runtime.invalid-location",
             Self::UninitializedLocation => "runtime.uninitialized-location",
             Self::AliasLoop => "runtime.alias-loop",
@@ -334,6 +365,7 @@ impl fmt::Display for RuntimeFailure {
             Self::EnvironmentCapacity => "runtime lexical environment capacity is exhausted",
             Self::InvalidControlState => "runtime machine control state is inconsistent",
             Self::HeapCapacity => "runtime heap capacity is exhausted",
+            Self::CapturedControlCapacity => "runtime captured-control capacity is exhausted",
             Self::InvalidLocation => "runtime heap location is invalid",
             Self::UninitializedLocation => "runtime heap location is uninitialized",
             Self::AliasLoop => "runtime heap aliases form a loop",
@@ -383,6 +415,43 @@ enum Frame {
         body: NodeId,
         environment: Environment,
     },
+    HandlerBoundary {
+        node: NodeId,
+        environment: Environment,
+    },
+    Request {
+        node: NodeId,
+    },
+    Resume {
+        node: NodeId,
+    },
+    ClauseBoundary {
+        handler: HandlerId,
+        owner: ResumeId,
+        continuation: Option<CapturedContinuation>,
+    },
+}
+
+#[derive(Debug)]
+struct CapturedContinuation {
+    frames: Vec<Frame>,
+}
+
+// Rust allocations cannot represent a non-zero `Frame` vector whose byte
+// length exceeds `isize::MAX`. This implementation bound is not Ash semantics.
+const MAX_CAPTURED_FRAME_CELLS: usize = (isize::MAX as usize) / std::mem::size_of::<Frame>();
+
+impl Drop for CapturedContinuation {
+    fn drop(&mut self) {
+        let mut pending = std::mem::take(&mut self.frames);
+        while let Some(mut frame) = pending.pop() {
+            if let Frame::ClauseBoundary { continuation, .. } = &mut frame
+                && let Some(mut nested) = continuation.take()
+            {
+                pending.append(&mut nested.frames);
+            }
+        }
+    }
 }
 
 struct Transition {
@@ -406,26 +475,53 @@ impl Transition {
     }
 }
 
-/// The retained explicit evaluator machine.
+/// The retained explicit evaluator machine shared by pure and effect Core.
 #[derive(Debug)]
 pub struct Machine {
-    program: Arc<PureProgram>,
+    program: ExecutableProgram,
     control: Option<Control>,
     frames: Vec<Frame>,
     max_frame_depth: usize,
     trace: Vec<TraceEvent>,
+    effect_trace: Option<Vec<EffectTraceEvent>>,
     heap: Vec<HeapCell>,
+    capture_limit: usize,
+    captured_cells: usize,
 }
 
 impl Machine {
     fn new(program: &ValidatedProgram) -> Self {
         Self {
-            program: program.shared(),
+            program: ExecutableProgram::Pure(program.shared()),
             control: Some(Control::Evaluate(program.root(), Environment::new())),
             frames: Vec::new(),
             max_frame_depth: 0,
             trace: Vec::new(),
+            effect_trace: None,
             heap: Vec::new(),
+            capture_limit: 0,
+            captured_cells: 0,
+        }
+    }
+
+    fn new_effect(program: &ValidatedEffectProgram) -> Self {
+        Self::new_effect_with_capture_limit(program, MAX_CAPTURED_FRAME_CELLS)
+    }
+
+    fn new_effect_with_capture_limit(
+        program: &ValidatedEffectProgram,
+        capture_limit: usize,
+    ) -> Self {
+        Self {
+            program: ExecutableProgram::Effect(program.shared()),
+            control: Some(Control::Evaluate(program.root(), Environment::new())),
+            frames: Vec::new(),
+            max_frame_depth: 0,
+            trace: Vec::new(),
+            effect_trace: Some(Vec::new()),
+            heap: Vec::new(),
+            capture_limit,
+            captured_cells: 0,
         }
     }
 
@@ -438,6 +534,9 @@ impl Machine {
             match control {
                 Control::Evaluate(node, environment) => {
                     self.trace.push(TraceEvent::Enter(node));
+                    if let Some(handler) = self.handler(node) {
+                        self.trace_effect(EffectTraceEvent::HandlerActivated(handler.id()));
+                    }
                     let transition =
                         dispatch_entry(&self.program, node, environment, &mut self.heap)?;
                     self.apply(transition);
@@ -456,11 +555,11 @@ impl Machine {
                             value,
                             trace: self.trace,
                             max_frame_depth: self.max_frame_depth,
+                            effect_trace: self.effect_trace.take().map(Vec::into_boxed_slice),
                             heap,
                         });
                     };
-                    let transition = dispatch_return(frame, value, &mut self.heap)?;
-                    self.apply(transition);
+                    self.return_from(frame, value)?;
                 }
             }
         }
@@ -473,25 +572,248 @@ impl Machine {
         }
         self.control = Some(transition.control);
     }
+
+    fn trace_effect(&mut self, event: EffectTraceEvent) {
+        if let Some(trace) = &mut self.effect_trace {
+            trace.push(event);
+        }
+    }
+
+    fn return_from(&mut self, frame: Frame, value: Value) -> Result<(), RuntimeFailure> {
+        match frame {
+            Frame::HandlerBoundary { .. } => {
+                self.control = Some(Control::Return(value));
+            }
+            Frame::Request { node } => self.return_request(node, value)?,
+            Frame::Resume { node } => self.return_resume(node, value)?,
+            Frame::ClauseBoundary {
+                handler,
+                continuation,
+                ..
+            } => {
+                if continuation.is_some() {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                self.trace_effect(EffectTraceEvent::ClauseReturned(handler));
+                self.control = Some(Control::Return(value));
+            }
+            frame => {
+                let transition = dispatch_return(frame, value, &mut self.heap)?;
+                self.apply(transition);
+            }
+        }
+        Ok(())
+    }
+
+    fn return_request(&mut self, node: NodeId, value: Value) -> Result<(), RuntimeFailure> {
+        let (effect, operation) = match self.program.node(node) {
+            Some(ExecutableNode::Effect(expression)) => match &expression.kind {
+                EffectExprKind::Operation(EffectOperation::Request(request)) => {
+                    (request.effect(), request.operation())
+                }
+                _ => return Err(RuntimeFailure::InvalidControlState),
+            },
+            _ => return Err(RuntimeFailure::InvalidControlState),
+        };
+        let selected = self
+            .frames
+            .iter()
+            .rposition(|frame| match frame {
+                Frame::HandlerBoundary { node, .. } => self
+                    .handler(*node)
+                    .is_some_and(|handler| same_effect_instance(handler.effect(), effect)),
+                _ => false,
+            })
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        self.trace_effect(EffectTraceEvent::Request(operation));
+        let continuation = self.capture_from(selected)?;
+        let captured = &continuation.frames;
+        let (handler_id, handler_environment, clause_owner, clause_body, bindings) = {
+            let Frame::HandlerBoundary {
+                node: handler_node,
+                environment,
+            } = &captured[0]
+            else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            let handler = self
+                .handler(*handler_node)
+                .ok_or(RuntimeFailure::InvalidControlState)?;
+            let clause = handler
+                .clauses()
+                .iter()
+                .find(|clause| clause.operation() == operation)
+                .ok_or(RuntimeFailure::InvalidControlState)?;
+            let mut bindings = Vec::new();
+            if !matches_pattern(clause.pattern(), &value, &self.heap, &mut bindings)? {
+                return Err(RuntimeFailure::ImpossibleMatch);
+            }
+            (
+                handler.id(),
+                environment.clone(),
+                clause.resume(),
+                clause.body(),
+                bindings,
+            )
+        };
+        self.frames.push(Frame::ClauseBoundary {
+            handler: handler_id,
+            owner: clause_owner,
+            continuation: Some(continuation),
+        });
+        self.trace_effect(EffectTraceEvent::HandlerSelected(handler_id));
+        self.trace_effect(EffectTraceEvent::ClauseEntered(handler_id, operation));
+        self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
+        self.control = Some(Control::Evaluate(
+            clause_body,
+            handler_environment.extend_many(bindings)?,
+        ));
+        Ok(())
+    }
+
+    fn capture_from(&mut self, selected: usize) -> Result<CapturedContinuation, RuntimeFailure> {
+        let captured_len = self
+            .frames
+            .len()
+            .checked_sub(selected)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let retained = self
+            .captured_cells
+            .checked_add(captured_len)
+            .ok_or(RuntimeFailure::CapturedControlCapacity)?;
+        if retained > self.capture_limit {
+            return Err(RuntimeFailure::CapturedControlCapacity);
+        }
+        let mut frames = Vec::new();
+        frames
+            .try_reserve_exact(captured_len)
+            .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+        frames.extend(self.frames.drain(selected..));
+        self.captured_cells = retained;
+        Ok(CapturedContinuation { frames })
+    }
+
+    fn return_resume(&mut self, node: NodeId, value: Value) -> Result<(), RuntimeFailure> {
+        let (handler, owner) = match self.program.node(node) {
+            Some(ExecutableNode::Effect(expression)) => match &expression.kind {
+                EffectExprKind::Operation(EffectOperation::Resume(resume)) => {
+                    (resume.handler(), resume.owner())
+                }
+                _ => return Err(RuntimeFailure::InvalidControlState),
+            },
+            _ => return Err(RuntimeFailure::InvalidControlState),
+        };
+        let boundary = self
+            .frames
+            .iter_mut()
+            .rev()
+            .find_map(|frame| match frame {
+                Frame::ClauseBoundary {
+                    handler: found_handler,
+                    owner: found_owner,
+                    continuation,
+                } if found_handler == &handler && found_owner == &owner => Some(continuation),
+                _ => None,
+            })
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let captured_len = boundary
+            .as_ref()
+            .ok_or(RuntimeFailure::InvalidControlState)?
+            .frames
+            .len();
+        self.frames
+            .try_reserve(captured_len)
+            .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+        let boundary = self
+            .frames
+            .iter_mut()
+            .rev()
+            .find_map(|frame| match frame {
+                Frame::ClauseBoundary {
+                    handler: found_handler,
+                    owner: found_owner,
+                    continuation,
+                } if found_handler == &handler && found_owner == &owner => Some(continuation),
+                _ => None,
+            })
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let mut continuation = boundary.take().ok_or(RuntimeFailure::InvalidControlState)?;
+        self.trace_effect(EffectTraceEvent::Resume(handler));
+        for frame in &continuation.frames {
+            if let Frame::HandlerBoundary { node, .. } = frame {
+                let restored = self
+                    .handler(*node)
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                self.trace_effect(EffectTraceEvent::HandlerRestored(restored.id()));
+            }
+        }
+        self.captured_cells = self
+            .captured_cells
+            .checked_sub(captured_len)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        self.frames.append(&mut continuation.frames);
+        self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
+        self.control = Some(Control::Return(value));
+        Ok(())
+    }
+
+    fn handler(&self, node: NodeId) -> Option<&crate::core::HandlerNode> {
+        let ExecutableNode::Effect(expression) = self.program.node(node)? else {
+            return None;
+        };
+        let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &expression.kind else {
+            return None;
+        };
+        Some(handler)
+    }
+}
+
+fn same_effect_instance(left: &EffectInstance, right: &EffectInstance) -> bool {
+    left.effect() == right.effect()
+        && left.arguments().len() == right.arguments().len()
+        && left
+            .arguments()
+            .iter()
+            .zip(right.arguments())
+            .all(|(left, right)| same_type(left, right))
 }
 
 fn dispatch_entry(
-    program: &Arc<PureProgram>,
+    program: &ExecutableProgram,
     node: NodeId,
     environment: Environment,
     heap: &mut Vec<HeapCell>,
 ) -> Result<Transition, RuntimeFailure> {
     let expression = program.node(node).ok_or(RuntimeFailure::MissingNode)?;
-    Ok(match &expression.kind {
+    let (kind, origin) = match expression {
+        ExecutableNode::Pure(expression) => (&expression.kind, &expression.origin),
+        ExecutableNode::Effect(expression) => match &expression.kind {
+            EffectExprKind::Pure(kind) => (kind, &expression.origin),
+            EffectExprKind::Operation(operation) => {
+                return Ok(match operation {
+                    EffectOperation::Request(request) => Transition::suspend(
+                        Control::Evaluate(request.operand(), environment),
+                        Frame::Request { node },
+                    ),
+                    EffectOperation::Handler(handler) => Transition::suspend(
+                        Control::Evaluate(handler.body(), environment.clone()),
+                        Frame::HandlerBoundary { node, environment },
+                    ),
+                    EffectOperation::Resume(resume) => Transition::suspend(
+                        Control::Evaluate(resume.value(), environment),
+                        Frame::Resume { node },
+                    ),
+                });
+            }
+        },
+    };
+    Ok(match kind {
         PureExprKind::Value(PureValue::Integer(integer)) => enter_integer(integer),
         PureExprKind::Value(PureValue::Boolean(boolean)) => enter_boolean(*boolean),
         PureExprKind::Value(PureValue::Unit(unit)) => enter_unit(*unit),
-        PureExprKind::Value(PureValue::Function(function)) => enter_function(
-            function,
-            Arc::clone(program),
-            environment,
-            expression.origin.clone(),
-        ),
+        PureExprKind::Value(PureValue::Function(function)) => {
+            enter_function(function, program.clone(), environment, origin.clone())
+        }
         PureExprKind::Variable(variable) => enter_variable(program, *variable, environment)?,
         PureExprKind::Computation(PureComputation::Bind(binding)) => {
             enter_binding(binding, environment)
@@ -536,7 +858,7 @@ fn enter_unit(_unit: crate::core::literal::UnitNode) -> Transition {
 }
 
 fn enter_constructor(
-    program: &Arc<PureProgram>,
+    program: &ExecutableProgram,
     constructor: crate::core::data::ConstructorNode,
     heap: &mut Vec<HeapCell>,
 ) -> Result<Transition, RuntimeFailure> {
@@ -600,7 +922,7 @@ fn enter_type_application(
 
 fn enter_function(
     function: &crate::core::function::FunctionNode,
-    program: Arc<PureProgram>,
+    program: ExecutableProgram,
     environment: Environment,
     origin: crate::source::Origin,
 ) -> Transition {
@@ -614,7 +936,7 @@ fn enter_function(
 }
 
 fn enter_variable(
-    program: &Arc<PureProgram>,
+    program: &ExecutableProgram,
     variable: crate::core::variable::VariableNode,
     environment: Environment,
 ) -> Result<Transition, RuntimeFailure> {
@@ -625,7 +947,7 @@ fn enter_variable(
 }
 
 fn enter_recursive_binding(
-    program: &Arc<PureProgram>,
+    program: &ExecutableProgram,
     group: &crate::core::recursion::RecursiveBindingNode,
     environment: Environment,
     heap: &mut Vec<HeapCell>,
@@ -633,29 +955,28 @@ fn enter_recursive_binding(
     let mut members = Vec::with_capacity(group.members().len());
     let mut pending = Vec::new();
     for member in group.members() {
-        let initializer = program
+        let initializer_origin = match program
             .node(member.initializer())
-            .ok_or(RuntimeFailure::MissingNode)?;
+            .ok_or(RuntimeFailure::MissingNode)?
+        {
+            ExecutableNode::Pure(expression) => expression.origin.clone(),
+            ExecutableNode::Effect(expression) => expression.origin.clone(),
+        };
         let mut erased_initializer = member.initializer();
         loop {
-            let expression = program
-                .node(erased_initializer)
-                .ok_or(RuntimeFailure::MissingNode)?;
-            let PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) =
-                &expression.kind
+            let expression = pure_expression(program, erased_initializer)?;
+            let PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) = expression
             else {
                 break;
             };
             erased_initializer = operation.body();
         }
-        let erased = program
-            .node(erased_initializer)
-            .ok_or(RuntimeFailure::MissingNode)?;
-        let kind = match &erased.kind {
+        let erased = pure_expression(program, erased_initializer)?;
+        let kind = match erased {
             PureExprKind::Value(PureValue::Function(function)) => RecursiveMemberKind::Function {
                 parameter: function.parameter().id(),
                 body: function.body(),
-                origin: initializer.origin.clone(),
+                origin: initializer_origin,
             },
             _ if member.binder().ty().outer_nominal().is_some() => {
                 let location = allocate_heap(heap, HeapCell::Uninitialized)?;
@@ -685,6 +1006,19 @@ fn enter_recursive_binding(
             group.body(),
             environment,
         )))
+    }
+}
+
+fn pure_expression(
+    program: &ExecutableProgram,
+    node: NodeId,
+) -> Result<&PureExprKind, RuntimeFailure> {
+    match program.node(node).ok_or(RuntimeFailure::MissingNode)? {
+        ExecutableNode::Pure(expression) => Ok(&expression.kind),
+        ExecutableNode::Effect(expression) => match &expression.kind {
+            EffectExprKind::Pure(kind) => Ok(kind),
+            EffectExprKind::Operation(_) => Err(RuntimeFailure::UnexpectedRecursiveBinding),
+        },
     }
 }
 
@@ -764,6 +1098,10 @@ fn dispatch_return(
             body,
             environment,
         } => return_recursive_initialization(pending, next, body, environment, value, heap),
+        Frame::HandlerBoundary { .. }
+        | Frame::Request { .. }
+        | Frame::Resume { .. }
+        | Frame::ClauseBoundary { .. } => Err(RuntimeFailure::InvalidControlState),
     }
 }
 
@@ -1016,6 +1354,11 @@ pub fn evaluate(program: &ValidatedProgram) -> Result<Evaluation, RuntimeFailure
     Machine::new(program).run()
 }
 
+/// Evaluates one independently validated effect Core program.
+pub fn evaluate_effect(program: &ValidatedEffectProgram) -> Result<Evaluation, RuntimeFailure> {
+    Machine::new_effect(program).run()
+}
+
 fn apply_primitive(
     primitive: Primitive,
     left: Value,
@@ -1038,7 +1381,7 @@ mod tests {
     use super::*;
     use crate::{
         core::{
-            CoreBuilder,
+            CoreBuilder, EffectCoreBuilder,
             binding::BindingNode,
             function::ApplicationNode,
             function::FunctionNode,
@@ -1047,14 +1390,187 @@ mod tests {
             literal::UnitNode,
             primitive::PrimitiveNode,
             type_ops::{TypeAbstractionNode, TypeApplicationNode},
-            validate,
+            validate, validate_effect, validate_effect_modules,
             variable::VariableNode,
         },
+        elaborate::{EffectElaborator, check_module, link_modules},
+        evidence_validation::validate_interface_evidence,
         integer::Integer,
+        module::{ModuleRoots, load_module_graph},
+        resolve::resolve_module,
         resolved::{ResolvedConstructor, ResolvedNominalType, ResolvedRegistry},
         source::{ByteRange, Origin, SourceFile},
         types::{ConstructorId, NominalTypeId, Type, TypeVariableId},
     };
+
+    fn sequential_effect_program() -> ValidatedEffectProgram {
+        let text = concat!(
+            "effect Ask {\nask : Int -> Int\n}\n\n",
+            "main : Unit -> Int\nmain () = handle ({\n",
+            "let first = perform Ask.ask 1\nperform Ask.ask first\n",
+            "}) with Ask {\nask value => resume (value + 1)\n}\n",
+        );
+        let path = std::env::temp_dir().join(format!(
+            "ash-machine-effect-budget-{}-{}.ash",
+            std::process::id(),
+            SourceFile::new("effect-budget-identity", "")
+                .expect("source identity")
+                .id()
+                .value()
+        ));
+        std::fs::write(&path, text).expect("fixture should be writable");
+        let graph = load_module_graph(&path, &ModuleRoots::empty()).expect("fixture should load");
+        let module = graph.module(graph.entry()).expect("entry remains loaded");
+        let checked = check_module(resolve_module(module, &[]).expect("fixture should resolve"))
+            .expect("fixture should check");
+        let linked = link_modules(vec![checked], graph.entry()).expect("fixture should link");
+        let linked = validate_interface_evidence(linked).expect("evidence should authenticate");
+        let mut elaborator =
+            EffectElaborator::for_module_program(&linked).expect("builder should start");
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .expect("fixture should lower");
+        let unchecked = elaborator.finish(typed.node).expect("Core should finish");
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let module_sources = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let program = validate_effect_modules(unchecked, &sources, &module_sources)
+            .expect("Effect Core should validate");
+        let _ = std::fs::remove_file(path);
+        program
+    }
+
+    fn capture_machine(limit: usize) -> Machine {
+        let source = SourceFile::new("capture-budget.ash", "()").expect("test source");
+        let origin = Origin::Source(
+            source
+                .span(ByteRange::new(0, 2).expect("ordered range"))
+                .expect("source span"),
+        );
+        let mut builder = EffectCoreBuilder::with_effect_registry(Arc::new(ResolvedRegistry::new(
+            Vec::new(),
+            Vec::new(),
+        )));
+        let root = builder.unit(Type::Unit, origin).expect("unit should fit");
+        let program = validate_effect(
+            builder.finish(root).expect("Core should finish"),
+            &[&source],
+        )
+        .expect("Core should validate");
+        let mut machine = Machine::new_effect_with_capture_limit(&program, limit);
+        machine
+            .frames
+            .extend((0..3).map(|_| Frame::Request { node: root }));
+        machine
+    }
+
+    #[test]
+    fn captured_control_quota_is_exact_atomic_retryable_and_iteratively_disposed() {
+        let source = SourceFile::new("pure-capture-budget.ash", "()").expect("test source");
+        let origin = Origin::Source(
+            source
+                .span(ByteRange::new(0, 2).expect("ordered range"))
+                .expect("source span"),
+        );
+        let mut builder = CoreBuilder::new();
+        let root = builder.unit(Type::Unit, origin).expect("unit should fit");
+        let program = validate(
+            builder.finish(root).expect("Core should finish"),
+            &[&source],
+        )
+        .expect("Core should validate");
+        let mut pure = Machine::new(&program);
+        pure.frames.push(Frame::Request { node: root });
+        assert_eq!(
+            pure.capture_from(0).expect_err("Pure cannot capture"),
+            RuntimeFailure::CapturedControlCapacity
+        );
+        assert_eq!(pure.frames.len(), 1);
+        assert_eq!(pure.captured_cells, 0);
+
+        let mut one_short = capture_machine(2);
+        assert_eq!(
+            one_short.capture_from(0).expect_err("one short must fail"),
+            RuntimeFailure::CapturedControlCapacity
+        );
+        assert_eq!(one_short.frames.len(), 3);
+        assert_eq!(one_short.captured_cells, 0);
+
+        for _ in 0..2 {
+            let mut exact = capture_machine(3);
+            let continuation = exact.capture_from(0).expect("exact quota should fit");
+            assert!(exact.frames.is_empty());
+            assert_eq!(exact.captured_cells, 3);
+            let node = match exact.control.as_ref() {
+                Some(Control::Evaluate(node, _)) => *node,
+                _ => unreachable!("fixture begins by evaluating its root"),
+            };
+            exact.frames.push(Frame::Request { node });
+            assert_eq!(
+                exact.capture_from(0).expect_err("cumulative quota is full"),
+                RuntimeFailure::CapturedControlCapacity
+            );
+            assert_eq!(exact.frames.len(), 1);
+            assert_eq!(exact.captured_cells, 3);
+            drop(continuation);
+        }
+
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let mut continuation = CapturedContinuation { frames: Vec::new() };
+                for depth in 0..32_768_u32 {
+                    continuation = CapturedContinuation {
+                        frames: vec![Frame::ClauseBoundary {
+                            handler: HandlerId::new(depth),
+                            owner: ResumeId::new(depth),
+                            continuation: Some(continuation),
+                        }],
+                    };
+                }
+                drop(continuation);
+            })
+            .expect("small-stack teardown should spawn")
+            .join()
+            .expect("captured control should drop iteratively");
+    }
+
+    #[test]
+    fn sequential_requests_reclaim_the_exact_effect_capture_quota() {
+        let program = sequential_effect_program();
+        assert!(matches!(
+            Machine::new_effect_with_capture_limit(&program, 1).run(),
+            Err(RuntimeFailure::CapturedControlCapacity)
+        ));
+
+        let evaluation = Machine::new_effect_with_capture_limit(&program, 2)
+            .run()
+            .expect("exact quota should serve both sequential requests");
+        assert_eq!(evaluation.value.to_string(), "3");
+        assert_eq!(
+            evaluation
+                .effect_trace()
+                .iter()
+                .filter(|event| matches!(event, EffectTraceEvent::Request(_)))
+                .count(),
+            2
+        );
+        assert_eq!(
+            evaluation
+                .effect_trace()
+                .iter()
+                .filter(|event| matches!(event, EffectTraceEvent::Resume(_)))
+                .count(),
+            2
+        );
+    }
 
     struct TransitionOwner {
         feature: &'static str,
@@ -1150,6 +1666,33 @@ mod tests {
         },
     ];
 
+    const EFFECT_TRANSITION_OWNERSHIP: &[TransitionOwner] = &[
+        TransitionOwner {
+            feature: "handler",
+            entry: "dispatch_entry",
+            frames: &["Frame::HandlerBoundary"],
+            returns: &["Machine::return_from"],
+        },
+        TransitionOwner {
+            feature: "request",
+            entry: "dispatch_entry",
+            frames: &["Frame::Request"],
+            returns: &["Machine::return_request"],
+        },
+        TransitionOwner {
+            feature: "resume",
+            entry: "dispatch_entry",
+            frames: &["Frame::Resume"],
+            returns: &["Machine::return_resume"],
+        },
+        TransitionOwner {
+            feature: "clause boundary",
+            entry: "Machine::return_request",
+            frames: &["Frame::ClauseBoundary"],
+            returns: &["Machine::return_from"],
+        },
+    ];
+
     mod mock_pure_feature {
         use super::{Control, Transition, Value};
 
@@ -1182,13 +1725,13 @@ mod tests {
     #[test]
     fn every_core_feature_has_one_named_entry_owner_and_explicit_return_owners() {
         type EnterRecursive = fn(
-            &Arc<PureProgram>,
+            &ExecutableProgram,
             &crate::core::recursion::RecursiveBindingNode,
             Environment,
             &mut Vec<HeapCell>,
         ) -> Result<Transition, RuntimeFailure>;
         type EnterConstructor = fn(
-            &Arc<PureProgram>,
+            &ExecutableProgram,
             crate::core::data::ConstructorNode,
             &mut Vec<HeapCell>,
         ) -> Result<Transition, RuntimeFailure>;
@@ -1220,13 +1763,13 @@ mod tests {
         let _: fn(UnitNode) -> Transition = enter_unit;
         let _: fn(
             &FunctionNode,
-            Arc<PureProgram>,
+            ExecutableProgram,
             Environment,
             crate::source::Origin,
         ) -> Transition = enter_function;
         let _: EnterConstructor = enter_constructor;
         let _: fn(
-            &Arc<PureProgram>,
+            &ExecutableProgram,
             VariableNode,
             Environment,
         ) -> Result<Transition, RuntimeFailure> = enter_variable;
@@ -1285,6 +1828,22 @@ mod tests {
         for owner in TRANSITION_OWNERSHIP {
             assert_eq!(owner.frames.is_empty(), owner.returns.is_empty());
         }
+    }
+
+    #[test]
+    fn every_effect_operation_has_one_explicit_transition_owner() {
+        assert_eq!(TRANSITION_OWNERSHIP.len(), 14);
+        assert_eq!(EFFECT_TRANSITION_OWNERSHIP.len(), 4);
+        assert_eq!(
+            EFFECT_TRANSITION_OWNERSHIP
+                .iter()
+                .map(|owner| owner.feature)
+                .collect::<Vec<_>>(),
+            ["handler", "request", "resume", "clause boundary"]
+        );
+        assert!(EFFECT_TRANSITION_OWNERSHIP.iter().all(|owner| {
+            !owner.entry.is_empty() && owner.frames.len() == 1 && owner.returns.len() == 1
+        }));
     }
 
     #[test]
@@ -1386,9 +1945,10 @@ mod tests {
         )
         .expect("function Core should validate");
         let program = validated.shared();
+        let executable = ExecutableProgram::Pure(Arc::clone(&program));
 
         assert!(matches!(
-            dispatch_entry(&program, variable, Environment::new(), &mut Vec::new()),
+            dispatch_entry(&executable, variable, Environment::new(), &mut Vec::new()),
             Err(RuntimeFailure::MissingBinding)
         ));
         assert!(matches!(
@@ -1499,6 +2059,7 @@ mod tests {
         )
         .expect("Core should validate");
         let program = validated.shared();
+        let executable = ExecutableProgram::Pure(Arc::clone(&program));
         let root = program.node(program.root()).expect("recursive root");
         let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &root.kind else {
             panic!("block should lower to one recursive group")
@@ -1508,7 +2069,7 @@ mod tests {
         };
 
         let mut heap = Vec::new();
-        let transition = enter_recursive_binding(&program, group, Environment::new(), &mut heap)
+        let transition = enter_recursive_binding(&executable, group, Environment::new(), &mut heap)
             .expect("recursive entry should allocate both slots");
         let Transition {
             control: Control::Evaluate(first_initializer, recursive_environment),
@@ -1523,16 +2084,16 @@ mod tests {
             [HeapCell::Uninitialized, HeapCell::Uninitialized]
         ));
         assert!(matches!(
-            recursive_environment.lookup(first.binder().id(), &program),
+            recursive_environment.lookup(first.binder().id(), &executable),
             Some(Value::Location(0))
         ));
         assert!(matches!(
-            recursive_environment.lookup(second.binder().id(), &program),
+            recursive_environment.lookup(second.binder().id(), &executable),
             Some(Value::Location(1))
         ));
 
         let first_value = dispatch_entry(
-            &program,
+            &executable,
             first_initializer,
             recursive_environment,
             &mut heap,
@@ -1559,7 +2120,7 @@ mod tests {
         assert!(matches!(heap[1], HeapCell::Uninitialized));
 
         let second_value = dispatch_entry(
-            &program,
+            &executable,
             second_initializer,
             recursive_environment,
             &mut heap,
@@ -1784,7 +2345,7 @@ mod tests {
                     let closure = Closure {
                         parameter: parameter.id(),
                         body,
-                        program: Arc::clone(&program),
+                        program: ExecutableProgram::Pure(Arc::clone(&program)),
                         environment: environment.clone(),
                         origin: origin.clone(),
                     };
@@ -1837,6 +2398,7 @@ mod tests {
                 )
                 .expect("function Core should validate");
                 let program = validated.shared();
+                let executable = ExecutableProgram::Pure(Arc::clone(&program));
                 let members = (0..MEMBERS)
                     .map(|binder| RecursiveMemberTemplate {
                         binder: BinderId::new(binder),
@@ -1854,11 +2416,11 @@ mod tests {
 
                 assert_eq!(Arc::strong_count(&frame), 2);
                 let first_value = environment
-                    .lookup(BinderId::new(MEMBERS / 2), &program)
+                    .lookup(BinderId::new(MEMBERS / 2), &executable)
                     .expect("member should materialize");
                 assert_eq!(Arc::strong_count(&frame), 3);
                 let second_value = environment
-                    .lookup(BinderId::new(MEMBERS / 2 + 1), &program)
+                    .lookup(BinderId::new(MEMBERS / 2 + 1), &executable)
                     .expect("another member should materialize");
                 assert_eq!(Arc::strong_count(&frame), 4);
                 let (Value::Function(first_closure), Value::Function(second_closure)) =

@@ -100,6 +100,23 @@ fn false_literal_has_exact_library_and_cli_observations() {
 }
 
 #[test]
+fn handled_effect_prints_the_resumed_value_and_pure_entry_type() {
+    let source = TempFile::write(
+        concat!(
+            "effect Ask {\nask : Int -> Int\n}\n\n",
+            "main : Unit -> Int\n",
+            "main () = handle (perform Ask.ask 1) with Ask {\n",
+            "ask value => resume (value + 41)\n}\n",
+        )
+        .as_bytes(),
+    );
+    let output = ash(&[source.path()]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"42 : Int\n");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn invocation_requires_exactly_one_source_path() {
     let none = ash(&[]);
     assert_eq!(none.status.code(), Some(2));

@@ -4,12 +4,69 @@ use std::{collections::HashSet, fmt, sync::Arc};
 
 use super::machine::Environment;
 use crate::{
-    core::{NodeId, PureProgram},
+    core::dialect::CoreProgram,
+    core::{EffectExpr, EffectOperationFamily, NodeId, PureProgram, TypedExpr},
     integer::Integer,
     resolved::{BinderId, ResolvedRegistry},
     source::Origin,
     types::ConstructorId,
 };
+
+/// One validated Core arena retained by a runtime closure.
+#[derive(Clone, Debug)]
+pub enum ExecutableProgram {
+    /// Pure Core.
+    Pure(Arc<PureProgram>),
+    /// Effect Core.
+    Effect(Arc<CoreProgram<EffectOperationFamily>>),
+}
+
+/// A borrowed runtime node from either accepted Core family.
+#[derive(Debug)]
+pub enum ExecutableNode<'a> {
+    /// A pure-family node.
+    Pure(&'a TypedExpr),
+    /// An effect-family node.
+    Effect(&'a EffectExpr),
+}
+
+impl ExecutableProgram {
+    /// Returns the root node of the retained arena.
+    #[must_use]
+    pub fn root(&self) -> NodeId {
+        match self {
+            Self::Pure(program) => program.root(),
+            Self::Effect(program) => program.root(),
+        }
+    }
+
+    /// Returns a node from the retained arena.
+    #[must_use]
+    pub fn node(&self, id: NodeId) -> Option<ExecutableNode<'_>> {
+        match self {
+            Self::Pure(program) => program.node(id).map(ExecutableNode::Pure),
+            Self::Effect(program) => program.node(id).map(ExecutableNode::Effect),
+        }
+    }
+
+    /// Returns the number of nodes in the retained arena.
+    #[must_use]
+    pub fn node_count(&self) -> usize {
+        match self {
+            Self::Pure(program) => program.node_count(),
+            Self::Effect(program) => program.node_count(),
+        }
+    }
+
+    /// Returns the immutable registry retained by the executable arena.
+    #[must_use]
+    pub fn registry(&self) -> &Arc<ResolvedRegistry> {
+        match self {
+            Self::Pure(program) => program.registry(),
+            Self::Effect(program) => program.registry(),
+        }
+    }
+}
 
 pub(crate) type Location = usize;
 
@@ -188,7 +245,7 @@ pub struct Closure {
     /// Core body evaluated after parameter binding.
     pub body: NodeId,
     /// Validated code arena containing `body`.
-    pub program: Arc<PureProgram>,
+    pub program: ExecutableProgram,
     /// Immutable lexical environment captured at function evaluation.
     pub environment: Environment,
     /// Causal source provenance of the function value.

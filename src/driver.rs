@@ -12,7 +12,7 @@ use crate::{
         EffectElaborator, Elaborator, TypeError, check_module_with_budget,
         checked_program_contains_effect_syntax, link_modules_with_budget,
     },
-    eval::{Evaluation, ObservedHeap, RuntimeFailure, Value, evaluate},
+    eval::{Evaluation, ObservedHeap, RuntimeFailure, Value, evaluate, evaluate_effect},
     evidence_validation::{
         EvidenceValidationFailure, ValidatedInterfaceProgram,
         validate_interface_evidence_with_budget,
@@ -777,6 +777,8 @@ where
                 .synthesize_effect_module_program(&validated_interfaces)
                 .map_err(PipelineFailure::Typing)
                 .map_err(FileFailure::Pipeline)?;
+            let ty = IterativeTypeOwner::new(typed.ty);
+            let type_display = registry.display_type(&ty);
             let unchecked = elaborator
                 .finish(typed.node)
                 .map_err(TypeError::Internal)
@@ -785,10 +787,16 @@ where
             let validated = validate_effect_modules(unchecked, &sources, &module_sources)
                 .map_err(PipelineFailure::Validation)
                 .map_err(FileFailure::Pipeline)?;
-            drop(validated);
-            return Err(FileFailure::Pipeline(PipelineFailure::Runtime(
-                RuntimeFailure::InvalidControlState,
-            )));
+            let evaluation = evaluate_effect(&validated)
+                .map_err(PipelineFailure::Runtime)
+                .map_err(FileFailure::Pipeline)?;
+            let (value, heap) = evaluation.into_observation_parts();
+            return Ok(Observation {
+                value,
+                ty: ty.into_inner(),
+                type_display: Some(type_display),
+                _heap: heap,
+            });
         }
         let mut elaborator = Elaborator::for_module_program(&validated_interfaces)
             .map_err(TypeError::Internal)

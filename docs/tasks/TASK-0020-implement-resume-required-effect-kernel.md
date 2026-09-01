@@ -82,7 +82,17 @@ milestone capacity when that forecast is exhausted.
 - The pure planning baseline passes the complete verifier.
 - Product commit `32e4b1c` has no `src/`, `tests/`, or `spec/` delta from base
   `d1e323d`, and `cargo xtask verify` passes there.
-- No product Rust, test, or normative specification file has changed.
+- Product commits through `b763db6` add effect rows, declarations, source
+  forms, resolution, and identity preservation.
+- Product commits through `2c07e68` add source typing and structural resume
+  validation.
+- Product commit `57f0b0a` adds and independently validates Effect Core by
+  reusing the generic Core substrate.
+- The current runtime checkpoint reuses the explicit evaluator machine for
+  ordered handling and one-shot resume. Its focused tests pass; it remains
+  uncommitted pending final review and verification.
+- The normative specification remains unchanged until the complete retained
+  product transition.
 
 ## Verification
 

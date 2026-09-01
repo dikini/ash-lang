@@ -153,12 +153,12 @@ fn checked_source_lowers_to_explicit_effect_core() {
         pending.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
     }
     assert_eq!(operations, [1, 1, 1]);
-    let failure = run_path(RunConfiguration {
+    let observation = run_path(RunConfiguration {
         entry: path.clone(),
         roots: ModuleRoots::empty(),
     })
-    .expect_err("effect Core stops before the pure evaluator until Checkpoint 4");
-    assert_eq!(failure.reason_code(), "runtime.invalid-control-state");
+    .expect("effect Core should execute through the shared machine");
+    assert_eq!(observation.value_display(), "Some(42)");
     std::fs::write(
         &path,
         "import facade (Build)\n\nmain : Unit -> Int\nmain () = 42\n",
@@ -190,9 +190,9 @@ fn checked_source_lowers_to_explicit_effect_core() {
             entry: type_only,
             roots: ModuleRoots::empty(),
         })
-        .expect_err("retained effectful types must select Effect Core")
-        .reason_code(),
-        "runtime.invalid-control-state"
+        .expect("type-only effect pressure must select executable Effect Core")
+        .value_display(),
+        "42"
     );
     let _ = std::fs::remove_dir_all(directory);
 }
