@@ -5972,6 +5972,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         )?;
         for instance in row.known() {
             for argument in instance.arguments() {
+                self.charge_type_structure(argument)?;
                 self.collect_free_type_variables(argument, output)?;
             }
         }
@@ -5982,6 +5983,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             self.charge_type_work(tail.lacks().len())?;
             for instance in tail.lacks() {
                 for argument in instance.arguments() {
+                    self.charge_type_structure(argument)?;
                     self.collect_free_type_variables(argument, output)?;
                 }
             }
@@ -12876,6 +12878,105 @@ mod tests {
             .expect_err("a forged complete row argument must be rejected");
         assert_eq!(error.reason(), ValidationReason::TypeOperation);
         assert_eq!(error.node(), Some(application));
+    }
+
+    #[test]
+    fn type_application_row_argument_scope_work_is_exact_atomic_and_retryable() {
+        const WIDTH: usize = 8;
+        const DEPTH: usize = 32;
+        let file = source();
+        let node_origin = origin(&file);
+        let closed_argument = || {
+            Type::Tuple(
+                (0..WIDTH)
+                    .map(|_| {
+                        (0..DEPTH).fold(Type::Unit, |ty, _| {
+                            Type::Application(Box::new(ty), Box::new(Type::Unit))
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            )
+        };
+        let fixture = |argument: Type| {
+            let mut builder = crate::core::EffectCoreBuilder::with_effect_registry(Arc::new(
+                crate::resolved::ResolvedRegistry::default(),
+            ));
+            let outer = crate::types::TypeVariableId::generated(72);
+            let inner = crate::types::TypeVariableId::generated(73);
+            let body = builder.unit(Type::Unit, node_origin.clone()).unwrap();
+            let function = builder
+                .type_abstraction(
+                    vec![(inner, Kind::EffectRow)],
+                    body,
+                    Type::Forall(Box::new([(inner, Kind::EffectRow)]), Box::new(Type::Unit)),
+                    node_origin.clone(),
+                )
+                .unwrap();
+            let row = EffectRow::with_tail(
+                Box::new([crate::types::EffectInstance::new(
+                    crate::types::EffectId::new(file.id().into(), 0),
+                    Box::new([argument.clone()]),
+                )]),
+                crate::types::EffectRowVariable::rigid(outer),
+                Box::new([crate::types::EffectInstance::new(
+                    crate::types::EffectId::new(file.id().into(), 1),
+                    Box::new([argument]),
+                )]),
+            );
+            let application = builder
+                .type_application_with_row_arguments(
+                    function,
+                    Vec::new(),
+                    vec![row],
+                    Type::Unit,
+                    node_origin.clone(),
+                )
+                .unwrap();
+            let root = builder
+                .type_abstraction(
+                    vec![(outer, Kind::EffectRow)],
+                    application,
+                    Type::Forall(Box::new([(outer, Kind::EffectRow)]), Box::new(Type::Unit)),
+                    node_origin.clone(),
+                )
+                .unwrap();
+            builder.finish(root).unwrap()
+        };
+
+        let shallow = fixture(Type::Unit);
+        let shallow_validator = Validator::new(&shallow, &[&file]);
+        shallow_validator.validate_type_scopes().unwrap();
+        let shallow_work = shallow_validator.type_work.get();
+
+        let argument = closed_argument();
+        let mut structural = crate::types::TypeWorkBudget::unbounded();
+        crate::types::charge_type_cells(&argument, &mut structural).unwrap();
+        let program = fixture(argument);
+        let measured = Validator::new(&program, &[&file]);
+        measured.validate_type_scopes().unwrap();
+        let exact = measured.type_work.get();
+        // Canonical open rows retain their known member in the tail's lacks set.
+        assert_eq!(exact - shallow_work, 3 * (structural.used() - 1));
+
+        let retained = program.nodes.len();
+        let short = Validator::new(&program, &[&file]);
+        short
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (exact - 1))
+            .unwrap();
+        assert_eq!(
+            short.validate_type_scopes().unwrap_err().reason(),
+            ValidationReason::Resource
+        );
+        assert_eq!(program.nodes.len(), retained);
+        for _ in 0..2 {
+            let retry = Validator::new(&program, &[&file]);
+            retry
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact)
+                .unwrap();
+            retry.validate_type_scopes().unwrap();
+            assert_eq!(retry.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+        }
     }
 
     #[test]
