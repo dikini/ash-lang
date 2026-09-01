@@ -16202,7 +16202,7 @@ fn first_invalid_handler_operation_with_budget(
             return Ok(Some(clause_index));
         }
     }
-    Ok((!seen.into_iter().all(|present| present)).then_some(operation_count))
+    Ok(None)
 }
 
 fn resolved_module_binders(module: &ResolvedModule) -> Vec<BinderId> {
