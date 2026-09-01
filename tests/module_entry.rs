@@ -86,6 +86,25 @@ fn accepts_a_private_main_declared_in_the_entry_module() {
 }
 
 #[test]
+fn rejects_effect_syntax_before_final_pure_core_and_evaluation() {
+    let tree = TempTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "effect Tick {\nping : Unit -> Unit\n}\n\n",
+            "main : Unit -> Unit\n",
+            "main () = handle (perform Tick.ping ()) with Tick {\n",
+            "ping ignored => resume ()\n",
+            "}\n",
+        ),
+    );
+
+    let failure = run(&entry).expect_err("effect syntax cannot enter retained pure Core");
+    assert_eq!(failure.reason_code(), "effect.core-unavailable");
+    assert!(!failure.is_source_rejection());
+}
+
+#[test]
 fn rejects_an_entry_module_without_a_local_main() {
     let tree = TempTree::create();
     let entry = tree.write("entry.ash", "helper : Unit -> Unit\nhelper value = value\n");

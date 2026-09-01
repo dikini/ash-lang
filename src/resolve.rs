@@ -662,6 +662,8 @@ pub enum ResolveReason {
     EffectKind,
     /// A written row repeats one exact effect instance.
     DuplicateEffect,
+    /// A resume form occurs outside an operation clause.
+    ResumeOutsideClause,
     /// An uppercase term or pattern names no constructor.
     UnknownConstructor,
     /// One pattern vector binds the same spelling more than once.
@@ -701,6 +703,7 @@ impl fmt::Display for ResolveReason {
             Self::UnknownEffect => "effect.unknown",
             Self::EffectKind => "effect.kind",
             Self::DuplicateEffect => "effect.duplicate",
+            Self::ResumeOutsideClause => "effect.resume-outside-clause",
             Self::UnknownConstructor => "resolve.unknown-constructor",
             Self::DuplicatePatternBinder => "pattern.duplicate-binder",
             Self::DuplicateRecursiveMember => "resolve.duplicate-recursive-member",
@@ -7516,6 +7519,13 @@ impl Resolver {
                     handler.effect.span,
                 )?;
                 let body = ResolvedExpressionOwner::new(self.resolve_expr(&handler.body)?);
+                self.type_work.charge(handler.clauses.len()).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "handler clause storage exceeded its type-work budget",
+                    )
+                })?;
                 let mut clauses = Vec::new();
                 clauses
                     .try_reserve_exact(handler.clauses.len())
@@ -7526,6 +7536,13 @@ impl Resolver {
                             "handler clause storage exceeded its type-work budget",
                         )
                     })?;
+                self.type_work.charge(handler.clauses.len()).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "handler clause traversal exceeded its type-work budget",
+                    )
+                })?;
                 for clause in &handler.clauses {
                     let operation =
                         self.resolved_operation(effect.instance.effect(), &clause.operation)?;
@@ -7550,6 +7567,20 @@ impl Resolver {
                     let scope_checkpoint = self.scopes.len();
                     let resume_checkpoint = self.active_resumes.len();
                     self.push_binder_scope_many(&binders);
+                    self.type_work.charge(1).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            clause.span,
+                            "handler resume scope exceeded its type-work budget",
+                        )
+                    })?;
+                    self.active_resumes.try_reserve(1).map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            clause.span,
+                            "handler resume scope exceeded its type-work budget",
+                        )
+                    })?;
                     self.active_resumes.push(resume);
                     let resolved_body = self
                         .resolve_expr(&clause.body)
@@ -7575,10 +7606,17 @@ impl Resolver {
                 });
             }
             SurfaceExprKind::Resume(value) => {
+                let owner = self.active_resumes.last().copied().ok_or_else(|| {
+                    error(
+                        ResolveReason::ResumeOutsideClause,
+                        expression.span,
+                        "resume is available only inside an operation clause",
+                    )
+                })?;
                 let value = self.resolve_expr(value)?;
                 expressions.push(ResolvedExpr {
                     kind: ResolvedExprKind::Resume(ResolvedResumeExpr {
-                        owner: self.active_resumes.last().copied(),
+                        owner: Some(owner),
                         value: Box::new(value),
                     }),
                     span: expression.span,

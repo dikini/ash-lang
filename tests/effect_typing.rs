@@ -199,6 +199,22 @@ fn open_global_relay_and_local_higher_order_function_generalize_effect_rows() {
     assert_eq!(latent_effects(&checked, "combined").known().len(), 2);
 }
 
+#[test]
+fn annotated_output_row_supplies_the_lacks_fact_for_one_requested_effect() {
+    let checked = check_source(concat!(
+        "effect Choice {\nchoose : Unit -> Int\n}\n\n",
+        "relay<R : EffectRow> : (Unit -> Int ! {| R}) -> Int ! {Choice | R}\n",
+        "relay action = {\n",
+        "let value = action ()\n",
+        "value + perform Choice.choose ()\n",
+        "}\n",
+    ));
+
+    let effects = latent_effects(&checked, "relay");
+    assert_eq!(effects.known().len(), 1);
+    assert!(effects.tail().is_some());
+}
+
 fn handler_source(clause_body: &str) -> String {
     format!(
         "effect Choice {{\nchoose : Unit -> Int\n}}\n\nmain : Unit -> Int\nmain () = handle (perform Choice.choose ()) with Choice {{\nchoose ignored => {clause_body}\n}}\n"

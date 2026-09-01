@@ -54,12 +54,12 @@ use crate::{
     types::{
         ComputationType, EffectInstance, EffectRow, EffectRowError, EffectRowVariable,
         InferenceVariableId, IterativeTypeOwner, Kind, Type, TypeVariableId, TypeWorkBudget,
-        charge_type_cells, clone_kind_with_budget, clone_kinded_type_parameters_with_budget,
-        compare_effect_instances_with_budget, discard_type_iteratively,
-        effect_row_from_owned_parts_with_budget, rebuild_effect_row_with_budget,
-        replace_type_iteratively, same_kind_with_budget, same_kinded_type_parameters_with_budget,
-        same_type, same_type_with_budget, substitute_type_and_row_variables_with,
-        substitute_type_variables_with,
+        charge_type_cells, clone_effect_row_with_budget, clone_kind_with_budget,
+        clone_kinded_type_parameters_with_budget, compare_effect_instances_with_budget,
+        discard_type_iteratively, effect_row_from_owned_parts_with_budget,
+        rebuild_effect_row_with_budget, replace_type_iteratively, same_kind_with_budget,
+        same_kinded_type_parameters_with_budget, same_type, same_type_with_budget,
+        substitute_type_and_row_variables_with, substitute_type_variables_with,
     },
 };
 
@@ -353,6 +353,8 @@ pub enum ElaborationFailure {
     Core(BuildError),
     /// The explicit elaboration work stack lost an invariant.
     InvalidState,
+    /// Effect syntax reached a checkpoint that still retains only pure Core.
+    EffectCoreUnavailable,
     /// Pattern coverage exceeded its deterministic compiler resource budget.
     CoverageResourceExhausted,
     /// Cumulative inference and type construction exceeded its work budget.
@@ -368,6 +370,7 @@ impl ElaborationFailure {
         match self {
             Self::Core(_) => "internal.core-build",
             Self::InvalidState => "type.internal",
+            Self::EffectCoreUnavailable => "effect.core-unavailable",
             Self::CoverageResourceExhausted => "internal.resource.coverage",
             Self::TypeResourceExhausted => "internal.resource.type-work",
             Self::ConstraintResourceExhausted => "internal.resource.constraint-work",
@@ -380,6 +383,9 @@ impl fmt::Display for ElaborationFailure {
         match self {
             Self::Core(error) => write!(formatter, "typed Core construction failed: {error}"),
             Self::InvalidState => formatter.write_str("typed elaboration state is inconsistent"),
+            Self::EffectCoreUnavailable => {
+                formatter.write_str("effect syntax requires the effect Core checkpoint")
+            }
             Self::CoverageResourceExhausted => {
                 formatter.write_str("pattern coverage resource limit exceeded")
             }
@@ -1693,6 +1699,7 @@ pub struct Elaborator {
     coverage_work: UsefulnessBudget,
     base_context: TypeContext,
     active_resumes: Vec<ActiveResume>,
+    expected_effect_rows: Vec<EffectRow>,
 }
 
 #[derive(Debug)]
@@ -1763,6 +1770,7 @@ impl Elaborator {
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
+            expected_effect_rows: Vec::new(),
         }
     }
 
@@ -1852,6 +1860,7 @@ impl Elaborator {
             coverage_work,
             base_context,
             active_resumes: Vec::new(),
+            expected_effect_rows: Vec::new(),
         })
     }
 
@@ -1908,6 +1917,7 @@ impl Elaborator {
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
+            expected_effect_rows: Vec::new(),
         };
         elaborator.evidence_lowering = Some(elaborator.build_evidence_lowering(program).map_err(
             |error| match error {
@@ -2339,6 +2349,7 @@ impl Elaborator {
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
+            expected_effect_rows: Vec::new(),
         })
     }
 
@@ -2444,6 +2455,12 @@ impl Elaborator {
             || self.final_root.is_some()
         {
             return Err(invalid_state());
+        }
+        if checked_program_contains_effect_syntax(program, &mut self.type_work)? {
+            self.state = ElaboratorState::Poisoned;
+            return Err(TypeError::Internal(
+                ElaborationFailure::EffectCoreUnavailable,
+            ));
         }
         let result = self.elaborate_module_program(program);
         match result {
@@ -7257,8 +7274,8 @@ impl Elaborator {
         if left.is_empty() && right.is_empty() {
             return Ok(EffectRow::empty());
         }
-        let left = self.zonk_effect_row(left)?;
-        let right = self.zonk_effect_row(right)?;
+        let left = self.qualify_effect_row(left)?;
+        let right = self.qualify_effect_row(right)?;
         left.union_with_budget(&right, &mut self.type_work)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
             .map_err(|_| {
@@ -7268,6 +7285,32 @@ impl Elaborator {
                     "this strict expression has no principal effect-row union",
                 )
             })
+    }
+
+    fn qualify_effect_row(&mut self, row: &EffectRow) -> Result<EffectRow, TypeError> {
+        let qualified = match (
+            row.tail(),
+            self.expected_effect_rows.last().and_then(EffectRow::tail),
+        ) {
+            (Some(tail), Some(expected)) if tail.variable() == expected.variable() => {
+                rebuild_effect_row_with_budget(
+                    row.known().iter(),
+                    Some(tail.variable()),
+                    tail.lacks().iter().chain(expected.lacks()).chain(
+                        self.expected_effect_rows
+                            .last()
+                            .into_iter()
+                            .flat_map(|row| row.known()),
+                    ),
+                    |argument, budget| clone_type_with_budget(argument, budget),
+                    &mut self.type_work,
+                )
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+            }
+            _ => clone_effect_row_with_budget(row, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+        };
+        self.zonk_effect_row(&qualified)
     }
 
     fn operation_signature(
@@ -7289,24 +7332,23 @@ impl Elaborator {
                 "this effect instance does not match its declaration",
             ));
         }
+        let operation_index =
+            usize::try_from(operation.operation()).map_err(|_| invalid_state())?;
         let operation = declaration
             .operations
-            .iter()
-            .find(|candidate| candidate.id == operation)
+            .get(operation_index)
+            .filter(|candidate| candidate.id == operation)
             .ok_or_else(invalid_state)?;
-        let parameters = declaration
-            .parameters
-            .iter()
-            .map(|parameter| parameter.id)
-            .collect::<Vec<_>>();
         let annotation = clone_type_with_budget(&operation.annotation.ty, &mut self.type_work)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let mut replacements = HashMap::new();
         replacements
-            .try_reserve(parameters.len())
+            .try_reserve(declaration.parameters.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        for (parameter, argument) in parameters.into_iter().zip(instance.arguments()) {
-            replacements.insert(parameter, self.clone_type(argument)?);
+        for (parameter, argument) in declaration.parameters.iter().zip(instance.arguments()) {
+            let argument = clone_type_with_budget(argument, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            replacements.insert(parameter.id, argument);
         }
         let instantiated = IterativeTypeOwner::new(
             substitute_type_variables_with(&annotation, &replacements, |cells| {
@@ -7456,38 +7498,34 @@ impl Elaborator {
             .registry
             .effect(handler.effect.instance.effect())
             .ok_or_else(invalid_state)?;
-        let required = declaration
-            .operations
-            .iter()
-            .map(|operation| operation.id)
-            .collect::<Vec<_>>();
-        if handler.clauses.len() != required.len() {
+        if handler.clauses.len() != declaration.operations.len() {
             return Err(inference_failure(
                 TypeReason::HandlerCoverage,
                 span,
                 "a handler must contain one clause for every operation",
             ));
         }
-        let mut seen = HashSet::new();
-        for clause in &handler.clauses {
-            if !required.contains(&clause.operation) || !seen.insert(clause.operation) {
-                return Err(inference_failure(
-                    TypeReason::HandlerCoverage,
-                    clause.span,
-                    "a handler operation clause is duplicate or does not belong to this effect",
-                ));
-            }
-        }
-        if seen.len() != required.len() {
+        let invalid_clause = first_invalid_handler_operation_with_budget(
+            declaration.id,
+            declaration.operations.len(),
+            handler.clauses.iter().map(|clause| clause.operation),
+            &mut self.type_work,
+        )
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        if let Some(index) = invalid_clause {
+            let diagnostic_span = handler
+                .clauses
+                .get(index)
+                .map_or(span, |clause| clause.span);
             return Err(inference_failure(
                 TypeReason::HandlerCoverage,
-                span,
-                "a handler must contain one clause for every operation",
+                diagnostic_span,
+                "a handler operation clause is duplicate or does not belong to this effect",
             ));
         }
 
         for clause in &handler.clauses {
-            check_clause_resume_usage(&clause.body, clause.resume)?;
+            check_clause_resume_usage(&clause.body, clause.resume, &mut self.type_work)?;
             let (domain, resume_result) =
                 self.operation_signature(&handler.effect.instance, clause.operation, clause.span)?;
             let domain = IterativeTypeOwner::new(domain);
@@ -7516,6 +7554,12 @@ impl Elaborator {
                 ));
             }
             let active_result = self.clone_type(&result_type)?;
+            self.type_work
+                .charge(1)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            self.active_resumes
+                .try_reserve(1)
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             self.active_resumes.push(ActiveResume {
                 owner: clause.resume,
                 input: resume_result.into_inner(),
@@ -9847,6 +9891,21 @@ impl Elaborator {
                 ));
             }
             let expected_type = self.clone_type(&remainder.ty)?;
+            let has_effect_scope = !expected_body_effects.is_empty();
+            if has_effect_scope {
+                self.type_work
+                    .charge(1)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                self.expected_effect_rows
+                    .try_reserve(1)
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let expected_effects =
+                    clone_effect_row_with_budget(&expected_body_effects, &mut self.type_work)
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                self.expected_effect_rows.push(expected_effects);
+            }
             let body_result = self
                 .elaborate_expression_with_context(
                     ElaborationTask::Check {
@@ -9863,16 +9922,23 @@ impl Elaborator {
                 )
                 .map(TypedNodeOwner::new);
             self.remove_pattern_binders(context, &binder_ids)?;
-            let body = body_result?;
-            let weakened =
-                self.union_effects(&body.effects, &expected_body_effects, clause.body.span)?;
-            if weakened != expected_body_effects {
-                return Err(inference_failure(
-                    TypeReason::AmbiguousEffectRow,
-                    clause.body.span,
-                    "this function body requests effects outside its declared row",
-                ));
+            let checked_body = body_result.and_then(|body| {
+                let expected_effects = self.qualify_effect_row(&expected_body_effects)?;
+                let weakened =
+                    self.union_effects(&body.effects, &expected_effects, clause.body.span)?;
+                if weakened != expected_effects {
+                    return Err(inference_failure(
+                        TypeReason::AmbiguousEffectRow,
+                        clause.body.span,
+                        "this function body requests effects outside its declared row",
+                    ));
+                }
+                Ok(body)
+            });
+            if has_effect_scope && self.expected_effect_rows.pop().is_none() {
+                return Err(invalid_state());
             }
+            let body = checked_body?;
             coverage_matrix.push(patterns.into_vec());
             clause_bodies.push((body.node, clause.span));
         }
@@ -15658,8 +15724,12 @@ enum ResumeUsage {
     Consumed,
 }
 
-fn check_clause_resume_usage(expression: &ResolvedExpr, owner: ResumeId) -> Result<(), TypeError> {
-    match resume_usage(expression, owner, ResumeUsage::Available)? {
+fn check_clause_resume_usage(
+    expression: &ResolvedExpr,
+    owner: ResumeId,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), TypeError> {
+    match resume_usage_with_budget(expression, owner, ResumeUsage::Available, budget)? {
         ResumeUsage::Consumed => Ok(()),
         ResumeUsage::Available => Err(inference_failure(
             TypeReason::ResumeNotConsumed,
@@ -15669,182 +15739,323 @@ fn check_clause_resume_usage(expression: &ResolvedExpr, owner: ResumeId) -> Resu
     }
 }
 
-fn resume_usage(
+fn resume_usage_with_budget(
     expression: &ResolvedExpr,
     owner: ResumeId,
-    state: ResumeUsage,
+    mut state: ResumeUsage,
+    budget: &mut TypeWorkBudget,
 ) -> Result<ResumeUsage, TypeError> {
-    match &expression.kind {
-        ResolvedExprKind::Integer(_)
-        | ResolvedExprKind::Boolean(_)
-        | ResolvedExprKind::Unit
-        | ResolvedExprKind::Occurrence(_)
-        | ResolvedExprKind::Constructor(_) => Ok(state),
-        ResolvedExprKind::Tuple(elements) => elements
-            .iter()
-            .try_fold(state, |state, element| resume_usage(element, owner, state)),
-        ResolvedExprKind::Apply(application) => {
-            let state = resume_usage(&application.function, owner, state)?;
-            resume_usage(&application.argument, owner, state)
-        }
-        ResolvedExprKind::Add(binary)
-        | ResolvedExprKind::Multiply(binary)
-        | ResolvedExprKind::Equal(binary) => {
-            let state = resume_usage(&binary.left, owner, state)?;
-            resume_usage(&binary.right, owner, state)
-        }
-        ResolvedExprKind::Block(block) => {
-            let mut state = state;
-            for declaration in &block.declarations {
-                match declaration {
-                    ResolvedLocalDeclaration::Binding(binding) => {
-                        state = resume_usage(&binding.initializer, owner, state)?;
+    enum Task<'a> {
+        Visit(&'a ResolvedExpr),
+        Consume(Option<ResumeId>, Span),
+        BeginMatch(&'a [crate::resolved::ResolvedMatchArm]),
+        FinishMatchArm {
+            arms: &'a [crate::resolved::ResolvedMatchArm],
+            next: usize,
+            incoming: ResumeUsage,
+            outgoing: Option<ResumeUsage>,
+        },
+        CheckRecursive(&'a ResolvedRecursiveGroup),
+        CheckFunction(&'a crate::resolved::ResolvedFunctionExpr, Span),
+        CheckHandlerClauses(&'a [crate::resolved::ResolvedHandlerClause], Span),
+    }
+
+    fn push<'a>(
+        tasks: &mut Vec<Task<'a>>,
+        task: Task<'a>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), TypeError> {
+        budget
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        tasks
+            .try_reserve(1)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        tasks.push(task);
+        Ok(())
+    }
+
+    let mut tasks = Vec::new();
+    push(&mut tasks, Task::Visit(expression), budget)?;
+    while let Some(task) = tasks.pop() {
+        match task {
+            Task::Visit(expression) => match &expression.kind {
+                ResolvedExprKind::Integer(_)
+                | ResolvedExprKind::Boolean(_)
+                | ResolvedExprKind::Unit
+                | ResolvedExprKind::Occurrence(_)
+                | ResolvedExprKind::Constructor(_) => {}
+                ResolvedExprKind::Tuple(elements) => {
+                    for element in elements.iter().rev() {
+                        push(&mut tasks, Task::Visit(element), budget)?;
                     }
-                    ResolvedLocalDeclaration::Recursive(group) => {
-                        if group
-                            .members
-                            .iter()
-                            .any(|member| contains_resume_owner(&member.initializer, owner))
-                        {
-                            return Err(inference_failure(
-                                TypeReason::ResumeCapture,
-                                group.span,
-                                "a recursive member cannot capture the clause resume capability",
-                            ));
+                }
+                ResolvedExprKind::Apply(application) => {
+                    push(&mut tasks, Task::Visit(&application.argument), budget)?;
+                    push(&mut tasks, Task::Visit(&application.function), budget)?;
+                }
+                ResolvedExprKind::Add(binary)
+                | ResolvedExprKind::Multiply(binary)
+                | ResolvedExprKind::Equal(binary) => {
+                    push(&mut tasks, Task::Visit(&binary.right), budget)?;
+                    push(&mut tasks, Task::Visit(&binary.left), budget)?;
+                }
+                ResolvedExprKind::Block(block) => {
+                    push(&mut tasks, Task::Visit(&block.result), budget)?;
+                    for declaration in block.declarations.iter().rev() {
+                        match declaration {
+                            ResolvedLocalDeclaration::Binding(binding) => {
+                                push(&mut tasks, Task::Visit(&binding.initializer), budget)?
+                            }
+                            ResolvedLocalDeclaration::Recursive(group) => {
+                                push(&mut tasks, Task::CheckRecursive(group), budget)?;
+                            }
                         }
                     }
                 }
-            }
-            resume_usage(&block.result, owner, state)
-        }
-        ResolvedExprKind::Function(function) => {
-            if contains_resume_owner(&function.body.result, owner)
-                || function
-                    .body
-                    .declarations
-                    .iter()
-                    .any(|declaration| match declaration {
-                        ResolvedLocalDeclaration::Binding(binding) => {
-                            contains_resume_owner(&binding.initializer, owner)
+                ResolvedExprKind::Function(function) => {
+                    push(
+                        &mut tasks,
+                        Task::CheckFunction(function, expression.span),
+                        budget,
+                    )?;
+                }
+                ResolvedExprKind::Match(matched) => {
+                    push(&mut tasks, Task::BeginMatch(&matched.arms), budget)?;
+                    push(&mut tasks, Task::Visit(&matched.scrutinee), budget)?;
+                }
+                ResolvedExprKind::Perform(request) => {
+                    push(&mut tasks, Task::Visit(&request.operand), budget)?;
+                }
+                ResolvedExprKind::Handle(handler) => {
+                    push(&mut tasks, Task::Visit(&handler.body), budget)?;
+                    push(
+                        &mut tasks,
+                        Task::CheckHandlerClauses(&handler.clauses, expression.span),
+                        budget,
+                    )?;
+                }
+                ResolvedExprKind::Resume(resume) => {
+                    push(
+                        &mut tasks,
+                        Task::Consume(resume.owner, expression.span),
+                        budget,
+                    )?;
+                    push(&mut tasks, Task::Visit(&resume.value), budget)?;
+                }
+            },
+            Task::Consume(resume_owner, span) => {
+                if resume_owner == Some(owner) {
+                    state = match state {
+                        ResumeUsage::Available => ResumeUsage::Consumed,
+                        ResumeUsage::Consumed => {
+                            return Err(inference_failure(
+                                TypeReason::ResumeAlreadyConsumed,
+                                span,
+                                "this control-flow path already consumed the resume capability",
+                            ));
                         }
-                        ResolvedLocalDeclaration::Recursive(group) => group
-                            .members
-                            .iter()
-                            .any(|member| contains_resume_owner(&member.initializer, owner)),
-                    })
-            {
-                Err(inference_failure(
-                    TypeReason::ResumeCapture,
-                    expression.span,
-                    "a nested function cannot capture the clause resume capability",
-                ))
-            } else {
-                Ok(state)
+                    };
+                }
             }
-        }
-        ResolvedExprKind::Match(matched) => {
-            let incoming = resume_usage(&matched.scrutinee, owner, state)?;
-            let mut outgoing = None;
-            for arm in &matched.arms {
-                let arm_state = resume_usage(&arm.body, owner, incoming)?;
-                if outgoing.is_some_and(|previous| previous != arm_state) {
+            Task::BeginMatch(arms) => {
+                if let Some(first) = arms.first() {
+                    let incoming = state;
+                    push(
+                        &mut tasks,
+                        Task::FinishMatchArm {
+                            arms,
+                            next: 1,
+                            incoming,
+                            outgoing: None,
+                        },
+                        budget,
+                    )?;
+                    push(&mut tasks, Task::Visit(&first.body), budget)?;
+                }
+            }
+            Task::FinishMatchArm {
+                arms,
+                next,
+                incoming,
+                outgoing,
+            } => {
+                if outgoing.is_some_and(|previous| previous != state) {
+                    let span = arms.get(next - 1).ok_or_else(invalid_state)?.span;
                     return Err(inference_failure(
                         TypeReason::ResumeNotConsumed,
-                        arm.span,
+                        span,
                         "every match branch must leave the same resume usage state",
                     ));
                 }
-                outgoing = Some(arm_state);
+                let outgoing = Some(state);
+                if let Some(arm) = arms.get(next) {
+                    state = incoming;
+                    push(
+                        &mut tasks,
+                        Task::FinishMatchArm {
+                            arms,
+                            next: next + 1,
+                            incoming,
+                            outgoing,
+                        },
+                        budget,
+                    )?;
+                    push(&mut tasks, Task::Visit(&arm.body), budget)?;
+                }
             }
-            Ok(outgoing.unwrap_or(incoming))
-        }
-        ResolvedExprKind::Perform(request) => resume_usage(&request.operand, owner, state),
-        ResolvedExprKind::Handle(handler) => {
-            if handler
-                .clauses
-                .iter()
-                .any(|clause| contains_resume_owner(&clause.body, owner))
-            {
-                return Err(inference_failure(
-                    TypeReason::ResumeCapture,
-                    expression.span,
-                    "a nested handler clause cannot capture the outer resume capability",
-                ));
+            Task::CheckRecursive(group) => {
+                for member in &group.members {
+                    if contains_resume_owner_with_budget(&member.initializer, owner, budget)? {
+                        return Err(inference_failure(
+                            TypeReason::ResumeCapture,
+                            group.span,
+                            "a recursive member cannot capture the clause resume capability",
+                        ));
+                    }
+                }
             }
-            resume_usage(&handler.body, owner, state)
-        }
-        ResolvedExprKind::Resume(resume) => {
-            let state = resume_usage(&resume.value, owner, state)?;
-            if resume.owner != Some(owner) {
-                return Ok(state);
+            Task::CheckFunction(function, span) => {
+                if block_contains_resume_owner_with_budget(&function.body, owner, budget)? {
+                    return Err(inference_failure(
+                        TypeReason::ResumeCapture,
+                        span,
+                        "a nested function cannot capture the clause resume capability",
+                    ));
+                }
             }
-            match state {
-                ResumeUsage::Available => Ok(ResumeUsage::Consumed),
-                ResumeUsage::Consumed => Err(inference_failure(
-                    TypeReason::ResumeAlreadyConsumed,
-                    expression.span,
-                    "this control-flow path already consumed the resume capability",
-                )),
+            Task::CheckHandlerClauses(clauses, span) => {
+                for clause in clauses {
+                    if contains_resume_owner_with_budget(&clause.body, owner, budget)? {
+                        return Err(inference_failure(
+                            TypeReason::ResumeCapture,
+                            span,
+                            "a nested handler clause cannot capture the outer resume capability",
+                        ));
+                    }
+                }
             }
         }
     }
+    Ok(state)
 }
 
-fn contains_resume_owner(expression: &ResolvedExpr, owner: ResumeId) -> bool {
-    let mut pending = vec![expression];
+fn block_contains_resume_owner_with_budget(
+    block: &ResolvedBlock,
+    owner: ResumeId,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, TypeError> {
+    if contains_resume_owner_with_budget(&block.result, owner, budget)? {
+        return Ok(true);
+    }
+    for declaration in &block.declarations {
+        match declaration {
+            ResolvedLocalDeclaration::Binding(binding) => {
+                if contains_resume_owner_with_budget(&binding.initializer, owner, budget)? {
+                    return Ok(true);
+                }
+            }
+            ResolvedLocalDeclaration::Recursive(group) => {
+                for member in &group.members {
+                    if contains_resume_owner_with_budget(&member.initializer, owner, budget)? {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn contains_resume_owner_with_budget(
+    expression: &ResolvedExpr,
+    owner: ResumeId,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, TypeError> {
+    fn schedule<'a>(
+        pending: &mut Vec<&'a ResolvedExpr>,
+        expression: &'a ResolvedExpr,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), TypeError> {
+        budget
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        pending
+            .try_reserve(1)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        pending.push(expression);
+        Ok(())
+    }
+
+    let mut pending = Vec::new();
+    schedule(&mut pending, expression, budget)?;
     while let Some(expression) = pending.pop() {
         match &expression.kind {
             ResolvedExprKind::Resume(resume) => {
                 if resume.owner == Some(owner) {
-                    return true;
+                    return Ok(true);
                 }
-                pending.push(&resume.value);
+                schedule(&mut pending, &resume.value, budget)?;
             }
-            ResolvedExprKind::Tuple(elements) => pending.extend(elements),
+            ResolvedExprKind::Tuple(elements) => {
+                for element in elements {
+                    schedule(&mut pending, element, budget)?;
+                }
+            }
             ResolvedExprKind::Apply(application) => {
-                pending.push(&application.argument);
-                pending.push(&application.function);
+                schedule(&mut pending, &application.argument, budget)?;
+                schedule(&mut pending, &application.function, budget)?;
             }
             ResolvedExprKind::Add(binary)
             | ResolvedExprKind::Multiply(binary)
             | ResolvedExprKind::Equal(binary) => {
-                pending.push(&binary.right);
-                pending.push(&binary.left);
+                schedule(&mut pending, &binary.right, budget)?;
+                schedule(&mut pending, &binary.left, budget)?;
             }
             ResolvedExprKind::Block(block) => {
-                pending.push(&block.result);
+                schedule(&mut pending, &block.result, budget)?;
                 for declaration in &block.declarations {
                     match declaration {
                         ResolvedLocalDeclaration::Binding(binding) => {
-                            pending.push(&binding.initializer)
+                            schedule(&mut pending, &binding.initializer, budget)?;
                         }
                         ResolvedLocalDeclaration::Recursive(group) => {
-                            pending.extend(group.members.iter().map(|member| &member.initializer))
+                            for member in &group.members {
+                                schedule(&mut pending, &member.initializer, budget)?;
+                            }
                         }
                     }
                 }
             }
             ResolvedExprKind::Function(function) => {
-                pending.push(&function.body.result);
+                schedule(&mut pending, &function.body.result, budget)?;
                 for declaration in &function.body.declarations {
                     match declaration {
                         ResolvedLocalDeclaration::Binding(binding) => {
-                            pending.push(&binding.initializer)
+                            schedule(&mut pending, &binding.initializer, budget)?;
                         }
                         ResolvedLocalDeclaration::Recursive(group) => {
-                            pending.extend(group.members.iter().map(|member| &member.initializer))
+                            for member in &group.members {
+                                schedule(&mut pending, &member.initializer, budget)?;
+                            }
                         }
                     }
                 }
             }
             ResolvedExprKind::Match(matched) => {
-                pending.push(&matched.scrutinee);
-                pending.extend(matched.arms.iter().map(|arm| &arm.body));
+                schedule(&mut pending, &matched.scrutinee, budget)?;
+                for arm in &matched.arms {
+                    schedule(&mut pending, &arm.body, budget)?;
+                }
             }
-            ResolvedExprKind::Perform(request) => pending.push(&request.operand),
+            ResolvedExprKind::Perform(request) => {
+                schedule(&mut pending, &request.operand, budget)?;
+            }
             ResolvedExprKind::Handle(handler) => {
-                pending.push(&handler.body);
-                pending.extend(handler.clauses.iter().map(|clause| &clause.body));
+                schedule(&mut pending, &handler.body, budget)?;
+                for clause in &handler.clauses {
+                    schedule(&mut pending, &clause.body, budget)?;
+                }
             }
             ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
@@ -15853,7 +16064,145 @@ fn contains_resume_owner(expression: &ResolvedExpr, owner: ResumeId) -> bool {
             | ResolvedExprKind::Constructor(_) => {}
         }
     }
-    false
+    Ok(false)
+}
+
+fn checked_program_contains_effect_syntax(
+    program: &ValidatedInterfaceProgram,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, TypeError> {
+    fn resource() -> TypeError {
+        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+    }
+
+    fn schedule<'a>(
+        work: &mut Vec<&'a ResolvedExpr>,
+        expression: &'a ResolvedExpr,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), TypeError> {
+        budget.charge(1).map_err(|()| resource())?;
+        work.try_reserve(1).map_err(|_| resource())?;
+        work.push(expression);
+        Ok(())
+    }
+
+    fn schedule_declaration<'a>(
+        work: &mut Vec<&'a ResolvedExpr>,
+        declaration: &'a ResolvedLocalDeclaration,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), TypeError> {
+        match declaration {
+            ResolvedLocalDeclaration::Binding(binding) => {
+                schedule(work, &binding.initializer, budget)
+            }
+            ResolvedLocalDeclaration::Recursive(group) => {
+                for member in &group.members {
+                    schedule(work, &member.initializer, budget)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn schedule_block<'a>(
+        work: &mut Vec<&'a ResolvedExpr>,
+        block: &'a ResolvedBlock,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), TypeError> {
+        schedule(work, &block.result, budget)?;
+        for declaration in &block.declarations {
+            schedule_declaration(work, declaration, budget)?;
+        }
+        Ok(())
+    }
+
+    let mut work = Vec::new();
+    for group in program.groups() {
+        for definition in group.definitions() {
+            match definition.kind() {
+                ResolvedDefinitionKind::Equational(global) => {
+                    for equation in &global.equations {
+                        schedule(&mut work, &equation.body, budget)?;
+                    }
+                }
+                ResolvedDefinitionKind::InlineOperational(global) => {
+                    schedule_block(&mut work, &global.body, budget)?;
+                }
+            }
+        }
+        for implementation in group.implementations() {
+            for method_group in implementation.method_groups() {
+                for equation in &method_group.equations {
+                    schedule(&mut work, &equation.body, budget)?;
+                }
+            }
+        }
+    }
+
+    while let Some(expression) = work.pop() {
+        match &expression.kind {
+            ResolvedExprKind::Perform(_)
+            | ResolvedExprKind::Handle(_)
+            | ResolvedExprKind::Resume(_) => return Ok(true),
+            ResolvedExprKind::Tuple(elements) => {
+                for element in elements {
+                    schedule(&mut work, element, budget)?;
+                }
+            }
+            ResolvedExprKind::Apply(application) => {
+                schedule(&mut work, &application.argument, budget)?;
+                schedule(&mut work, &application.function, budget)?;
+            }
+            ResolvedExprKind::Add(binary)
+            | ResolvedExprKind::Multiply(binary)
+            | ResolvedExprKind::Equal(binary) => {
+                schedule(&mut work, &binary.right, budget)?;
+                schedule(&mut work, &binary.left, budget)?;
+            }
+            ResolvedExprKind::Block(block) => schedule_block(&mut work, block, budget)?,
+            ResolvedExprKind::Function(function) => {
+                schedule_block(&mut work, &function.body, budget)?;
+            }
+            ResolvedExprKind::Match(matched) => {
+                for arm in &matched.arms {
+                    schedule(&mut work, &arm.body, budget)?;
+                }
+                schedule(&mut work, &matched.scrutinee, budget)?;
+            }
+            ResolvedExprKind::Integer(_)
+            | ResolvedExprKind::Boolean(_)
+            | ResolvedExprKind::Unit
+            | ResolvedExprKind::Occurrence(_)
+            | ResolvedExprKind::Constructor(_) => {}
+        }
+    }
+    Ok(false)
+}
+
+fn first_invalid_handler_operation_with_budget(
+    owner: crate::types::EffectId,
+    operation_count: usize,
+    operations: impl ExactSizeIterator<Item = crate::types::OperationId>,
+    budget: &mut TypeWorkBudget,
+) -> Result<Option<usize>, ()> {
+    budget.charge(operation_count)?;
+    let mut seen = Vec::new();
+    seen.try_reserve(operation_count).map_err(|_| ())?;
+    seen.resize(operation_count, false);
+
+    budget.charge(operations.len())?;
+    for (clause_index, operation) in operations.enumerate() {
+        let Ok(index) = usize::try_from(operation.operation()) else {
+            return Ok(Some(clause_index));
+        };
+        let Some(slot) = seen.get_mut(index) else {
+            return Ok(Some(clause_index));
+        };
+        if operation.owner() != owner || std::mem::replace(slot, true) {
+            return Ok(Some(clause_index));
+        }
+    }
+    Ok((!seen.into_iter().all(|present| present)).then_some(operation_count))
 }
 
 fn resolved_module_binders(module: &ResolvedModule) -> Vec<BinderId> {
@@ -16036,6 +16385,173 @@ mod tests {
     };
 
     static MODULE_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn wide_handler_coverage_is_exact_atomic_and_retryable() {
+        const OPERATIONS: usize = 4_096;
+        const EXACT_WORK: usize = 2 * OPERATIONS;
+
+        let owner = crate::types::EffectId::new(ModuleId::new(7), 3);
+        let operations = (0..OPERATIONS)
+            .map(|ordinal| crate::types::OperationId::new(owner, ordinal as u32))
+            .collect::<Vec<_>>();
+
+        let mut one_short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            first_invalid_handler_operation_with_budget(
+                owner,
+                OPERATIONS,
+                operations.iter().copied(),
+                &mut one_short,
+            ),
+            Err(())
+        );
+        assert_eq!(one_short.used(), OPERATIONS);
+
+        let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
+        assert_eq!(
+            first_invalid_handler_operation_with_budget(
+                owner,
+                OPERATIONS,
+                operations.iter().copied(),
+                &mut exact,
+            ),
+            Ok(None)
+        );
+        assert_eq!(exact.used(), EXACT_WORK);
+    }
+
+    #[test]
+    fn deep_resume_usage_is_iterative_exact_and_retryable() {
+        const DEPTH: usize = 16_384;
+        const EXACT_WORK: usize = DEPTH + 3;
+
+        std::thread::Builder::new()
+            .name("deep-resume-usage".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let owner = ResumeId::new(7);
+                let source = SourceFile::new("resume-usage.ash", "resume")
+                    .expect("the resume fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 6).expect("the resume range is ordered"))
+                    .expect("the resume span should fit");
+                let mut expression = ResolvedExpr {
+                    kind: ResolvedExprKind::Resume(crate::resolved::ResolvedResumeExpr {
+                        owner: Some(owner),
+                        value: Box::new(ResolvedExpr {
+                            kind: ResolvedExprKind::Unit,
+                            span,
+                        }),
+                    }),
+                    span,
+                };
+                for _ in 0..DEPTH {
+                    expression = ResolvedExpr {
+                        kind: ResolvedExprKind::Tuple(vec![expression]),
+                        span,
+                    };
+                }
+
+                let mut one_short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+                assert!(matches!(
+                    resume_usage_with_budget(
+                        &expression,
+                        owner,
+                        ResumeUsage::Available,
+                        &mut one_short,
+                    ),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                ));
+                assert_eq!(one_short.used(), EXACT_WORK - 1);
+
+                let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
+                assert_eq!(
+                    resume_usage_with_budget(
+                        &expression,
+                        owner,
+                        ResumeUsage::Available,
+                        &mut exact,
+                    ),
+                    Ok(ResumeUsage::Consumed)
+                );
+                assert_eq!(exact.used(), EXACT_WORK);
+                crate::resolved::discard_resolved_expression_iteratively(expression);
+            })
+            .expect("the small-stack resume witness should spawn")
+            .join()
+            .expect("the small-stack resume witness should complete");
+    }
+
+    #[test]
+    fn pure_core_scheme_projection_preserves_exact_pure_and_effectful_boundaries() {
+        const PURE_WORK: usize = 11;
+        const EFFECT_WORK: usize = 17;
+
+        let pure = TypeFact {
+            ty: Type::Tuple(vec![Type::Int, Type::Bool, Type::Unit].into_boxed_slice()),
+            provenance: TypeProvenance::unknown(&Type::Unit),
+            quantified: vec![
+                (TypeVariableId::new(0), Kind::Type),
+                (TypeVariableId::new(1), Kind::Type),
+                (TypeVariableId::new(2), Kind::Type),
+            ]
+            .into_boxed_slice(),
+        };
+        let mut pure_short = Elaborator::new();
+        pure_short.type_work = TypeWorkBudget::with_limit(PURE_WORK - 1);
+        assert_eq!(
+            pure_short.pure_core_scheme(&pure),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        );
+        assert_eq!(pure_short.type_work.used(), PURE_WORK - 1);
+        let mut pure_exact = Elaborator::new();
+        pure_exact.type_work = TypeWorkBudget::with_limit(PURE_WORK);
+        assert!(matches!(
+            pure_exact.pure_core_scheme(&pure),
+            Ok(Type::Forall(_, _))
+        ));
+        assert_eq!(pure_exact.type_work.used(), PURE_WORK);
+
+        let row = TypeVariableId::new(9);
+        let source_effects = EffectRow::open(
+            EffectRowVariable::rigid(row),
+            Box::new([row_test_effect("pure-core-scheme-effect.ash")]),
+        );
+        let effectful = TypeFact {
+            ty: Type::function_computation(
+                Type::Unit,
+                ComputationType::new(Type::Int, source_effects),
+            ),
+            provenance: TypeProvenance::unknown(&Type::Unit),
+            quantified: vec![(row, Kind::EffectRow)].into_boxed_slice(),
+        };
+        let mut effect_short = Elaborator::new();
+        effect_short.type_work = TypeWorkBudget::with_limit(EFFECT_WORK - 1);
+        assert_eq!(
+            effect_short.pure_core_scheme(&effectful),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        );
+        assert_eq!(effect_short.type_work.used(), EFFECT_WORK - 1);
+        assert!(matches!(effectful.ty, Type::EffectfulFunction(_, _)));
+        assert_eq!(effectful.quantified.as_ref(), [(row, Kind::EffectRow)]);
+
+        let mut effect_exact = Elaborator::new();
+        effect_exact.type_work = TypeWorkBudget::with_limit(EFFECT_WORK);
+        let projected = effect_exact
+            .pure_core_scheme(&effectful)
+            .expect("a fresh exact retry should project the complete scheme");
+        assert_eq!(projected, Type::function(Type::Unit, Type::Int));
+        assert_eq!(effect_exact.type_work.used(), EFFECT_WORK);
+        assert!(matches!(effectful.ty, Type::EffectfulFunction(_, _)));
+        assert_eq!(effectful.quantified.as_ref(), [(row, Kind::EffectRow)]);
+    }
 
     #[test]
     fn resolved_application_clone_discards_a_deep_first_argument_when_the_second_is_one_short() {

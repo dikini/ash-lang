@@ -7,7 +7,7 @@ use std::{
 use ash::{
     elaborate::{ElaborationFailure, Elaborator, TypeContext, TypeError, TypeReason, check_module},
     module::{ModuleRoots, load_module_graph},
-    resolve::resolve_module,
+    resolve::{ResolveModuleError, ResolveReason, resolve_module},
     resolved::{ResolvedDefinitionKind, ResolvedExpr, ResolvedExprKind, ResolvedModule},
 };
 
@@ -81,7 +81,7 @@ fn handler_source(clause_body: &str) -> String {
 }
 
 #[test]
-fn resume_usage_rejects_zero_double_branch_capture_and_outside_clause() {
+fn resume_usage_rejects_zero_double_branch_and_capture() {
     let cases = [
         ("zero", handler_source("1"), TypeReason::ResumeNotConsumed),
         (
@@ -123,15 +123,29 @@ fn resume_usage_rejects_zero_double_branch_capture_and_outside_clause() {
             .to_owned(),
             TypeReason::ResumeNotConsumed,
         ),
-        (
-            "outside",
-            "main : Unit -> Int\nmain () = resume 1\n".to_owned(),
-            TypeReason::ResumeOutsideClause,
-        ),
     ];
 
     for (name, source, expected) in cases {
         assert_eq!(typing_reason(&source), expected, "case: {name}");
+    }
+}
+
+#[test]
+fn resume_outside_a_handler_clause_is_rejected_by_resolution() {
+    let fixture = TempModule::write("main : Unit -> Int\nmain () = resume 1\n");
+    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
+        .expect("the outside-resume fixture should load");
+    let module = graph
+        .modules()
+        .iter()
+        .find(|module| module.id() == graph.entry())
+        .expect("the graph should retain its entry");
+
+    match resolve_module(module, &[]).expect_err("resolution should reject outside resume") {
+        ResolveModuleError::Resolution(error) => {
+            assert_eq!(error.reason, ResolveReason::ResumeOutsideClause)
+        }
+        error => panic!("expected a resolution diagnostic, found {error:?}"),
     }
 }
 
