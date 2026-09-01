@@ -59,7 +59,32 @@ impl TypeWorkBudget {
     }
 }
 
-pub(crate) fn charge_type_cells(ty: &Type, budget: &mut TypeWorkBudget) -> Result<(), ()> {
+pub(crate) trait TypeWorkMeter {
+    type Error;
+    fn charge(&mut self, cells: usize) -> Result<(), Self::Error>;
+}
+
+impl TypeWorkMeter for TypeWorkBudget {
+    type Error = ();
+    fn charge(&mut self, cells: usize) -> Result<(), ()> {
+        Self::charge(self, cells)
+    }
+}
+
+impl<E, F: FnMut(usize) -> Result<(), E>> TypeWorkMeter for F {
+    type Error = E;
+    fn charge(&mut self, cells: usize) -> Result<(), E> {
+        self(cells)
+    }
+}
+
+fn allocation_error<B: TypeWorkMeter>(budget: &mut B) -> B::Error {
+    budget.charge(usize::MAX).expect_err("allocation failure")
+}
+pub(crate) fn charge_type_cells<B: TypeWorkMeter>(
+    ty: &Type,
+    budget: &mut B,
+) -> Result<(), B::Error> {
     enum Task<'a> {
         Visit(&'a Type),
         Sequence(std::slice::Iter<'a, Type>),
@@ -119,10 +144,10 @@ pub(crate) fn charge_type_cells(ty: &Type, budget: &mut TypeWorkBudget) -> Resul
     Ok(())
 }
 
-pub(crate) fn charge_effect_row_cells(
+pub(crate) fn charge_effect_row_cells<B: TypeWorkMeter>(
     row: &EffectRow,
-    budget: &mut TypeWorkBudget,
-) -> Result<(), ()> {
+    budget: &mut B,
+) -> Result<(), B::Error> {
     budget.charge(1)?;
     for instance in &row.known {
         budget.charge(1)?;
@@ -142,14 +167,10 @@ pub(crate) fn charge_effect_row_cells(
     Ok(())
 }
 
-#[allow(
-    dead_code,
-    reason = "the effect syntax and checked-summary steps consume this charged clone seam"
-)]
-pub(crate) fn clone_effect_row_with_budget(
+pub(crate) fn clone_effect_row_with_budget<B: TypeWorkMeter>(
     row: &EffectRow,
-    budget: &mut TypeWorkBudget,
-) -> Result<EffectRow, ()> {
+    budget: &mut B,
+) -> Result<EffectRow, B::Error> {
     charge_effect_row_cells(row, budget)?;
     Ok(clone_effect_row(row))
 }
@@ -208,10 +229,10 @@ pub(crate) fn clone_computation_type_with_budget(
     ))
 }
 
-pub(crate) fn charge_kinded_type_parameters(
+pub(crate) fn charge_kinded_type_parameters<B: TypeWorkMeter>(
     parameters: &[(TypeVariableId, Kind)],
-    budget: &mut TypeWorkBudget,
-) -> Result<(), ()> {
+    budget: &mut B,
+) -> Result<(), B::Error> {
     budget.charge(parameters.len())?;
     for (_, kind) in parameters {
         charge_kind_nodes(kind, budget)?;
@@ -219,7 +240,10 @@ pub(crate) fn charge_kinded_type_parameters(
     Ok(())
 }
 
-pub(crate) fn clone_type_with_budget(ty: &Type, budget: &mut TypeWorkBudget) -> Result<Type, ()> {
+pub(crate) fn clone_type_with_budget<B: TypeWorkMeter>(
+    ty: &Type,
+    budget: &mut B,
+) -> Result<Type, B::Error> {
     struct RowShape {
         known: Box<[(EffectId, usize)]>,
         tail: Option<(EffectRowVariable, Box<[(EffectId, usize)]>)>,
@@ -370,7 +394,7 @@ pub(crate) fn clone_type_with_budget(ty: &Type, budget: &mut TypeWorkBudget) -> 
             }
         }
     }
-    rebuilt.pop().ok_or(())
+    Ok(rebuilt.pop().expect("one cloned type"))
 }
 
 fn clone_type(ty: &Type) -> Type {
@@ -853,12 +877,12 @@ impl EffectRow {
         )
     }
 
-    pub(crate) fn substitute_tail_once_with_budget(
+    pub(crate) fn substitute_tail_once_with_budget<B: TypeWorkMeter>(
         &self,
         target: EffectRowVariable,
         replacement: &Self,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<Result<Self, EffectRowError>, ()> {
+        budget: &mut B,
+    ) -> Result<Result<Self, EffectRowError>, B::Error> {
         let Some(tail) = &self.tail else {
             return clone_effect_row_with_budget(self, budget).map(Ok);
         };
@@ -916,36 +940,38 @@ impl EffectRow {
     }
 }
 
-pub(crate) fn rebuild_effect_row_with_budget<'a, E>(
+pub(crate) fn rebuild_effect_row_with_budget<'a, E, B: TypeWorkMeter>(
     known: impl IntoIterator<Item = &'a EffectInstance>,
     tail: Option<EffectRowVariable>,
     lacks: impl IntoIterator<Item = &'a EffectInstance>,
-    mut map: impl FnMut(&Type, &mut TypeWorkBudget) -> Result<Type, E>,
-    budget: &mut TypeWorkBudget,
+    mut map: impl FnMut(&Type, &mut B) -> Result<Type, E>,
+    budget: &mut B,
 ) -> Result<EffectRow, E>
 where
-    E: From<()>,
+    E: From<B::Error>,
 {
-    fn rebuild_instance<E>(
+    fn rebuild_instance<E, B: TypeWorkMeter>(
         instance: &EffectInstance,
-        map: &mut impl FnMut(&Type, &mut TypeWorkBudget) -> Result<Type, E>,
-        budget: &mut TypeWorkBudget,
+        map: &mut impl FnMut(&Type, &mut B) -> Result<Type, E>,
+        budget: &mut B,
     ) -> Result<EffectInstance, E>
     where
-        E: From<()>,
+        E: From<B::Error>,
     {
         let mut arguments = Vec::new();
         for argument in &instance.arguments {
             let argument = IterativeTypeOwner::new(map(argument, budget)?);
             budget.charge(1).map_err(E::from)?;
-            arguments.try_reserve(1).map_err(|_| E::from(()))?;
+            arguments
+                .try_reserve(1)
+                .map_err(|_| E::from(allocation_error(budget)))?;
             arguments.push(argument);
         }
         let mut retained = Vec::new();
         budget.charge(arguments.len()).map_err(E::from)?;
         retained
             .try_reserve(arguments.len())
-            .map_err(|_| E::from(()))?;
+            .map_err(|_| E::from(allocation_error(budget)))?;
         retained.extend(arguments.into_iter().map(IterativeTypeOwner::into_inner));
         Ok(EffectInstance::new(
             instance.effect,
@@ -957,7 +983,9 @@ where
     for instance in known {
         let instance = rebuild_instance(instance, &mut map, budget)?;
         budget.charge(1).map_err(E::from)?;
-        rebuilt_known.try_reserve(1).map_err(|_| E::from(()))?;
+        rebuilt_known
+            .try_reserve(1)
+            .map_err(|_| E::from(allocation_error(budget)))?;
         rebuilt_known.push(instance);
     }
     let rebuilt_tail = if let Some(variable) = tail {
@@ -965,7 +993,9 @@ where
         for instance in lacks {
             let instance = rebuild_instance(instance, &mut map, budget)?;
             budget.charge(1).map_err(E::from)?;
-            rebuilt_lacks.try_reserve(1).map_err(|_| E::from(()))?;
+            rebuilt_lacks
+                .try_reserve(1)
+                .map_err(|_| E::from(allocation_error(budget)))?;
             rebuilt_lacks.push(instance);
         }
         Some((variable, rebuilt_lacks))
@@ -975,19 +1005,19 @@ where
     effect_row_from_owned_parts_with_budget(rebuilt_known, rebuilt_tail, budget).map_err(E::from)
 }
 
-fn contains_instance_with_budget(
+fn contains_instance_with_budget<B: TypeWorkMeter>(
     instances: &[EffectInstance],
     target: &EffectInstance,
-    budget: &mut TypeWorkBudget,
-) -> Result<bool, ()> {
+    budget: &mut B,
+) -> Result<bool, B::Error> {
     Ok(find_instance_index_with_budget(instances, target, budget)?.is_some())
 }
 
-fn find_instance_index_with_budget(
+fn find_instance_index_with_budget<B: TypeWorkMeter>(
     instances: &[EffectInstance],
     target: &EffectInstance,
-    budget: &mut TypeWorkBudget,
-) -> Result<Option<usize>, ()> {
+    budget: &mut B,
+) -> Result<Option<usize>, B::Error> {
     for (index, instance) in instances.iter().enumerate() {
         if compare_effect_instances_with_budget(instance, target, budget)? == Ordering::Equal {
             return Ok(Some(index));
@@ -996,10 +1026,10 @@ fn find_instance_index_with_budget(
     Ok(None)
 }
 
-fn canonical_instances_with_budget(
+fn canonical_instances_with_budget<B: TypeWorkMeter>(
     instances: Vec<EffectInstance>,
-    budget: &mut TypeWorkBudget,
-) -> Result<Vec<EffectInstance>, ()> {
+    budget: &mut B,
+) -> Result<Vec<EffectInstance>, B::Error> {
     let mut canonical = Vec::new();
     for instance in instances {
         let mut position = 0;
@@ -1018,7 +1048,9 @@ fn canonical_instances_with_budget(
             continue;
         }
         budget.charge(1)?;
-        canonical.try_reserve(1).map_err(|_| ())?;
+        canonical
+            .try_reserve(1)
+            .map_err(|_| allocation_error(budget))?;
         canonical.insert(position, instance);
     }
     Ok(canonical)
@@ -1029,11 +1061,11 @@ fn canonical_instances(instances: Vec<EffectInstance>) -> Vec<EffectInstance> {
         .expect("an in-memory row can reserve its canonical member vector")
 }
 
-pub(crate) fn effect_row_from_owned_parts_with_budget(
+pub(crate) fn effect_row_from_owned_parts_with_budget<B: TypeWorkMeter>(
     known: Vec<EffectInstance>,
     tail: Option<(EffectRowVariable, Vec<EffectInstance>)>,
-    budget: &mut TypeWorkBudget,
-) -> Result<EffectRow, ()> {
+    budget: &mut B,
+) -> Result<EffectRow, B::Error> {
     budget.charge(1)?;
     let known = canonical_instances_with_budget(known, budget)?.into_boxed_slice();
     let tail = if let Some((variable, lacks)) = tail {
@@ -1048,20 +1080,20 @@ pub(crate) fn effect_row_from_owned_parts_with_budget(
     Ok(EffectRow { known, tail })
 }
 
-pub(crate) fn compare_effect_instances_with_budget(
+pub(crate) fn compare_effect_instances_with_budget<B: TypeWorkMeter>(
     left: &EffectInstance,
     right: &EffectInstance,
-    budget: &mut TypeWorkBudget,
-) -> Result<Ordering, ()> {
-    compare_effect_instances_with_charge(left, right, &mut |work| budget.charge(work))
+    budget: &mut B,
+) -> Result<Ordering, B::Error> {
+    compare_effect_instances_with_charge(left, right, budget)
 }
 
-fn compare_effect_instances_with_charge(
+fn compare_effect_instances_with_charge<B: TypeWorkMeter>(
     left: &EffectInstance,
     right: &EffectInstance,
-    charge: &mut impl FnMut(usize) -> Result<(), ()>,
-) -> Result<Ordering, ()> {
-    charge(1)?;
+    charge: &mut B,
+) -> Result<Ordering, B::Error> {
+    charge.charge(1)?;
     let effects = left.effect.cmp(&right.effect);
     if effects != Ordering::Equal {
         return Ok(effects);
@@ -1121,11 +1153,11 @@ pub(crate) fn same_effect_rows_with_charge(
     Ok(true)
 }
 
-fn compare_types_with_charge(
+fn compare_types_with_charge<B: TypeWorkMeter>(
     left: &Type,
     right: &Type,
-    charge: &mut impl FnMut(usize) -> Result<(), ()>,
-) -> Result<Ordering, ()> {
+    charge: &mut B,
+) -> Result<Ordering, B::Error> {
     enum Task<'a> {
         Types(&'a Type, &'a Type),
         Kinds(&'a Kind, &'a Kind),
@@ -1170,8 +1202,8 @@ fn compare_types_with_charge(
     let mut work = Vec::new();
     macro_rules! schedule {
         ($task:expr) => {{
-            charge(1)?;
-            work.try_reserve(1).map_err(|_| ())?;
+            charge.charge(1)?;
+            work.try_reserve(1).map_err(|_| allocation_error(charge))?;
             work.push($task);
         }};
     }
@@ -2442,89 +2474,6 @@ pub(crate) fn substitute_type_and_row_variables_with<E>(
     row_replacements: &HashMap<TypeVariableId, EffectRow>,
     mut charge: impl FnMut(usize) -> Result<(), E>,
 ) -> Result<Result<Type, EffectRowError>, E> {
-    enum ChargeTask<'a> {
-        Visit(&'a Type, bool),
-        Slice(std::slice::Iter<'a, Type>, bool),
-    }
-
-    let mut work = vec![ChargeTask::Visit(ty, true)];
-    while let Some(task) = work.pop() {
-        match task {
-            ChargeTask::Visit(Type::Variable(identity), true)
-                if replacements.contains_key(identity) =>
-            {
-                work.push(ChargeTask::Visit(&replacements[identity], false));
-            }
-            ChargeTask::Visit(Type::Tuple(elements), substitute) => {
-                charge(1)?;
-                work.push(ChargeTask::Slice(elements.iter(), substitute));
-            }
-            ChargeTask::Visit(Type::Application(function, argument), substitute) => {
-                charge(1)?;
-                work.push(ChargeTask::Visit(argument, substitute));
-                work.push(ChargeTask::Visit(function, substitute));
-            }
-            ChargeTask::Visit(Type::Function(domain, codomain), substitute) => {
-                charge(1)?;
-                work.push(ChargeTask::Visit(codomain, substitute));
-                work.push(ChargeTask::Visit(domain, substitute));
-            }
-            ChargeTask::Visit(Type::EffectfulFunction(domain, codomain), substitute) => {
-                charge(1)?;
-                charge(1)?;
-                charge(1)?;
-                for instance in &codomain.effects.known {
-                    charge(1)?;
-                    work.push(ChargeTask::Slice(instance.arguments.iter(), substitute));
-                }
-                if let Some(tail) = &codomain.effects.tail {
-                    charge(1)?;
-                    for instance in &tail.lacks {
-                        charge(1)?;
-                        work.push(ChargeTask::Slice(instance.arguments.iter(), substitute));
-                    }
-                }
-                work.push(ChargeTask::Visit(&codomain.value, substitute));
-                work.push(ChargeTask::Visit(domain, substitute));
-            }
-            ChargeTask::Visit(Type::Forall(parameters, body), substitute) => {
-                charge(1)?;
-                for (_, kind) in parameters {
-                    charge(1)?;
-                    let mut kinds = vec![kind];
-                    while let Some(kind) = kinds.pop() {
-                        charge(1)?;
-                        if let Kind::Arrow(domain, codomain) = kind {
-                            kinds.push(codomain);
-                            kinds.push(domain);
-                        }
-                    }
-                }
-                let substitute = substitute
-                    && !parameters.iter().any(|(parameter, _)| {
-                        replacements.contains_key(parameter)
-                            || row_replacements.contains_key(parameter)
-                    });
-                work.push(ChargeTask::Visit(body, substitute));
-            }
-            ChargeTask::Visit(
-                Type::Int
-                | Type::Bool
-                | Type::Unit
-                | Type::Nominal(_)
-                | Type::Variable(_)
-                | Type::Inference(_),
-                _,
-            ) => charge(1)?,
-            ChargeTask::Slice(mut remaining, substitute) => {
-                if let Some(element) = remaining.next() {
-                    work.push(ChargeTask::Slice(remaining, substitute));
-                    work.push(ChargeTask::Visit(element, substitute));
-                }
-            }
-        }
-    }
-
     substitute_type_and_row_variables(ty, replacements, row_replacements, &mut charge)
 }
 
@@ -2552,33 +2501,48 @@ fn substitute_type_and_row_variables<E>(
     }
 
     let mut work = vec![Task::Visit(ty, true)];
-    let mut rebuilt = Vec::new();
+    let mut rebuilt: Vec<IterativeTypeOwner> = Vec::new();
     while let Some(task) = work.pop() {
         match task {
             Task::Visit(Type::Variable(identity), true) if replacements.contains_key(identity) => {
                 work.push(Task::Visit(&replacements[identity], false));
             }
-            Task::Visit(Type::Int, _) => rebuilt.push(Type::Int),
-            Task::Visit(Type::Bool, _) => rebuilt.push(Type::Bool),
-            Task::Visit(Type::Unit, _) => rebuilt.push(Type::Unit),
-            Task::Visit(Type::Nominal(owner), _) => rebuilt.push(Type::Nominal(*owner)),
-            Task::Visit(Type::Variable(identity), _) => rebuilt.push(Type::Variable(*identity)),
-            Task::Visit(Type::Inference(identity), _) => rebuilt.push(Type::Inference(*identity)),
+            Task::Visit(
+                ty @ (Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_)
+                | Type::Inference(_)),
+                _,
+            ) => {
+                charge(1)?;
+                rebuilt.push(IterativeTypeOwner::new(clone_type(ty)));
+            }
             Task::Visit(Type::Tuple(elements), substitute) => {
+                charge(1)?;
                 work.push(Task::FinishTuple(elements.len()));
                 work.push(Task::Sequence(elements.iter(), substitute));
             }
             Task::Visit(Type::Application(function, argument), substitute) => {
+                charge(1)?;
                 work.push(Task::FinishApplication);
                 work.push(Task::Visit(argument, substitute));
                 work.push(Task::Visit(function, substitute));
             }
             Task::Visit(Type::Function(domain, codomain), substitute) => {
+                charge(1)?;
                 work.push(Task::FinishFunction);
                 work.push(Task::Visit(codomain, substitute));
                 work.push(Task::Visit(domain, substitute));
             }
             Task::Visit(Type::EffectfulFunction(domain, codomain), substitute) => {
+                charge(3)?;
+                charge(codomain.effects.known.len())?;
+                if let Some(tail) = &codomain.effects.tail {
+                    charge(1)?;
+                    charge(tail.lacks.len())?;
+                }
                 let known = codomain
                     .effects
                     .known
@@ -2633,6 +2597,11 @@ fn substitute_type_and_row_variables<E>(
                 work.push(Task::Visit(domain, substitute));
             }
             Task::Visit(Type::Forall(parameters, body), substitute) => {
+                charge(1)?;
+                charge(parameters.len())?;
+                for (_, kind) in parameters {
+                    charge_kind_with_charge(kind, || charge(1))?;
+                }
                 work.push(Task::FinishForall(parameters.clone()));
                 let substitute = substitute
                     && !parameters.iter().any(|(parameter, _)| {
@@ -2649,24 +2618,44 @@ fn substitute_type_and_row_variables<E>(
             }
             Task::FinishTuple(count) => {
                 let elements = rebuilt.split_off(rebuilt.len() - count);
-                rebuilt.push(Type::Tuple(elements.into_boxed_slice()));
+                rebuilt.push(IterativeTypeOwner::new(Type::Tuple(
+                    elements
+                        .into_iter()
+                        .map(IterativeTypeOwner::into_inner)
+                        .collect(),
+                )));
             }
             Task::FinishApplication => {
-                let argument = rebuilt.pop().expect("type reconstruction argument");
-                let function = rebuilt.pop().expect("type reconstruction function");
-                rebuilt.push(Type::Application(Box::new(function), Box::new(argument)));
+                let argument = rebuilt
+                    .pop()
+                    .expect("type reconstruction argument")
+                    .into_inner();
+                let function = rebuilt
+                    .pop()
+                    .expect("type reconstruction function")
+                    .into_inner();
+                rebuilt.push(IterativeTypeOwner::new(Type::Application(
+                    Box::new(function),
+                    Box::new(argument),
+                )));
             }
             Task::FinishFunction => {
-                let codomain = rebuilt.pop().expect("type reconstruction codomain");
-                let domain = rebuilt.pop().expect("type reconstruction domain");
-                rebuilt.push(Type::function(domain, codomain));
+                let codomain = rebuilt
+                    .pop()
+                    .expect("type reconstruction codomain")
+                    .into_inner();
+                let domain = rebuilt
+                    .pop()
+                    .expect("type reconstruction domain")
+                    .into_inner();
+                rebuilt.push(IterativeTypeOwner::new(Type::function(domain, codomain)));
             }
             Task::FinishEffectfulFunction(shape) => {
                 let arguments = rebuilt.split_off(rebuilt.len() - shape.argument_count);
                 let mut arguments = arguments.into_iter();
                 let rebuild_instances =
                     |instances: Box<[(EffectId, usize)]>,
-                     arguments: &mut std::vec::IntoIter<Type>| {
+                     arguments: &mut std::vec::IntoIter<IterativeTypeOwner>| {
                         instances
                             .into_vec()
                             .into_iter()
@@ -2676,6 +2665,7 @@ fn substitute_type_and_row_variables<E>(
                                     arguments
                                         .by_ref()
                                         .take(count)
+                                        .map(IterativeTypeOwner::into_inner)
                                         .collect::<Vec<_>>()
                                         .into_boxed_slice(),
                                 )
@@ -2691,11 +2681,8 @@ fn substitute_type_and_row_variables<E>(
                 };
                 debug_assert!(arguments.next().is_none());
                 let effects = if let Some((target, replacement)) = shape.replacement {
-                    let mut budget = TypeWorkBudget::unbounded();
-                    let substituted = effects
-                        .substitute_tail_once_with_budget(target, replacement, &mut budget)
-                        .expect("an in-memory row fits an unbounded budget");
-                    charge(budget.used())?;
+                    let substituted =
+                        effects.substitute_tail_once_with_budget(target, replacement, charge)?;
                     match substituted {
                         Ok(effects) => effects,
                         Err(error) => return Ok(Err(error)),
@@ -2703,20 +2690,35 @@ fn substitute_type_and_row_variables<E>(
                 } else {
                     effects
                 };
-                let codomain = rebuilt.pop().expect("type reconstruction codomain");
-                let domain = rebuilt.pop().expect("type reconstruction domain");
-                rebuilt.push(Type::function_computation(
+                let codomain = rebuilt
+                    .pop()
+                    .expect("type reconstruction codomain")
+                    .into_inner();
+                let domain = rebuilt
+                    .pop()
+                    .expect("type reconstruction domain")
+                    .into_inner();
+                rebuilt.push(IterativeTypeOwner::new(Type::function_computation(
                     domain,
                     ComputationType::new(codomain, effects),
-                ));
+                )));
             }
             Task::FinishForall(parameters) => {
-                let body = rebuilt.pop().expect("type reconstruction scheme body");
-                rebuilt.push(Type::Forall(parameters, Box::new(body)));
+                let body = rebuilt
+                    .pop()
+                    .expect("type reconstruction scheme body")
+                    .into_inner();
+                rebuilt.push(IterativeTypeOwner::new(Type::Forall(
+                    parameters,
+                    Box::new(body),
+                )));
             }
         }
     }
-    Ok(Ok(rebuilt.pop().expect("one reconstructed type")))
+    Ok(Ok(rebuilt
+        .pop()
+        .expect("one reconstructed type")
+        .into_inner()))
 }
 
 /// The internal kind language used to check type constructors.
@@ -2867,14 +2869,17 @@ fn kind_discard_pending_peak() -> usize {
     KIND_DISCARD_PENDING_PEAK.get()
 }
 
-pub(crate) fn charge_kind_nodes(kind: &Kind, budget: &mut TypeWorkBudget) -> Result<(), ()> {
+pub(crate) fn charge_kind_nodes<B: TypeWorkMeter>(
+    kind: &Kind,
+    budget: &mut B,
+) -> Result<(), B::Error> {
     charge_kind_with_charge(kind, || budget.charge(1))
 }
 
-pub(crate) fn charge_kind_with_charge(
+pub(crate) fn charge_kind_with_charge<E>(
     kind: &Kind,
-    mut charge: impl FnMut() -> Result<(), ()>,
-) -> Result<(), ()> {
+    mut charge: impl FnMut() -> Result<(), E>,
+) -> Result<(), E> {
     let mut work = vec![kind];
     while let Some(kind) = work.pop() {
         #[cfg(test)]
@@ -4549,6 +4554,47 @@ mod tests {
             .unwrap();
             assert_eq!(retry.used(), exact);
         }
+
+        let mut deep = Type::Unit;
+        for _ in 0..4_096 {
+            deep = Type::Application(Box::new(Type::Unit), Box::new(deep));
+        }
+        let deep_replacements = HashMap::from([(
+            binder,
+            EffectRow::singleton(EffectInstance::new(effect, Box::new([deep]))),
+        )]);
+        let mut prefix = 0;
+        substitute_type_and_row_variables_with(
+            &source,
+            &HashMap::new(),
+            &HashMap::new(),
+            |cells| {
+                prefix += cells;
+                Ok::<(), ()>(())
+            },
+        )
+        .unwrap()
+        .unwrap();
+        let mut used = 0_usize;
+        let mut rejected = None;
+        assert!(
+            substitute_type_and_row_variables_with(
+                &source,
+                &HashMap::new(),
+                &deep_replacements,
+                |cells| {
+                    if used.checked_add(cells).is_none_or(|next| next > prefix) {
+                        rejected = Some(cells);
+                        Err(())
+                    } else {
+                        used += cells;
+                        Ok(())
+                    }
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(rejected, Some(1), "failure must interrupt row work");
     }
 
     #[test]

@@ -12792,12 +12792,38 @@ mod tests {
             ));
             let outer = crate::types::TypeVariableId::generated(70);
             let inner = crate::types::TypeVariableId::generated(71);
-            let body = builder.unit(Type::Unit, node_origin.clone()).unwrap();
+            let dependent = |variable| {
+                Type::function_computation(
+                    Type::Unit,
+                    crate::types::ComputationType::new(
+                        Type::Unit,
+                        EffectRow::open(
+                            crate::types::EffectRowVariable::rigid(variable),
+                            Box::new([]),
+                        ),
+                    ),
+                )
+            };
+            let identity = |variable| {
+                Type::Function(Box::new(dependent(variable)), Box::new(dependent(variable)))
+            };
+            let parameter = builder
+                .binder(dependent(inner), node_origin.clone())
+                .unwrap();
+            let body = builder
+                .variable(parameter.id(), dependent(inner), node_origin.clone())
+                .unwrap();
+            let function = builder
+                .function(parameter, body, identity(inner), node_origin.clone())
+                .unwrap();
             let inner_abstraction = builder
                 .type_abstraction(
                     vec![(inner, Kind::EffectRow)],
-                    body,
-                    Type::Forall(Box::new([(inner, Kind::EffectRow)]), Box::new(Type::Unit)),
+                    function,
+                    Type::Forall(
+                        Box::new([(inner, Kind::EffectRow)]),
+                        Box::new(identity(inner)),
+                    ),
                     node_origin.clone(),
                 )
                 .unwrap();
@@ -12809,7 +12835,7 @@ mod tests {
                         crate::types::EffectRowVariable::rigid(outer),
                         Box::new([]),
                     )],
-                    Type::Unit,
+                    identity(outer),
                     node_origin.clone(),
                 )
                 .unwrap();
@@ -12817,7 +12843,10 @@ mod tests {
                 .type_abstraction(
                     vec![(outer, Kind::EffectRow)],
                     application,
-                    Type::Forall(Box::new([(outer, Kind::EffectRow)]), Box::new(Type::Unit)),
+                    Type::Forall(
+                        Box::new([(outer, Kind::EffectRow)]),
+                        Box::new(identity(outer)),
+                    ),
                     node_origin.clone(),
                 )
                 .unwrap();
@@ -12839,18 +12868,13 @@ mod tests {
                 PureComputation::TypeApplication(TypeApplicationNode::new_with_row_arguments(
                     function,
                     Vec::new(),
-                    vec![EffectRow::open(
-                        crate::types::EffectRowVariable::rigid(
-                            crate::types::TypeVariableId::generated(72),
-                        ),
-                        Box::new([]),
-                    )],
+                    vec![EffectRow::empty()],
                 )),
             ));
         let error = Validator::new(&forged, &[&file])
             .run_effect()
             .expect_err("a forged complete row argument must be rejected");
-        assert_eq!(error.reason(), ValidationReason::TypeScope);
+        assert_eq!(error.reason(), ValidationReason::TypeOperation);
         assert_eq!(error.node(), Some(application));
     }
 
