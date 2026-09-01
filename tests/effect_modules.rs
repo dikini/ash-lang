@@ -8,7 +8,7 @@ use ash::{
     elaborate::check_module,
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, ResolveModuleError, ResolveReason, resolve_module},
-    resolved::CheckedModule,
+    resolved::{CheckedModule, ResolvedDefinitionKind},
     types::{EffectId, Kind, OperationId, Type},
 };
 
@@ -100,6 +100,47 @@ fn resolve_graph_error(graph: &ModuleGraph) -> ResolveModuleError {
         }
     }
     panic!("the rejected effect graph unexpectedly resolved")
+}
+
+#[test]
+fn inline_result_rows_survive_resolution_and_checking() {
+    let tree = ModuleTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "effect State<A : Type> {\n",
+            "get : Unit -> A\n",
+            "}\n\n",
+            "fn explicit(value : Int) -> Int ! {State<Int>} {\nvalue\n}\n\n",
+            "fn pure(value : Int) -> Int {\nvalue\n}\n",
+        ),
+    );
+
+    let graph = load_module_graph(&entry, &ModuleRoots::empty())
+        .expect("the inline result-row fixture should load");
+    let module = module_named(&graph, "entry.ash");
+    let checked = check_graph(&graph);
+    let checked = checked
+        .iter()
+        .find(|checked| checked.module() == module.id())
+        .expect("the inline result-row fixture should check");
+    let [explicit, pure] = checked.definitions() else {
+        panic!("the fixture should retain both inline globals")
+    };
+    let ResolvedDefinitionKind::InlineOperational(explicit) = explicit.kind() else {
+        panic!("the explicit-row global should remain inline operational")
+    };
+    let ResolvedDefinitionKind::InlineOperational(pure) = pure.kind() else {
+        panic!("the pure global should remain inline operational")
+    };
+
+    let [instance] = explicit.header.result_effects.known() else {
+        panic!("the explicit result should retain exactly one effect")
+    };
+    assert_eq!(instance.effect(), EffectId::new(module.id(), 0));
+    assert_eq!(instance.arguments(), &[Type::Int]);
+    assert!(explicit.header.result_effects.tail().is_none());
+    assert!(pure.header.result_effects.is_empty());
 }
 
 #[test]

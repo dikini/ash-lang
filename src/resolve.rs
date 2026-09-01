@@ -5865,6 +5865,13 @@ impl Resolver {
                         let result_type = ResolvedTypeOccurrenceOwner::new(
                             self.resolve_type(&operational.header.result_type)?,
                         );
+                        let result_effects = operational
+                            .header
+                            .result_effects
+                            .as_ref()
+                            .map(|effects| self.resolve_effect_row(effects))
+                            .transpose()?
+                            .unwrap_or_else(EffectRow::empty);
                         if !matches!(body.kind, ResolvedExprKind::Block(_)) {
                             return Err(error(
                                 ResolveReason::InternalState,
@@ -5880,6 +5887,7 @@ impl Resolver {
                                 name: global.clone(),
                                 parameters: parameters.into_vec(),
                                 result_type: result_type.into_inner(),
+                                result_effects,
                                 requirements: requirements.into_boxed_slice(),
                                 type_parameters: type_parameters.into_boxed_slice(),
                                 span: operational.header.span,

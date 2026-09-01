@@ -21,8 +21,8 @@ use crate::{
     module::ModuleId,
     source::{Origin, Span, discard_origin_iteratively},
     types::{
-        ConstructorId, EffectId, EffectRowVariable, IterativeTypeOwner, Kind, NominalTypeId,
-        OperationId, Type, TypeVariableId, TypeWorkBudget, charge_kind_with_charge,
+        ConstructorId, EffectId, EffectRow, EffectRowVariable, IterativeTypeOwner, Kind,
+        NominalTypeId, OperationId, Type, TypeVariableId, TypeWorkBudget, charge_kind_with_charge,
         charge_type_cells, clone_arrows_with_budget, clone_kind_with_budget,
         clone_type_with_budget, discard_type_iteratively, same_kind_with_charge,
     },
@@ -16196,6 +16196,8 @@ pub struct ResolvedInlineOperationalHeader {
     pub parameters: Vec<ResolvedTypedPattern>,
     /// Declared result type.
     pub result_type: ResolvedType,
+    /// Declared result effect row, or the canonical empty row when omitted.
+    pub result_effects: EffectRow,
     /// Ordered explicit interface requirements.
     pub requirements: Box<[ResolvedRequirement]>,
     /// Implicit outer type binders in first-occurrence order.
