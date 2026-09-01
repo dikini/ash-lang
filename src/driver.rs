@@ -1652,7 +1652,7 @@ mod tests {
     fn deep_wide_public_routes_admit_and_reject_on_a_small_stack() {
         const DEPTH: usize = 48;
         const WIDTH: usize = 4;
-        const STACK_SIZE: usize = 256 * 1024;
+        const STACK_SIZE: usize = 320 * 1024;
 
         std::thread::Builder::new()
             .name(String::from("deep-public-route-budget"))

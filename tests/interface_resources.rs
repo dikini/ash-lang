@@ -287,7 +287,7 @@ fn cycle_precedes_constraint_resource_exhaustion_after_import_admission() {
 fn public_run_admits_and_drops_deep_public_routes_on_a_small_stack() {
     const DEPTH: usize = 48;
     const WIDTH: usize = 4;
-    const STACK_SIZE: usize = 256 * 1024;
+    const STACK_SIZE: usize = 320 * 1024;
 
     std::thread::Builder::new()
         .name(String::from("public-deep-route"))

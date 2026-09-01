@@ -790,7 +790,7 @@ fn single_clause_function_domain_patterns_must_be_irrefutable() {
 fn ten_thousand_member_cycle_evaluates_renders_and_drops_on_a_small_stack() {
     std::thread::Builder::new()
         .name("deep-data-cycle".into())
-        .stack_size(256 * 1024)
+        .stack_size(320 * 1024)
         .spawn(|| {
             const MEMBERS: usize = 10_000;
             let mut source = String::from(

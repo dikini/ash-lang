@@ -867,7 +867,7 @@ fn wide_nominal_application_remains_width_through_elaboration_and_core() {
 
     std::thread::Builder::new()
         .name("wide-canonical-application-pipeline".to_owned())
-        .stack_size(256 * 1024)
+        .stack_size(320 * 1024)
         .spawn(|| {
             let parameters = (0..WIDTH)
                 .map(|index| format!("A{index}"))

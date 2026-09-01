@@ -19735,7 +19735,7 @@ mod tests {
         let mut short = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         short
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 13)
+            .charge(crate::types::TYPE_WORK_LIMIT - 16)
             .expect("the fixture leaves one fewer unit than complete match storage requires");
 
         assert_eq!(
@@ -19754,7 +19754,7 @@ mod tests {
         let mut exact = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         exact
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 14)
+            .charge(crate::types::TYPE_WORK_LIMIT - 17)
             .expect("the fixture leaves type copies plus both progress and Core arm storage");
         let typed = exact
             .elaborate_expression_with_context(

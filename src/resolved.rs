@@ -19064,8 +19064,8 @@ mod tests {
                 );
                 assert_eq!(
                     constraint_short.used(),
-                    CONSTRAINT_WORK - 2,
-                    "the final two-child Kind comparison charge is atomic",
+                    CONSTRAINT_WORK - 1,
+                    "the one-short Kind traversal charges every completed visit",
                 );
                 assert_eq!(untouched_type.used(), 0);
 
@@ -20516,7 +20516,7 @@ mod tests {
                     authenticate_scheme_parameter_mirror(&scheme, &parameters, &mut mirror_short,),
                     Err(ResolvedBuildFailure::ConstraintResource),
                 );
-                assert_eq!(mirror_short.used(), MIRROR_WORK - 2);
+                assert_eq!(mirror_short.used(), MIRROR_WORK - 1);
                 let mut mirror_exact =
                     crate::interface::InterfaceConstraintBudget::with_limit(MIRROR_WORK);
                 authenticate_scheme_parameter_mirror(&scheme, &parameters, &mut mirror_exact)

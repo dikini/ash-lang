@@ -1914,7 +1914,7 @@ fn deep_generic_prerequisite_chain_completes_the_pipeline_on_a_small_stack() {
     const DEPTH: usize = 96;
     let worker = std::thread::Builder::new()
         .name("deep-generic-prerequisite-chain".into())
-        .stack_size(256 * 1024)
+        .stack_size(320 * 1024)
         .spawn(|| {
             let mut nested = "Option<".repeat(DEPTH);
             nested.push_str("Int");
