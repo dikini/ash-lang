@@ -74,6 +74,13 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 - [Rank-1 integration evidence](mini-ash/rank-1-polymorphism/evidence.md) —
   cross-stage evidence for Mini-Ash's final semantic increment.
 
+### Compiler transformations and backends
+
+- [DN-0030: Typed Compiler Macros and Declarative Hooks](DN-0030-typed-compiler-macros-and-hooks.md)
+  — work-in-progress exploration of typed compiler transformations,
+  declarative phase hooks, registration scopes, unresolved selection policy,
+  staged handlers and providers, and library-defined specialized kernels.
+
 ### Surface language, typing, and elaboration
 
 - [DN-0005: Surface Function Definitions](DN-0005-surface-function-definitions.md) — equational and operational function presentations and their elaboration.
