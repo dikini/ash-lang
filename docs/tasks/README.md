@@ -9,4 +9,4 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-- [TASK-0020: Implement the Resume-Required Effect Kernel](TASK-0020-implement-resume-required-effect-kernel.md)
+No task is currently active.

@@ -23,4 +23,4 @@ No proposed change is currently awaiting a decision.
 
 ## Accepted changes
 
-- [CP-0013: Resume-required effect kernel](CP-0013-resume-required-effect-kernel.md)
+No accepted change is awaiting implementation.
