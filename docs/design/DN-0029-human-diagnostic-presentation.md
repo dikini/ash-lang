@@ -154,9 +154,22 @@ state.
 
 ## Evidence and experiments
 
-The catalogue-format comparison is disposable. Retain only its findings and
-the selected dependency or small integration layer. Do not build a custom
-localization language when an existing format satisfies the required cases.
+The bounded catalogue comparison selected
+[Fluent](https://projectfluent.org/fluent/guide/), using the Rust
+[`fluent-bundle`](https://docs.rs/fluent-bundle/0.16.0/fluent_bundle/) and
+[`fluent-syntax`](https://docs.rs/fluent-syntax/0.12.0/fluent_syntax/) crates
+with [`unic-langid`](https://docs.rs/unic-langid/0.9.6/unic_langid/). Fluent
+supports named variables, selectors, and plural rules in embedded text
+resources. `fluent-syntax` lets tests compare each template's variables with
+the compiler-owned message declaration. The product needs no runtime resource
+loader, code generator, or custom template language.
+
+Whole-string lookup does not let Bulgarian reorder named facts or select
+grammatical forms without multiplying lookup keys. Per-locale Rust rendering
+duplicates presentation control flow. ICU MessageFormat 2 did not offer a
+smaller established Rust integration for this checkpoint. The experiment
+therefore retains only the Fluent dependencies, two embedded catalogues, and
+catalogue validation tests.
 
 Compare candidates with English and Bulgarian versions of:
 
@@ -192,8 +205,6 @@ relationship.
 
 ## Open questions
 
-- Which existing message format and Rust integration satisfy the bounded
-  comparison with the least new mechanism?
 - Which small invariant families describe checked-export-summary failures
   without losing the exact failed relationship?
 - Which Bulgarian terminology guide should govern recurring compiler and source

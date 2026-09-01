@@ -10,8 +10,8 @@
 
 - AD-0010 authorizes the human-first CLI, machine format, localization, and
   structured internal-failure boundaries.
-- A bounded comparison must select an existing catalogue format and Rust
-  integration before product catalogue code is retained.
+- The bounded catalogue comparison in DN-0029 selected Fluent through
+  `fluent-bundle`, `fluent-syntax`, and `unic-langid`.
 - The exact `lib-ash` migration sources in the sibling `ash-doc` repository
   remain external regression evidence. The task must not rewrite those sources
   to avoid the compiler failure.
@@ -53,7 +53,10 @@ localization language. Color is not required for completion.
 ## Progress
 
 - Design exploration and architectural decision are recorded.
-- Implementation has not started.
+- The task-owned [execution plan](human-diagnostics-execution-plan.md) records
+  the test-first implementation and verification sequence.
+- The migration failure has been reproduced and isolated. Implementation has
+  not started.
 
 ## Verification
 
@@ -74,7 +77,18 @@ localization language. Color is not required for completion.
 
 ## Discoveries
 
-None yet.
+- Checked-summary validation counts withheld constructor families by owner and
+  access kind. It then requires every such family to match either an exported
+  opaque nominal or a retained local hidden nominal.
+- The search-frontier dependency has six unreferenced private helper types.
+  Their constructor names are correctly retained as private access metadata,
+  but their nominal facts are correctly absent from the minimal hidden closure.
+  The final equality therefore compares different sets and reports invalid
+  compiler state. The repair must admit local private access-only families
+  without weakening exact matching for opaque and retained-hidden families.
+- Fluent is the smallest compared existing format that supplies named values,
+  selectors, plural rules, embedded Rust resources, and syntax inspection for
+  catalogue-contract tests.
 
 ## Deviations
 
