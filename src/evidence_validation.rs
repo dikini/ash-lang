@@ -17,6 +17,7 @@ use crate::{
         CheckedRequirement, ConstrainedScheme, EvidenceNode, EvidenceNodeId, EvidenceSelection,
         EvidenceSubstitution, ImplId, ImplMethodId, InterfaceApplication,
         InterfaceConstraintBudget, InterfaceId, MethodId, RequirementId, RequirementOwner,
+        effect_row_constraint_work,
         same_type_with_constraint_budget as same_semantic_type_with_constraint_budget,
     },
     kind::{
@@ -2097,19 +2098,19 @@ fn collect_linked_constraint_variables(
             if effects.is_some_and(|effects| effects.tail().is_some()) {
                 return Err(unknown(span));
             }
+            let (effect_members, effect_argument_count) = effects
+                .map(effect_row_constraint_work)
+                .transpose()
+                .map_err(|()| resource(span))?
+                .unwrap_or((0, 0));
             let effect_arguments = effects
                 .into_iter()
                 .flat_map(|effects| effects.known())
                 .flat_map(|instance| instance.arguments());
-            let children = effects
-                .map_or(0, |effects| {
-                    effects
-                        .known()
-                        .iter()
-                        .map(|instance| instance.arguments().len())
-                        .sum()
-                })
-                .saturating_add(2);
+            charge(budget, effect_members, span)?;
+            let children = effect_argument_count
+                .checked_add(2)
+                .ok_or_else(|| resource(span))?;
             charge(budget, children, span)?;
             pending.try_reserve(children).map_err(|_| resource(span))?;
             pending.extend(effect_arguments.rev());
@@ -5570,19 +5571,19 @@ fn validate_type_with_application_policy(
                     if effects.is_some_and(|effects| effects.tail().is_some()) {
                         return Err(invalid_root(span));
                     }
+                    let (effect_members, effect_argument_count) = effects
+                        .map(effect_row_constraint_work)
+                        .transpose()
+                        .map_err(|()| resource(span))?
+                        .unwrap_or((0, 0));
                     let effect_arguments = effects
                         .into_iter()
                         .flat_map(|effects| effects.known())
                         .flat_map(|instance| instance.arguments());
-                    let children = effects
-                        .map_or(0, |effects| {
-                            effects
-                                .known()
-                                .iter()
-                                .map(|instance| instance.arguments().len())
-                                .sum()
-                        })
-                        .saturating_add(2);
+                    charge(budget, effect_members, span)?;
+                    let children = effect_argument_count
+                        .checked_add(2)
+                        .ok_or_else(|| resource(span))?;
                     charge(budget, children, span)?;
                     pending.try_reserve(children).map_err(|_| resource(span))?;
                     pending.extend(effect_arguments.rev().map(Task::Visit));
@@ -5888,14 +5889,23 @@ fn substitute_evidence_type(
                 if effects.tail().is_some() {
                     return Err(invalid_root(span));
                 }
-                let known = effects
-                    .known()
-                    .iter()
-                    .map(|instance| (instance.effect(), instance.arguments().len()))
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice();
-                let argument_count = known.iter().map(|(_, count)| *count).sum::<usize>();
-                let tasks = argument_count.saturating_add(3);
+                let (member_count, argument_count) =
+                    effect_row_constraint_work(effects).map_err(|()| resource(span))?;
+                charge(budget, member_count, span)?;
+                let mut known = Vec::new();
+                known
+                    .try_reserve(member_count)
+                    .map_err(|_| resource(span))?;
+                known.extend(
+                    effects
+                        .known()
+                        .iter()
+                        .map(|instance| (instance.effect(), instance.arguments().len())),
+                );
+                let known = known.into_boxed_slice();
+                let tasks = argument_count
+                    .checked_add(3)
+                    .ok_or_else(|| resource(span))?;
                 charge(budget, tasks, span)?;
                 work.try_reserve(tasks).map_err(|_| resource(span))?;
                 work.push(Task::FinishEffectfulFunction(RowShape {
@@ -5961,21 +5971,36 @@ fn substitute_evidence_type(
                     return Err(invalid_root(span));
                 }
                 reserve_rebuilt_type(&mut rebuilt, budget, span)?;
-                let arguments = rebuilt
-                    .split_off(rebuilt.len() - shape.argument_count)
-                    .into_boxed_slice();
-                let mut arguments = arguments.into_vec().into_iter();
+                charge(budget, shape.argument_count, span)?;
+                let mut arguments = TypeBuffer::new();
+                arguments
+                    .try_reserve(shape.argument_count)
+                    .map_err(|_| resource(span))?;
+                for _ in 0..shape.argument_count {
+                    let argument = rebuilt.pop_owned().ok_or_else(|| invalid_root(span))?;
+                    arguments.push(argument.into_inner());
+                }
                 let mut known = Vec::new();
+                charge(budget, shape.known.len(), span)?;
                 known
                     .try_reserve(shape.known.len())
                     .map_err(|_| resource(span))?;
                 for (effect, count) in shape.known {
+                    charge(budget, count, span)?;
+                    let mut instance_arguments = TypeBuffer::new();
+                    instance_arguments
+                        .try_reserve(count)
+                        .map_err(|_| resource(span))?;
+                    for _ in 0..count {
+                        let argument = arguments.pop_owned().ok_or_else(|| invalid_root(span))?;
+                        instance_arguments.push(argument.into_inner());
+                    }
                     known.push(crate::types::EffectInstance::new(
                         effect,
-                        arguments.by_ref().take(count).collect(),
+                        instance_arguments.into_boxed_slice(),
                     ));
                 }
-                if arguments.next().is_some() {
+                if arguments.len() != 0 {
                     return Err(invalid_root(span));
                 }
                 let codomain = rebuilt.pop_owned().ok_or_else(|| invalid_root(span))?;
@@ -9018,6 +9043,65 @@ mod tests {
             .reason(),
             EvidenceValidationReason::InvalidEvidenceRoot
         );
+    }
+
+    #[test]
+    fn nullary_closed_row_evidence_work_is_proportional_exact_and_retryable() {
+        const NARROW: u32 = 1;
+        const WIDE: u32 = 8;
+        let program = entry_program("main : Unit -> Unit\nmain () = ()\n");
+        let span = program.result().span;
+        let closed = |width| {
+            let members = (0..width)
+                .map(|declaration| {
+                    crate::types::EffectInstance::new(
+                        crate::types::EffectId::new(ModuleId::new(77), declaration),
+                        Box::new([]),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            Type::function_computation(
+                Type::Unit,
+                crate::types::ComputationType::new(
+                    Type::Bool,
+                    crate::types::EffectRow::closed(members),
+                ),
+            )
+        };
+        let exercise = |ty: &Type, budget: &mut InterfaceConstraintBudget| {
+            validate_type_with_application_policy(ty, program.registry(), &[], budget, span)?;
+            let mut variables = Vec::new();
+            collect_linked_constraint_variables(ty, &mut variables, budget, span)?;
+            if !same_type_charged(ty, ty, budget, span)? {
+                return Err(invalid_root(span));
+            }
+            substitute_evidence_type(ty, &[], budget, span)?;
+            Ok::<(), EvidenceValidationFailure>(())
+        };
+
+        let mut narrow_work = InterfaceConstraintBudget::default();
+        exercise(&closed(NARROW), &mut narrow_work).expect("the narrow row should fit");
+        let mut measured = InterfaceConstraintBudget::default();
+        let wide = closed(WIDE);
+        exercise(&wide, &mut measured).expect("the measured wide row should fit");
+        let exact = measured.used();
+        assert_eq!(
+            exact - narrow_work.used(),
+            5 * (WIDE - NARROW) as usize,
+            "each nullary member owns equality, collection, validation, shape, and retained-member work"
+        );
+
+        let mut one_short = InterfaceConstraintBudget::with_limit(exact - 1);
+        assert_eq!(
+            exercise(&wide, &mut one_short)
+                .expect_err("one short must reject before returning evidence")
+                .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted
+        );
+        let mut retry = InterfaceConstraintBudget::with_limit(exact);
+        exercise(&wide, &mut retry).expect("the exact ledger should retry successfully");
+        assert_eq!(retry.used(), exact);
     }
 
     fn forged_fresh_current_node(

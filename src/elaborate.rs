@@ -5030,8 +5030,8 @@ impl Elaborator {
         let inference_variables = &self.inference_variables;
         let authenticated_solutions = &self.authenticated_inference_solutions;
         let type_work = &mut self.type_work;
-        let (ordinary, unresolved) =
-            zonk_type_with_status_and_inference(ty, solutions, |work| match work {
+        let (ordinary, unresolved, has_effect_row) =
+            zonk_type_with_status_and_inference_and_rows(ty, solutions, |work| match work {
                 ZonkWork::TypeCells(cells) => type_work
                     .charge(cells)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted)),
@@ -5051,6 +5051,9 @@ impl Elaborator {
                     | UnificationFailure::Invariant => invalid_state(),
                 }),
             })?;
+        if self.row_inference_solutions.is_empty() && !has_effect_row {
+            return Ok((ordinary, unresolved));
+        }
         let zonked = if self.row_inference_solutions.is_empty() {
             ordinary
         } else {
@@ -5062,8 +5065,12 @@ impl Elaborator {
             )
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
         };
-        let row_unresolved =
-            type_contains_unsolved_row_inference(&zonked, &self.row_inference_solutions);
+        let row_unresolved = type_contains_unsolved_row_inference(
+            &zonked,
+            &self.row_inference_solutions,
+            &mut self.type_work,
+        )
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         Ok((zonked, unresolved || row_unresolved))
     }
 
@@ -14005,8 +14012,18 @@ fn zonk_type_with_status<E>(
 fn zonk_type_with_status_and_inference<E>(
     ty: &Type,
     solutions: &HashMap<InferenceVariableId, Type>,
-    mut work_charge: impl FnMut(ZonkWork) -> Result<(), E>,
+    work_charge: impl FnMut(ZonkWork) -> Result<(), E>,
 ) -> Result<(Type, bool), E> {
+    let (ty, unresolved, _) =
+        zonk_type_with_status_and_inference_and_rows(ty, solutions, work_charge)?;
+    Ok((ty, unresolved))
+}
+
+fn zonk_type_with_status_and_inference_and_rows<E>(
+    ty: &Type,
+    solutions: &HashMap<InferenceVariableId, Type>,
+    mut work_charge: impl FnMut(ZonkWork) -> Result<(), E>,
+) -> Result<(Type, bool, bool), E> {
     enum ChargeTask<'a> {
         Visit(&'a Type),
         Slice(std::slice::Iter<'a, Type>),
@@ -14014,6 +14031,7 @@ fn zonk_type_with_status_and_inference<E>(
 
     let mut work = vec![ChargeTask::Visit(ty)];
     let mut unresolved = false;
+    let mut has_effect_row = false;
     while let Some(task) = work.pop() {
         match task {
             ChargeTask::Visit(Type::Inference(identity)) => {
@@ -14040,6 +14058,7 @@ fn zonk_type_with_status_and_inference<E>(
                 work.push(ChargeTask::Visit(domain));
             }
             ChargeTask::Visit(Type::EffectfulFunction(domain, codomain)) => {
+                has_effect_row = true;
                 let row_cells = 2_usize
                     .saturating_add(codomain.effects().known().len())
                     .saturating_add(usize::from(codomain.effects().tail().is_some()))
@@ -14083,7 +14102,7 @@ fn zonk_type_with_status_and_inference<E>(
         }
     }
 
-    Ok((zonk_type(ty, solutions), unresolved))
+    Ok((zonk_type(ty, solutions), unresolved, has_effect_row))
 }
 
 fn zonk_type(ty: &Type, solutions: &HashMap<InferenceVariableId, Type>) -> Type {
@@ -14594,22 +14613,42 @@ fn collect_unsolved_inference(
 fn type_contains_unsolved_row_inference(
     ty: &Type,
     solutions: &HashMap<InferenceVariableId, EffectRow>,
-) -> bool {
-    let mut work = vec![ty];
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    fn schedule<'a>(
+        work: &mut Vec<&'a Type>,
+        ty: &'a Type,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        budget.charge(1)?;
+        work.try_reserve(1).map_err(|_| ())?;
+        work.push(ty);
+        Ok(())
+    }
+
+    let mut work = Vec::new();
+    schedule(&mut work, ty, budget)?;
     let mut visited = HashSet::new();
     while let Some(ty) = work.pop() {
         match ty {
-            Type::Tuple(elements) => work.extend(elements.iter()),
+            Type::Tuple(elements) => {
+                for element in elements {
+                    schedule(&mut work, element, budget)?;
+                }
+            }
             Type::Application(function, argument) | Type::Function(function, argument) => {
-                work.push(argument);
-                work.push(function);
+                schedule(&mut work, argument, budget)?;
+                schedule(&mut work, function, budget)?;
             }
             Type::EffectfulFunction(domain, codomain) => {
                 if let Some(EffectRowVariable::Inference(identity)) = codomain.tail_variable() {
                     if !solutions.contains_key(&identity) {
-                        return true;
+                        return Ok(true);
                     }
-                    if visited.insert(identity) {
+                    if !visited.contains(&identity) {
+                        budget.charge(1)?;
+                        visited.try_reserve(1).map_err(|_| ())?;
+                        visited.insert(identity);
                         if let Some(solution) = solutions.get(&identity) {
                             for argument in solution.known().iter().chain(
                                 solution
@@ -14617,16 +14656,20 @@ fn type_contains_unsolved_row_inference(
                                     .into_iter()
                                     .flat_map(|tail| tail.lacks().iter()),
                             ) {
-                                work.extend(argument.arguments());
+                                for argument in argument.arguments() {
+                                    schedule(&mut work, argument, budget)?;
+                                }
                             }
                         }
                     }
                 }
-                codomain.extend_effect_arguments(&mut work);
-                work.push(codomain.value());
-                work.push(domain);
+                for argument in codomain.effect_arguments() {
+                    schedule(&mut work, argument, budget)?;
+                }
+                schedule(&mut work, codomain.value(), budget)?;
+                schedule(&mut work, domain, budget)?;
             }
-            Type::Forall(_, body) => work.push(body),
+            Type::Forall(_, body) => schedule(&mut work, body, budget)?,
             Type::Int
             | Type::Bool
             | Type::Unit
@@ -14635,7 +14678,7 @@ fn type_contains_unsolved_row_inference(
             | Type::Inference(_) => {}
         }
     }
-    false
+    Ok(false)
 }
 
 fn inference_failure(reason: TypeReason, span: Span, message: &str) -> TypeError {
@@ -21676,7 +21719,7 @@ mod tests {
     }
 
     #[test]
-    fn row_aware_type_zonker_charges_deep_solution_scratch_and_retries() {
+    fn complete_row_aware_zonk_owner_is_exact_and_retries_after_deep_failure() {
         const DEPTH: u32 = 1_024;
         let effect = crate::types::EffectId::new(ModuleId::new(0), 0);
         let first = InferenceVariableId::new(0);
@@ -21707,44 +21750,52 @@ mod tests {
             .name("deep-row-solution-zonk-owner".to_owned())
             .stack_size(256 * 1024)
             .spawn(move || {
-                let mut measured = TypeWorkBudget::unbounded();
-                let zonked = zonk_owned_type_with_rows(
-                    source(),
+                let mut component_work = TypeWorkBudget::unbounded();
+                let (ordinary, unresolved) =
+                    zonk_type_with_status_and_inference(&source(), &HashMap::new(), |work| {
+                        match work {
+                            ZonkWork::TypeCells(cells) => component_work.charge(cells),
+                            ZonkWork::Inference(_) => Ok(()),
+                        }
+                    })
+                    .expect("the ordinary zonk component should fit");
+                assert!(!unresolved);
+                zonk_owned_type_with_rows(
+                    ordinary,
                     &HashMap::new(),
                     &solutions,
-                    &mut measured,
+                    &mut component_work,
                 )
-                .expect("the measured deep solution chain should zonk");
-                let exact = measured.used();
+                .expect("the row rebuild component should fit");
+
+                let mut measured = Elaborator::new();
+                measured.row_inference_solutions = RowInferenceSolutionMap(solutions.clone());
+                measured.type_work = TypeWorkBudget::unbounded();
+                let zonked = measured
+                    .zonk_with_status(&source())
+                    .expect("the complete measured deep solution chain should zonk");
+                let exact = measured.type_work.used();
                 assert!(
-                    exact > 2 * DEPTH as usize,
-                    "solution rebuild cells alone do not own the visited set, row shape, worklist, or rebuilt stack"
+                    exact > component_work.used(),
+                    "the complete owner must include its final unresolved-row scan"
+                );
+                assert!(!zonked.1);
+
+                let mut retry = Elaborator::new();
+                retry.row_inference_solutions = RowInferenceSolutionMap(solutions);
+                retry.type_work = TypeWorkBudget::with_limit(exact - 1);
+                assert_eq!(
+                    retry.zonk_with_status(&source()),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
                 );
 
-                let mut one_short = TypeWorkBudget::with_limit(exact - 1);
-                assert_eq!(
-                    zonk_owned_type_with_rows(
-                        source(),
-                        &HashMap::new(),
-                        &solutions,
-                        &mut one_short,
-                    ),
-                    Err(())
-                );
-
-                let mut retry = TypeWorkBudget::with_limit(exact);
-                assert_eq!(
-                    zonk_owned_type_with_rows(
-                        source(),
-                        &HashMap::new(),
-                        &solutions,
-                        &mut retry,
-                    ),
-                    Ok(zonked)
-                );
-                assert_eq!(retry.used(), exact);
+                retry.type_work = TypeWorkBudget::with_limit(exact);
+                assert_eq!(retry.zonk_with_status(&source()), Ok(zonked));
+                assert_eq!(retry.type_work.used(), exact);
             })
-            .expect("the deep row-solution zonker should start")
+            .expect("the complete deep row-solution zonk owner should start")
             .join()
             .expect("failure and success teardown must fit a small host stack");
     }
