@@ -3195,6 +3195,11 @@ fn admit_type_with_status(
                 work.push(TypeAdmissionTask::Visit(*codomain, child_depth));
                 work.push(TypeAdmissionTask::Visit(*domain, child_depth));
             }
+            TypeAdmissionTask::Visit(effectful @ Type::EffectfulFunction(_, _), _) => {
+                discard_type_iteratively(effectful);
+                discard_type_admission_work(work);
+                return Err(BuildError::InvalidPayload);
+            }
             TypeAdmissionTask::FinishFunction => tokens.push(TypeToken::Function),
             TypeAdmissionTask::FinishTuple(count) => tokens.push(TypeToken::Tuple(count)),
             TypeAdmissionTask::FinishApplication => tokens.push(TypeToken::Application),
@@ -3270,6 +3275,12 @@ fn discard_type_admission_work(mut work: Vec<TypeAdmissionTask>) {
                 }
                 Type::Function(domain, codomain) => {
                     work.push(TypeAdmissionTask::Visit(*codomain, depth));
+                    work.push(TypeAdmissionTask::Visit(*domain, depth));
+                }
+                Type::EffectfulFunction(domain, codomain) => {
+                    let crate::types::ComputationType { value, effects } = *codomain;
+                    drop(effects);
+                    work.push(TypeAdmissionTask::Visit(value, depth));
                     work.push(TypeAdmissionTask::Visit(*domain, depth));
                 }
                 Type::Forall(_, body) => {

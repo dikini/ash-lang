@@ -108,6 +108,16 @@ impl InterfaceConstraintBudget {
                     pending.push(Task::Type(codomain));
                     pending.push(Task::Type(domain));
                 }
+                Type::EffectfulFunction(domain, codomain) => {
+                    let children = codomain.effect_argument_count().saturating_add(2);
+                    self.charge(children)?;
+                    pending.try_reserve(children).map_err(|_| ())?;
+                    for argument in codomain.effect_arguments() {
+                        pending.push(Task::Type(argument));
+                    }
+                    pending.push(Task::Type(&codomain.value));
+                    pending.push(Task::Type(domain));
+                }
                 Type::Forall(parameters, body) => {
                     self.charge(parameters.len().saturating_add(1))?;
                     for (_, kind) in parameters {
@@ -325,6 +335,17 @@ fn type_contains_any_variable(
                 pending.push(codomain);
                 pending.push(domain);
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                if codomain.tail_variable().is_some() {
+                    return Ok(true);
+                }
+                let children = codomain.effect_argument_count().saturating_add(2);
+                budget.charge(children)?;
+                pending.try_reserve(children).map_err(|_| ())?;
+                codomain.extend_effect_arguments(&mut pending);
+                pending.push(&codomain.value);
+                pending.push(domain);
+            }
             Type::Forall(parameters, body) => {
                 budget.charge(parameters.len().saturating_add(1))?;
                 for (_, kind) in parameters {
@@ -360,6 +381,14 @@ fn schedule_type_children<'a>(
             budget.charge(2)?;
             pending.try_reserve(2).map_err(|_| ())?;
             pending.push(codomain);
+            pending.push(domain);
+        }
+        Type::EffectfulFunction(domain, codomain) => {
+            let children = codomain.effect_argument_count().saturating_add(2);
+            budget.charge(children)?;
+            pending.try_reserve(children).map_err(|_| ())?;
+            codomain.extend_effect_arguments(pending);
+            pending.push(&codomain.value);
             pending.push(domain);
         }
         Type::Forall(parameters, body) => {
@@ -433,6 +462,14 @@ pub(crate) fn collect_type_nominal_identities_with_constraint_budget(
                 pending.try_reserve(2).map_err(|_| ())?;
                 pending.push(argument);
                 pending.push(function);
+            }
+            Type::EffectfulFunction(domain, codomain) => {
+                let children = codomain.effect_argument_count().saturating_add(2);
+                budget.charge(children)?;
+                pending.try_reserve(children).map_err(|_| ())?;
+                codomain.extend_effect_arguments(&mut pending);
+                pending.push(&codomain.value);
+                pending.push(domain);
             }
             Type::Tuple(elements) => {
                 budget.charge(elements.len())?;
@@ -962,6 +999,7 @@ fn validate_match_type(
                 pending.push(codomain);
                 pending.push(domain);
             }
+            Type::EffectfulFunction(_, _) => return Err(HeadMatchFailure::InvalidState),
             Type::Variable(variable) => {
                 if candidate_parameters.is_some_and(|positions| !positions.contains_key(variable)) {
                     return Err(HeadMatchFailure::InvalidState);
@@ -1542,6 +1580,7 @@ fn overlap_occurs<'a>(
                     ty: domain,
                 });
             }
+            Type::EffectfulFunction(_, _) => return Err(OverlapFailure::InvalidState),
             Type::Variable(_) => return Err(OverlapFailure::InvalidState),
             Type::Forall(_, _) | Type::Inference(_) => return Err(OverlapFailure::InvalidState),
             Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
@@ -2650,6 +2689,49 @@ mod tests {
         };
         assert_eq!(*retained, parameter);
         assert_eq!(kind, &Kind::Type);
+    }
+
+    #[test]
+    fn constrained_schemes_retain_row_kind_binders_and_occurrence_lacks() {
+        let parameter = TypeVariableId::resolved(ModuleId::new(5), 8);
+        let member = crate::types::EffectInstance::new(
+            crate::types::EffectId::new(ModuleId::new(5), 0),
+            Box::new([Type::Int]),
+        );
+        let scheme = ConstrainedScheme::from_rank1_type(Type::Forall(
+            Box::new([(parameter, Kind::EffectRow)]),
+            Box::new(Type::function_computation(
+                Type::Unit,
+                crate::types::ComputationType::new(
+                    Type::Int,
+                    crate::types::EffectRow::with_tail(
+                        Box::new([member.clone()]),
+                        crate::types::EffectRowVariable::rigid(parameter),
+                        Box::new([member.clone()]),
+                    ),
+                ),
+            )),
+        ));
+        let cloned = scheme
+            .clone_with_budget(&mut TypeWorkBudget::default())
+            .expect("the row-bearing constrained scheme should clone");
+
+        assert!(matches!(
+            cloned.type_parameters.as_ref(),
+            [(identity, Kind::EffectRow)] if *identity == parameter
+        ));
+        let Type::EffectfulFunction(_, codomain) = cloned.value_type() else {
+            panic!("the scheme should retain its latent computation row");
+        };
+        let tail = codomain
+            .effects()
+            .tail()
+            .expect("the generalized row should remain open");
+        assert_eq!(
+            tail.variable(),
+            crate::types::EffectRowVariable::rigid(parameter)
+        );
+        assert_eq!(tail.lacks(), &[member]);
     }
 
     #[test]

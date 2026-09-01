@@ -60,9 +60,9 @@ use crate::{
         SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypeParameter, SurfaceTypeVisibility,
     },
     types::{
-        ConstructorId, IterativeTypeOwner, Kind, NominalTypeId, Type, TypeVariableId,
-        TypeWorkBudget, charge_kind_nodes, charge_type_cells, clone_type_with_budget,
-        discard_type_iteratively, same_kind_with_charge,
+        ComputationType, ConstructorId, EffectRow, IterativeTypeOwner, Kind, NominalTypeId, Type,
+        TypeVariableId, TypeWorkBudget, charge_kind_nodes, charge_type_cells,
+        clone_type_with_budget, discard_type_iteratively, same_kind_with_charge,
     },
 };
 
@@ -3563,6 +3563,7 @@ impl Resolver {
             Tuple(usize),
             Application,
             Function,
+            EffectfulFunction(EffectRow),
         }
 
         const MESSAGE: &str =
@@ -3606,6 +3607,11 @@ impl Resolver {
                     work.push(Task::Visit(codomain));
                     work.push(Task::Visit(domain));
                 }
+                Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
+                    work.push(Task::EffectfulFunction(codomain.effects().clone()));
+                    work.push(Task::Visit(codomain.value()));
+                    work.push(Task::Visit(domain));
+                }
                 Task::Visit(Type::Forall(_, _)) => {
                     return Err(error(ResolveReason::InternalState, span, MESSAGE));
                 }
@@ -3641,6 +3647,18 @@ impl Resolver {
                     rebuilt.push(Type::Function(
                         Box::new(domain.into_inner()),
                         Box::new(codomain.into_inner()),
+                    ));
+                }
+                Task::EffectfulFunction(effects) => {
+                    let codomain = rebuilt
+                        .pop_owned()
+                        .expect("an authenticated effectful function retains its codomain");
+                    let domain = rebuilt
+                        .pop_owned()
+                        .expect("an authenticated effectful function retains its domain");
+                    rebuilt.push(Type::function_computation(
+                        domain.into_inner(),
+                        ComputationType::new(codomain.into_inner(), effects),
                     ));
                 }
             }
@@ -3736,6 +3754,13 @@ impl Resolver {
                 Type::Tuple(elements) => pending.push(Task::Sequence(elements.iter())),
                 Type::Function(domain, codomain) => {
                     pending.push(Task::Type(codomain));
+                    pending.push(Task::Type(domain));
+                }
+                Type::EffectfulFunction(domain, codomain) => {
+                    for argument in codomain.effect_arguments() {
+                        pending.push(Task::Type(argument));
+                    }
+                    pending.push(Task::Type(codomain.value()));
                     pending.push(Task::Type(domain));
                 }
                 Type::Forall(_, body) => pending.push(Task::Type(body)),

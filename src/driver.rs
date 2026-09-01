@@ -672,6 +672,7 @@ where
         }
         Type::Function(domain, result) if matches!(domain.as_ref(), Type::Unit) => result.as_ref(),
         Type::Function(_, _)
+        | Type::EffectfulFunction(_, _)
         | Type::Int
         | Type::Bool
         | Type::Unit
@@ -792,6 +793,16 @@ fn closed_entry_result(root: &Type) -> bool {
             }
             Type::Function(domain, codomain) => {
                 work.push(codomain);
+                work.push(domain);
+            }
+            Type::EffectfulFunction(domain, codomain) => {
+                if codomain.effects().tail().is_some() {
+                    return false;
+                }
+                for instance in codomain.effects().known() {
+                    work.extend(instance.arguments());
+                }
+                work.push(codomain.value());
                 work.push(domain);
             }
             Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}

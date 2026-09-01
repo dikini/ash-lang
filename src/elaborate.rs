@@ -52,10 +52,11 @@ use crate::{
     },
     source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
     types::{
-        InferenceVariableId, IterativeTypeOwner, Kind, Type, TypeVariableId, TypeWorkBudget,
-        charge_type_cells, clone_kind_with_budget, clone_kinded_type_parameters_with_budget,
-        discard_type_iteratively, replace_type_iteratively, same_kind_with_budget,
-        same_kinded_type_parameters_with_budget, same_type, same_type_with_budget,
+        EffectRow, EffectRowError, EffectRowVariable, InferenceVariableId, IterativeTypeOwner,
+        Kind, Type, TypeVariableId, TypeWorkBudget, charge_type_cells, clone_kind_with_budget,
+        clone_kinded_type_parameters_with_budget, discard_type_iteratively,
+        replace_type_iteratively, same_kind_with_budget, same_kinded_type_parameters_with_budget,
+        same_type, same_type_with_budget, substitute_type_and_row_variables_with,
         substitute_type_variables_with,
     },
 };
@@ -513,6 +514,21 @@ impl TypeProvenance {
                     tasks.push((domain, false));
                 }
                 Type::Function(_, _) => {
+                    let codomain = roots.pop().unwrap_or(0);
+                    let domain = roots.pop().unwrap_or(0);
+                    nodes.push(TypeProvenanceNode::Function {
+                        span,
+                        domain,
+                        codomain,
+                    });
+                    roots.push(nodes.len() - 1);
+                }
+                Type::EffectfulFunction(domain, codomain) if !visited => {
+                    tasks.push((current, true));
+                    tasks.push((codomain.value(), false));
+                    tasks.push((domain, false));
+                }
+                Type::EffectfulFunction(_, _) => {
                     let codomain = roots.pop().unwrap_or(0);
                     let domain = roots.pop().unwrap_or(0);
                     nodes.push(TypeProvenanceNode::Function {
@@ -1216,6 +1232,41 @@ impl Drop for InferenceSolutionMap {
     }
 }
 
+#[derive(Debug, Default, Eq, PartialEq)]
+struct RowInferenceSolutionMap(HashMap<InferenceVariableId, EffectRow>);
+
+impl Deref for RowInferenceSolutionMap {
+    type Target = HashMap<InferenceVariableId, EffectRow>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl RowInferenceSolutionMap {
+    fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
+        self.0.try_reserve(additional)
+    }
+
+    fn insert_unique(
+        &mut self,
+        variable: InferenceVariableId,
+        row: EffectRow,
+    ) -> Result<(), EffectRow> {
+        match self.0.entry(variable) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(row);
+                Ok(())
+            }
+            std::collections::hash_map::Entry::Occupied(_) => Err(row),
+        }
+    }
+
+    fn remove(&mut self, variable: InferenceVariableId) {
+        drop(self.0.remove(&variable));
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum InferenceRegistryFailure {
     Missing,
@@ -1426,6 +1477,7 @@ pub struct Elaborator {
     next_generated_type_variable: u32,
     generated_type_variables: GeneratedTypeVariableRegistry,
     inference_solutions: InferenceSolutionMap,
+    row_inference_solutions: RowInferenceSolutionMap,
     authenticated_inference_solutions: HashSet<InferenceVariableId>,
     monomorphic_recursive: HashSet<BinderId>,
     current_implementation_method: Option<CurrentImplementationMethod>,
@@ -1480,6 +1532,7 @@ impl Elaborator {
             next_generated_type_variable: u32::MAX,
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
             inference_solutions: InferenceSolutionMap::default(),
+            row_inference_solutions: RowInferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
@@ -1567,6 +1620,7 @@ impl Elaborator {
             next_generated_type_variable: u32::MAX,
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
             inference_solutions: InferenceSolutionMap::default(),
+            row_inference_solutions: RowInferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
@@ -1621,6 +1675,7 @@ impl Elaborator {
             next_generated_type_variable: u32::MAX,
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
             inference_solutions: InferenceSolutionMap::default(),
+            row_inference_solutions: RowInferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
@@ -2045,6 +2100,7 @@ impl Elaborator {
             next_generated_type_variable: u32::MAX,
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
             inference_solutions: InferenceSolutionMap::default(),
+            row_inference_solutions: RowInferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
@@ -2727,10 +2783,16 @@ impl Elaborator {
     }
 
     fn fresh_inference(&mut self, kind: &Kind, origin: Span) -> Result<Type, TypeError> {
+        if kind_mentions_effect_row(kind) {
+            return Err(invalid_state());
+        }
         self.fresh_inference_reserved(kind, origin)
     }
 
     fn fresh_inference_reserved(&mut self, kind: &Kind, origin: Span) -> Result<Type, TypeError> {
+        if kind_mentions_effect_row(kind) {
+            return Err(invalid_state());
+        }
         allocate_inference_variable(
             &mut self.next_inference,
             &mut self.inference_variables,
@@ -2740,11 +2802,31 @@ impl Elaborator {
         )
     }
 
+    #[allow(
+        dead_code,
+        reason = "the next syntax step allocates row inference through this fixed-kind seam"
+    )]
+    fn fresh_effect_row(&mut self, origin: Span) -> Result<EffectRow, TypeError> {
+        let identity = allocate_row_inference_variable(
+            &mut self.next_inference,
+            &mut self.inference_variables,
+            &mut self.type_work,
+            origin,
+        )?;
+        Ok(EffectRow::open(
+            EffectRowVariable::inference(identity),
+            Box::new([]),
+        ))
+    }
+
     fn fresh_type_variable(
         &mut self,
         kind: &Kind,
         origin: Span,
     ) -> Result<TypeVariableId, TypeError> {
+        if matches!(kind, Kind::Arrow(_, _)) && kind_mentions_effect_row(kind) {
+            return Err(invalid_state());
+        }
         let identity = TypeVariableId::generated(self.next_generated_type_variable);
         let next = self
             .next_generated_type_variable
@@ -2772,6 +2854,9 @@ impl Elaborator {
         self.inference_solutions
             .try_reserve(variables.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        self.row_inference_solutions
+            .try_reserve(variables.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         self.authenticated_inference_solutions
             .try_reserve(variables.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
@@ -2787,7 +2872,15 @@ impl Elaborator {
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 let origin = fact.origin;
                 let binder = self.fresh_type_variable(&kind, origin)?;
-                if let Err(replacement) = self
+                if matches!(kind, Kind::EffectRow) {
+                    if let Err(replacement) = self.row_inference_solutions.insert_unique(
+                        *variable,
+                        EffectRow::open(EffectRowVariable::rigid(binder), Box::new([])),
+                    ) {
+                        drop(replacement);
+                        return Err(invalid_state());
+                    }
+                } else if let Err(replacement) = self
                     .inference_solutions
                     .insert_unique(*variable, Type::Variable(binder))
                 {
@@ -2796,6 +2889,7 @@ impl Elaborator {
                 }
                 if !self.authenticated_inference_solutions.insert(*variable) {
                     self.inference_solutions.remove_and_discard(*variable);
+                    self.row_inference_solutions.remove(*variable);
                     return Err(invalid_state());
                 }
                 generalized.push((binder, kind));
@@ -2807,6 +2901,7 @@ impl Elaborator {
             Err(error) => {
                 for variable in variables.iter().take(generalized.len()) {
                     self.inference_solutions.remove_and_discard(*variable);
+                    self.row_inference_solutions.remove(*variable);
                     self.authenticated_inference_solutions.remove(variable);
                 }
                 self.generated_type_variables.truncate(generated_marker);
@@ -2841,10 +2936,28 @@ impl Elaborator {
         arguments
             .try_reserve(count)
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut row_replacements = HashMap::new();
+        row_replacements
+            .try_reserve(count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let inference_marker = self.inference_variables.len();
         let next_inference = self.next_inference;
         let result = (|| {
             for (binder, kind) in &fact.quantified {
+                if matches!(kind, Kind::EffectRow) {
+                    let variable = if rigid {
+                        EffectRowVariable::rigid(*binder)
+                    } else {
+                        EffectRowVariable::inference(allocate_row_inference_variable(
+                            &mut self.next_inference,
+                            &mut self.inference_variables,
+                            &mut self.type_work,
+                            origin,
+                        )?)
+                    };
+                    row_replacements.insert(*binder, variable);
+                    continue;
+                }
                 let argument = if rigid {
                     Type::Variable(*binder)
                 } else {
@@ -2853,9 +2966,12 @@ impl Elaborator {
                 replacements.insert(*binder, argument.clone());
                 arguments.push(argument);
             }
-            let instantiated = substitute_type_variables_with(&fact.ty, &replacements, |cells| {
-                self.type_work.charge(cells)
-            })
+            let instantiated = substitute_type_and_row_variables_with(
+                &fact.ty,
+                &replacements,
+                &row_replacements,
+                |cells| self.type_work.charge(cells),
+            )
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             Ok((instantiated, arguments))
         })();
@@ -4452,6 +4568,33 @@ impl Elaborator {
                     })?;
                     pending.push(body);
                 }
+                Type::EffectfulFunction(domain, codomain) => {
+                    if codomain
+                        .tail_variable()
+                        .is_some_and(|variable| match variable {
+                            crate::types::EffectRowVariable::Rigid(variable) => {
+                                variables.contains(&variable)
+                            }
+                            crate::types::EffectRowVariable::Inference(_) => false,
+                        })
+                    {
+                        return Ok(true);
+                    }
+                    let argument_count = codomain.effect_argument_count();
+                    self.type_work
+                        .charge(argument_count.saturating_add(2))
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                    pending
+                        .try_reserve(argument_count.saturating_add(2))
+                        .map_err(|_| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                    codomain.extend_effect_arguments(&mut pending);
+                    pending.push(codomain.value());
+                    pending.push(domain);
+                }
                 Type::Int
                 | Type::Bool
                 | Type::Unit
@@ -4879,26 +5022,82 @@ impl Elaborator {
         let inference_variables = &self.inference_variables;
         let authenticated_solutions = &self.authenticated_inference_solutions;
         let type_work = &mut self.type_work;
-        zonk_type_with_status_and_inference(ty, solutions, |work| match work {
-            ZonkWork::TypeCells(cells) => type_work
-                .charge(cells)
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted)),
-            ZonkWork::Inference(identity) => authenticate_zonk_inference_occurrence(
-                identity,
-                inference_variables,
-                solutions,
-                authenticated_solutions,
-                type_work,
-            )
-            .map_err(|failure| match failure {
-                UnificationFailure::Resource => {
-                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                }
-                UnificationFailure::Mismatch
-                | UnificationFailure::Infinite
-                | UnificationFailure::Invariant => invalid_state(),
-            }),
-        })
+        let (ordinary, unresolved) =
+            zonk_type_with_status_and_inference(ty, solutions, |work| match work {
+                ZonkWork::TypeCells(cells) => type_work
+                    .charge(cells)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted)),
+                ZonkWork::Inference(identity) => authenticate_zonk_inference_occurrence(
+                    identity,
+                    inference_variables,
+                    solutions,
+                    authenticated_solutions,
+                    type_work,
+                )
+                .map_err(|failure| match failure {
+                    UnificationFailure::Resource => {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    }
+                    UnificationFailure::Mismatch
+                    | UnificationFailure::Infinite
+                    | UnificationFailure::Invariant => invalid_state(),
+                }),
+            })?;
+        let zonked = zonk_type_with_rows(&ordinary, &HashMap::new(), &self.row_inference_solutions);
+        discard_type_iteratively(ordinary);
+        let row_unresolved =
+            type_contains_unsolved_row_inference(&zonked, &self.row_inference_solutions);
+        Ok((zonked, unresolved || row_unresolved))
+    }
+
+    fn zonk_effect_row(&mut self, row: &EffectRow) -> Result<EffectRow, TypeError> {
+        let mut arguments = HashMap::new();
+        for member in row
+            .known()
+            .iter()
+            .chain(row.tail().into_iter().flat_map(|tail| tail.lacks().iter()))
+        {
+            for argument in member.arguments() {
+                arguments.insert(argument as *const Type, self.zonk(argument)?);
+            }
+        }
+        let mut current = row.map_type_arguments(|argument| {
+            arguments
+                .remove(&(argument as *const Type))
+                .expect("each row argument was zonked once")
+        });
+        let mut visited = HashSet::new();
+        loop {
+            let Some(tail) = current.tail() else {
+                return Ok(current);
+            };
+            let EffectRowVariable::Inference(identity) = tail.variable() else {
+                return Ok(current);
+            };
+            let fact = self
+                .inference_variables
+                .fact(identity, &mut self.type_work)
+                .map_err(inference_registry_error)?;
+            if !same_kind_with_budget(&fact.kind, &Kind::EffectRow, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+            {
+                return Err(invalid_state());
+            }
+            let Some(solution) = self.row_inference_solutions.get(&identity) else {
+                return Ok(current);
+            };
+            self.type_work
+                .charge(1)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            if !self.authenticated_inference_solutions.contains(&identity)
+                || !visited.insert(identity)
+            {
+                return Err(invalid_state());
+            }
+            current = current
+                .substitute_tail_once(EffectRowVariable::inference(identity), solution)
+                .map_err(|_| invalid_state())?;
+        }
     }
 
     fn charge_type(&mut self, ty: &Type) -> Result<(), TypeError> {
@@ -4923,6 +5122,324 @@ impl Elaborator {
             cloned.push(self.clone_type(ty)?);
         }
         Ok(cloned.into_boxed_slice())
+    }
+
+    fn solve_effect_row_variable(
+        &mut self,
+        variable: InferenceVariableId,
+        lacks: &[crate::types::EffectInstance],
+        candidate: EffectRow,
+        inserted: &mut Vec<InferenceVariableId>,
+    ) -> Result<(), UnificationFailure> {
+        let fact = self
+            .inference_variables
+            .fact(variable, &mut self.type_work)
+            .map_err(inference_registry_failure_for_unification)?;
+        if !same_kind_with_budget(&fact.kind, &Kind::EffectRow, &mut self.type_work)
+            .map_err(|()| UnificationFailure::Resource)?
+        {
+            return Err(UnificationFailure::Mismatch);
+        }
+        if self.inference_solutions.contains_key(&variable) {
+            return Err(UnificationFailure::Invariant);
+        }
+        let occurrence = EffectRow::open(
+            EffectRowVariable::inference(variable),
+            lacks.to_vec().into_boxed_slice(),
+        );
+        let candidate = occurrence
+            .substitute_tail_once(EffectRowVariable::inference(variable), &candidate)
+            .map_err(|error| match error {
+                EffectRowError::Infinite => UnificationFailure::Infinite,
+                EffectRowError::Ambiguous | EffectRowError::Missing => UnificationFailure::Mismatch,
+            })?;
+        crate::types::charge_effect_row_cells(&candidate, &mut self.type_work)
+            .map_err(|()| UnificationFailure::Resource)?;
+        self.type_work
+            .charge(3)
+            .map_err(|()| UnificationFailure::Resource)?;
+        self.row_inference_solutions
+            .try_reserve(1)
+            .map_err(|_| UnificationFailure::Resource)?;
+        self.authenticated_inference_solutions
+            .try_reserve(1)
+            .map_err(|_| UnificationFailure::Resource)?;
+        inserted
+            .try_reserve(1)
+            .map_err(|_| UnificationFailure::Resource)?;
+        if let Err(candidate) = self
+            .row_inference_solutions
+            .insert_unique(variable, candidate)
+        {
+            drop(candidate);
+            return Err(UnificationFailure::Invariant);
+        }
+        if !self.authenticated_inference_solutions.insert(variable) {
+            self.row_inference_solutions.remove(variable);
+            return Err(UnificationFailure::Invariant);
+        }
+        inserted.push(variable);
+        Ok(())
+    }
+
+    #[allow(
+        dead_code,
+        reason = "the next expression-typing step routes latent rows through this transaction"
+    )]
+    fn unify_effect_rows(
+        &mut self,
+        left: &EffectRow,
+        right: &EffectRow,
+    ) -> Result<(), UnificationFailure> {
+        let mut inserted_types = Vec::new();
+        let mut inserted_rows = Vec::new();
+        let inference_marker = self.inference_variables.len();
+        let next_inference = self.next_inference;
+        let result =
+            self.unify_effect_rows_inner(left, right, &mut inserted_types, &mut inserted_rows);
+        if result.is_err() {
+            for variable in inserted_types.drain(..).rev() {
+                self.inference_solutions.remove_and_discard(variable);
+                self.authenticated_inference_solutions.remove(&variable);
+            }
+            for variable in inserted_rows.drain(..).rev() {
+                self.row_inference_solutions.remove(variable);
+                self.authenticated_inference_solutions.remove(&variable);
+            }
+            self.inference_variables.truncate(inference_marker);
+            self.next_inference = next_inference;
+        }
+        result
+    }
+
+    fn unify_effect_rows_inner(
+        &mut self,
+        left: &EffectRow,
+        right: &EffectRow,
+        inserted_types: &mut Vec<InferenceVariableId>,
+        inserted_rows: &mut Vec<InferenceVariableId>,
+    ) -> Result<(), UnificationFailure> {
+        fn map_type_error(error: TypeError) -> UnificationFailure {
+            match error {
+                TypeError::Internal(ElaborationFailure::TypeResourceExhausted) => {
+                    UnificationFailure::Resource
+                }
+                TypeError::Source(_)
+                | TypeError::Interface(_)
+                | TypeError::Mismatch(_)
+                | TypeError::Internal(_) => UnificationFailure::Invariant,
+            }
+        }
+
+        (|| {
+            let mut left = self.zonk_effect_row(left).map_err(map_type_error)?;
+            let mut right = self.zonk_effect_row(right).map_err(map_type_error)?;
+
+            // Solving an exact instance argument can collapse duplicate row
+            // members. Re-canonicalize after every such solution before
+            // deciding which members remain on either side.
+            loop {
+                if left == right {
+                    return Ok(());
+                }
+                let mut exact_right = vec![false; right.known().len()];
+                let mut exact_left = vec![false; left.known().len()];
+                for (left_index, left_member) in left.known().iter().enumerate() {
+                    if let Some((right_index, _)) = right
+                        .known()
+                        .iter()
+                        .enumerate()
+                        .find(|(index, member)| !exact_right[*index] && *member == left_member)
+                    {
+                        exact_left[left_index] = true;
+                        exact_right[right_index] = true;
+                    }
+                }
+
+                let mut progressed = false;
+                'candidate: for (left_index, left_member) in left.known().iter().enumerate() {
+                    if exact_left[left_index] {
+                        continue;
+                    }
+                    for right_member in right.known() {
+                        if left_member.effect() != right_member.effect()
+                            || left_member.arguments().len() != right_member.arguments().len()
+                        {
+                            continue;
+                        }
+                        let type_marker = inserted_types.len();
+                        let row_marker = inserted_rows.len();
+                        let inference_marker = self.inference_variables.len();
+                        let next_inference = self.next_inference;
+                        let result = left_member
+                            .arguments()
+                            .iter()
+                            .zip(right_member.arguments())
+                            .try_for_each(|(left_argument, right_argument)| {
+                                self.unify_recorded(
+                                    left_argument,
+                                    right_argument,
+                                    inserted_types,
+                                    inserted_rows,
+                                )
+                            });
+                        match result {
+                            Ok(())
+                                if inserted_types.len() > type_marker
+                                    || inserted_rows.len() > row_marker =>
+                            {
+                                left = self.zonk_effect_row(&left).map_err(map_type_error)?;
+                                right = self.zonk_effect_row(&right).map_err(map_type_error)?;
+                                progressed = true;
+                                break 'candidate;
+                            }
+                            Ok(())
+                            | Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
+                                self.rollback_unification_to(
+                                    inserted_types,
+                                    inserted_rows,
+                                    type_marker,
+                                    row_marker,
+                                    inference_marker,
+                                    next_inference,
+                                );
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    }
+                }
+                if !progressed {
+                    break;
+                }
+            }
+
+            let mut left_matched = vec![false; left.known().len()];
+            let mut right_matched = vec![false; right.known().len()];
+            for (left_index, left_member) in left.known().iter().enumerate() {
+                let Some((right_index, right_member)) =
+                    right
+                        .known()
+                        .iter()
+                        .enumerate()
+                        .find(|(index, right_member)| {
+                            !right_matched[*index]
+                                && left_member.effect() == right_member.effect()
+                                && left_member.arguments().len() == right_member.arguments().len()
+                        })
+                else {
+                    continue;
+                };
+                for (left_argument, right_argument) in
+                    left_member.arguments().iter().zip(right_member.arguments())
+                {
+                    self.unify_recorded(
+                        left_argument,
+                        right_argument,
+                        inserted_types,
+                        inserted_rows,
+                    )?;
+                }
+                left_matched[left_index] = true;
+                right_matched[right_index] = true;
+            }
+
+            let left_only = left
+                .known()
+                .iter()
+                .zip(&left_matched)
+                .filter(|(_, matched)| !**matched)
+                .map(|(member, _)| member.clone())
+                .collect::<Vec<_>>();
+            let right_only = right
+                .known()
+                .iter()
+                .zip(&right_matched)
+                .filter(|(_, matched)| !**matched)
+                .map(|(member, _)| member.clone())
+                .collect::<Vec<_>>();
+            let row_from = |known: Vec<crate::types::EffectInstance>,
+                            tail: Option<&crate::types::EffectRowTail>| {
+                if let Some(tail) = tail {
+                    EffectRow::with_tail(
+                        known.into_boxed_slice(),
+                        tail.variable(),
+                        tail.lacks().to_vec().into_boxed_slice(),
+                    )
+                } else {
+                    EffectRow::closed(known.into_boxed_slice())
+                }
+            };
+
+            match (left.tail(), right.tail()) {
+                (None, None) if left_only.is_empty() && right_only.is_empty() => Ok(()),
+                (Some(left_tail), right_tail)
+                    if left_only.is_empty()
+                        && matches!(left_tail.variable(), EffectRowVariable::Inference(_)) =>
+                {
+                    let EffectRowVariable::Inference(variable) = left_tail.variable() else {
+                        unreachable!()
+                    };
+                    self.solve_effect_row_variable(
+                        variable,
+                        left_tail.lacks(),
+                        row_from(right_only, right_tail),
+                        inserted_rows,
+                    )
+                }
+                (left_tail, Some(right_tail))
+                    if right_only.is_empty()
+                        && matches!(right_tail.variable(), EffectRowVariable::Inference(_)) =>
+                {
+                    let EffectRowVariable::Inference(variable) = right_tail.variable() else {
+                        unreachable!()
+                    };
+                    self.solve_effect_row_variable(
+                        variable,
+                        right_tail.lacks(),
+                        row_from(left_only, left_tail),
+                        inserted_rows,
+                    )
+                }
+                (Some(left_tail), Some(right_tail))
+                    if matches!(left_tail.variable(), EffectRowVariable::Inference(_))
+                        && matches!(right_tail.variable(), EffectRowVariable::Inference(_))
+                        && left_tail.variable() != right_tail.variable() =>
+                {
+                    let EffectRowVariable::Inference(left_variable) = left_tail.variable() else {
+                        unreachable!()
+                    };
+                    let EffectRowVariable::Inference(right_variable) = right_tail.variable() else {
+                        unreachable!()
+                    };
+                    let origin = self
+                        .inference_variables
+                        .fact(left_variable, &mut self.type_work)
+                        .map_err(inference_registry_failure_for_unification)?
+                        .origin;
+                    let shared = allocate_row_inference_variable(
+                        &mut self.next_inference,
+                        &mut self.inference_variables,
+                        &mut self.type_work,
+                        origin,
+                    )
+                    .map_err(map_type_error)?;
+                    let shared = EffectRowVariable::inference(shared);
+                    self.solve_effect_row_variable(
+                        left_variable,
+                        left_tail.lacks(),
+                        EffectRow::with_tail(right_only.into_boxed_slice(), shared, Box::new([])),
+                        inserted_rows,
+                    )?;
+                    self.solve_effect_row_variable(
+                        right_variable,
+                        right_tail.lacks(),
+                        EffectRow::with_tail(left_only.into_boxed_slice(), shared, Box::new([])),
+                        inserted_rows,
+                    )
+                }
+                _ => Err(UnificationFailure::Mismatch),
+            }
+        })()
     }
 
     fn unknown_provenance(&mut self, ty: &Type) -> Result<TypeProvenance, TypeError> {
@@ -4974,6 +5491,54 @@ impl Elaborator {
     }
 
     fn unify(&mut self, left: &Type, right: &Type) -> Result<(), UnificationFailure> {
+        let mut inserted = Vec::new();
+        let mut inserted_rows = Vec::new();
+        let inference_marker = self.inference_variables.len();
+        let next_inference = self.next_inference;
+        let result = self.unify_recorded(left, right, &mut inserted, &mut inserted_rows);
+        if result.is_err() {
+            for variable in inserted.drain(..).rev() {
+                self.inference_solutions.remove_and_discard(variable);
+                self.authenticated_inference_solutions.remove(&variable);
+            }
+            for variable in inserted_rows.drain(..).rev() {
+                self.row_inference_solutions.remove(variable);
+                self.authenticated_inference_solutions.remove(&variable);
+            }
+            self.inference_variables.truncate(inference_marker);
+            self.next_inference = next_inference;
+        }
+        result
+    }
+
+    fn rollback_unification_to(
+        &mut self,
+        inserted_types: &mut Vec<InferenceVariableId>,
+        inserted_rows: &mut Vec<InferenceVariableId>,
+        type_marker: usize,
+        row_marker: usize,
+        inference_marker: usize,
+        next_inference: u32,
+    ) {
+        for variable in inserted_types.drain(type_marker..).rev() {
+            self.inference_solutions.remove_and_discard(variable);
+            self.authenticated_inference_solutions.remove(&variable);
+        }
+        for variable in inserted_rows.drain(row_marker..).rev() {
+            self.row_inference_solutions.remove(variable);
+            self.authenticated_inference_solutions.remove(&variable);
+        }
+        self.inference_variables.truncate(inference_marker);
+        self.next_inference = next_inference;
+    }
+
+    fn unify_recorded(
+        &mut self,
+        left: &Type,
+        right: &Type,
+        inserted: &mut Vec<InferenceVariableId>,
+        inserted_rows: &mut Vec<InferenceVariableId>,
+    ) -> Result<(), UnificationFailure> {
         if let Some(equal) = compare_concrete_types(left, right, &mut self.type_work)
             .map_err(|()| UnificationFailure::Resource)?
         {
@@ -5018,7 +5583,6 @@ impl Elaborator {
         );
         let right = clone_type_with_budget(right, &mut self.type_work)
             .map_err(|()| UnificationFailure::Resource)?;
-        let mut inserted = Vec::new();
         let result = (|| {
             let mut work = Work(vec![Task::Pair(left.into_inner(), right)]);
             while let Some(task) = work.0.pop() {
@@ -5162,6 +5726,65 @@ impl Elaborator {
                         work.0.push(Task::Pair(*left_codomain, *right_codomain));
                         work.0.push(Task::Pair(*left_domain, *right_domain));
                     }
+                    (
+                        Type::EffectfulFunction(left_domain, left_codomain),
+                        Type::EffectfulFunction(right_domain, right_codomain),
+                    ) => {
+                        let crate::types::ComputationType {
+                            value: left_value,
+                            effects: left_effects,
+                        } = *left_codomain;
+                        let crate::types::ComputationType {
+                            value: right_value,
+                            effects: right_effects,
+                        } = *right_codomain;
+                        self.unify_effect_rows_inner(
+                            &left_effects,
+                            &right_effects,
+                            inserted,
+                            inserted_rows,
+                        )?;
+                        drop(left_effects);
+                        drop(right_effects);
+                        work.0.push(Task::Pair(left_value, right_value));
+                        work.0.push(Task::Pair(*left_domain, *right_domain));
+                    }
+                    (
+                        Type::Function(left_domain, left_value),
+                        Type::EffectfulFunction(right_domain, right_codomain),
+                    ) => {
+                        let crate::types::ComputationType {
+                            value: right_value,
+                            effects: right_effects,
+                        } = *right_codomain;
+                        self.unify_effect_rows_inner(
+                            &EffectRow::empty(),
+                            &right_effects,
+                            inserted,
+                            inserted_rows,
+                        )?;
+                        drop(right_effects);
+                        work.0.push(Task::Pair(*left_value, right_value));
+                        work.0.push(Task::Pair(*left_domain, *right_domain));
+                    }
+                    (
+                        Type::EffectfulFunction(left_domain, left_codomain),
+                        Type::Function(right_domain, right_value),
+                    ) => {
+                        let crate::types::ComputationType {
+                            value: left_value,
+                            effects: left_effects,
+                        } = *left_codomain;
+                        self.unify_effect_rows_inner(
+                            &left_effects,
+                            &EffectRow::empty(),
+                            inserted,
+                            inserted_rows,
+                        )?;
+                        drop(left_effects);
+                        work.0.push(Task::Pair(left_value, *right_value));
+                        work.0.push(Task::Pair(*left_domain, *right_domain));
+                    }
                     (left, right) => {
                         discard_type_iteratively(left);
                         discard_type_iteratively(right);
@@ -5171,12 +5794,6 @@ impl Elaborator {
             }
             Ok(())
         })();
-        if result.is_err() {
-            for variable in inserted.drain(..).rev() {
-                self.inference_solutions.remove_and_discard(variable);
-                self.authenticated_inference_solutions.remove(&variable);
-            }
-        }
         result
     }
 
@@ -10609,6 +11226,22 @@ where
                 pending.push(codomain);
                 pending.push(domain);
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                if let Some(crate::types::EffectRowVariable::Rigid(variable)) =
+                    codomain.tail_variable()
+                    && visit(variable, budget)?
+                {
+                    return Ok(true);
+                }
+                let argument_count = codomain.effect_argument_count();
+                budget.charge(argument_count.saturating_add(2))?;
+                pending
+                    .try_reserve(argument_count.saturating_add(2))
+                    .map_err(|_| ())?;
+                codomain.extend_effect_arguments(&mut pending);
+                pending.push(codomain.value());
+                pending.push(domain);
+            }
             Type::Forall(parameters, body) => {
                 budget.charge(parameters.len().saturating_add(1))?;
                 pending.try_reserve(1).map_err(|_| ())?;
@@ -12327,6 +12960,9 @@ fn allocate_inference_variable(
     kind: &Kind,
     origin: Span,
 ) -> Result<Type, TypeError> {
+    if kind_mentions_effect_row(kind) {
+        return Err(invalid_state());
+    }
     let identity = InferenceVariableId::new(*next_inference);
     let next = next_inference.checked_add(1).ok_or_else(invalid_state)?;
     variables
@@ -12334,6 +12970,36 @@ fn allocate_inference_variable(
         .map_err(inference_registry_error)?;
     *next_inference = next;
     Ok(Type::Inference(identity))
+}
+
+fn kind_mentions_effect_row(root: &Kind) -> bool {
+    let mut work = vec![root];
+    while let Some(kind) = work.pop() {
+        match kind {
+            Kind::Type => {}
+            Kind::EffectRow => return true,
+            Kind::Arrow(domain, codomain) => {
+                work.push(codomain);
+                work.push(domain);
+            }
+        }
+    }
+    false
+}
+
+fn allocate_row_inference_variable(
+    next_inference: &mut u32,
+    variables: &mut InferenceVariableRegistry,
+    budget: &mut TypeWorkBudget,
+    origin: Span,
+) -> Result<InferenceVariableId, TypeError> {
+    let identity = InferenceVariableId::new(*next_inference);
+    let next = next_inference.checked_add(1).ok_or_else(invalid_state)?;
+    variables
+        .insert(identity, &Kind::EffectRow, origin, budget)
+        .map_err(inference_registry_error)?;
+    *next_inference = next;
+    Ok(identity)
 }
 
 fn kind_failure_for_unification(failure: KindFailure) -> UnificationFailure {
@@ -12472,6 +13138,29 @@ fn candidate_kind_environment<'a>(
                 schedule!(argument);
                 schedule!(function);
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                if let Some(crate::types::EffectRowVariable::Rigid(variable)) =
+                    codomain.tail_variable()
+                    && !environments.contains_declared(variable)
+                {
+                    let parameter = registry
+                        .type_variable(variable)
+                        .ok_or(UnificationFailure::Invariant)?;
+                    environments
+                        .insert_declared(
+                            variable,
+                            &parameter.kind,
+                            parameter.origin.primary_span(),
+                            budget,
+                        )
+                        .map_err(kind_failure_for_unification)?;
+                }
+                for argument in codomain.effect_arguments() {
+                    schedule!(argument);
+                }
+                schedule!(codomain.value());
+                schedule!(domain);
+            }
             Type::Forall(_, _) => return Err(UnificationFailure::Invariant),
         }
     }
@@ -12604,12 +13293,14 @@ fn validate_recursive_member(
     registry: &ResolvedRegistry,
 ) -> Result<(), TypeError> {
     match &member.annotation.ty {
-        Type::Function(_, _)
+        Type::Function(_, _) | Type::EffectfulFunction(_, _)
             if matches!(member.initializer.kind, ResolvedExprKind::Function(_)) =>
         {
             Ok(())
         }
-        Type::Function(_, _) => Err(unsafe_recursive_initializer(group, member)),
+        Type::Function(_, _) | Type::EffectfulFunction(_, _) => {
+            Err(unsafe_recursive_initializer(group, member))
+        }
         ty if ty.outer_nominal().is_some() => {
             let owner = ty.outer_nominal().ok_or_else(invalid_state)?;
             let payload = match &member.initializer.kind {
@@ -12961,7 +13652,21 @@ fn validate_and_charge_public_monotype(
                 work.push(Task::Visit(codomain, child_depth, 0));
                 work.push(Task::Visit(domain, child_depth, 0));
             }
-            Type::Function(_, _) | Type::Inference(_) | Type::Forall(_, _) => {
+            Type::EffectfulFunction(domain, codomain) if applied_arguments == 0 => {
+                let child_depth = depth.saturating_add(1);
+                if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
+                    return Err(PublicTypeAdmissionError::Invalid);
+                }
+                for argument in codomain.effect_arguments() {
+                    work.push(Task::Visit(argument, child_depth, 0));
+                }
+                work.push(Task::Visit(codomain.value(), child_depth, 0));
+                work.push(Task::Visit(domain, child_depth, 0));
+            }
+            Type::Function(_, _)
+            | Type::EffectfulFunction(_, _)
+            | Type::Inference(_)
+            | Type::Forall(_, _) => {
                 return Err(PublicTypeAdmissionError::Invalid);
             }
             Type::Int | Type::Bool | Type::Unit if applied_arguments != 0 => {
@@ -13279,6 +13984,23 @@ fn zonk_type_with_status_and_inference<E>(
                 work.push(ChargeTask::Visit(codomain));
                 work.push(ChargeTask::Visit(domain));
             }
+            ChargeTask::Visit(Type::EffectfulFunction(domain, codomain)) => {
+                let row_cells = 2_usize
+                    .saturating_add(codomain.effects().known().len())
+                    .saturating_add(usize::from(codomain.effects().tail().is_some()))
+                    .saturating_add(
+                        codomain
+                            .effects()
+                            .tail()
+                            .map_or(0, |tail| tail.lacks().len()),
+                    );
+                work_charge(ZonkWork::TypeCells(row_cells))?;
+                for argument in codomain.effect_arguments() {
+                    work.push(ChargeTask::Visit(argument));
+                }
+                work.push(ChargeTask::Visit(codomain.value()));
+                work.push(ChargeTask::Visit(domain));
+            }
             ChargeTask::Visit(Type::Forall(parameters, body)) => {
                 work_charge(ZonkWork::TypeCells(1))?;
                 for (_, kind) in parameters {
@@ -13310,12 +14032,21 @@ fn zonk_type_with_status_and_inference<E>(
 }
 
 fn zonk_type(ty: &Type, solutions: &HashMap<InferenceVariableId, Type>) -> Type {
+    zonk_type_with_rows(ty, solutions, &HashMap::new())
+}
+
+fn zonk_type_with_rows(
+    ty: &Type,
+    solutions: &HashMap<InferenceVariableId, Type>,
+    row_solutions: &HashMap<InferenceVariableId, EffectRow>,
+) -> Type {
     enum Task<'a> {
         Visit(&'a Type),
         VisitSequence(std::slice::Iter<'a, Type>),
         FinishTuple(usize),
         FinishApplication,
         FinishFunction,
+        FinishEffectfulFunction(crate::types::EffectRow),
         FinishForall(Box<[(TypeVariableId, Kind)]>),
     }
 
@@ -13348,6 +14079,32 @@ fn zonk_type(ty: &Type, solutions: &HashMap<InferenceVariableId, Type>) -> Type 
                 work.push(Task::Visit(codomain));
                 work.push(Task::Visit(domain));
             }
+            Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
+                let mut effects = codomain.effects().map_type_arguments(|argument| {
+                    zonk_type_with_rows(argument, solutions, row_solutions)
+                });
+                let mut visited = HashSet::new();
+                loop {
+                    let Some(tail) = effects.tail() else {
+                        break;
+                    };
+                    let EffectRowVariable::Inference(identity) = tail.variable() else {
+                        break;
+                    };
+                    let Some(solution) = row_solutions.get(&identity) else {
+                        break;
+                    };
+                    if !visited.insert(identity) {
+                        break;
+                    }
+                    effects = effects
+                        .substitute_tail_once(EffectRowVariable::inference(identity), solution)
+                        .expect("authenticated row solutions preserve lacks and occurs");
+                }
+                work.push(Task::FinishEffectfulFunction(effects));
+                work.push(Task::Visit(codomain.value()));
+                work.push(Task::Visit(domain));
+            }
             Task::Visit(Type::Forall(parameters, body)) => {
                 work.push(Task::FinishForall(parameters.clone()));
                 work.push(Task::Visit(body));
@@ -13371,6 +14128,14 @@ fn zonk_type(ty: &Type, solutions: &HashMap<InferenceVariableId, Type>) -> Type 
                 let codomain = rebuilt.pop().expect("zonked codomain");
                 let domain = rebuilt.pop().expect("zonked domain");
                 rebuilt.push(Type::Function(Box::new(domain), Box::new(codomain)));
+            }
+            Task::FinishEffectfulFunction(effects) => {
+                let codomain = rebuilt.pop().expect("zonked effectful codomain");
+                let domain = rebuilt.pop().expect("zonked effectful domain");
+                rebuilt.push(Type::function_computation(
+                    domain,
+                    crate::types::ComputationType::new(codomain, effects),
+                ));
             }
             Task::FinishForall(parameters) => {
                 let body = rebuilt.pop().expect("zonked scheme body");
@@ -13463,6 +14228,13 @@ fn type_contains_inference(
                 schedule!(Task::Visit(codomain));
                 schedule!(Task::Visit(domain));
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                for argument in codomain.effect_arguments() {
+                    schedule!(Task::Visit(argument));
+                }
+                schedule!(Task::Visit(codomain.value()));
+                schedule!(Task::Visit(domain));
+            }
             Type::Forall(_, _) => return Err(UnificationFailure::Invariant),
             Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_) => {}
         }
@@ -13513,6 +14285,22 @@ fn collect_unsolved_inference(
                 work.push(Task::Visit(codomain));
                 work.push(Task::Visit(domain));
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                if let Some(EffectRowVariable::Inference(identity)) = codomain.tail_variable()
+                    && !seen.contains(&identity)
+                {
+                    budget.charge(2)?;
+                    seen.try_reserve(1).map_err(|_| ())?;
+                    found.try_reserve(1).map_err(|_| ())?;
+                    seen.insert(identity);
+                    found.push(identity);
+                }
+                for argument in codomain.effect_arguments() {
+                    work.push(Task::Visit(argument));
+                }
+                work.push(Task::Visit(codomain.value()));
+                work.push(Task::Visit(domain));
+            }
             Type::Forall(_, body) => work.push(Task::Visit(body)),
             Type::Int
             | Type::Bool
@@ -13523,6 +14311,53 @@ fn collect_unsolved_inference(
         }
     }
     Ok(found)
+}
+
+fn type_contains_unsolved_row_inference(
+    ty: &Type,
+    solutions: &HashMap<InferenceVariableId, EffectRow>,
+) -> bool {
+    let mut work = vec![ty];
+    let mut visited = HashSet::new();
+    while let Some(ty) = work.pop() {
+        match ty {
+            Type::Tuple(elements) => work.extend(elements.iter()),
+            Type::Application(function, argument) | Type::Function(function, argument) => {
+                work.push(argument);
+                work.push(function);
+            }
+            Type::EffectfulFunction(domain, codomain) => {
+                if let Some(EffectRowVariable::Inference(identity)) = codomain.tail_variable() {
+                    if !solutions.contains_key(&identity) {
+                        return true;
+                    }
+                    if visited.insert(identity) {
+                        if let Some(solution) = solutions.get(&identity) {
+                            for argument in solution.known().iter().chain(
+                                solution
+                                    .tail()
+                                    .into_iter()
+                                    .flat_map(|tail| tail.lacks().iter()),
+                            ) {
+                                work.extend(argument.arguments());
+                            }
+                        }
+                    }
+                }
+                codomain.extend_effect_arguments(&mut work);
+                work.push(codomain.value());
+                work.push(domain);
+            }
+            Type::Forall(_, body) => work.push(body),
+            Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Nominal(_)
+            | Type::Variable(_)
+            | Type::Inference(_) => {}
+        }
+    }
+    false
 }
 
 fn inference_failure(reason: TypeReason, span: Span, message: &str) -> TypeError {
@@ -20332,5 +21167,250 @@ mod tests {
             .expect("the boundary thread should start")
             .join()
             .expect("provenance construction and cursor movement should not overflow");
+    }
+
+    fn row_test_span(label: &'static str) -> Span {
+        let source = Box::leak(Box::new(
+            SourceFile::new(label, "x").expect("the row inference fixture should fit"),
+        ));
+        source
+            .span(ByteRange::new(0, 1).expect("the fixture range is ordered"))
+            .expect("the fixture span should fit")
+    }
+
+    fn row_test_effect(label: &'static str) -> crate::types::EffectInstance {
+        let source = Box::leak(Box::new(
+            SourceFile::new(label, "").expect("the row identity fixture should fit"),
+        ));
+        crate::types::EffectInstance::new(
+            crate::types::EffectId::new(ModuleId::from(source.id()), 0),
+            Box::new([]),
+        )
+    }
+
+    #[test]
+    fn row_inference_unifies_exact_members_and_rejects_occurs() {
+        let span = row_test_span("row-unification.ash");
+        let mut elaborator = Elaborator::new();
+        let open = elaborator
+            .fresh_effect_row(span)
+            .expect("a row inference variable should fit");
+        let variable = open.tail().expect("the row should be open").variable();
+        let member = row_test_effect("row-unification-effect.ash");
+        let closed = crate::types::EffectRow::singleton(member.clone());
+
+        elaborator
+            .unify_effect_rows(&open, &closed)
+            .expect("an unconstrained row variable should solve to the closed row");
+        assert_eq!(
+            elaborator
+                .zonk_effect_row(&open)
+                .expect("the solved row should zonk"),
+            closed,
+        );
+
+        let mut open_tails = Elaborator::new();
+        let left_tail = open_tails
+            .fresh_effect_row(span)
+            .expect("the left row variable should fit")
+            .tail()
+            .expect("the left row should be open")
+            .variable();
+        let right_tail = open_tails
+            .fresh_effect_row(span)
+            .expect("the right row variable should fit")
+            .tail()
+            .expect("the right row should be open")
+            .variable();
+        let left = EffectRow::with_tail(
+            Box::new([row_test_effect("left-open-member.ash")]),
+            left_tail,
+            Box::new([]),
+        );
+        let right = EffectRow::with_tail(
+            Box::new([row_test_effect("right-open-member.ash")]),
+            right_tail,
+            Box::new([]),
+        );
+        open_tails
+            .unify_effect_rows(&left, &right)
+            .expect("two inference tails should share a fresh residual tail");
+        assert_eq!(
+            open_tails
+                .zonk_effect_row(&left)
+                .expect("the left row should zonk"),
+            open_tails
+                .zonk_effect_row(&right)
+                .expect("the right row should zonk"),
+        );
+
+        let recursive = crate::types::EffectRow::with_tail(
+            Box::new([member.clone()]),
+            variable,
+            Box::new([member]),
+        );
+        let mut occurs = Elaborator::new();
+        let occurs_open = occurs
+            .fresh_effect_row(span)
+            .expect("an occurs row variable should fit");
+        let occurs_variable = occurs_open
+            .tail()
+            .expect("the occurs row should be open")
+            .variable();
+        let recursive = crate::types::EffectRow::with_tail(
+            recursive.known().to_vec().into_boxed_slice(),
+            occurs_variable,
+            recursive.known().to_vec().into_boxed_slice(),
+        );
+        assert_eq!(
+            occurs.unify_effect_rows(&occurs_open, &recursive),
+            Err(UnificationFailure::Infinite),
+        );
+    }
+
+    #[test]
+    fn row_inference_has_a_fixed_effect_row_kind() {
+        let span = row_test_span("row-kind.ash");
+        let mut elaborator = Elaborator::new();
+
+        assert!(elaborator.fresh_effect_row(span).is_ok());
+        assert_eq!(
+            elaborator.fresh_inference(&Kind::EffectRow, span),
+            Err(invalid_state()),
+        );
+        assert_eq!(
+            elaborator.fresh_inference(
+                &Kind::Arrow(Box::new(Kind::EffectRow), Box::new(Kind::Type)),
+                span,
+            ),
+            Err(invalid_state()),
+        );
+    }
+
+    #[test]
+    fn row_argument_unification_rolls_back_before_retry() {
+        let span = row_test_span("row-argument-transaction.ash");
+        let mut elaborator = Elaborator::new();
+        let inference = elaborator
+            .fresh_inference(&Kind::Type, span)
+            .expect("the exact effect argument inference should fit");
+        let Type::Inference(variable) = inference else {
+            panic!("fresh ordinary inference should retain its identity");
+        };
+        let owner = crate::types::EffectId::new(ModuleId::new(0), 0);
+        let left = EffectRow::singleton(crate::types::EffectInstance::new(
+            owner,
+            Box::new([Type::Inference(variable), Type::Int]),
+        ));
+        let mismatch = EffectRow::singleton(crate::types::EffectInstance::new(
+            owner,
+            Box::new([Type::Bool, Type::Bool]),
+        ));
+
+        assert_eq!(
+            elaborator.unify_effect_rows(&left, &mismatch),
+            Err(UnificationFailure::Mismatch),
+        );
+        assert!(!elaborator.inference_solutions.contains_key(&variable));
+
+        let retry = EffectRow::singleton(crate::types::EffectInstance::new(
+            owner,
+            Box::new([Type::Bool, Type::Int]),
+        ));
+        elaborator
+            .unify_effect_rows(&left, &retry)
+            .expect("the rolled-back row argument should solve on retry");
+        assert_eq!(
+            elaborator.inference_solutions.get(&variable),
+            Some(&Type::Bool)
+        );
+    }
+
+    #[test]
+    fn row_solution_publication_is_exact_atomic_and_retryable() {
+        const SOLUTION_WORK: usize = 9;
+        let span = row_test_span("row-solution-budget.ash");
+        let mut elaborator = Elaborator::new();
+        let open = elaborator
+            .fresh_effect_row(span)
+            .expect("the row variable registration should fit");
+        let closed = EffectRow::singleton(row_test_effect("row-solution-effect.ash"));
+
+        elaborator.type_work = TypeWorkBudget::with_limit(SOLUTION_WORK - 1);
+        assert_eq!(
+            elaborator.unify_effect_rows(&open, &closed),
+            Err(UnificationFailure::Resource),
+        );
+        assert!(elaborator.row_inference_solutions.is_empty());
+        assert!(elaborator.authenticated_inference_solutions.is_empty());
+
+        elaborator.type_work = TypeWorkBudget::with_limit(SOLUTION_WORK);
+        assert_eq!(elaborator.unify_effect_rows(&open, &closed), Ok(()));
+        assert_eq!(elaborator.type_work.used(), SOLUTION_WORK);
+        elaborator.type_work = TypeWorkBudget::default();
+        assert_eq!(
+            elaborator
+                .zonk_effect_row(&open)
+                .expect("the retried row solution should remain valid"),
+            closed,
+        );
+    }
+
+    #[test]
+    fn row_inference_generalizes_and_instantiates_without_entering_value_positions() {
+        let span = row_test_span("row-polymorphism.ash");
+        let mut elaborator = Elaborator::new();
+        let inferred = elaborator
+            .fresh_effect_row(span)
+            .expect("a generalized row should fit");
+        let crate::types::EffectRowVariable::Inference(identity) = inferred
+            .tail()
+            .expect("the fresh row should be open")
+            .variable()
+        else {
+            panic!("a fresh row tail must be inferential");
+        };
+        let initializer = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(Type::Int, inferred),
+        );
+        let (quantified, generalized) = elaborator
+            .generalize_inference_variables(&[identity], &initializer)
+            .expect("an eligible row inference variable should generalize");
+        let [(binder, Kind::EffectRow)] = quantified.as_slice() else {
+            panic!("generalization should retain one row-kind binder");
+        };
+        let Type::EffectfulFunction(_, generalized_codomain) = &generalized else {
+            panic!("the generalized function should retain its latent row");
+        };
+        assert_eq!(
+            generalized_codomain
+                .effects()
+                .tail()
+                .expect("the generalized row remains open")
+                .variable(),
+            crate::types::EffectRowVariable::rigid(*binder),
+        );
+
+        let fact = TypeFact {
+            ty: generalized,
+            provenance: TypeProvenance::unknown(&initializer),
+            quantified: quantified.into_boxed_slice(),
+        };
+        let (instantiated, ordinary_arguments) = Elaborator::new()
+            .instantiate(&fact, false, span)
+            .expect("a row-kind binder should instantiate freshly");
+        assert!(ordinary_arguments.is_empty());
+        let Type::EffectfulFunction(_, instantiated_codomain) = instantiated else {
+            panic!("instantiation should retain the latent row");
+        };
+        assert!(matches!(
+            instantiated_codomain
+                .effects()
+                .tail()
+                .expect("the instantiated row remains open")
+                .variable(),
+            crate::types::EffectRowVariable::Inference(_),
+        ));
     }
 }

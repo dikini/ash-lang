@@ -1085,7 +1085,7 @@ mod tests {
                     depth += 1;
                     current = codomain;
                 }
-                Kind::Type => return depth,
+                Kind::Type | Kind::EffectRow => return depth,
             }
         }
     }

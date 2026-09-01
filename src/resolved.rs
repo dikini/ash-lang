@@ -21,10 +21,10 @@ use crate::{
     module::ModuleId,
     source::{Origin, Span, discard_origin_iteratively},
     types::{
-        ConstructorId, IterativeTypeOwner, Kind, NominalTypeId, Type, TypeVariableId,
-        TypeWorkBudget, charge_kind_with_charge, charge_type_cells, clone_arrows_with_budget,
-        clone_kind_with_budget, clone_type_with_budget, discard_type_iteratively,
-        same_kind_with_charge,
+        ConstructorId, EffectRowVariable, IterativeTypeOwner, Kind, NominalTypeId, Type,
+        TypeVariableId, TypeWorkBudget, charge_kind_with_charge, charge_type_cells,
+        clone_arrows_with_budget, clone_kind_with_budget, clone_type_with_budget,
+        discard_type_iteratively, same_kind_with_charge,
     },
 };
 
@@ -6189,6 +6189,26 @@ fn authenticate_summary_type_variables(
                 pending.push(argument);
                 pending.push(function);
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                if let Some(variable) = codomain.tail_variable() {
+                    match variable {
+                        EffectRowVariable::Rigid(variable) if allowed.contains(&variable) => {}
+                        EffectRowVariable::Rigid(_) | EffectRowVariable::Inference(_) => {
+                            return Err(ResolvedBuildFailure::InvalidState);
+                        }
+                    }
+                }
+                let children = codomain.effect_argument_count().saturating_add(2);
+                type_work
+                    .charge(children)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                pending
+                    .try_reserve(children)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                codomain.extend_effect_arguments(&mut pending);
+                pending.push(codomain.value());
+                pending.push(domain);
+            }
         }
     }
     Ok(())
@@ -6239,6 +6259,30 @@ fn collect_summary_constraint_variables(
                     .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
                 pending.push(argument);
                 pending.push(function);
+            }
+            Type::EffectfulFunction(domain, codomain) => {
+                if let Some(variable) = codomain.tail_variable() {
+                    let EffectRowVariable::Rigid(variable) = variable else {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    };
+                    constraint_work
+                        .charge(1)
+                        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                    output
+                        .try_reserve(1)
+                        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+                    output.insert(variable);
+                }
+                let children = codomain.effect_argument_count().saturating_add(2);
+                constraint_work
+                    .charge(children)
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(children)
+                    .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+                codomain.extend_effect_arguments(&mut pending);
+                pending.push(codomain.value());
+                pending.push(domain);
             }
             Type::Forall(_, _) | Type::Inference(_) => {
                 return Err(ResolvedBuildFailure::InvalidState);
@@ -13036,6 +13080,14 @@ fn collect_nominal_identities(
                 work.push(codomain);
                 work.push(domain);
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                let children = codomain.effect_argument_count().saturating_add(2);
+                budget.charge(children)?;
+                work.try_reserve(children).map_err(|_| ())?;
+                codomain.extend_effect_arguments(&mut work);
+                work.push(codomain.value());
+                work.push(domain);
+            }
             Type::Forall(_, body) => {
                 budget.charge(1)?;
                 work.try_reserve(1).map_err(|_| ())?;
@@ -14718,6 +14770,7 @@ impl ResolvedRegistry {
         enum Task<'a> {
             Type(&'a Type),
             ApplicationSpine(&'a Type),
+            EffectRow(&'a crate::types::EffectRow),
             Text(&'static str),
         }
 
@@ -14726,6 +14779,7 @@ impl ResolvedRegistry {
         while let Some(task) = work.pop() {
             match task {
                 Task::Text(text) => output.push_str(text),
+                Task::EffectRow(row) => output.push_str(&row.to_string()),
                 Task::Type(Type::Int) => output.push_str("Int"),
                 Task::Type(Type::Bool) => output.push_str("Bool"),
                 Task::Type(Type::Unit) => output.push_str("Unit"),
@@ -14763,7 +14817,12 @@ impl ResolvedRegistry {
                         work.push(Task::ApplicationSpine(function));
                     } else {
                         work.push(Task::Text("<"));
-                        if matches!(function.as_ref(), Type::Function(_, _) | Type::Forall(_, _)) {
+                        if matches!(
+                            function.as_ref(),
+                            Type::Function(_, _)
+                                | Type::EffectfulFunction(_, _)
+                                | Type::Forall(_, _)
+                        ) {
                             work.push(Task::Text(")"));
                             work.push(Task::Type(function));
                             work.push(Task::Text("("));
@@ -14804,6 +14863,22 @@ impl ResolvedRegistry {
                     work.push(Task::Type(codomain));
                     work.push(Task::Text(" -> "));
                     if matches!(domain.as_ref(), Type::Function(_, _)) {
+                        work.push(Task::Text(")"));
+                        work.push(Task::Type(domain));
+                        work.push(Task::Text("("));
+                    } else {
+                        work.push(Task::Type(domain));
+                    }
+                }
+                Task::Type(Type::EffectfulFunction(domain, codomain)) => {
+                    work.push(Task::EffectRow(codomain.effects()));
+                    work.push(Task::Text(" ! "));
+                    work.push(Task::Type(codomain.value()));
+                    work.push(Task::Text(" -> "));
+                    if matches!(
+                        domain.as_ref(),
+                        Type::Function(_, _) | Type::EffectfulFunction(_, _)
+                    ) {
                         work.push(Task::Text(")"));
                         work.push(Task::Type(domain));
                         work.push(Task::Text("("));

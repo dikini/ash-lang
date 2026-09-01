@@ -25,6 +25,21 @@ use ash::{
     types::{Kind, Type},
 };
 
+#[test]
+fn effect_row_carriers_have_one_shared_owner_gate_and_no_core_side_table() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let kind =
+        fs::read_to_string(root.join("src/kind.rs")).expect("kind source should be readable");
+    let types =
+        fs::read_to_string(root.join("src/types.rs")).expect("type source should be readable");
+
+    assert!(kind.contains("fn binder_kind_is_admitted"));
+    assert!(kind.contains("EffectRow cannot occur beneath a kind arrow"));
+    assert!(types.contains("pub struct ComputationType"));
+    assert!(types.contains("pub struct EffectRow"));
+    assert!(!types.contains("effect_row_side_table"));
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum InventoryScope {
     Field,
@@ -544,16 +559,17 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::$fn_compare_concrete_types::Task.Sequence.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/elaborate.rs::$fn_type_contains_inference::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/elaborate.rs::$fn_type_contains_inference::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
-    kind_site!("src/elaborate.rs::$impl_Elaborator::$fn_unify::Task.Pair.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate.rs::$impl_Elaborator::$fn_unify::Task.Pair.1", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate.rs::$impl_Elaborator::$fn_unify::Task.Sequence.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate.rs::$impl_Elaborator::$fn_unify::Task.Sequence.1", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate.rs::$impl_Elaborator::$fn_unify::Work.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::$impl_Elaborator::$fn_unify_recorded::Task.Pair.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::$impl_Elaborator::$fn_unify_recorded::Task.Pair.1", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::$impl_Elaborator::$fn_unify_recorded::Task.Sequence.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::$impl_Elaborator::$fn_unify_recorded::Task.Sequence.1", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::$impl_Elaborator::$fn_unify_recorded::Work.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::$fn_validate_and_charge_public_monotype::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/elaborate.rs::$fn_validate_and_charge_public_monotype::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
-    kind_site!("src/elaborate.rs::$fn_zonk_type::Task.FinishForall.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate.rs::$fn_zonk_type::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
-    kind_site!("src/elaborate.rs::$fn_zonk_type::Task.VisitSequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
+    kind_site!("src/elaborate.rs::$fn_zonk_type_with_rows::Task.FinishEffectfulFunction.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::$fn_zonk_type_with_rows::Task.FinishForall.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::$fn_zonk_type_with_rows::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
+    kind_site!("src/elaborate.rs::$fn_zonk_type_with_rows::Task.VisitSequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/elaborate.rs::$fn_zonk_type_with_status_and_inference::ChargeTask.Slice.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/elaborate.rs::$fn_zonk_type_with_status_and_inference::ChargeTask.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/elaborate.rs::ActiveEvidenceBinder.ty", FieldTransientValueTypeValueElaborationInferenceTypeTransientWork),
@@ -568,6 +584,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::CheckedPattern.pattern", FieldTransientCarrierRetentionPreservedCarrierElaborationCoreTypeTransientWork),
     kind_site!("src/elaborate.rs::CheckedSchemeBuffer.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CheckedTypeVariableBuffer.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::Elaborator.row_inference_solutions", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::RowInferenceSolutionMap.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CoreRecursiveMemberBuffer.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CorePatternBuffer.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CorePatternMatrixBuffer.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
@@ -838,6 +856,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolve.rs::$fn_surface_kind_to_kind::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_clone_imported_payload_with_budget::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_clone_imported_payload_with_budget::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
+    kind_site!("src/resolve.rs::$impl_Resolver::$fn_clone_imported_payload_with_budget::Task.EffectfulFunction.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_type::Task.Application.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_type::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_resolve_type::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
@@ -881,6 +900,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolve.rs::Resolver.imported", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolve.rs::ValidatedImportedConstructorRoute.exported", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::$impl_ResolvedRegistry::$fn_display_type_with_inference::Task.ApplicationSpine.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/resolved.rs::$impl_ResolvedRegistry::$fn_display_type_with_inference::Task.EffectRow.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/resolved.rs::$impl_ResolvedRegistry::$fn_display_type_with_inference::Task.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/resolved.rs::AuthorizedImplementationFact.fact", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
     kind_site!("src/resolved.rs::CanonicalNominalKind.Frozen.kind", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
@@ -1117,31 +1137,59 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/types.rs::Type.Forall.1", FieldCanonicalApplicationStructureStructuralSubtreeTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::Type.Function.0", FieldCanonicalApplicationStructureStructuralSubtreeTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::Type.Function.1", FieldCanonicalApplicationStructureStructuralSubtreeTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::Type.EffectfulFunction.0", FieldCanonicalApplicationStructureStructuralSubtreeTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::Type.EffectfulFunction.1", FieldCanonicalApplicationStructureStructuralSubtreeTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::Type.Tuple.0", FieldCanonicalApplicationStructureStructuralSubtreeTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::ComputationType.effects", FieldCanonicalApplicationStructureStructuralSubtreeTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::ComputationType.value", FieldCanonicalApplicationStructureStructuralSubtreeTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::EffectInstance.arguments", FieldCanonicalApplicationStructureStructuralSubtreeTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::EffectRow.known", FieldCanonicalApplicationStructureStructuralSubtreeTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::EffectRow.tail", FieldCanonicalApplicationStructureStructuralSubtreeTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::EffectRowTail.lacks", FieldCanonicalApplicationStructureStructuralSubtreeTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_charge_type_cells::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_charge_type_cells::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_clone_kind_with_budget::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/types.rs::$fn_clone_type_with_budget::Task.Forall.0", FieldTransientCarrierRetentionPreservedCarrierTypeOperationTypeTransientWork),
     kind_site!("src/types.rs::$fn_clone_type_with_budget::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_clone_type_with_budget::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_compare_types::Task.Instances.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_compare_types::Task.Instances.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_compare_types::Task.Kinds.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
+    kind_site!("src/types.rs::$fn_compare_types::Task.Kinds.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
+    kind_site!("src/types.rs::$fn_compare_types::Task.Rows.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_compare_types::Task.Rows.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_compare_types::Task.Types.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_compare_types::Task.Types.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_discard_type_iteratively::Task.Sequence.0", FieldTransientCarrierRetentionPreservedCarrierTypeOperationTypeTransientWork),
+    kind_site!("src/types.rs::$fn_discard_type_iteratively::Task.EffectInstances.0", FieldTransientCarrierRetentionPreservedCarrierTypeOperationTypeTransientWork),
     kind_site!("src/types.rs::$fn_discard_type_iteratively::Task.Visit.0", FieldTransientCarrierRetentionPreservedCarrierTypeOperationTypeTransientWork),
-    kind_site!("src/types.rs::$fn_hash_type::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
-    kind_site!("src/types.rs::$fn_hash_type::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::TypeHashTask.EffectRow.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::TypeHashTask.Instance.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::TypeHashTask.Instances.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::TypeHashTask.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::TypeHashTask.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_render_kind_with_budget::RenderedKind.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/types.rs::$fn_same_type::Task.Compare.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_same_type::Task.Compare.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_same_type::Task.CompareRows.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_same_type::Task.CompareRows.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_same_type::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_same_type_with_budget::Task.Compare.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_same_type_with_budget::Task.Compare.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_same_type_with_budget::Task.CompareRows.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_same_type_with_budget::Task.CompareRows.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_same_type_with_budget::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
-    kind_site!("src/types.rs::$fn_substitute_type_variables::Task.FinishForall.0", FieldTransientCarrierRetentionPreservedCarrierTypeOperationTypeTransientWork),
-    kind_site!("src/types.rs::$fn_substitute_type_variables::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
-    kind_site!("src/types.rs::$fn_substitute_type_variables::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
-    kind_site!("src/types.rs::$fn_substitute_type_variables_with::ChargeTask.Slice.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
-    kind_site!("src/types.rs::$fn_substitute_type_variables_with::ChargeTask.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_substitute_type_and_row_variables::Task.FinishForall.0", FieldTransientCarrierRetentionPreservedCarrierTypeOperationTypeTransientWork),
+    kind_site!("src/types.rs::$fn_substitute_type_and_row_variables::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_substitute_type_and_row_variables::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_substitute_type_and_row_variables_with::ChargeTask.Slice.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_substitute_type_and_row_variables_with::ChargeTask.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_write_kind::Task.kind", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/types.rs::$fn_write_type::Task.ApplicationSpine.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_write_type::Task.EffectInstance.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_write_type::Task.EffectInstances.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_write_type::Task.EffectRow.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_write_type::Task.EffectRowTail.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_write_type::Task.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_write_type::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::IterativeTypeOwner.0", FieldTransientCarrierRetentionPreservedCarrierTypeOperationTypeTransientWork),
@@ -1507,7 +1555,7 @@ fn canonical_nominal_kind_views_follow_ultimate_referents() {
 fn kind_inventory_is_closed() {
     fn exhaust_kind_variants(kind: &Kind) {
         match kind {
-            Kind::Type | Kind::Arrow(_, _) => {}
+            Kind::Type | Kind::EffectRow | Kind::Arrow(_, _) => {}
         }
     }
 
@@ -1522,7 +1570,8 @@ fn kind_inventory_is_closed() {
             | Type::Inference(_)
             | Type::Application(_, _)
             | Type::Forall(_, _)
-            | Type::Function(_, _) => {}
+            | Type::Function(_, _)
+            | Type::EffectfulFunction(_, _) => {}
         }
     }
 

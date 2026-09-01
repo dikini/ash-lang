@@ -2120,6 +2120,7 @@ fn collect_linked_constraint_variables(
                 pending.push(argument);
                 pending.push(function);
             }
+            Type::EffectfulFunction(_, _) => return Err(unknown(span)),
             Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
             Type::Inference(_) | Type::Forall(_, _) => return Err(unknown(span)),
         }
@@ -5568,6 +5569,7 @@ fn validate_type_with_application_policy(
                         pending.push(Task::Visit(codomain));
                         pending.push(Task::Visit(domain));
                     }
+                    Type::EffectfulFunction(_, _) => return Err(invalid_root(span)),
                 }
             }
             Task::Sequence(mut remaining) => {
@@ -5858,6 +5860,9 @@ fn substitute_evidence_type(
                 work.push(Task::FinishFunction);
                 work.push(Task::Visit(codomain, substitute));
                 work.push(Task::Visit(domain, substitute));
+            }
+            Task::Visit(Type::EffectfulFunction(_, _), _) => {
+                return Err(invalid_root(span));
             }
             Task::Sequence(mut remaining, substitute) => {
                 if let Some(next) = remaining.next() {

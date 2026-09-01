@@ -20,10 +20,30 @@ use ash::{
     module::{ModuleId, ModuleRoots, load_module_graph},
     resolve::resolve_module,
     source::SourceFile,
+    types::{ComputationType, EffectRow, EffectRowVariable, Kind, Type, TypeVariableId},
 };
 use support::run_module;
 
 static CORE_TEMP_IDS: AtomicU64 = AtomicU64::new(0);
+
+#[test]
+fn rank_one_schemes_retain_row_kind_binders_in_latent_computations() {
+    let binder = TypeVariableId::new(77);
+    let scheme = Type::Forall(
+        Box::new([(binder, Kind::EffectRow)]),
+        Box::new(Type::function_computation(
+            Type::Unit,
+            ComputationType::new(
+                Type::Int,
+                EffectRow::open(EffectRowVariable::rigid(binder), Box::new([])),
+            ),
+        )),
+    );
+
+    assert_eq!(scheme, scheme.clone());
+    assert!(scheme.to_string().contains("EffectRow"));
+    assert!(scheme.to_string().contains("<row-variable:generated:77>"));
+}
 
 fn run(text: &str) -> ash::driver::Observation {
     run_module("polymorphism.ash", text).expect("fixture should run")
@@ -696,6 +716,24 @@ fn eligible_local_relay_generalizes_higher_kinded_parameters() {
                 ash::types::Type::Function(domain, codomain) => {
                     work.push((codomain, true));
                     work.push((domain, true));
+                }
+                ash::types::Type::EffectfulFunction(domain, codomain) => {
+                    work.push((codomain.value(), true));
+                    work.push((domain, true));
+                    for member in codomain.effects().known().iter().chain(
+                        codomain
+                            .effects()
+                            .tail()
+                            .into_iter()
+                            .flat_map(|tail| tail.lacks().iter()),
+                    ) {
+                        work.extend(
+                            member
+                                .arguments()
+                                .iter()
+                                .map(|argument| (argument, below_function)),
+                        );
+                    }
                 }
                 ash::types::Type::Application(function, argument) => {
                     work.push((argument, below_function));

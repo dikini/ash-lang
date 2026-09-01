@@ -1,6 +1,7 @@
 //! Structural types shared by elaboration and Core.
 
 use std::{
+    cmp::Ordering,
     collections::HashMap,
     fmt,
     hash::{Hash, Hasher},
@@ -86,6 +87,23 @@ pub(crate) fn charge_type_cells(ty: &Type, budget: &mut TypeWorkBudget) -> Resul
                 work.push(Task::Visit(codomain));
                 work.push(Task::Visit(domain));
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                budget.charge(1)?;
+                budget.charge(1)?;
+                for instance in &codomain.effects.known {
+                    budget.charge(1)?;
+                    work.push(Task::Sequence(instance.arguments.iter()));
+                }
+                if let Some(tail) = &codomain.effects.tail {
+                    budget.charge(1)?;
+                    for instance in &tail.lacks {
+                        budget.charge(1)?;
+                        work.push(Task::Sequence(instance.arguments.iter()));
+                    }
+                }
+                work.push(Task::Visit(&codomain.value));
+                work.push(Task::Visit(domain));
+            }
             Type::Forall(parameters, body) => {
                 charge_kinded_type_parameters(parameters, budget)?;
                 work.push(Task::Visit(body));
@@ -101,6 +119,95 @@ pub(crate) fn charge_type_cells(ty: &Type, budget: &mut TypeWorkBudget) -> Resul
     Ok(())
 }
 
+pub(crate) fn charge_effect_row_cells(
+    row: &EffectRow,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), ()> {
+    budget.charge(1)?;
+    for instance in &row.known {
+        budget.charge(1)?;
+        for argument in &instance.arguments {
+            charge_type_cells(argument, budget)?;
+        }
+    }
+    if let Some(tail) = &row.tail {
+        budget.charge(1)?;
+        for instance in &tail.lacks {
+            budget.charge(1)?;
+            for argument in &instance.arguments {
+                charge_type_cells(argument, budget)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[allow(
+    dead_code,
+    reason = "the effect syntax and checked-summary steps consume this charged clone seam"
+)]
+pub(crate) fn clone_effect_row_with_budget(
+    row: &EffectRow,
+    budget: &mut TypeWorkBudget,
+) -> Result<EffectRow, ()> {
+    charge_effect_row_cells(row, budget)?;
+    Ok(clone_effect_row(row))
+}
+
+fn clone_effect_row(row: &EffectRow) -> EffectRow {
+    let clone_instance = |instance: &EffectInstance| -> EffectInstance {
+        let mut arguments = Vec::new();
+        arguments
+            .try_reserve(instance.arguments.len())
+            .expect("an in-memory row can reserve its argument clone");
+        for argument in &instance.arguments {
+            arguments.push(clone_type(argument));
+        }
+        EffectInstance::new(instance.effect, arguments.into_boxed_slice())
+    };
+    let mut known = Vec::new();
+    known
+        .try_reserve(row.known.len())
+        .expect("an in-memory row can reserve its member clone");
+    for instance in &row.known {
+        known.push(clone_instance(instance));
+    }
+    let tail = if let Some(tail) = &row.tail {
+        let mut lacks = Vec::new();
+        lacks
+            .try_reserve(tail.lacks.len())
+            .expect("an in-memory row can reserve its lacks clone");
+        for instance in &tail.lacks {
+            lacks.push(clone_instance(instance));
+        }
+        Some(EffectRowTail {
+            variable: tail.variable,
+            lacks: lacks.into_boxed_slice(),
+        })
+    } else {
+        None
+    };
+    EffectRow {
+        known: known.into_boxed_slice(),
+        tail,
+    }
+}
+
+#[allow(
+    dead_code,
+    reason = "the effect syntax and checked-summary steps consume this charged clone seam"
+)]
+pub(crate) fn clone_computation_type_with_budget(
+    computation: &ComputationType,
+    budget: &mut TypeWorkBudget,
+) -> Result<ComputationType, ()> {
+    budget.charge(1)?;
+    Ok(ComputationType::new(
+        clone_type_with_budget(&computation.value, budget)?,
+        clone_effect_row_with_budget(&computation.effects, budget)?,
+    ))
+}
+
 pub(crate) fn charge_kinded_type_parameters(
     parameters: &[(TypeVariableId, Kind)],
     budget: &mut TypeWorkBudget,
@@ -113,12 +220,19 @@ pub(crate) fn charge_kinded_type_parameters(
 }
 
 pub(crate) fn clone_type_with_budget(ty: &Type, budget: &mut TypeWorkBudget) -> Result<Type, ()> {
+    struct RowShape {
+        known: Box<[(EffectId, usize)]>,
+        tail: Option<(EffectRowVariable, Box<[(EffectId, usize)]>)>,
+        argument_count: usize,
+    }
+
     enum Task<'a> {
         Visit(&'a Type),
         Sequence(std::slice::Iter<'a, Type>),
         Tuple(usize),
         Application,
         Function,
+        EffectfulFunction(RowShape),
         Forall(Box<[(TypeVariableId, Kind)]>),
     }
 
@@ -147,6 +261,49 @@ pub(crate) fn clone_type_with_budget(ty: &Type, budget: &mut TypeWorkBudget) -> 
                 work.push(Task::Visit(codomain));
                 work.push(Task::Visit(domain));
             }
+            Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
+                let known = codomain
+                    .effects
+                    .known
+                    .iter()
+                    .map(|instance| (instance.effect, instance.arguments.len()))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
+                let tail = codomain.effects.tail.as_ref().map(|tail| {
+                    (
+                        tail.variable,
+                        tail.lacks
+                            .iter()
+                            .map(|instance| (instance.effect, instance.arguments.len()))
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
+                    )
+                });
+                let arguments = codomain
+                    .effects
+                    .known
+                    .iter()
+                    .chain(
+                        codomain
+                            .effects
+                            .tail
+                            .iter()
+                            .flat_map(|tail| tail.lacks.iter()),
+                    )
+                    .flat_map(|instance| instance.arguments.iter())
+                    .collect::<Vec<_>>();
+                let shape = RowShape {
+                    known,
+                    tail,
+                    argument_count: arguments.len(),
+                };
+                work.push(Task::EffectfulFunction(shape));
+                for argument in arguments.into_iter().rev() {
+                    work.push(Task::Visit(argument));
+                }
+                work.push(Task::Visit(&codomain.value));
+                work.push(Task::Visit(domain));
+            }
             Task::Visit(Type::Forall(parameters, body)) => {
                 work.push(Task::Forall(parameters.clone()));
                 work.push(Task::Visit(body));
@@ -169,7 +326,43 @@ pub(crate) fn clone_type_with_budget(ty: &Type, budget: &mut TypeWorkBudget) -> 
             Task::Function => {
                 let codomain = rebuilt.pop().expect("cloned function codomain");
                 let domain = rebuilt.pop().expect("cloned function domain");
-                rebuilt.push(Type::Function(Box::new(domain), Box::new(codomain)));
+                rebuilt.push(Type::function(domain, codomain));
+            }
+            Task::EffectfulFunction(shape) => {
+                let arguments = rebuilt.split_off(rebuilt.len() - shape.argument_count);
+                let mut arguments = arguments.into_iter();
+                let rebuild_instances =
+                    |instances: Box<[(EffectId, usize)]>,
+                     arguments: &mut std::vec::IntoIter<Type>| {
+                        instances
+                            .into_vec()
+                            .into_iter()
+                            .map(|(effect, count)| {
+                                EffectInstance::new(
+                                    effect,
+                                    arguments
+                                        .by_ref()
+                                        .take(count)
+                                        .collect::<Vec<_>>()
+                                        .into_boxed_slice(),
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice()
+                    };
+                let known = rebuild_instances(shape.known, &mut arguments);
+                let tail = shape.tail.map(|(variable, lacks)| EffectRowTail {
+                    variable,
+                    lacks: rebuild_instances(lacks, &mut arguments),
+                });
+                debug_assert!(arguments.next().is_none());
+                let effects = EffectRow { known, tail };
+                let codomain = rebuilt.pop().expect("cloned function codomain");
+                let domain = rebuilt.pop().expect("cloned function domain");
+                rebuilt.push(Type::function_computation(
+                    domain,
+                    ComputationType::new(codomain, effects),
+                ));
             }
             Task::Forall(parameters) => {
                 let body = rebuilt.pop().expect("cloned scheme body");
@@ -276,6 +469,784 @@ impl InferenceVariableId {
     }
 }
 
+/// Stable identity of one effect declaration.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct EffectId {
+    module: ModuleId,
+    declaration: u32,
+}
+
+impl EffectId {
+    /// Creates the identity for one source-order effect declaration.
+    #[must_use]
+    pub const fn new(module: ModuleId, declaration: u32) -> Self {
+        Self {
+            module,
+            declaration,
+        }
+    }
+
+    /// Returns the canonical module that owns the declaration.
+    #[must_use]
+    pub const fn module(self) -> ModuleId {
+        self.module
+    }
+
+    /// Returns the source-order declaration index.
+    #[must_use]
+    pub const fn declaration(self) -> u32 {
+        self.declaration
+    }
+}
+
+/// Stable identity of one operation within an effect declaration.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct OperationId {
+    owner: EffectId,
+    operation: u32,
+}
+
+impl OperationId {
+    /// Creates one source-order operation identity.
+    #[must_use]
+    pub const fn new(owner: EffectId, operation: u32) -> Self {
+        Self { owner, operation }
+    }
+
+    /// Returns the effect declaration that owns this operation.
+    #[must_use]
+    pub const fn owner(self) -> EffectId {
+        self.owner
+    }
+
+    /// Returns the source-order index within the owning effect.
+    #[must_use]
+    pub const fn operation(self) -> u32 {
+        self.operation
+    }
+}
+
+/// A rigid or inference variable used only as an effect-row tail.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum EffectRowVariable {
+    /// A source or generalized rank-1 binder of kind [`Kind::EffectRow`].
+    Rigid(TypeVariableId),
+    /// An elaborator inference variable registered at [`Kind::EffectRow`].
+    Inference(InferenceVariableId),
+}
+
+impl EffectRowVariable {
+    /// Creates a rigid row-tail occurrence.
+    #[must_use]
+    pub const fn rigid(identity: TypeVariableId) -> Self {
+        Self::Rigid(identity)
+    }
+
+    /// Creates an inference row-tail occurrence.
+    #[must_use]
+    pub const fn inference(identity: InferenceVariableId) -> Self {
+        Self::Inference(identity)
+    }
+}
+
+/// One exact effect application in a computation row.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct EffectInstance {
+    effect: EffectId,
+    arguments: Box<[Type]>,
+}
+
+impl EffectInstance {
+    /// Creates one exact effect instance from its stable identity and arguments.
+    #[must_use]
+    pub const fn new(effect: EffectId, arguments: Box<[Type]>) -> Self {
+        Self { effect, arguments }
+    }
+
+    /// Returns the stable effect declaration identity.
+    #[must_use]
+    pub const fn effect(&self) -> EffectId {
+        self.effect
+    }
+
+    /// Borrows the complete ordered type arguments.
+    #[must_use]
+    pub const fn arguments(&self) -> &[Type] {
+        &self.arguments
+    }
+}
+
+impl Drop for EffectInstance {
+    fn drop(&mut self) {
+        for argument in std::mem::take(&mut self.arguments).into_vec() {
+            discard_type_iteratively(argument);
+        }
+    }
+}
+
+/// One effect-row tail and the exact instances known absent from it.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct EffectRowTail {
+    variable: EffectRowVariable,
+    lacks: Box<[EffectInstance]>,
+}
+
+impl EffectRowTail {
+    /// Returns the rigid or inference row variable.
+    #[must_use]
+    pub const fn variable(&self) -> EffectRowVariable {
+        self.variable
+    }
+
+    /// Borrows the canonical exact instances known absent from the variable.
+    #[must_use]
+    pub const fn lacks(&self) -> &[EffectInstance] {
+        &self.lacks
+    }
+}
+
+/// A canonical unordered set of exact effect instances with at most one tail.
+#[derive(Debug, Default)]
+pub struct EffectRow {
+    known: Box<[EffectInstance]>,
+    tail: Option<EffectRowTail>,
+}
+
+/// A bounded effect-row algebra failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EffectRowError {
+    /// The operation would strengthen or equate unrelated open tails.
+    Ambiguous,
+    /// Exact removal proved that the requested instance is absent.
+    Missing,
+    /// A row-tail substitution would make the tail contain itself.
+    Infinite,
+}
+
+impl EffectRow {
+    /// Returns the closed empty effect row.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            known: Box::new([]),
+            tail: None,
+        }
+    }
+
+    /// Returns a closed singleton row.
+    #[must_use]
+    pub fn singleton(instance: EffectInstance) -> Self {
+        Self {
+            known: Box::new([instance]),
+            tail: None,
+        }
+    }
+
+    /// Returns a canonical open row with no known members.
+    #[must_use]
+    pub fn open(variable: EffectRowVariable, lacks: Box<[EffectInstance]>) -> Self {
+        Self::with_tail(Box::new([]), variable, lacks)
+    }
+
+    /// Returns a canonical open row and preserves all supplied lacks facts.
+    #[must_use]
+    pub fn with_tail(
+        known: Box<[EffectInstance]>,
+        variable: EffectRowVariable,
+        lacks: Box<[EffectInstance]>,
+    ) -> Self {
+        let known = canonical_instances(known.into_vec()).into_boxed_slice();
+        let mut lacks = lacks.into_vec();
+        lacks.extend(known.iter().cloned());
+        let lacks = canonical_instances(lacks).into_boxed_slice();
+        Self {
+            known,
+            tail: Some(EffectRowTail { variable, lacks }),
+        }
+    }
+
+    /// Returns a canonical closed row, coalescing repeated inferred members.
+    #[must_use]
+    pub fn closed(known: Box<[EffectInstance]>) -> Self {
+        Self {
+            known: canonical_instances(known.into_vec()).into_boxed_slice(),
+            tail: None,
+        }
+    }
+
+    /// Borrows the canonical known members.
+    #[must_use]
+    pub const fn known(&self) -> &[EffectInstance] {
+        &self.known
+    }
+
+    /// Borrows the optional open tail.
+    #[must_use]
+    pub const fn tail(&self) -> Option<&EffectRowTail> {
+        self.tail.as_ref()
+    }
+
+    /// Reports whether this row is closed and has no known members.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.known.is_empty() && self.tail.is_none()
+    }
+
+    /// Computes the least principal union admitted by the one-tail kernel.
+    pub fn union(&self, other: &Self) -> Result<Self, EffectRowError> {
+        match (&self.tail, &other.tail) {
+            (Some(left), Some(right)) if left.variable != right.variable => {
+                return Err(EffectRowError::Ambiguous);
+            }
+            _ => {}
+        }
+
+        if let Some(tail) = &self.tail {
+            for instance in other
+                .known
+                .iter()
+                .filter(|instance| !contains_instance(&self.known, instance))
+            {
+                if !contains_instance(&tail.lacks, instance) {
+                    return Err(EffectRowError::Ambiguous);
+                }
+            }
+        }
+        if let Some(tail) = &other.tail {
+            for instance in self
+                .known
+                .iter()
+                .filter(|instance| !contains_instance(&other.known, instance))
+            {
+                if !contains_instance(&tail.lacks, instance) {
+                    return Err(EffectRowError::Ambiguous);
+                }
+            }
+        }
+
+        let mut known = self.known.to_vec();
+        known.extend(other.known.iter().cloned());
+        let known = canonical_instances(known).into_boxed_slice();
+        let tail = match (&self.tail, &other.tail) {
+            (None, None) => None,
+            (Some(tail), None) | (None, Some(tail)) => Some(tail.clone()),
+            (Some(left), Some(right)) => {
+                let mut lacks = left.lacks.to_vec();
+                lacks.extend(right.lacks.iter().cloned());
+                Some(EffectRowTail {
+                    variable: left.variable,
+                    lacks: canonical_instances(lacks).into_boxed_slice(),
+                })
+            }
+        };
+        Ok(Self { known, tail })
+    }
+
+    /// Removes one exact member without masking another instance of the API.
+    pub fn remove_exact(&self, target: &EffectInstance) -> Result<Self, EffectRowError> {
+        if contains_instance(&self.known, target) {
+            let known = self
+                .known
+                .iter()
+                .filter(|instance| *instance != target)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            return Ok(Self {
+                known,
+                tail: self.tail.clone(),
+            });
+        }
+        match &self.tail {
+            Some(tail) if !contains_instance(&tail.lacks, target) => Err(EffectRowError::Ambiguous),
+            _ => Err(EffectRowError::Missing),
+        }
+    }
+
+    /// Applies capture-free ordinary type substitution to every exact instance.
+    ///
+    /// Row tails remain row variables; their own substitution is performed by
+    /// the elaborator's fixed-kind row transaction.
+    #[must_use]
+    pub fn substitute_type_variables(&self, replacements: &HashMap<TypeVariableId, Type>) -> Self {
+        substitute_effect_row_type_variables(self, replacements)
+    }
+
+    pub(crate) fn substitute_tail_once(
+        &self,
+        target: EffectRowVariable,
+        replacement: &Self,
+    ) -> Result<Self, EffectRowError> {
+        let Some(tail) = &self.tail else {
+            return Ok(self.clone());
+        };
+        if tail.variable != target {
+            return Ok(self.clone());
+        }
+        if replacement
+            .tail
+            .as_ref()
+            .is_some_and(|replacement_tail| replacement_tail.variable == target)
+        {
+            return Err(EffectRowError::Infinite);
+        }
+        if replacement
+            .known
+            .iter()
+            .any(|member| contains_instance(&tail.lacks, member))
+        {
+            return Err(EffectRowError::Missing);
+        }
+
+        let mut known = self.known.to_vec();
+        known.extend(replacement.known.iter().cloned());
+        match &replacement.tail {
+            None => Ok(Self::closed(known.into_boxed_slice())),
+            Some(replacement_tail) => {
+                let mut lacks = tail.lacks.to_vec();
+                lacks.extend(replacement_tail.lacks.iter().cloned());
+                Ok(Self::with_tail(
+                    known.into_boxed_slice(),
+                    replacement_tail.variable,
+                    lacks.into_boxed_slice(),
+                ))
+            }
+        }
+    }
+
+    pub(crate) fn map_type_arguments(&self, mut map: impl FnMut(&Type) -> Type) -> Self {
+        let map_instance =
+            |instance: &EffectInstance, map: &mut dyn FnMut(&Type) -> Type| -> EffectInstance {
+                EffectInstance::new(
+                    instance.effect,
+                    instance
+                        .arguments
+                        .iter()
+                        .map(map)
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                )
+            };
+        let known = self
+            .known
+            .iter()
+            .map(|instance| map_instance(instance, &mut map))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        if let Some(tail) = &self.tail {
+            Self::with_tail(
+                known,
+                tail.variable,
+                tail.lacks
+                    .iter()
+                    .map(|instance| map_instance(instance, &mut map))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            )
+        } else {
+            Self::closed(known)
+        }
+    }
+}
+
+fn contains_instance(instances: &[EffectInstance], target: &EffectInstance) -> bool {
+    instances.iter().any(|instance| instance == target)
+}
+
+fn canonical_instances(mut instances: Vec<EffectInstance>) -> Vec<EffectInstance> {
+    instances.sort_by(compare_effect_instances);
+    instances.dedup();
+    instances
+}
+
+fn compare_effect_instances(left: &EffectInstance, right: &EffectInstance) -> Ordering {
+    left.effect.cmp(&right.effect).then_with(|| {
+        left.arguments
+            .len()
+            .cmp(&right.arguments.len())
+            .then_with(|| {
+                left.arguments
+                    .iter()
+                    .zip(right.arguments.iter())
+                    .find_map(|(left, right)| {
+                        let ordering = compare_types(left, right);
+                        (ordering != Ordering::Equal).then_some(ordering)
+                    })
+                    .unwrap_or(Ordering::Equal)
+            })
+    })
+}
+
+fn compare_types(left: &Type, right: &Type) -> Ordering {
+    enum Task<'a> {
+        Types(&'a Type, &'a Type),
+        Kinds(&'a Kind, &'a Kind),
+        Rows(&'a EffectRow, &'a EffectRow),
+        Instances(&'a EffectInstance, &'a EffectInstance),
+    }
+
+    fn type_tag(ty: &Type) -> u8 {
+        match ty {
+            Type::Int => 0,
+            Type::Bool => 1,
+            Type::Unit => 2,
+            Type::Tuple(_) => 3,
+            Type::Nominal(_) => 4,
+            Type::Variable(_) => 5,
+            Type::Inference(_) => 6,
+            Type::Application(_, _) => 7,
+            Type::Forall(_, _) => 8,
+            Type::Function(_, _) | Type::EffectfulFunction(_, _) => 9,
+        }
+    }
+
+    fn kind_tag(kind: &Kind) -> u8 {
+        match kind {
+            Kind::Type => 0,
+            Kind::EffectRow => 1,
+            Kind::Arrow(_, _) => 2,
+        }
+    }
+
+    fn variable_order(left: EffectRowVariable, right: EffectRowVariable) -> Ordering {
+        match (left, right) {
+            (EffectRowVariable::Rigid(left), EffectRowVariable::Rigid(right)) => left.cmp(&right),
+            (EffectRowVariable::Inference(left), EffectRowVariable::Inference(right)) => {
+                left.value().cmp(&right.value())
+            }
+            (EffectRowVariable::Rigid(_), EffectRowVariable::Inference(_)) => Ordering::Less,
+            (EffectRowVariable::Inference(_), EffectRowVariable::Rigid(_)) => Ordering::Greater,
+        }
+    }
+
+    let mut work = vec![Task::Types(left, right)];
+    while let Some(task) = work.pop() {
+        let ordering = match task {
+            Task::Types(left, right) => {
+                let tags = type_tag(left).cmp(&type_tag(right));
+                if tags != Ordering::Equal {
+                    tags
+                } else {
+                    match (left, right) {
+                        (Type::Int, Type::Int)
+                        | (Type::Bool, Type::Bool)
+                        | (Type::Unit, Type::Unit) => Ordering::Equal,
+                        (Type::Nominal(left), Type::Nominal(right)) => left.cmp(right),
+                        (Type::Variable(left), Type::Variable(right)) => left.cmp(right),
+                        (Type::Inference(left), Type::Inference(right)) => {
+                            left.value().cmp(&right.value())
+                        }
+                        (Type::Tuple(left), Type::Tuple(right)) => {
+                            let lengths = left.len().cmp(&right.len());
+                            if lengths == Ordering::Equal {
+                                for (left, right) in left.iter().zip(right).rev() {
+                                    work.push(Task::Types(left, right));
+                                }
+                            }
+                            lengths
+                        }
+                        (
+                            Type::Application(left_function, left_argument),
+                            Type::Application(right_function, right_argument),
+                        ) => {
+                            work.push(Task::Types(left_argument, right_argument));
+                            work.push(Task::Types(left_function, right_function));
+                            Ordering::Equal
+                        }
+                        (
+                            Type::Forall(left_parameters, left),
+                            Type::Forall(right_parameters, right),
+                        ) => {
+                            let lengths = left_parameters.len().cmp(&right_parameters.len());
+                            if lengths == Ordering::Equal {
+                                work.push(Task::Types(left, right));
+                                for ((left_id, left_kind), (right_id, right_kind)) in
+                                    left_parameters.iter().zip(right_parameters).rev()
+                                {
+                                    work.push(Task::Kinds(left_kind, right_kind));
+                                    if left_id != right_id {
+                                        return left_id.cmp(right_id);
+                                    }
+                                }
+                            }
+                            lengths
+                        }
+                        (
+                            Type::Function(left_domain, left_value),
+                            Type::Function(right_domain, right_value),
+                        ) => {
+                            work.push(Task::Types(left_value, right_value));
+                            work.push(Task::Types(left_domain, right_domain));
+                            Ordering::Equal
+                        }
+                        (
+                            Type::EffectfulFunction(left_domain, left_computation),
+                            Type::EffectfulFunction(right_domain, right_computation),
+                        ) => {
+                            work.push(Task::Rows(
+                                &left_computation.effects,
+                                &right_computation.effects,
+                            ));
+                            work.push(Task::Types(
+                                &left_computation.value,
+                                &right_computation.value,
+                            ));
+                            work.push(Task::Types(left_domain, right_domain));
+                            Ordering::Equal
+                        }
+                        (
+                            Type::Function(left_domain, left_value),
+                            Type::EffectfulFunction(right_domain, right_computation),
+                        ) if right_computation.effects.is_empty() => {
+                            work.push(Task::Types(left_value, &right_computation.value));
+                            work.push(Task::Types(left_domain, right_domain));
+                            Ordering::Equal
+                        }
+                        (
+                            Type::EffectfulFunction(left_domain, left_computation),
+                            Type::Function(right_domain, right_value),
+                        ) if left_computation.effects.is_empty() => {
+                            work.push(Task::Types(&left_computation.value, right_value));
+                            work.push(Task::Types(left_domain, right_domain));
+                            Ordering::Equal
+                        }
+                        (Type::Function(_, _), Type::EffectfulFunction(_, _)) => Ordering::Less,
+                        (Type::EffectfulFunction(_, _), Type::Function(_, _)) => Ordering::Greater,
+                        _ => unreachable!("equal type tags have one structural family"),
+                    }
+                }
+            }
+            Task::Kinds(left, right) => {
+                let tags = kind_tag(left).cmp(&kind_tag(right));
+                if tags != Ordering::Equal {
+                    tags
+                } else if let (
+                    Kind::Arrow(left_domain, left_codomain),
+                    Kind::Arrow(right_domain, right_codomain),
+                ) = (left, right)
+                {
+                    work.push(Task::Kinds(left_codomain, right_codomain));
+                    work.push(Task::Kinds(left_domain, right_domain));
+                    Ordering::Equal
+                } else {
+                    Ordering::Equal
+                }
+            }
+            Task::Rows(left, right) => {
+                let lengths = left.known.len().cmp(&right.known.len());
+                if lengths != Ordering::Equal {
+                    lengths
+                } else {
+                    match (&left.tail, &right.tail) {
+                        (None, Some(_)) => return Ordering::Less,
+                        (Some(_), None) => return Ordering::Greater,
+                        (Some(left_tail), Some(right_tail)) => {
+                            let variables = variable_order(left_tail.variable, right_tail.variable);
+                            if variables != Ordering::Equal {
+                                return variables;
+                            }
+                            let lacks_lengths = left_tail.lacks.len().cmp(&right_tail.lacks.len());
+                            if lacks_lengths != Ordering::Equal {
+                                return lacks_lengths;
+                            }
+                            for (left, right) in left_tail.lacks.iter().zip(&right_tail.lacks).rev()
+                            {
+                                work.push(Task::Instances(left, right));
+                            }
+                        }
+                        (None, None) => {}
+                    }
+                    for (left, right) in left.known.iter().zip(&right.known).rev() {
+                        work.push(Task::Instances(left, right));
+                    }
+                    Ordering::Equal
+                }
+            }
+            Task::Instances(left, right) => {
+                let effects = left.effect.cmp(&right.effect);
+                if effects != Ordering::Equal {
+                    effects
+                } else {
+                    let lengths = left.arguments.len().cmp(&right.arguments.len());
+                    if lengths == Ordering::Equal {
+                        for (left, right) in left.arguments.iter().zip(&right.arguments).rev() {
+                            work.push(Task::Types(left, right));
+                        }
+                    }
+                    lengths
+                }
+            }
+        };
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+    Ordering::Equal
+}
+
+impl Clone for EffectRow {
+    fn clone(&self) -> Self {
+        Self {
+            known: self.known.clone(),
+            tail: self.tail.clone(),
+        }
+    }
+}
+
+impl PartialEq for EffectRow {
+    fn eq(&self, other: &Self) -> bool {
+        fn same_instances(left: &[EffectInstance], right: &[EffectInstance]) -> bool {
+            left.len() == right.len()
+                && left.iter().zip(right).all(|(left, right)| {
+                    left.effect == right.effect
+                        && left.arguments.len() == right.arguments.len()
+                        && left
+                            .arguments
+                            .iter()
+                            .zip(right.arguments.iter())
+                            .all(|(left, right)| same_type(left, right))
+                })
+        }
+
+        same_instances(&self.known, &other.known)
+            && match (&self.tail, &other.tail) {
+                (None, None) => true,
+                (Some(left), Some(right)) => {
+                    left.variable == right.variable && same_instances(&left.lacks, &right.lacks)
+                }
+                _ => false,
+            }
+    }
+}
+
+impl Eq for EffectRow {}
+
+impl Hash for EffectRow {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_type_or_effect_row(TypeHashTask::EffectRow(self), state);
+    }
+}
+
+impl Drop for EffectRow {
+    fn drop(&mut self) {
+        drop(std::mem::take(&mut self.known));
+        if let Some(tail) = self.tail.take() {
+            drop(tail.lacks);
+        }
+    }
+}
+
+impl fmt::Display for EffectRow {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("{")?;
+        for (index, instance) in self.known.iter().enumerate() {
+            if index > 0 {
+                formatter.write_str(", ")?;
+            }
+            write!(
+                formatter,
+                "<effect:{}:{}>",
+                instance.effect.module, instance.effect.declaration
+            )?;
+            if !instance.arguments.is_empty() {
+                formatter.write_str("<")?;
+                for (argument_index, argument) in instance.arguments.iter().enumerate() {
+                    if argument_index > 0 {
+                        formatter.write_str(", ")?;
+                    }
+                    write!(formatter, "{argument}")?;
+                }
+                formatter.write_str(">")?;
+            }
+        }
+        if let Some(tail) = &self.tail {
+            if !self.known.is_empty() {
+                formatter.write_str(" ")?;
+            }
+            formatter.write_str("| ")?;
+            match tail.variable {
+                EffectRowVariable::Rigid(TypeVariableId::Resolved { module, local }) => {
+                    write!(formatter, "<row-variable:{module}:{local}>")?;
+                }
+                EffectRowVariable::Rigid(TypeVariableId::Generated(local)) => {
+                    write!(formatter, "<row-variable:generated:{local}>")?;
+                }
+                EffectRowVariable::Inference(identity) => {
+                    write!(formatter, "?row{}", identity.value())?;
+                }
+            }
+        }
+        formatter.write_str("}")
+    }
+}
+
+/// A computation result pairs one value type with one effect row.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ComputationType {
+    pub(crate) value: Type,
+    pub(crate) effects: EffectRow,
+}
+
+impl ComputationType {
+    /// Creates a computation type from its value and effect components.
+    #[must_use]
+    pub const fn new(value: Type, effects: EffectRow) -> Self {
+        Self { value, effects }
+    }
+
+    /// Compatibility constructor for a pure computation result.
+    #[must_use]
+    pub fn pure(value: Type) -> Self {
+        Self::new(value, EffectRow::empty())
+    }
+
+    /// Borrows the returned value type.
+    #[must_use]
+    pub const fn value(&self) -> &Type {
+        &self.value
+    }
+
+    /// Borrows the latent effect row.
+    #[must_use]
+    pub const fn effects(&self) -> &EffectRow {
+        &self.effects
+    }
+
+    pub(crate) fn tail_variable(&self) -> Option<EffectRowVariable> {
+        self.effects.tail.as_ref().map(|tail| tail.variable)
+    }
+
+    pub(crate) fn effect_arguments(&self) -> impl Iterator<Item = &Type> {
+        self.effects
+            .known
+            .iter()
+            .chain(self.effects.tail.iter().flat_map(|tail| tail.lacks.iter()))
+            .flat_map(|instance| instance.arguments.iter())
+    }
+
+    pub(crate) fn effect_argument_count(&self) -> usize {
+        self.effect_arguments().count()
+    }
+
+    pub(crate) fn extend_effect_arguments<'a>(&'a self, output: &mut Vec<&'a Type>) {
+        output.extend(self.effect_arguments());
+    }
+}
+
+impl std::ops::Deref for ComputationType {
+    type Target = Type;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
+impl AsRef<Type> for ComputationType {
+    fn as_ref(&self) -> &Type {
+        &self.value
+    }
+}
+
 impl ConstructorId {
     /// Creates one source-order constructor identity under its nominal owner.
     #[must_use]
@@ -340,8 +1311,10 @@ pub enum Type {
     Application(Box<Type>, Box<Type>),
     /// A rank-1 type scheme binding variables in its monotype body.
     Forall(Box<[(TypeVariableId, Kind)]>, Box<Type>),
-    /// A unary function from a domain to a codomain.
+    /// A unary function whose canonical computation codomain has an empty row.
     Function(Box<Type>, Box<Type>),
+    /// A unary function whose computation codomain has a nonempty or open row.
+    EffectfulFunction(Box<Type>, Box<ComputationType>),
 }
 
 /// Crate-internal ownership guard for a type crossing fallible work.
@@ -387,6 +1360,22 @@ impl Drop for IterativeTypeOwner {
 }
 
 impl Type {
+    /// Compatibility constructor for a function with an empty latent row.
+    #[must_use]
+    pub fn function(domain: Type, codomain: Type) -> Self {
+        Self::Function(Box::new(domain), Box::new(codomain))
+    }
+
+    /// Creates a function and canonicalizes an empty computation row.
+    #[must_use]
+    pub fn function_computation(domain: Type, codomain: ComputationType) -> Self {
+        if codomain.effects.is_empty() {
+            Self::function(domain, codomain.value)
+        } else {
+            Self::EffectfulFunction(Box::new(domain), Box::new(codomain))
+        }
+    }
+
     /// Returns the nominal constructor at the left edge of an application.
     #[must_use]
     pub fn outer_nominal(&self) -> Option<NominalTypeId> {
@@ -486,6 +1475,7 @@ pub fn discard_type_iteratively(root: Type) {
     enum Task {
         Visit(Type),
         Sequence(std::vec::IntoIter<Type>),
+        EffectInstances(std::vec::IntoIter<EffectInstance>),
     }
 
     let mut work = vec![Task::Visit(root)];
@@ -496,7 +1486,23 @@ pub fn discard_type_iteratively(root: Type) {
         if let Task::Visit(ty) = &task {
             let children = match ty {
                 Type::Tuple(elements) => elements.len(),
-                Type::Application(_, _) | Type::Function(_, _) => 2,
+                Type::Application(_, _) => 2,
+                Type::Function(_, _) => 2,
+                Type::EffectfulFunction(_, codomain) => {
+                    2 + codomain
+                        .effects
+                        .known
+                        .iter()
+                        .chain(
+                            codomain
+                                .effects
+                                .tail
+                                .iter()
+                                .flat_map(|tail| tail.lacks.iter()),
+                        )
+                        .map(|instance| instance.arguments.len())
+                        .sum::<usize>()
+                }
                 Type::Forall(_, _) => 1,
                 Type::Int
                 | Type::Bool
@@ -519,6 +1525,21 @@ pub fn discard_type_iteratively(root: Type) {
                 work.push(Task::Visit(*codomain));
                 work.push(Task::Visit(*domain));
             }
+            Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
+                let ComputationType { value, mut effects } = *codomain;
+                let known = std::mem::take(&mut effects.known).into_vec().into_iter();
+                let lacks = effects
+                    .tail
+                    .take()
+                    .map(|tail| tail.lacks.into_vec().into_iter());
+                drop(effects);
+                if let Some(lacks) = lacks {
+                    work.push(Task::EffectInstances(lacks));
+                }
+                work.push(Task::EffectInstances(known));
+                work.push(Task::Visit(value));
+                work.push(Task::Visit(*domain));
+            }
             Task::Visit(Type::Forall(_, body)) => work.push(Task::Visit(*body)),
             Task::Visit(
                 Type::Int
@@ -532,6 +1553,16 @@ pub fn discard_type_iteratively(root: Type) {
                 if let Some(ty) = remaining.next() {
                     work.push(Task::Sequence(remaining));
                     work.push(Task::Visit(ty));
+                }
+            }
+            Task::EffectInstances(mut remaining) => {
+                if let Some(mut instance) = remaining.next() {
+                    let arguments = std::mem::take(&mut instance.arguments)
+                        .into_vec()
+                        .into_iter();
+                    drop(instance);
+                    work.push(Task::EffectInstances(remaining));
+                    work.push(Task::Sequence(arguments));
                 }
             }
         }
@@ -558,6 +1589,10 @@ fn write_type(ty: &Type, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
     enum Task<'a> {
         Visit(&'a Type),
         ApplicationSpine(&'a Type),
+        EffectRow(&'a EffectRow),
+        EffectInstances(std::slice::Iter<'a, EffectInstance>),
+        EffectInstance(&'a EffectInstance),
+        EffectRowTail(&'a EffectRowTail, bool),
         Text(&'static str),
         Sequence(std::slice::Iter<'a, Type>),
     }
@@ -566,6 +1601,49 @@ fn write_type(ty: &Type, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
     while let Some(task) = work.pop() {
         match task {
             Task::Text(text) => formatter.write_str(text)?,
+            Task::EffectRow(row) => {
+                formatter.write_str("{")?;
+                work.push(Task::Text("}"));
+                if let Some(tail) = &row.tail {
+                    work.push(Task::EffectRowTail(tail, !row.known.is_empty()));
+                }
+                work.push(Task::EffectInstances(row.known.iter()));
+            }
+            Task::EffectInstances(mut remaining) => {
+                if let Some(next) = remaining.next() {
+                    if !remaining.as_slice().is_empty() {
+                        work.push(Task::EffectInstances(remaining));
+                        work.push(Task::Text(", "));
+                    }
+                    work.push(Task::EffectInstance(next));
+                }
+            }
+            Task::EffectInstance(instance) => {
+                write!(
+                    formatter,
+                    "<effect:{}:{}>",
+                    instance.effect.module, instance.effect.declaration
+                )?;
+                if !instance.arguments.is_empty() {
+                    work.push(Task::Text(">"));
+                    work.push(Task::Sequence(instance.arguments.iter()));
+                    work.push(Task::Text("<"));
+                }
+            }
+            Task::EffectRowTail(tail, after_known) => {
+                formatter.write_str(if after_known { " | " } else { "| " })?;
+                match tail.variable {
+                    EffectRowVariable::Rigid(TypeVariableId::Resolved { module, local }) => {
+                        write!(formatter, "<row-variable:{module}:{local}>")?;
+                    }
+                    EffectRowVariable::Rigid(TypeVariableId::Generated(local)) => {
+                        write!(formatter, "<row-variable:generated:{local}>")?;
+                    }
+                    EffectRowVariable::Inference(identity) => {
+                        write!(formatter, "?row{}", identity.value())?;
+                    }
+                }
+            }
             Task::Sequence(mut remaining) => {
                 if let Some(next) = remaining.next() {
                     if !remaining.as_slice().is_empty() {
@@ -606,7 +1684,10 @@ fn write_type(ty: &Type, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                     work.push(Task::ApplicationSpine(function));
                 } else {
                     work.push(Task::Text("<"));
-                    if matches!(function.as_ref(), Type::Function(_, _) | Type::Forall(_, _)) {
+                    if matches!(
+                        function.as_ref(),
+                        Type::Function(_, _) | Type::EffectfulFunction(_, _) | Type::Forall(_, _)
+                    ) {
                         work.push(Task::Text(")"));
                         work.push(Task::Visit(function));
                         work.push(Task::Text("("));
@@ -630,7 +1711,28 @@ fn write_type(ty: &Type, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             Task::Visit(Type::Function(domain, codomain)) => {
                 work.push(Task::Visit(codomain));
                 work.push(Task::Text(" -> "));
-                if matches!(domain.as_ref(), Type::Function(_, _)) {
+                if matches!(
+                    domain.as_ref(),
+                    Type::Function(_, _) | Type::EffectfulFunction(_, _)
+                ) {
+                    work.push(Task::Text(")"));
+                    work.push(Task::Visit(domain));
+                    work.push(Task::Text("("));
+                } else {
+                    work.push(Task::Visit(domain));
+                }
+            }
+            Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
+                if !codomain.effects.is_empty() {
+                    work.push(Task::EffectRow(&codomain.effects));
+                    work.push(Task::Text(" ! "));
+                }
+                work.push(Task::Visit(&codomain.value));
+                work.push(Task::Text(" -> "));
+                if matches!(
+                    domain.as_ref(),
+                    Type::Function(_, _) | Type::EffectfulFunction(_, _)
+                ) {
                     work.push(Task::Text(")"));
                     work.push(Task::Visit(domain));
                     work.push(Task::Text("("));
@@ -661,17 +1763,54 @@ pub(crate) fn render_type_with_budget(
 pub fn same_type(left: &Type, right: &Type) -> bool {
     enum Task<'a> {
         Compare(&'a Type, &'a Type),
+        CompareRows(&'a EffectRow, &'a EffectRow),
         Sequence(std::iter::Zip<std::slice::Iter<'a, Type>, std::slice::Iter<'a, Type>>),
     }
     let mut pending = vec![Task::Compare(left, right)];
     while let Some(task) = pending.pop() {
         let Task::Compare(left, right) = task else {
-            let Task::Sequence(mut remaining) = task else {
-                unreachable!()
-            };
-            if let Some((left, right)) = remaining.next() {
-                pending.push(Task::Sequence(remaining));
-                pending.push(Task::Compare(left, right));
+            match task {
+                Task::Sequence(mut remaining) => {
+                    if let Some((left, right)) = remaining.next() {
+                        pending.push(Task::Sequence(remaining));
+                        pending.push(Task::Compare(left, right));
+                    }
+                }
+                Task::CompareRows(left, right) => {
+                    if left.known.len() != right.known.len() {
+                        return false;
+                    }
+                    for (left, right) in left.known.iter().zip(right.known.iter()) {
+                        if left.effect != right.effect
+                            || left.arguments.len() != right.arguments.len()
+                        {
+                            return false;
+                        }
+                        pending.push(Task::Sequence(
+                            left.arguments.iter().zip(right.arguments.iter()),
+                        ));
+                    }
+                    match (&left.tail, &right.tail) {
+                        (None, None) => {}
+                        (Some(left), Some(right))
+                            if left.variable == right.variable
+                                && left.lacks.len() == right.lacks.len() =>
+                        {
+                            for (left, right) in left.lacks.iter().zip(right.lacks.iter()) {
+                                if left.effect != right.effect
+                                    || left.arguments.len() != right.arguments.len()
+                                {
+                                    return false;
+                                }
+                                pending.push(Task::Sequence(
+                                    left.arguments.iter().zip(right.arguments.iter()),
+                                ));
+                            }
+                        }
+                        _ => return false,
+                    }
+                }
+                Task::Compare(_, _) => unreachable!(),
             }
             continue;
         };
@@ -700,6 +1839,28 @@ pub fn same_type(left: &Type, right: &Type) -> bool {
                 Type::Function(right_domain, right_codomain),
             ) => {
                 pending.push(Task::Compare(left_codomain, right_codomain));
+                pending.push(Task::Compare(left_domain, right_domain));
+            }
+            (
+                Type::EffectfulFunction(left_domain, left_codomain),
+                Type::EffectfulFunction(right_domain, right_codomain),
+            ) => {
+                pending.push(Task::CompareRows(
+                    &left_codomain.effects,
+                    &right_codomain.effects,
+                ));
+                pending.push(Task::Compare(&left_codomain.value, &right_codomain.value));
+                pending.push(Task::Compare(left_domain, right_domain));
+            }
+            (
+                Type::Function(left_domain, left_codomain),
+                Type::EffectfulFunction(right_domain, right_codomain),
+            )
+            | (
+                Type::EffectfulFunction(right_domain, right_codomain),
+                Type::Function(left_domain, left_codomain),
+            ) if right_codomain.effects.is_empty() => {
+                pending.push(Task::Compare(left_codomain, &right_codomain.value));
                 pending.push(Task::Compare(left_domain, right_domain));
             }
             _ => return false,
@@ -753,18 +1914,58 @@ pub(crate) fn same_type_with_budget(
 ) -> Result<bool, ()> {
     enum Task<'a> {
         Compare(&'a Type, &'a Type),
+        CompareRows(&'a EffectRow, &'a EffectRow),
         Sequence(std::iter::Zip<std::slice::Iter<'a, Type>, std::slice::Iter<'a, Type>>),
     }
 
     let mut pending = vec![Task::Compare(left, right)];
     while let Some(task) = pending.pop() {
         let Task::Compare(left, right) = task else {
-            let Task::Sequence(mut remaining) = task else {
-                unreachable!()
-            };
-            if let Some((left, right)) = remaining.next() {
-                pending.push(Task::Sequence(remaining));
-                pending.push(Task::Compare(left, right));
+            match task {
+                Task::Sequence(mut remaining) => {
+                    if let Some((left, right)) = remaining.next() {
+                        pending.push(Task::Sequence(remaining));
+                        pending.push(Task::Compare(left, right));
+                    }
+                }
+                Task::CompareRows(left, right) => {
+                    budget.charge(1)?;
+                    if left.known.len() != right.known.len() {
+                        return Ok(false);
+                    }
+                    budget.charge(left.known.len())?;
+                    for (left, right) in left.known.iter().zip(right.known.iter()) {
+                        if left.effect != right.effect
+                            || left.arguments.len() != right.arguments.len()
+                        {
+                            return Ok(false);
+                        }
+                        pending.push(Task::Sequence(
+                            left.arguments.iter().zip(right.arguments.iter()),
+                        ));
+                    }
+                    match (&left.tail, &right.tail) {
+                        (None, None) => {}
+                        (Some(left), Some(right))
+                            if left.variable == right.variable
+                                && left.lacks.len() == right.lacks.len() =>
+                        {
+                            budget.charge(1_usize.saturating_add(left.lacks.len()))?;
+                            for (left, right) in left.lacks.iter().zip(right.lacks.iter()) {
+                                if left.effect != right.effect
+                                    || left.arguments.len() != right.arguments.len()
+                                {
+                                    return Ok(false);
+                                }
+                                pending.push(Task::Sequence(
+                                    left.arguments.iter().zip(right.arguments.iter()),
+                                ));
+                            }
+                        }
+                        _ => return Ok(false),
+                    }
+                }
+                Task::Compare(_, _) => unreachable!(),
             }
             continue;
         };
@@ -803,61 +2004,124 @@ pub(crate) fn same_type_with_budget(
                 pending.push(Task::Compare(left_codomain, right_codomain));
                 pending.push(Task::Compare(left_domain, right_domain));
             }
+            (
+                Type::EffectfulFunction(left_domain, left_codomain),
+                Type::EffectfulFunction(right_domain, right_codomain),
+            ) => {
+                budget.charge(1)?;
+                pending.push(Task::CompareRows(
+                    &left_codomain.effects,
+                    &right_codomain.effects,
+                ));
+                pending.push(Task::Compare(&left_codomain.value, &right_codomain.value));
+                pending.push(Task::Compare(left_domain, right_domain));
+            }
+            (
+                Type::Function(left_domain, left_codomain),
+                Type::EffectfulFunction(right_domain, right_codomain),
+            )
+            | (
+                Type::EffectfulFunction(right_domain, right_codomain),
+                Type::Function(left_domain, left_codomain),
+            ) if right_codomain.effects.is_empty() => {
+                budget.charge(2)?;
+                pending.push(Task::Compare(left_codomain, &right_codomain.value));
+                pending.push(Task::Compare(left_domain, right_domain));
+            }
             _ => return Ok(false),
         }
     }
     Ok(true)
 }
 
-fn hash_type<H: Hasher>(ty: &Type, state: &mut H) {
-    enum Task<'a> {
-        Visit(&'a Type),
-        Sequence(std::slice::Iter<'a, Type>),
-    }
+enum TypeHashTask<'a> {
+    Visit(&'a Type),
+    EffectRow(&'a EffectRow),
+    Instances(std::slice::Iter<'a, EffectInstance>),
+    Instance(&'a EffectInstance),
+    Sequence(std::slice::Iter<'a, Type>),
+}
 
-    let mut work = vec![Task::Visit(ty)];
+fn hash_type<H: Hasher>(ty: &Type, state: &mut H) {
+    hash_type_or_effect_row(TypeHashTask::Visit(ty), state);
+}
+
+fn hash_type_or_effect_row<H: Hasher>(root: TypeHashTask<'_>, state: &mut H) {
+    let mut work = vec![root];
     while let Some(task) = work.pop() {
         match task {
-            Task::Sequence(mut remaining) => {
+            TypeHashTask::Sequence(mut remaining) => {
                 if let Some(next) = remaining.next() {
-                    work.push(Task::Sequence(remaining));
-                    work.push(Task::Visit(next));
+                    work.push(TypeHashTask::Sequence(remaining));
+                    work.push(TypeHashTask::Visit(next));
                 }
             }
-            Task::Visit(Type::Int) => 0_u8.hash(state),
-            Task::Visit(Type::Bool) => 1_u8.hash(state),
-            Task::Visit(Type::Unit) => 2_u8.hash(state),
-            Task::Visit(Type::Tuple(elements)) => {
+            TypeHashTask::EffectRow(row) => {
+                10_u8.hash(state);
+                row.known.len().hash(state);
+                match &row.tail {
+                    None => 0_u8.hash(state),
+                    Some(tail) => {
+                        1_u8.hash(state);
+                        tail.variable.hash(state);
+                        tail.lacks.len().hash(state);
+                        work.push(TypeHashTask::Instances(tail.lacks.iter()));
+                    }
+                }
+                work.push(TypeHashTask::Instances(row.known.iter()));
+            }
+            TypeHashTask::Instances(mut remaining) => {
+                if let Some(next) = remaining.next() {
+                    work.push(TypeHashTask::Instances(remaining));
+                    work.push(TypeHashTask::Instance(next));
+                }
+            }
+            TypeHashTask::Instance(instance) => {
+                instance.effect.hash(state);
+                instance.arguments.len().hash(state);
+                work.push(TypeHashTask::Sequence(instance.arguments.iter()));
+            }
+            TypeHashTask::Visit(Type::Int) => 0_u8.hash(state),
+            TypeHashTask::Visit(Type::Bool) => 1_u8.hash(state),
+            TypeHashTask::Visit(Type::Unit) => 2_u8.hash(state),
+            TypeHashTask::Visit(Type::Tuple(elements)) => {
                 3_u8.hash(state);
                 elements.len().hash(state);
-                work.push(Task::Sequence(elements.iter()));
+                work.push(TypeHashTask::Sequence(elements.iter()));
             }
-            Task::Visit(Type::Nominal(identity)) => {
+            TypeHashTask::Visit(Type::Nominal(identity)) => {
                 4_u8.hash(state);
                 identity.hash(state);
             }
-            Task::Visit(Type::Variable(identity)) => {
+            TypeHashTask::Visit(Type::Variable(identity)) => {
                 5_u8.hash(state);
                 identity.hash(state);
             }
-            Task::Visit(Type::Inference(identity)) => {
+            TypeHashTask::Visit(Type::Inference(identity)) => {
                 6_u8.hash(state);
                 identity.hash(state);
             }
-            Task::Visit(Type::Application(function, argument)) => {
+            TypeHashTask::Visit(Type::Application(function, argument)) => {
                 7_u8.hash(state);
-                work.push(Task::Visit(argument));
-                work.push(Task::Visit(function));
+                work.push(TypeHashTask::Visit(argument));
+                work.push(TypeHashTask::Visit(function));
             }
-            Task::Visit(Type::Forall(parameters, body)) => {
+            TypeHashTask::Visit(Type::Forall(parameters, body)) => {
                 8_u8.hash(state);
                 parameters.hash(state);
-                work.push(Task::Visit(body));
+                work.push(TypeHashTask::Visit(body));
             }
-            Task::Visit(Type::Function(domain, codomain)) => {
+            TypeHashTask::Visit(Type::Function(domain, codomain)) => {
                 9_u8.hash(state);
-                work.push(Task::Visit(codomain));
-                work.push(Task::Visit(domain));
+                EffectRow::empty().hash(state);
+                work.push(TypeHashTask::Visit(codomain));
+                work.push(TypeHashTask::Visit(domain));
+            }
+            TypeHashTask::Visit(Type::EffectfulFunction(domain, codomain)) => {
+                9_u8.hash(state);
+                work.push(TypeHashTask::Visit(&codomain.value));
+                work.push(TypeHashTask::Visit(domain));
+                work.push(TypeHashTask::EffectRow(&codomain.effects));
             }
         }
     }
@@ -878,6 +2142,15 @@ pub(crate) fn hash_type_with_budget<H: Hasher>(
 pub(crate) fn substitute_type_variables_with<E>(
     ty: &Type,
     replacements: &HashMap<TypeVariableId, Type>,
+    charge: impl FnMut(usize) -> Result<(), E>,
+) -> Result<Type, E> {
+    substitute_type_and_row_variables_with(ty, replacements, &HashMap::new(), charge)
+}
+
+pub(crate) fn substitute_type_and_row_variables_with<E>(
+    ty: &Type,
+    replacements: &HashMap<TypeVariableId, Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRowVariable>,
     mut charge: impl FnMut(usize) -> Result<(), E>,
 ) -> Result<Type, E> {
     enum ChargeTask<'a> {
@@ -905,6 +2178,24 @@ pub(crate) fn substitute_type_variables_with<E>(
             ChargeTask::Visit(Type::Function(domain, codomain), substitute) => {
                 charge(1)?;
                 work.push(ChargeTask::Visit(codomain, substitute));
+                work.push(ChargeTask::Visit(domain, substitute));
+            }
+            ChargeTask::Visit(Type::EffectfulFunction(domain, codomain), substitute) => {
+                charge(1)?;
+                charge(1)?;
+                charge(1)?;
+                for instance in &codomain.effects.known {
+                    charge(1)?;
+                    work.push(ChargeTask::Slice(instance.arguments.iter(), substitute));
+                }
+                if let Some(tail) = &codomain.effects.tail {
+                    charge(1)?;
+                    for instance in &tail.lacks {
+                        charge(1)?;
+                        work.push(ChargeTask::Slice(instance.arguments.iter(), substitute));
+                    }
+                }
+                work.push(ChargeTask::Visit(&codomain.value, substitute));
                 work.push(ChargeTask::Visit(domain, substitute));
             }
             ChargeTask::Visit(Type::Forall(parameters, body), substitute) => {
@@ -944,16 +2235,35 @@ pub(crate) fn substitute_type_variables_with<E>(
         }
     }
 
-    Ok(substitute_type_variables(ty, replacements))
+    Ok(substitute_type_and_row_variables(
+        ty,
+        replacements,
+        row_replacements,
+    ))
 }
 
 fn substitute_type_variables(ty: &Type, replacements: &HashMap<TypeVariableId, Type>) -> Type {
+    substitute_type_and_row_variables(ty, replacements, &HashMap::new())
+}
+
+fn substitute_type_and_row_variables(
+    ty: &Type,
+    replacements: &HashMap<TypeVariableId, Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRowVariable>,
+) -> Type {
+    struct RowShape {
+        known: Box<[(EffectId, usize)]>,
+        tail: Option<(EffectRowVariable, Box<[(EffectId, usize)]>)>,
+        argument_count: usize,
+    }
+
     enum Task<'a> {
         Visit(&'a Type, bool),
         Sequence(std::slice::Iter<'a, Type>, bool),
         FinishTuple(usize),
         FinishApplication,
         FinishFunction,
+        FinishEffectfulFunction(RowShape),
         FinishForall(Box<[(TypeVariableId, Kind)]>),
     }
 
@@ -984,6 +2294,59 @@ fn substitute_type_variables(ty: &Type, replacements: &HashMap<TypeVariableId, T
                 work.push(Task::Visit(codomain, substitute));
                 work.push(Task::Visit(domain, substitute));
             }
+            Task::Visit(Type::EffectfulFunction(domain, codomain), substitute) => {
+                let known = codomain
+                    .effects
+                    .known
+                    .iter()
+                    .map(|instance| (instance.effect, instance.arguments.len()))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
+                let tail = codomain.effects.tail.as_ref().map(|tail| {
+                    let variable = if substitute {
+                        match tail.variable {
+                            EffectRowVariable::Rigid(identity) => row_replacements
+                                .get(&identity)
+                                .copied()
+                                .unwrap_or(tail.variable),
+                            EffectRowVariable::Inference(_) => tail.variable,
+                        }
+                    } else {
+                        tail.variable
+                    };
+                    (
+                        variable,
+                        tail.lacks
+                            .iter()
+                            .map(|instance| (instance.effect, instance.arguments.len()))
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
+                    )
+                });
+                let arguments = codomain
+                    .effects
+                    .known
+                    .iter()
+                    .chain(
+                        codomain
+                            .effects
+                            .tail
+                            .iter()
+                            .flat_map(|tail| tail.lacks.iter()),
+                    )
+                    .flat_map(|instance| instance.arguments.iter())
+                    .collect::<Vec<_>>();
+                work.push(Task::FinishEffectfulFunction(RowShape {
+                    known,
+                    tail,
+                    argument_count: arguments.len(),
+                }));
+                for argument in arguments.into_iter().rev() {
+                    work.push(Task::Visit(argument, substitute));
+                }
+                work.push(Task::Visit(&codomain.value, substitute));
+                work.push(Task::Visit(domain, substitute));
+            }
             Task::Visit(Type::Forall(parameters, body), substitute) => {
                 work.push(Task::FinishForall(parameters.clone()));
                 let substitute = substitute
@@ -1010,7 +2373,43 @@ fn substitute_type_variables(ty: &Type, replacements: &HashMap<TypeVariableId, T
             Task::FinishFunction => {
                 let codomain = rebuilt.pop().expect("type reconstruction codomain");
                 let domain = rebuilt.pop().expect("type reconstruction domain");
-                rebuilt.push(Type::Function(Box::new(domain), Box::new(codomain)));
+                rebuilt.push(Type::function(domain, codomain));
+            }
+            Task::FinishEffectfulFunction(shape) => {
+                let arguments = rebuilt.split_off(rebuilt.len() - shape.argument_count);
+                let mut arguments = arguments.into_iter();
+                let rebuild_instances =
+                    |instances: Box<[(EffectId, usize)]>,
+                     arguments: &mut std::vec::IntoIter<Type>| {
+                        instances
+                            .into_vec()
+                            .into_iter()
+                            .map(|(effect, count)| {
+                                EffectInstance::new(
+                                    effect,
+                                    arguments
+                                        .by_ref()
+                                        .take(count)
+                                        .collect::<Vec<_>>()
+                                        .into_boxed_slice(),
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice()
+                    };
+                let known = rebuild_instances(shape.known, &mut arguments);
+                let effects = if let Some((variable, lacks)) = shape.tail {
+                    EffectRow::with_tail(known, variable, rebuild_instances(lacks, &mut arguments))
+                } else {
+                    EffectRow::closed(known)
+                };
+                debug_assert!(arguments.next().is_none());
+                let codomain = rebuilt.pop().expect("type reconstruction codomain");
+                let domain = rebuilt.pop().expect("type reconstruction domain");
+                rebuilt.push(Type::function_computation(
+                    domain,
+                    ComputationType::new(codomain, effects),
+                ));
             }
             Task::FinishForall(parameters) => {
                 let body = rebuilt.pop().expect("type reconstruction scheme body");
@@ -1021,10 +2420,48 @@ fn substitute_type_variables(ty: &Type, replacements: &HashMap<TypeVariableId, T
     rebuilt.pop().expect("one reconstructed type")
 }
 
+fn substitute_effect_row_type_variables(
+    row: &EffectRow,
+    replacements: &HashMap<TypeVariableId, Type>,
+) -> EffectRow {
+    let substitute_instance = |instance: &EffectInstance| {
+        EffectInstance::new(
+            instance.effect,
+            instance
+                .arguments
+                .iter()
+                .map(|argument| substitute_type_variables(argument, replacements))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        )
+    };
+    let known = row
+        .known
+        .iter()
+        .map(&substitute_instance)
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    if let Some(tail) = &row.tail {
+        EffectRow::with_tail(
+            known,
+            tail.variable,
+            tail.lacks
+                .iter()
+                .map(substitute_instance)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        )
+    } else {
+        EffectRow::closed(known)
+    }
+}
+
 /// The internal kind language used to check type constructors.
 pub enum Kind {
     /// The kind of every source-admitted value type.
     Type,
+    /// The kind of computation effect rows.
+    EffectRow,
     /// An internal unary type-constructor kind.
     Arrow(Box<Kind>, Box<Kind>),
 }
@@ -1191,7 +2628,7 @@ pub(crate) fn charge_kind_with_charge(
 /// Charges every Kind node below an already charged root.
 pub(crate) fn charge_kind_descendants(kind: &Kind, budget: &mut TypeWorkBudget) -> Result<(), ()> {
     match kind {
-        Kind::Type => Ok(()),
+        Kind::Type | Kind::EffectRow => Ok(()),
         Kind::Arrow(domain, codomain) => {
             charge_kind_nodes(domain, budget)?;
             charge_kind_nodes(codomain, budget)
@@ -1211,6 +2648,7 @@ pub(crate) fn clone_kind_with_budget(kind: &Kind, budget: &mut TypeWorkBudget) -
     while let Some(task) = work.pop() {
         match task {
             Task::Visit(Kind::Type) => rebuilt.push(Kind::Type),
+            Task::Visit(Kind::EffectRow) => rebuilt.push(Kind::EffectRow),
             Task::Visit(Kind::Arrow(domain, codomain)) => {
                 work.push(Task::Arrow);
                 work.push(Task::Visit(codomain));
@@ -1280,7 +2718,7 @@ pub(crate) fn same_kind_with_charge(
     while let Some((left, right)) = work.pop() {
         charge()?;
         match (left, right) {
-            (Kind::Type, Kind::Type) => {}
+            (Kind::Type, Kind::Type) | (Kind::EffectRow, Kind::EffectRow) => {}
             (
                 Kind::Arrow(left_domain, left_codomain),
                 Kind::Arrow(right_domain, right_codomain),
@@ -1312,8 +2750,9 @@ pub(crate) fn hash_kind_with_budget<H: Hasher>(
     while let Some(kind) = work.pop() {
         match kind {
             Kind::Type => 0_u8.hash(state),
+            Kind::EffectRow => 1_u8.hash(state),
             Kind::Arrow(domain, codomain) => {
-                1_u8.hash(state);
+                2_u8.hash(state);
                 work.push(codomain);
                 work.push(domain);
             }
@@ -1362,6 +2801,10 @@ fn write_kind(kind: &Kind, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             match task.kind {
                 Kind::Type => {
                     formatter.write_str("Type")?;
+                    finished = true;
+                }
+                Kind::EffectRow => {
+                    formatter.write_str("EffectRow")?;
                     finished = true;
                 }
                 Kind::Arrow(domain, codomain) => match task.phase {
@@ -2444,5 +3887,129 @@ mod tests {
             .expect("the deep/wide substitution thread should start")
             .join()
             .expect("partial and complete substitution results should tear down on 256 KiB");
+    }
+
+    #[test]
+    fn effect_row_and_computation_clone_are_exact_atomic_and_retryable() {
+        const ROW_CELLS: usize = 5;
+        const COMPUTATION_CELLS: usize = 7;
+        let member = EffectInstance::new(
+            EffectId::new(ModuleId::new(0), 0),
+            Box::new([Type::Tuple(Box::new([Type::Int, Type::Bool]))]),
+        );
+        let row = EffectRow::singleton(member);
+
+        let mut row_short = TypeWorkBudget::with_limit(ROW_CELLS - 1);
+        assert_eq!(clone_effect_row_with_budget(&row, &mut row_short), Err(()));
+        assert_eq!(row.known().len(), 1);
+        let mut row_exact = TypeWorkBudget::with_limit(ROW_CELLS);
+        assert_eq!(
+            clone_effect_row_with_budget(&row, &mut row_exact),
+            Ok(row.clone()),
+        );
+
+        let computation = ComputationType::new(Type::Unit, row);
+        let mut computation_short = TypeWorkBudget::with_limit(COMPUTATION_CELLS - 1);
+        assert_eq!(
+            clone_computation_type_with_budget(&computation, &mut computation_short),
+            Err(()),
+        );
+        assert_eq!(computation.value(), &Type::Unit);
+        let mut computation_exact = TypeWorkBudget::with_limit(COMPUTATION_CELLS);
+        assert_eq!(
+            clone_computation_type_with_budget(&computation, &mut computation_exact),
+            Ok(computation),
+        );
+    }
+
+    #[test]
+    fn effectful_function_closed_operations_share_one_exact_cell_formula() {
+        const CELLS: usize = 7;
+        let ty = Type::function_computation(
+            Type::Unit,
+            ComputationType::new(
+                Type::Bool,
+                EffectRow::singleton(EffectInstance::new(
+                    EffectId::new(ModuleId::new(0), 0),
+                    Box::new([Type::Int]),
+                )),
+            ),
+        );
+
+        let mut clone_short = TypeWorkBudget::with_limit(CELLS - 1);
+        assert_eq!(clone_type_with_budget(&ty, &mut clone_short), Err(()));
+        let mut clone_exact = TypeWorkBudget::with_limit(CELLS);
+        assert_eq!(
+            clone_type_with_budget(&ty, &mut clone_exact),
+            Ok(ty.clone())
+        );
+
+        let mut equality_short = TypeWorkBudget::with_limit(CELLS - 1);
+        assert_eq!(
+            same_type_with_budget(&ty, &ty, &mut equality_short),
+            Err(()),
+        );
+        let mut equality_exact = TypeWorkBudget::with_limit(CELLS);
+        assert_eq!(
+            same_type_with_budget(&ty, &ty, &mut equality_exact),
+            Ok(true),
+        );
+
+        let mut render_short = TypeWorkBudget::with_limit(CELLS - 1);
+        assert_eq!(render_type_with_budget(&ty, &mut render_short), Err(()));
+        let mut render_exact = TypeWorkBudget::with_limit(CELLS);
+        assert!(render_type_with_budget(&ty, &mut render_exact).is_ok());
+
+        let mut hash_short = TypeWorkBudget::with_limit(CELLS - 1);
+        let mut short_hasher = DefaultHasher::new();
+        assert_eq!(
+            hash_type_with_budget(&ty, &mut short_hasher, &mut hash_short),
+            Err(()),
+        );
+        let mut hash_exact = TypeWorkBudget::with_limit(CELLS);
+        let mut exact_hasher = DefaultHasher::new();
+        assert_eq!(
+            hash_type_with_budget(&ty, &mut exact_hasher, &mut hash_exact),
+            Ok(()),
+        );
+    }
+
+    #[test]
+    fn nested_row_arguments_clone_and_substitute_on_a_small_stack() {
+        const DEPTH: usize = 8_192;
+
+        std::thread::Builder::new()
+            .name("nested-row-operations".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let parameter = TypeVariableId::new(0);
+                let effect = EffectId::new(ModuleId::new(0), 0);
+                let mut nested = Type::Variable(parameter);
+                for _ in 0..DEPTH {
+                    nested = Type::function_computation(
+                        Type::Unit,
+                        ComputationType::new(
+                            Type::Unit,
+                            EffectRow::singleton(EffectInstance::new(effect, Box::new([nested]))),
+                        ),
+                    );
+                }
+                let row = EffectRow::singleton(EffectInstance::new(effect, Box::new([nested])));
+
+                let mut budget = TypeWorkBudget::default();
+                let cloned = clone_effect_row_with_budget(&row, &mut budget)
+                    .expect("the nested row clone should stay iterative");
+                assert_eq!(cloned, row);
+
+                let substituted =
+                    row.substitute_type_variables(&HashMap::from([(parameter, Type::Int)]));
+                assert_ne!(substituted, row);
+                drop(substituted);
+                drop(cloned);
+                drop(row);
+            })
+            .expect("the nested-row test thread should start")
+            .join()
+            .expect("row clone, substitution, and disposal should fit a 256 KiB stack");
     }
 }

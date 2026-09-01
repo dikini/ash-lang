@@ -25,8 +25,8 @@ use crate::{
     },
     source::Span,
     types::{
-        IterativeTypeOwner, Kind, NominalTypeId, Type, TypeVariableId, TypeWorkBudget,
-        clone_kind_with_budget, clone_type_with_budget, discard_type_iteratively,
+        EffectRowVariable, IterativeTypeOwner, Kind, NominalTypeId, Type, TypeVariableId,
+        TypeWorkBudget, clone_kind_with_budget, clone_type_with_budget, discard_type_iteratively,
         same_kind_with_charge, same_kinded_type_parameters_with_charge,
         substitute_type_variables_with,
     },
@@ -3376,6 +3376,11 @@ impl EvidenceSelector {
                     pending.push(argument);
                     pending.push(function);
                 }
+                Type::EffectfulFunction(domain, codomain) => {
+                    codomain.extend_effect_arguments(&mut pending);
+                    pending.push(codomain.value());
+                    pending.push(domain);
+                }
                 Type::Tuple(elements) => pending.extend(elements.iter().rev()),
                 Type::Forall(_, body) => pending.push(body),
                 Type::Int
@@ -3519,6 +3524,26 @@ fn validate_candidate_scope(
                     .map_err(|_| SelectionFailure::ConstraintResource)?;
                 pending.push(argument);
                 pending.push(function);
+            }
+            Type::EffectfulFunction(domain, codomain) => {
+                if let Some(variable) = codomain.tail_variable() {
+                    match variable {
+                        EffectRowVariable::Rigid(variable) if allowed.contains(&variable) => {}
+                        EffectRowVariable::Rigid(_) | EffectRowVariable::Inference(_) => {
+                            return Err(SelectionFailure::InvalidState);
+                        }
+                    }
+                }
+                let children = codomain.effect_argument_count().saturating_add(2);
+                constraint_work
+                    .charge(children)
+                    .map_err(|()| SelectionFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(children)
+                    .map_err(|_| SelectionFailure::ConstraintResource)?;
+                codomain.extend_effect_arguments(&mut pending);
+                pending.push(&codomain.value);
+                pending.push(domain);
             }
             Type::Tuple(elements) if elements.len() >= 2 => {
                 constraint_work
@@ -3823,6 +3848,24 @@ fn type_is_inference_free(
                 pending.push(argument);
                 pending.push(function);
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                if matches!(
+                    codomain.tail_variable(),
+                    Some(EffectRowVariable::Inference(_))
+                ) {
+                    return Ok(false);
+                }
+                let children = codomain.effect_argument_count().saturating_add(2);
+                constraint_work
+                    .charge(children)
+                    .map_err(|()| SelectionFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(children)
+                    .map_err(|_| SelectionFailure::ConstraintResource)?;
+                codomain.extend_effect_arguments(&mut pending);
+                pending.push(&codomain.value);
+                pending.push(domain);
+            }
             Type::Forall(_, _) => return Err(SelectionFailure::InvalidState),
             Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_) => {}
         }
@@ -4059,6 +4102,9 @@ fn goal_key(
                         .map_err(|_| SelectionFailure::ConstraintResource)?;
                     pending.push(codomain);
                     pending.push(domain);
+                }
+                Type::EffectfulFunction(_, _) => {
+                    return Err(SelectionFailure::InvalidState);
                 }
                 Type::Variable(id) => cells.push(GoalCell::Variable(*id)),
                 Type::Inference(_) => {

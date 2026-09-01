@@ -1119,6 +1119,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             self.charge_type_work(1)?;
             match ty {
                 Type::Forall(_, _) => return Ok(true),
+                Type::EffectfulFunction(_, _) => return Ok(true),
                 Type::Application(function, argument) | Type::Function(function, argument) => {
                     self.charge_type_work(2)?;
                     pending
@@ -1920,6 +1921,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                         .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
                     pending.push(body);
                 }
+                Type::EffectfulFunction(_, _) => return Ok(false),
                 Type::Int
                 | Type::Bool
                 | Type::Unit
@@ -3391,6 +3393,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                             work.push(Task::Visit(codomain, false, child_depth, 0));
                             work.push(Task::Visit(domain, false, child_depth, 0));
                         }
+                        Type::EffectfulFunction(_, _) => return Ok(false),
                     }
                 }
                 Task::Sequence(mut remaining, depth) => {
@@ -3456,6 +3459,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                     work.push(Task::Visit(codomain, child_depth));
                     work.push(Task::Visit(domain, child_depth));
                 }
+                Type::EffectfulFunction(_, _) => return Ok(false),
             }
         }
         Ok(true)
@@ -3816,6 +3820,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                     work.push(Task::Visit(codomain));
                     work.push(Task::Visit(domain));
                 }
+                Task::Visit(Type::EffectfulFunction(_, _)) => return Ok(None),
                 Task::Sequence(mut remaining) => {
                     if let Some(next) = remaining.next() {
                         work.try_reserve(2).map_err(|_| resource())?;
@@ -3975,6 +3980,10 @@ impl<'program, 'source> Validator<'program, 'source> {
                 }
                 Type::Function(domain, codomain) => {
                     work.push(Task::Visit(codomain));
+                    work.push(Task::Visit(domain));
+                }
+                Type::EffectfulFunction(domain, codomain) => {
+                    work.push(Task::Visit(codomain.value()));
                     work.push(Task::Visit(domain));
                 }
                 Type::Forall(parameters, body) => {
@@ -4576,6 +4585,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                         | Type::Application(_, _)
                         | Type::Variable(_)
                         | Type::Inference(_)
+                        | Type::EffectfulFunction(_, _)
                         | Type::Forall(_, _) => false,
                     };
                     if !safe {
@@ -5342,6 +5352,10 @@ impl<'program, 'source> Validator<'program, 'source> {
                 }
                 Task::Visit(Type::Function(domain, codomain)) => {
                     work.push(Task::Visit(codomain));
+                    work.push(Task::Visit(domain));
+                }
+                Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
+                    work.push(Task::Visit(codomain.value()));
                     work.push(Task::Visit(domain));
                 }
                 Task::Visit(Type::Forall(parameters, body)) => {
@@ -7482,6 +7496,7 @@ mod tests {
             Visit(&'a Type),
             Application,
             Function,
+            EffectfulFunction(crate::types::EffectRow),
             Tuple(usize),
             Forall(Box<[(crate::types::TypeVariableId, Kind)]>),
         }
@@ -7505,6 +7520,11 @@ mod tests {
                     pending.push(Task::Visit(codomain));
                     pending.push(Task::Visit(domain));
                 }
+                Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
+                    pending.push(Task::EffectfulFunction(codomain.effects().clone()));
+                    pending.push(Task::Visit(codomain.value()));
+                    pending.push(Task::Visit(domain));
+                }
                 Task::Visit(Type::Tuple(elements)) => {
                     pending.push(Task::Tuple(elements.len()));
                     pending.extend(elements.iter().rev().map(Task::Visit));
@@ -7521,6 +7541,14 @@ mod tests {
                     } else {
                         Type::Function(Box::new(function), Box::new(argument))
                     });
+                }
+                Task::EffectfulFunction(effects) => {
+                    let value = output.pop().expect("effectful function value");
+                    let domain = output.pop().expect("effectful function domain");
+                    output.push(Type::function_computation(
+                        domain,
+                        crate::types::ComputationType::new(value, effects),
+                    ));
                 }
                 Task::Tuple(len) => {
                     let start = output.len().checked_sub(len).expect("tuple children");
@@ -7995,6 +8023,7 @@ mod tests {
                     work.push(argument);
                     work.push(function);
                 }
+                Type::EffectfulFunction(_, _) => {}
                 Type::Forall(parameters, body) => {
                     for (parameter, _) in parameters {
                         swap_type_variable_identity(parameter, left, right);
@@ -10166,6 +10195,7 @@ mod tests {
                     work.push(argument);
                     work.push(function);
                 }
+                Type::EffectfulFunction(_, _) => {}
                 Type::Forall(parameters, body) => {
                     if rewrite_forall_parameter {
                         for (parameter, _) in parameters {
@@ -10190,6 +10220,7 @@ mod tests {
                     work.push(argument);
                     work.push(function);
                 }
+                Type::EffectfulFunction(_, _) => {}
                 Type::Forall(parameters, body) => {
                     if parameters.iter().any(|(parameter, _)| *parameter == sought) {
                         return true;
@@ -10217,6 +10248,7 @@ mod tests {
                     work.push(argument);
                     work.push(function);
                 }
+                Type::EffectfulFunction(_, _) => {}
                 Type::Forall(parameters, body) => {
                     if parameters.iter().any(|(parameter, _)| *parameter == sought) {
                         return true;

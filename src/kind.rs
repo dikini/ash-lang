@@ -27,6 +27,27 @@ use crate::{
 
 static TYPE_KIND: Kind = Kind::Type;
 
+fn binder_kind_is_admitted(kind: &Kind, allow_effect_row: bool) -> bool {
+    match kind {
+        Kind::Type => true,
+        Kind::EffectRow => allow_effect_row,
+        Kind::Arrow(_, _) => {
+            let mut work = vec![kind];
+            while let Some(kind) = work.pop() {
+                match kind {
+                    Kind::Type => {}
+                    Kind::EffectRow => return false,
+                    Kind::Arrow(domain, codomain) => {
+                        work.push(codomain);
+                        work.push(domain);
+                    }
+                }
+            }
+            true
+        }
+    }
+}
+
 /// Minimal charging seam for the total kind-synthesis engine.
 ///
 /// Resolved checking supplies [`TypeWorkBudget`]. Linked evidence validation
@@ -297,6 +318,12 @@ impl<'a> KindEnvironments<'a> {
         origin: Span,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), KindFailure> {
+        if !binder_kind_is_admitted(kind, true) {
+            return Err(KindFailure::internal(
+                origin,
+                "EffectRow cannot occur beneath a kind arrow",
+            ));
+        }
         budget.charge(1).map_err(|()| {
             KindFailure::resource(
                 origin,
@@ -338,6 +365,35 @@ impl<'a> KindEnvironments<'a> {
     ) -> Result<(), KindFailure> {
         self.clear_declared();
         for parameter in parameters {
+            if !binder_kind_is_admitted(&parameter.kind, false) {
+                return Err(KindFailure::internal(
+                    parameter.origin.primary_span(),
+                    "this owner cannot bind an EffectRow parameter",
+                ));
+            }
+            self.insert_declared(
+                parameter.id,
+                &parameter.kind,
+                parameter.origin.primary_span(),
+                budget,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn install_scheme_parameters(
+        &mut self,
+        parameters: &'a [crate::resolved::ResolvedTypeVariable],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), KindFailure> {
+        self.clear_declared();
+        for parameter in parameters {
+            if !binder_kind_is_admitted(&parameter.kind, true) {
+                return Err(KindFailure::internal(
+                    parameter.origin.primary_span(),
+                    "EffectRow cannot occur beneath a kind arrow",
+                ));
+            }
             self.insert_declared(
                 parameter.id,
                 &parameter.kind,
@@ -352,10 +408,21 @@ impl<'a> KindEnvironments<'a> {
         &mut self,
         parameters: &'a [(TypeVariableId, Kind)],
         origin: Span,
+        allow_effect_row: bool,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), KindFailure> {
         self.clear_declared();
         for (identity, kind) in parameters {
+            if !binder_kind_is_admitted(kind, allow_effect_row) {
+                return Err(KindFailure::internal(
+                    origin,
+                    if allow_effect_row {
+                        "EffectRow cannot occur beneath a kind arrow"
+                    } else {
+                        "this owner cannot bind an EffectRow parameter"
+                    },
+                ));
+            }
             self.insert_declared(*identity, kind, origin, budget)?;
         }
         Ok(())
@@ -409,6 +476,14 @@ impl<'a> KindEnvironments<'a> {
         }
         self.clear_declared();
         for (parameter, source) in parameters.iter().zip(source_parameters) {
+            if !binder_kind_is_admitted(&parameter.kind, false)
+                || !binder_kind_is_admitted(&source.kind, false)
+            {
+                return Err(KindFailure::internal(
+                    span,
+                    "an implementation owner cannot bind an EffectRow parameter",
+                ));
+            }
             if parameter.id != source.id {
                 return Err(KindFailure::internal(
                     span,
@@ -1893,12 +1968,24 @@ impl<'a> KindEnvironments<'a> {
                             );
                             State::Visit(function, function_mirror, function_root)
                         }
-                        Type::Function(domain, codomain) => {
+                        Type::Function(_, _) | Type::EffectfulFunction(_, _) => {
+                            let (domain, codomain) = match ty {
+                                Type::Function(domain, codomain) => {
+                                    (domain.as_ref(), codomain.as_ref())
+                                }
+                                Type::EffectfulFunction(domain, codomain) => {
+                                    (domain.as_ref(), codomain.value())
+                                }
+                                _ => unreachable!(),
+                            };
                             charge_synthesis_cell(span, budget)?;
                             let (mut domain_mirror, codomain_mirror) = match type_mirror {
                                 None => (None, None),
                                 Some(Type::Function(domain, codomain)) => {
                                     (Some(domain.as_ref()), Some(codomain.as_ref()))
+                                }
+                                Some(Type::EffectfulFunction(domain, codomain)) => {
+                                    (Some(domain.as_ref()), Some(codomain.value()))
                                 }
                                 Some(_) => {
                                     return Err(KindFailure::internal(
@@ -1907,6 +1994,66 @@ impl<'a> KindEnvironments<'a> {
                                     ));
                                 }
                             };
+                            if let Type::EffectfulFunction(_, computation) = ty {
+                                if let Some(Type::EffectfulFunction(_, mirror)) = type_mirror
+                                    && computation.effects() != mirror.effects()
+                                {
+                                    return Err(KindFailure::internal(
+                                        span,
+                                        "a linked source computation row does not match its checked row",
+                                    ));
+                                }
+                                if let Some(tail) = computation.effects().tail() {
+                                    let fact = match tail.variable() {
+                                        crate::types::EffectRowVariable::Rigid(identity) => {
+                                            if allowed_variables
+                                                .is_some_and(|allowed| !allowed.contains(&identity))
+                                            {
+                                                return Err(KindFailure::internal(
+                                                    span,
+                                                    "an effect row references a non-owner tail",
+                                                ));
+                                            }
+                                            if let Some(visited) =
+                                                visited_variables.as_deref_mut()
+                                            {
+                                                visited.insert(identity);
+                                            }
+                                            self.delta.get(&identity).ok_or_else(|| {
+                                                KindFailure::internal(
+                                                    span,
+                                                    "an effect-row tail has no canonical binder kind",
+                                                )
+                                            })?
+                                        }
+                                        crate::types::EffectRowVariable::Inference(identity) => {
+                                            self.omega.get(&identity).ok_or_else(|| {
+                                                KindFailure::internal(
+                                                    span,
+                                                    "an effect-row tail has no fixed inference kind",
+                                                )
+                                            })?
+                                        }
+                                    };
+                                    let is_row = same_kind_with_charge(
+                                        fact.kind,
+                                        &Kind::EffectRow,
+                                        || budget.charge(1),
+                                    )
+                                    .map_err(|()| {
+                                        KindFailure::resource(
+                                            span,
+                                            "effect-row tail kind checking exceeded its work budget",
+                                        )
+                                    })?;
+                                    if !is_row {
+                                        return Err(KindFailure::internal(
+                                            span,
+                                            "an effect-row tail does not have kind EffectRow",
+                                        ));
+                                    }
+                                }
+                            }
                             if domain_override.is_some() {
                                 if domain_mirror.is_some() {
                                     return Err(KindFailure::internal(
@@ -2300,6 +2447,39 @@ pub(crate) fn canonical_body_free_environments<'a>(
                 pending.push(argument);
                 pending.push(function);
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                if let Some(tail) = codomain.effects().tail() {
+                    let crate::types::EffectRowVariable::Rigid(identity) = tail.variable() else {
+                        return Err(CanonicalEnvironmentFailure::InvalidState);
+                    };
+                    if !environments.contains_declared(identity) {
+                        discovery_budget
+                            .charge(1)
+                            .map_err(|()| CanonicalEnvironmentFailure::ConstraintResource)?;
+                        let parameter = registry
+                            .type_variable(identity)
+                            .ok_or(CanonicalEnvironmentFailure::InvalidState)?;
+                        environments
+                            .insert_declared(
+                                identity,
+                                &parameter.kind,
+                                parameter.origin.primary_span(),
+                                retention_budget,
+                            )
+                            .map_err(map_canonical_environment_retention_failure)?;
+                    }
+                }
+                let children = codomain.effect_argument_count().saturating_add(2);
+                discovery_budget
+                    .charge(children)
+                    .map_err(|()| CanonicalEnvironmentFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(children)
+                    .map_err(|_| CanonicalEnvironmentFailure::ConstraintResource)?;
+                codomain.extend_effect_arguments(&mut pending);
+                pending.push(codomain.value());
+                pending.push(domain);
+            }
             Type::Inference(_) | Type::Forall(_, _) => {
                 return Err(CanonicalEnvironmentFailure::InvalidState);
             }
@@ -2633,6 +2813,12 @@ fn authenticate_imported_environments<'a>(
             )?;
             environments.install_owner_parameters(&interface.parameters, budget)?;
             for parameter in method.type_parameters() {
+                if !binder_kind_is_admitted(&parameter.kind, false) {
+                    return Err(KindFailure::internal(
+                        parameter.origin.primary_span(),
+                        "an interface method cannot bind an EffectRow parameter",
+                    ));
+                }
                 environments.insert_declared(
                     parameter.id,
                     &parameter.kind,
@@ -2646,7 +2832,7 @@ fn authenticate_imported_environments<'a>(
 
     for global in imported.globals() {
         let span = global.origin.primary_span();
-        environments.install_owner_pairs(&global.scheme.type_parameters, span, budget)?;
+        environments.install_owner_pairs(&global.scheme.type_parameters, span, true, budget)?;
         environments.expect_body_free_value_type(&global.scheme.value_type, span, budget)?;
         for requirement in &global.scheme.requirements {
             environments.expect_body_free_interface_argument(
@@ -2679,6 +2865,7 @@ fn authenticate_imported_environments<'a>(
             environments.install_owner_pairs(
                 &method.scheme.type_parameters,
                 method.span,
+                false,
                 budget,
             )?;
             environments.expect_body_free_value_type(
@@ -2781,6 +2968,12 @@ fn check_interface<'a>(
         if method.has_explicit_type_parameters {
             environments.install_owner_parameters(&interface.parameters, budget)?;
             for parameter in &method.type_parameters {
+                if !binder_kind_is_admitted(&parameter.kind, false) {
+                    return Err(KindFailure::internal(
+                        parameter.origin.primary_span(),
+                        "an interface method cannot bind an EffectRow parameter",
+                    ));
+                }
                 environments.insert_declared(
                     parameter.id,
                     &parameter.kind,
@@ -2953,7 +3146,7 @@ fn check_interface_application_kinds_in_owner_environments<'a>(
                     }
                 };
                 authenticate_owner_parameters(&module.registry, parameters, budget)?;
-                environments.install_owner_parameters(parameters, budget)?;
+                environments.install_scheme_parameters(parameters, budget)?;
                 for requirement in requirements.iter() {
                     check(&requirement.application, environments, budget)?;
                 }
@@ -3061,7 +3254,7 @@ fn check_definition<'a>(
     match &definition.kind {
         ResolvedDefinitionKind::Equational(global) => {
             authenticate_owner_parameters(registry, &global.interface.type_parameters, budget)?;
-            environments.install_owner_parameters(&global.interface.type_parameters, budget)?;
+            environments.install_scheme_parameters(&global.interface.type_parameters, budget)?;
             environments.expect_value_type(&global.interface.annotation, budget)?;
             let mut determined = Vec::new();
             collect_type_variables(
@@ -3095,7 +3288,7 @@ fn check_definition<'a>(
         }
         ResolvedDefinitionKind::InlineOperational(global) => {
             authenticate_owner_parameters(registry, &global.header.type_parameters, budget)?;
-            environments.install_owner_parameters(&global.header.type_parameters, budget)?;
+            environments.install_scheme_parameters(&global.header.type_parameters, budget)?;
             let mut determined = Vec::new();
             for parameter in &global.header.parameters {
                 environments.expect_value_type(&parameter.annotation, budget)?;
@@ -3179,6 +3372,36 @@ fn collect_type_variables(
             Type::Application(function, argument) | Type::Function(function, argument) => {
                 push_determination_work(&mut work, argument, span, budget)?;
                 push_determination_work(&mut work, function, span, budget)?;
+            }
+            Type::EffectfulFunction(domain, codomain) => {
+                if let Some(tail) = codomain.effects().tail() {
+                    let crate::types::EffectRowVariable::Rigid(identity) = tail.variable() else {
+                        return Err(KindFailure::internal(
+                            span,
+                            "row inference entered global determination discovery",
+                        ));
+                    };
+                    if !contains_type_variable_with_budget(output, identity, span, budget)? {
+                        budget.charge(1).map_err(|()| {
+                            KindFailure::resource(
+                                span,
+                                "global row-tail determination retention exceeded its type-work budget",
+                            )
+                        })?;
+                        output.try_reserve(1).map_err(|_| {
+                            KindFailure::resource(
+                                span,
+                                "global row-tail determination could not reserve storage",
+                            )
+                        })?;
+                        output.push(identity);
+                    }
+                }
+                for argument in codomain.effect_arguments() {
+                    push_determination_work(&mut work, argument, span, budget)?;
+                }
+                push_determination_work(&mut work, codomain.value(), span, budget)?;
+                push_determination_work(&mut work, domain, span, budget)?;
             }
             Type::Forall(_, _) => {
                 return Err(KindFailure::internal(
@@ -3743,7 +3966,7 @@ fn charge_kind_descendants_with_ledger(
         return charge_kind_descendants(kind, type_work);
     }
     match kind {
-        Kind::Type => Ok(()),
+        Kind::Type | Kind::EffectRow => Ok(()),
         Kind::Arrow(domain, codomain) => {
             charge_kind_with_charge(domain, || budget.charge(1))?;
             charge_kind_with_charge(codomain, || budget.charge(1))
@@ -3779,7 +4002,8 @@ fn authenticate_kind_descendants_with_ledger(
     let mut pending = Vec::new();
     loop {
         match current {
-            (Kind::Type, Kind::Type, None | Some(Kind::Type)) => {}
+            (Kind::Type, Kind::Type, None | Some(Kind::Type))
+            | (Kind::EffectRow, Kind::EffectRow, None | Some(Kind::EffectRow)) => {}
             (
                 Kind::Arrow(canonical_domain, canonical_codomain),
                 Kind::Arrow(first_domain, first_codomain),
@@ -3790,7 +4014,9 @@ fn authenticate_kind_descendants_with_ledger(
                     Some(Kind::Arrow(domain, codomain)) => {
                         (Some(domain.as_ref()), Some(codomain.as_ref()))
                     }
-                    Some(Kind::Type) => return Err(LinkedKindMirrorFailure::Mismatch),
+                    Some(Kind::Type | Kind::EffectRow) => {
+                        return Err(LinkedKindMirrorFailure::Mismatch);
+                    }
                 };
                 budget
                     .charge(1)
