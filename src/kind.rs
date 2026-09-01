@@ -2651,6 +2651,15 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                 )?;
                 check_interface(interface, &module.registry, &mut environments, budget)?
             }
+            crate::resolved::ResolvedDeclarationIndex::Effect(index) => {
+                let effect = required_lookup(
+                    module.effects.get(index),
+                    module.span,
+                    "declaration order contains an invalid effect index",
+                    budget,
+                )?;
+                check_effect(effect, &module.registry, &mut environments, budget)?
+            }
             crate::resolved::ResolvedDeclarationIndex::Global(index) => {
                 let definition = required_lookup(
                     module.definitions.get(index),
@@ -2694,6 +2703,7 @@ fn authenticate_declaration_order(
 ) -> Result<(), KindFailure> {
     let mut next_type = 0;
     let mut next_interface = 0;
+    let mut next_effect = 0;
     let mut next_global = 0;
     let mut next_implementation = 0;
     for declaration in &module.declaration_order {
@@ -2712,6 +2722,11 @@ fn authenticate_declaration_order(
             crate::resolved::ResolvedDeclarationIndex::Interface(index) => {
                 let ordered = index == next_interface && index < module.interfaces.len();
                 next_interface = next_interface.saturating_add(1);
+                ordered
+            }
+            crate::resolved::ResolvedDeclarationIndex::Effect(index) => {
+                let ordered = index == next_effect && index < module.effects.len();
+                next_effect = next_effect.saturating_add(1);
                 ordered
             }
             crate::resolved::ResolvedDeclarationIndex::Global(index) => {
@@ -2741,6 +2756,7 @@ fn authenticate_declaration_order(
     })?;
     if next_type != module.registry.nominals().len()
         || next_interface != module.interfaces.len()
+        || next_effect != module.effects.len()
         || next_global != module.definitions.len()
         || next_implementation != module.implementations.len()
     {
@@ -2996,6 +3012,28 @@ fn check_interface<'a>(
     Ok(DeclarationKindOutcome::Checked)
 }
 
+fn check_effect<'a>(
+    effect: &'a crate::resolved::ResolvedEffectDeclaration,
+    registry: &crate::resolved::ResolvedRegistry,
+    environments: &mut KindEnvironments<'a>,
+    budget: &mut TypeWorkBudget,
+) -> Result<DeclarationKindOutcome, KindFailure> {
+    authenticate_owner_parameters(registry, &effect.parameters, budget)?;
+    environments.install_owner_parameters(&effect.parameters, budget)?;
+    for parameter in &effect.parameters {
+        if parameter.kind != Kind::Type {
+            return Err(KindFailure::internal(
+                parameter.origin.primary_span(),
+                "an effect parameter must have kind Type",
+            ));
+        }
+    }
+    for operation in &effect.operations {
+        environments.expect_value_type(&operation.annotation, budget)?;
+    }
+    Ok(DeclarationKindOutcome::Checked)
+}
+
 fn interface_determination_is_total(
     interface: &ResolvedInterfaceDeclaration,
     budget: &mut TypeWorkBudget,
@@ -3128,7 +3166,8 @@ fn check_interface_application_kinds_in_owner_environments<'a>(
         })?;
         match *declaration {
             crate::resolved::ResolvedDeclarationIndex::Type(_)
-            | crate::resolved::ResolvedDeclarationIndex::Interface(_) => {}
+            | crate::resolved::ResolvedDeclarationIndex::Interface(_)
+            | crate::resolved::ResolvedDeclarationIndex::Effect(_) => {}
             crate::resolved::ResolvedDeclarationIndex::Global(index) => {
                 let definition = module.definitions.get(index).ok_or_else(|| {
                     KindFailure::internal(
@@ -3210,7 +3249,8 @@ fn visit_interface_applications(
         })?;
         match *declaration {
             crate::resolved::ResolvedDeclarationIndex::Type(_)
-            | crate::resolved::ResolvedDeclarationIndex::Interface(_) => {}
+            | crate::resolved::ResolvedDeclarationIndex::Interface(_)
+            | crate::resolved::ResolvedDeclarationIndex::Effect(_) => {}
             crate::resolved::ResolvedDeclarationIndex::Global(index) => {
                 let definition = module.definitions.get(index).ok_or_else(|| {
                     KindFailure::internal(
@@ -5107,6 +5147,7 @@ mod tests {
             direct_dependencies: Vec::new(),
             declaration_order: Vec::new(),
             interfaces: Vec::new(),
+            effects: Vec::new(),
             implementations: Vec::new(),
             definitions: Vec::new(),
             export_candidate: ResolvedExportCandidate::default(),

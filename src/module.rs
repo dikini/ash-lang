@@ -1355,6 +1355,7 @@ mod tests {
                 declaration_order: Vec::new(),
                 type_declarations: Vec::new(),
                 interfaces: Vec::new(),
+                effects: Vec::new(),
                 implementations: Vec::new(),
                 definitions: Vec::new(),
                 span,

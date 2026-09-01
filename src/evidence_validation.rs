@@ -4511,6 +4511,7 @@ fn validate_occurrences<'a>(
                         .ok_or_else(|| resource(group.span()))?;
                 }
                 ResolvedDeclarationIndex::Type(_) => {}
+                ResolvedDeclarationIndex::Effect(_) => {}
                 ResolvedDeclarationIndex::Global(_)
                 | ResolvedDeclarationIndex::Implementation(_)
                 | ResolvedDeclarationIndex::Interface(_) => return Err(unknown(group.span())),

@@ -2327,7 +2327,9 @@ impl Elaborator {
                         .checked_add(1)
                         .ok_or_else(invalid_state)?;
                 }
-                ResolvedDeclarationIndex::Type(_) | ResolvedDeclarationIndex::Interface(_) => {}
+                ResolvedDeclarationIndex::Type(_)
+                | ResolvedDeclarationIndex::Interface(_)
+                | ResolvedDeclarationIndex::Effect(_) => {}
             }
         }
         if next_global != module.definitions().len()
@@ -6139,7 +6141,9 @@ impl Elaborator {
                         .checked_add(1)
                         .ok_or_else(invalid_state)?;
                 }
-                ResolvedDeclarationIndex::Type(_) | ResolvedDeclarationIndex::Interface(_) => {}
+                ResolvedDeclarationIndex::Type(_)
+                | ResolvedDeclarationIndex::Interface(_)
+                | ResolvedDeclarationIndex::Effect(_) => {}
                 ResolvedDeclarationIndex::Global(_)
                 | ResolvedDeclarationIndex::Implementation(_) => return Err(invalid_state()),
             }
@@ -9534,7 +9538,9 @@ fn preflight_application_arities(
     for declaration in module.declaration_order() {
         budget.charge(1).map_err(|()| constraint_resource())?;
         match *declaration {
-            ResolvedDeclarationIndex::Type(_) | ResolvedDeclarationIndex::Interface(_) => {}
+            ResolvedDeclarationIndex::Type(_)
+            | ResolvedDeclarationIndex::Interface(_)
+            | ResolvedDeclarationIndex::Effect(_) => {}
             ResolvedDeclarationIndex::Global(index) => {
                 let definition = module.definitions().get(index).ok_or_else(invalid_state)?;
                 let requirements = match &definition.kind {
@@ -16655,6 +16661,7 @@ mod tests {
                         origin: Origin::Source(span),
                         span,
                     }],
+                    effects: Vec::new(),
                     implementations: Vec::new(),
                     definitions: Vec::new(),
                     export_candidate: ResolvedExportCandidate::default(),
