@@ -5488,6 +5488,67 @@ fn implementation_head_matches(
             }
             continue;
         }
+        match (candidate.function_view(), goal.function_view()) {
+            (Some(candidate_function), Some(goal_function)) => {
+                let effect_argument_count =
+                    match (candidate_function.effects(), goal_function.effects()) {
+                        (None, None) => 0,
+                        (Some(candidate_effects), Some(goal_effects))
+                            if candidate_effects.tail().is_none()
+                                && goal_effects.tail().is_none()
+                                && candidate_effects.known().len()
+                                    == goal_effects.known().len() =>
+                        {
+                            let mut arguments = 0usize;
+                            for (candidate_instance, goal_instance) in
+                                candidate_effects.known().iter().zip(goal_effects.known())
+                            {
+                                charge(budget, 1, span)?;
+                                if candidate_instance.effect() != goal_instance.effect()
+                                    || candidate_instance.arguments().len()
+                                        != goal_instance.arguments().len()
+                                {
+                                    return Ok(false);
+                                }
+                                arguments = arguments
+                                    .checked_add(candidate_instance.arguments().len())
+                                    .ok_or_else(|| resource(span))?;
+                            }
+                            arguments
+                        }
+                        _ => return Ok(false),
+                    };
+                reserve_type_pairs(
+                    &mut pending,
+                    effect_argument_count.saturating_add(2),
+                    budget,
+                    span,
+                )?;
+                if let (Some(candidate_effects), Some(goal_effects)) =
+                    (candidate_function.effects(), goal_function.effects())
+                {
+                    for (candidate_instance, goal_instance) in candidate_effects
+                        .known()
+                        .iter()
+                        .zip(goal_effects.known())
+                        .rev()
+                    {
+                        pending.extend(
+                            candidate_instance
+                                .arguments()
+                                .iter()
+                                .zip(goal_instance.arguments())
+                                .rev(),
+                        );
+                    }
+                }
+                pending.push((candidate_function.value(), goal_function.value()));
+                pending.push((candidate_function.domain(), goal_function.domain()));
+                continue;
+            }
+            (Some(_), None) | (None, Some(_)) => return Ok(false),
+            (None, None) => {}
+        }
         match (candidate, goal) {
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
@@ -5503,14 +5564,8 @@ fn implementation_head_matches(
                 reserve_type_pairs(&mut pending, left.len(), budget, span)?;
                 pending.extend(left.iter().zip(right).rev());
             }
-            (
-                Type::Function(left_domain, left_codomain),
-                Type::Function(right_domain, right_codomain),
-            ) => {
-                reserve_type_pairs(&mut pending, 2, budget, span)?;
-                pending.push((left_codomain, right_codomain));
-                pending.push((left_domain, right_domain));
-            }
+            (Type::Function(_, _), Type::Function(_, _))
+            | (Type::EffectfulFunction(_, _), Type::EffectfulFunction(_, _)) => unreachable!(),
             _ => return Ok(false),
         }
     }
@@ -12686,6 +12741,47 @@ mod tests {
             group.span(),
         )
         .expect("the exact node-validation budget should fit");
+    }
+
+    #[test]
+    fn linked_selection_accepts_a_specific_closed_effectful_implementation_head() {
+        let mut program = generic_program();
+        let module = program.groups()[0].module();
+        let closed = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Bool,
+                crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                    crate::types::EffectId::new(module, 0),
+                    Box::new([Type::Int]),
+                )),
+            ),
+        );
+        let registry =
+            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
+                .expect(
+                    "the linked registry should authenticate before the retained head mutation",
+                );
+        assert!(program.replace_first_implementation_argument_for_test(module, closed.clone()));
+        let group = &program.groups()[0];
+        let fact = &group.implementation_facts()[0];
+        let methods = fact
+            .methods
+            .iter()
+            .map(|method| method.id)
+            .collect::<Vec<_>>();
+        let selection =
+            implementation_selection_for_argument(fact.id, fact.interface(), &methods, closed);
+        validate_selection(
+            &program,
+            &registry,
+            group,
+            &selection,
+            fact.interface(),
+            &mut InterfaceConstraintBudget::default(),
+            group.span(),
+        )
+        .expect("the selected specific closed-effect head should match its linked goal");
     }
 
     #[test]

@@ -7504,6 +7504,71 @@ fn same_summary_type_after_substitutions(
                 continue;
             }
         }
+        match (source.function_view(), actual.function_view()) {
+            (Some(source_function), Some(actual_function)) => {
+                let effect_argument_count =
+                    match (source_function.effects(), actual_function.effects()) {
+                        (None, None) => 0,
+                        (Some(source_effects), Some(actual_effects))
+                            if source_effects.tail().is_none()
+                                && actual_effects.tail().is_none()
+                                && source_effects.known().len() == actual_effects.known().len() =>
+                        {
+                            let mut arguments = 0usize;
+                            for (source_instance, actual_instance) in
+                                source_effects.known().iter().zip(actual_effects.known())
+                            {
+                                constraint_work
+                                    .charge(1)
+                                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                                if source_instance.effect() != actual_instance.effect()
+                                    || source_instance.arguments().len()
+                                        != actual_instance.arguments().len()
+                                {
+                                    return Ok(false);
+                                }
+                                arguments = arguments
+                                    .checked_add(source_instance.arguments().len())
+                                    .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+                            }
+                            arguments
+                        }
+                        _ => return Ok(false),
+                    };
+                let children = effect_argument_count
+                    .checked_add(2)
+                    .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+                constraint_work
+                    .charge(children)
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(children)
+                    .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+                if let (Some(source_effects), Some(actual_effects)) =
+                    (source_function.effects(), actual_function.effects())
+                {
+                    for (source_instance, actual_instance) in source_effects
+                        .known()
+                        .iter()
+                        .zip(actual_effects.known())
+                        .rev()
+                    {
+                        pending.extend(
+                            source_instance
+                                .arguments()
+                                .iter()
+                                .zip(actual_instance.arguments())
+                                .rev(),
+                        );
+                    }
+                }
+                pending.push((source_function.value(), actual_function.value()));
+                pending.push((source_function.domain(), actual_function.domain()));
+                continue;
+            }
+            (Some(_), None) | (None, Some(_)) => return Ok(false),
+            (None, None) => {}
+        }
         match (source, actual) {
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
@@ -7520,10 +7585,6 @@ fn same_summary_type_after_substitutions(
             (
                 Type::Application(left_function, left_argument),
                 Type::Application(right_function, right_argument),
-            )
-            | (
-                Type::Function(left_function, left_argument),
-                Type::Function(right_function, right_argument),
             ) => {
                 constraint_work
                     .charge(2)
@@ -7534,6 +7595,8 @@ fn same_summary_type_after_substitutions(
                 pending.push((left_argument, right_argument));
                 pending.push((left_function, right_function));
             }
+            (Type::Function(_, _), Type::Function(_, _))
+            | (Type::EffectfulFunction(_, _), Type::EffectfulFunction(_, _)) => unreachable!(),
             (Type::Inference(_), _)
             | (_, Type::Inference(_))
             | (Type::Forall(_, _), _)
@@ -20626,6 +20689,45 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn effectful_interface_method_summary_authenticates_after_head_substitution() {
+        let mut summary =
+            implementation_summary_with_prerequisite_dependents([Type::Bool, Type::Unit]);
+        summary.implementations[0].fact.prerequisites = Box::new([]);
+        summary.implementations[0].fact.methods[0]
+            .scheme
+            .requirements = Box::new([]);
+        let parameter = summary.interfaces[0].parameters[0].id;
+        let effect = crate::types::EffectId::new(summary.module, 0);
+        summary.interfaces[0].methods[0].value_type = Type::function_computation(
+            Type::Variable(parameter),
+            crate::types::ComputationType::new(
+                Type::Int,
+                crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                    effect,
+                    Box::new([Type::Variable(parameter)]),
+                )),
+            ),
+        );
+        summary.implementations[0].fact.methods[0].scheme.value_type = Type::function_computation(
+            Type::Int,
+            crate::types::ComputationType::new(
+                Type::Int,
+                crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                    effect,
+                    Box::new([Type::Int]),
+                )),
+            ),
+        );
+
+        summary
+            .authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .expect("the effectful method summary should match after interface substitution");
     }
 
     #[test]

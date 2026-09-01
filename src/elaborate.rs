@@ -55,9 +55,10 @@ use crate::{
         EffectRow, EffectRowError, EffectRowVariable, InferenceVariableId, IterativeTypeOwner,
         Kind, Type, TypeVariableId, TypeWorkBudget, charge_type_cells, clone_kind_with_budget,
         clone_kinded_type_parameters_with_budget, discard_type_iteratively,
-        effect_row_from_owned_parts_with_budget, replace_type_iteratively, same_kind_with_budget,
-        same_kinded_type_parameters_with_budget, same_type, same_type_with_budget,
-        substitute_type_and_row_variables_with, substitute_type_variables_with,
+        effect_row_from_owned_parts_with_budget, rebuild_effect_row_with_budget,
+        replace_type_iteratively, same_kind_with_budget, same_kinded_type_parameters_with_budget,
+        same_type, same_type_with_budget, substitute_type_and_row_variables_with,
+        substitute_type_variables_with,
     },
 };
 
@@ -604,11 +605,11 @@ impl TypeProvenance {
                     Cursor::Resolved(resolved, resolved.root())
                 }
                 Cursor::Provenance(provenance @ Self::Function { .. }) => {
-                    if let (Type::Function(domain, codomain), Self::Function { parts, .. }) =
-                        (current, provenance)
+                    if let (Some(function), Self::Function { parts, .. }) =
+                        (current.function_view(), provenance)
                     {
-                        work.push((codomain, Cursor::Provenance(&parts.1)));
-                        work.push((domain, Cursor::Provenance(&parts.0)));
+                        work.push((function.value(), Cursor::Provenance(&parts.1)));
+                        work.push((function.domain(), Cursor::Provenance(&parts.0)));
                         continue;
                     }
                     return false;
@@ -640,29 +641,35 @@ impl TypeProvenance {
                         work.push((function, Cursor::Built(nodes, *function_node)));
                     }
                     (
-                        Type::Function(domain, codomain),
+                        Type::Function(_, _) | Type::EffectfulFunction(_, _),
                         Some(TypeProvenanceNode::Function {
                             domain: domain_node,
                             codomain: codomain_node,
                             ..
                         }),
                     ) => {
-                        work.push((codomain, Cursor::Built(nodes, *codomain_node)));
-                        work.push((domain, Cursor::Built(nodes, *domain_node)));
+                        let function = current
+                            .function_view()
+                            .expect("a physical function has a semantic function view");
+                        work.push((function.value(), Cursor::Built(nodes, *codomain_node)));
+                        work.push((function.domain(), Cursor::Built(nodes, *domain_node)));
                     }
                     _ => return false,
                 },
                 Cursor::Resolved(resolved, node) => match (current, resolved.nodes().get(node)) {
                     (
-                        Type::Function(domain, codomain),
+                        Type::Function(_, _) | Type::EffectfulFunction(_, _),
                         Some(ResolvedTypeProvenanceNode::Function {
                             domain: domain_node,
                             codomain: codomain_node,
                             ..
                         }),
                     ) => {
-                        work.push((codomain, Cursor::Resolved(resolved, *codomain_node)));
-                        work.push((domain, Cursor::Resolved(resolved, *domain_node)));
+                        let function = current
+                            .function_view()
+                            .expect("a physical function has a semantic function view");
+                        work.push((function.value(), Cursor::Resolved(resolved, *codomain_node)));
+                        work.push((function.domain(), Cursor::Resolved(resolved, *domain_node)));
                     }
                     (
                         Type::Application(function, argument),
@@ -5190,10 +5197,14 @@ impl Elaborator {
         if self.inference_solutions.contains_key(&variable) {
             return Err(UnificationFailure::Invariant);
         }
-        let occurrence = EffectRow::open(
-            EffectRowVariable::inference(variable),
-            lacks.to_vec().into_boxed_slice(),
-        );
+        let occurrence = rebuild_effect_row_with_budget(
+            std::iter::empty(),
+            Some(EffectRowVariable::inference(variable)),
+            lacks,
+            clone_type_with_budget,
+            &mut self.type_work,
+        )
+        .map_err(|()| UnificationFailure::Resource)?;
         let candidate = occurrence
             .substitute_tail_once_with_budget(
                 EffectRowVariable::inference(variable),
@@ -5292,8 +5303,19 @@ impl Elaborator {
                 if left == right {
                     return Ok(());
                 }
-                let mut exact_right = vec![false; right.known().len()];
-                let mut exact_left = vec![false; left.known().len()];
+                self.type_work
+                    .charge(right.known().len().saturating_add(left.known().len()))
+                    .map_err(|()| UnificationFailure::Resource)?;
+                let mut exact_right = Vec::new();
+                exact_right
+                    .try_reserve(right.known().len())
+                    .map_err(|_| UnificationFailure::Resource)?;
+                exact_right.resize(right.known().len(), false);
+                let mut exact_left = Vec::new();
+                exact_left
+                    .try_reserve(left.known().len())
+                    .map_err(|_| UnificationFailure::Resource)?;
+                exact_left.resize(left.known().len(), false);
                 for (left_index, left_member) in left.known().iter().enumerate() {
                     if let Some((right_index, _)) = right
                         .known()
@@ -5363,8 +5385,19 @@ impl Elaborator {
                 }
             }
 
-            let mut left_matched = vec![false; left.known().len()];
-            let mut right_matched = vec![false; right.known().len()];
+            self.type_work
+                .charge(left.known().len().saturating_add(right.known().len()))
+                .map_err(|()| UnificationFailure::Resource)?;
+            let mut left_matched = Vec::new();
+            left_matched
+                .try_reserve(left.known().len())
+                .map_err(|_| UnificationFailure::Resource)?;
+            left_matched.resize(left.known().len(), false);
+            let mut right_matched = Vec::new();
+            right_matched
+                .try_reserve(right.known().len())
+                .map_err(|_| UnificationFailure::Resource)?;
+            right_matched.resize(right.known().len(), false);
             for (left_index, left_member) in left.known().iter().enumerate() {
                 let Some((right_index, right_member)) =
                     right
@@ -5393,60 +5426,63 @@ impl Elaborator {
                 right_matched[right_index] = true;
             }
 
-            let left_only = left
-                .known()
-                .iter()
-                .zip(&left_matched)
-                .filter(|(_, matched)| !**matched)
-                .map(|(member, _)| member.clone())
-                .collect::<Vec<_>>();
-            let right_only = right
-                .known()
-                .iter()
-                .zip(&right_matched)
-                .filter(|(_, matched)| !**matched)
-                .map(|(member, _)| member.clone())
-                .collect::<Vec<_>>();
-            let row_from = |known: Vec<crate::types::EffectInstance>,
-                            tail: Option<&crate::types::EffectRowTail>| {
-                if let Some(tail) = tail {
-                    EffectRow::with_tail(
-                        known.into_boxed_slice(),
-                        tail.variable(),
-                        tail.lacks().to_vec().into_boxed_slice(),
-                    )
-                } else {
-                    EffectRow::closed(known.into_boxed_slice())
-                }
-            };
+            let left_only_is_empty = left_matched.iter().all(|matched| *matched);
+            let right_only_is_empty = right_matched.iter().all(|matched| *matched);
 
             match (left.tail(), right.tail()) {
-                (None, None) if left_only.is_empty() && right_only.is_empty() => Ok(()),
+                (None, None) if left_only_is_empty && right_only_is_empty => Ok(()),
                 (Some(left_tail), right_tail)
-                    if left_only.is_empty()
+                    if left_only_is_empty
                         && matches!(left_tail.variable(), EffectRowVariable::Inference(_)) =>
                 {
                     let EffectRowVariable::Inference(variable) = left_tail.variable() else {
                         unreachable!()
                     };
+                    let candidate = rebuild_effect_row_with_budget(
+                        right
+                            .known()
+                            .iter()
+                            .zip(&right_matched)
+                            .filter_map(|(member, matched)| (!matched).then_some(member)),
+                        right_tail.map(crate::types::EffectRowTail::variable),
+                        right_tail
+                            .into_iter()
+                            .flat_map(crate::types::EffectRowTail::lacks),
+                        clone_type_with_budget,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| UnificationFailure::Resource)?;
                     self.solve_effect_row_variable(
                         variable,
                         left_tail.lacks(),
-                        row_from(right_only, right_tail),
+                        candidate,
                         inserted_rows,
                     )
                 }
                 (left_tail, Some(right_tail))
-                    if right_only.is_empty()
+                    if right_only_is_empty
                         && matches!(right_tail.variable(), EffectRowVariable::Inference(_)) =>
                 {
                     let EffectRowVariable::Inference(variable) = right_tail.variable() else {
                         unreachable!()
                     };
+                    let candidate = rebuild_effect_row_with_budget(
+                        left.known()
+                            .iter()
+                            .zip(&left_matched)
+                            .filter_map(|(member, matched)| (!matched).then_some(member)),
+                        left_tail.map(crate::types::EffectRowTail::variable),
+                        left_tail
+                            .into_iter()
+                            .flat_map(crate::types::EffectRowTail::lacks),
+                        clone_type_with_budget,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| UnificationFailure::Resource)?;
                     self.solve_effect_row_variable(
                         variable,
                         right_tail.lacks(),
-                        row_from(left_only, left_tail),
+                        candidate,
                         inserted_rows,
                     )
                 }
@@ -5474,16 +5510,48 @@ impl Elaborator {
                     )
                     .map_err(map_type_error)?;
                     let shared = EffectRowVariable::inference(shared);
+                    let shared_row = rebuild_effect_row_with_budget(
+                        std::iter::empty(),
+                        Some(shared),
+                        left_tail.lacks().iter().chain(right_tail.lacks()),
+                        clone_type_with_budget,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| UnificationFailure::Resource)?;
+                    let shared_lacks = shared_row.tail().expect("the shared row is open").lacks();
+                    let left_candidate = rebuild_effect_row_with_budget(
+                        right
+                            .known()
+                            .iter()
+                            .zip(&right_matched)
+                            .filter_map(|(member, matched)| (!matched).then_some(member)),
+                        Some(shared),
+                        shared_lacks,
+                        clone_type_with_budget,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| UnificationFailure::Resource)?;
+                    let right_candidate = rebuild_effect_row_with_budget(
+                        left.known()
+                            .iter()
+                            .zip(&left_matched)
+                            .filter_map(|(member, matched)| (!matched).then_some(member)),
+                        Some(shared),
+                        shared_lacks,
+                        clone_type_with_budget,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| UnificationFailure::Resource)?;
                     self.solve_effect_row_variable(
                         left_variable,
                         left_tail.lacks(),
-                        EffectRow::with_tail(right_only.into_boxed_slice(), shared, Box::new([])),
+                        left_candidate,
                         inserted_rows,
                     )?;
                     self.solve_effect_row_variable(
                         right_variable,
                         right_tail.lacks(),
-                        EffectRow::with_tail(left_only.into_boxed_slice(), shared, Box::new([])),
+                        right_candidate,
                         inserted_rows,
                     )
                 }
@@ -21355,6 +21423,21 @@ mod tests {
     }
 
     #[test]
+    fn unknown_provenance_aligns_with_an_effectful_function_context_value() {
+        let ty = Type::function_computation(
+            Type::Int,
+            crate::types::ComputationType::new(
+                Type::Bool,
+                EffectRow::singleton(row_test_effect("provenance-effect.ash")),
+            ),
+        );
+        let value = ProvenancedType::unknown(ty);
+
+        assert!(value.provenance.aligns(&value.ty));
+        assert!(value.into_function_parts().is_ok());
+    }
+
+    #[test]
     fn a_shape_mismatch_poisoning_prevents_later_elaboration() {
         let program = resolved_module_fixture(
             "mismatched-provenance.ash",
@@ -21556,12 +21639,12 @@ mod tests {
         let left = EffectRow::with_tail(
             Box::new([row_test_effect("left-open-member.ash")]),
             left_tail,
-            Box::new([]),
+            Box::new([row_test_effect("left-open-lacks.ash")]),
         );
         let right = EffectRow::with_tail(
             Box::new([row_test_effect("right-open-member.ash")]),
             right_tail,
-            Box::new([]),
+            Box::new([row_test_effect("right-open-lacks.ash")]),
         );
         open_tails
             .unify_effect_rows(&left, &right)
@@ -21574,6 +21657,9 @@ mod tests {
                 .zonk_effect_row(&right)
                 .expect("the right row should zonk"),
         );
+        open_tails
+            .unify_effect_rows(&left, &right)
+            .expect("the shared residual row should unify again");
 
         let recursive = crate::types::EffectRow::with_tail(
             Box::new([member.clone()]),
@@ -21659,43 +21745,63 @@ mod tests {
 
     #[test]
     fn row_solution_publication_is_exact_atomic_and_retryable() {
-        let span = row_test_span("row-solution-budget.ash");
-        let mut calibration = Elaborator::new();
-        let calibration_open = calibration
-            .fresh_effect_row(span)
-            .expect("the calibration row variable registration should fit");
-        let calibration_closed =
-            EffectRow::singleton(row_test_effect("row-solution-calibration-effect.ash"));
-        calibration.type_work = TypeWorkBudget::unbounded();
-        calibration
-            .unify_effect_rows(&calibration_open, &calibration_closed)
-            .expect("the measured row solution should publish");
-        let solution_work = calibration.type_work.used();
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const WIDTH: u32 = 256;
+                let span = row_test_span("row-solution-budget.ash");
+                let wide_row = |module| {
+                    EffectRow::closed(
+                        (0..WIDTH)
+                            .map(|declaration| {
+                                crate::types::EffectInstance::new(
+                                    crate::types::EffectId::new(module, declaration),
+                                    Box::new([]),
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
+                    )
+                };
+                let mut calibration = Elaborator::new();
+                let calibration_open = calibration
+                    .fresh_effect_row(span)
+                    .expect("the calibration row variable registration should fit");
+                let calibration_closed = wide_row(ModuleId::new(90));
+                calibration.type_work = TypeWorkBudget::unbounded();
+                calibration
+                    .unify_effect_rows(&calibration_open, &calibration_closed)
+                    .expect("the measured wide row solution should publish");
+                let solution_work = calibration.type_work.used();
 
-        let mut elaborator = Elaborator::new();
-        let open = elaborator
-            .fresh_effect_row(span)
-            .expect("the row variable registration should fit");
-        let closed = EffectRow::singleton(row_test_effect("row-solution-effect.ash"));
+                let mut elaborator = Elaborator::new();
+                let open = elaborator
+                    .fresh_effect_row(span)
+                    .expect("the row variable registration should fit");
+                let closed = wide_row(ModuleId::new(91));
 
-        elaborator.type_work = TypeWorkBudget::with_limit(solution_work - 1);
-        assert_eq!(
-            elaborator.unify_effect_rows(&open, &closed),
-            Err(UnificationFailure::Resource),
-        );
-        assert!(elaborator.row_inference_solutions.is_empty());
-        assert!(elaborator.authenticated_inference_solutions.is_empty());
+                elaborator.type_work = TypeWorkBudget::with_limit(solution_work - 1);
+                assert_eq!(
+                    elaborator.unify_effect_rows(&open, &closed),
+                    Err(UnificationFailure::Resource),
+                );
+                assert!(elaborator.row_inference_solutions.is_empty());
+                assert!(elaborator.authenticated_inference_solutions.is_empty());
 
-        elaborator.type_work = TypeWorkBudget::with_limit(solution_work);
-        assert_eq!(elaborator.unify_effect_rows(&open, &closed), Ok(()));
-        assert_eq!(elaborator.type_work.used(), solution_work);
-        elaborator.type_work = TypeWorkBudget::default();
-        assert_eq!(
-            elaborator
-                .zonk_effect_row(&open)
-                .expect("the retried row solution should remain valid"),
-            closed,
-        );
+                elaborator.type_work = TypeWorkBudget::with_limit(solution_work);
+                assert_eq!(elaborator.unify_effect_rows(&open, &closed), Ok(()));
+                assert_eq!(elaborator.type_work.used(), solution_work);
+                elaborator.type_work = TypeWorkBudget::default();
+                assert_eq!(
+                    elaborator
+                        .zonk_effect_row(&open)
+                        .expect("the retried wide row solution should remain valid"),
+                    closed,
+                );
+            })
+            .expect("the wide row owner thread should start")
+            .join()
+            .expect("wide row success and failure teardown should fit the small stack");
     }
 
     #[test]

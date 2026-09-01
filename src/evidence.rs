@@ -4069,45 +4069,46 @@ fn goal_key(
             cells
                 .try_reserve(1)
                 .map_err(|_| SelectionFailure::ConstraintResource)?;
-            if matches!(ty, Type::EffectfulFunction(_, _)) {
-                let function = ty
-                    .function_view()
-                    .expect("an effectful function has a semantic function view");
-                let effects = function
-                    .effects()
-                    .expect("an effectful function retains a nonempty or open row");
-                if effects.tail().is_some() {
-                    return Err(SelectionFailure::InvalidState);
-                }
-                let row_cells = effects.known().len().saturating_add(2);
-                constraint_work
-                    .charge(row_cells)
-                    .map_err(|()| SelectionFailure::ConstraintResource)?;
-                cells
-                    .try_reserve(row_cells)
-                    .map_err(|_| SelectionFailure::ConstraintResource)?;
-                cells.push(GoalCell::EffectfulFunction);
-                cells.push(GoalCell::EffectRow(effects.known().len()));
-                for instance in effects.known() {
-                    cells.push(GoalCell::EffectInstance(
-                        instance.effect(),
-                        instance.arguments().len(),
-                    ));
-                }
-                let effect_arguments = effects
-                    .known()
-                    .iter()
-                    .map(|instance| instance.arguments().len())
-                    .sum::<usize>();
-                let children = effect_arguments.saturating_add(2);
+            if let Some(function) = ty.function_view() {
+                let children = if let Some(effects) = function.effects() {
+                    if effects.tail().is_some() {
+                        return Err(SelectionFailure::InvalidState);
+                    }
+                    let row_cells = effects.known().len().saturating_add(2);
+                    constraint_work
+                        .charge(row_cells)
+                        .map_err(|()| SelectionFailure::ConstraintResource)?;
+                    cells
+                        .try_reserve(row_cells)
+                        .map_err(|_| SelectionFailure::ConstraintResource)?;
+                    cells.push(GoalCell::EffectfulFunction);
+                    cells.push(GoalCell::EffectRow(effects.known().len()));
+                    for instance in effects.known() {
+                        cells.push(GoalCell::EffectInstance(
+                            instance.effect(),
+                            instance.arguments().len(),
+                        ));
+                    }
+                    effects
+                        .known()
+                        .iter()
+                        .map(|instance| instance.arguments().len())
+                        .sum::<usize>()
+                        .saturating_add(2)
+                } else {
+                    cells.push(GoalCell::Function);
+                    2
+                };
                 constraint_work
                     .charge(children)
                     .map_err(|()| SelectionFailure::ConstraintResource)?;
                 pending
                     .try_reserve(children)
                     .map_err(|_| SelectionFailure::ConstraintResource)?;
-                for instance in effects.known().iter().rev() {
-                    pending.extend(instance.arguments().iter().rev());
+                if let Some(effects) = function.effects() {
+                    for instance in effects.known().iter().rev() {
+                        pending.extend(instance.arguments().iter().rev());
+                    }
                 }
                 pending.push(function.value());
                 pending.push(function.domain());
@@ -4139,18 +4140,7 @@ fn goal_key(
                         .map_err(|_| SelectionFailure::ConstraintResource)?;
                     pending.extend(elements.iter().rev());
                 }
-                Type::Function(domain, codomain) => {
-                    cells.push(GoalCell::Function);
-                    constraint_work
-                        .charge(2)
-                        .map_err(|()| SelectionFailure::ConstraintResource)?;
-                    pending
-                        .try_reserve(2)
-                        .map_err(|_| SelectionFailure::ConstraintResource)?;
-                    pending.push(codomain);
-                    pending.push(domain);
-                }
-                Type::EffectfulFunction(_, _) => unreachable!(),
+                Type::Function(_, _) | Type::EffectfulFunction(_, _) => unreachable!(),
                 Type::Variable(id) => cells.push(GoalCell::Variable(*id)),
                 Type::Inference(_) => {
                     return Err(SelectionFailure::Reason(InterfaceReason::Ambiguous));
@@ -8452,6 +8442,28 @@ mod tests {
     fn selection_goal_keys_distinguish_closed_effect_rows_and_reject_open_tails() {
         let interface = InterfaceId::new(ModuleId::new(10), 0);
         let effect = crate::types::EffectId::new(ModuleId::new(11), 0);
+        let noncanonical_pure = Type::EffectfulFunction(
+            Box::new(Type::Unit),
+            Box::new(crate::types::ComputationType::new(
+                Type::Bool,
+                crate::types::EffectRow::empty(),
+            )),
+        );
+        let noncanonical_key = goal_key(
+            &unary_application(interface, noncanonical_pure),
+            &mut InterfaceConstraintBudget::default(),
+        )
+        .expect("an empty effectful representation has the pure function key");
+        let pure_key = goal_key(
+            &unary_application(
+                interface,
+                Type::Function(Box::new(Type::Unit), Box::new(Type::Bool)),
+            ),
+            &mut InterfaceConstraintBudget::default(),
+        )
+        .expect("the canonical pure function has a selection key");
+        assert_eq!(noncanonical_key, pure_key);
+
         let closed = Type::function_computation(
             Type::Unit,
             crate::types::ComputationType::new(

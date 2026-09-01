@@ -916,7 +916,7 @@ impl EffectRow {
     }
 }
 
-fn rebuild_effect_row_with_budget<'a, E>(
+pub(crate) fn rebuild_effect_row_with_budget<'a, E>(
     known: impl IntoIterator<Item = &'a EffectInstance>,
     tail: Option<EffectRowVariable>,
     lacks: impl IntoIterator<Item = &'a EffectInstance>,
@@ -1436,20 +1436,6 @@ impl ComputationType {
 
     pub(crate) fn extend_effect_arguments<'a>(&'a self, output: &mut Vec<&'a Type>) {
         output.extend(self.effect_arguments());
-    }
-}
-
-impl std::ops::Deref for ComputationType {
-    type Target = Type;
-
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
-}
-
-impl AsRef<Type> for ComputationType {
-    fn as_ref(&self) -> &Type {
-        &self.value
     }
 }
 
