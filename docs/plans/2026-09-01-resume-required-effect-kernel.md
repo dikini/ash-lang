@@ -419,6 +419,52 @@ git -c commit.gpgsign=false commit -m "feat: evaluate effect handlers"
 
 ## Checkpoint 5: Retain specification and closure evidence
 
+### Bounded Core row-instantiation correction
+
+The combined corpus RED proved that an explicit global `EffectRow` parameter
+cannot cross the current Core type-application carrier. The existing carrier
+retains only `Type` arguments, while the accepted scheme retains both ordinary
+and `EffectRow` binders. This is the evidence required by TASK-0020 before
+adding one proportional field.
+
+Use the existing `TypeApplicationNode` as the sole instantiation owner:
+
+- retain a parallel `Box<[EffectRow]>` of complete row arguments;
+- preserve the current ordinary argument API and empty Pure Core construction;
+- consume both slices by walking the abstraction's one authoritative ordered
+  parameter vector and selecting by fixed kind;
+- extend the existing type-and-row substitution traversal to replace a row
+  binder with a complete open or closed row, including lacks constraints;
+- reuse the existing builder admission, transform, validator, iterative
+  disposal, and type-work ledger; and
+- keep evaluation as direct type-application erasure.
+
+Do not add a mixed generic-argument enum, Effect Core instantiation operation,
+Core node, graph edge, evaluator transition, registry, pass, or budget.
+
+Execute one TDD slice:
+
+1. Preserve the exact combined corpus RED at
+   `every_valid_corpus_presentation_has_its_exact_library_and_cli_observation`.
+2. Replace the incomplete resolved-kind comparison with the canonical charged
+   comparison and retain focused `EffectRow`-kind registry evidence.
+3. Add exact full-row substitution, Core admission, independent forgery
+   rejection, transform/revalidation, one-short atomic failure, retry, and
+   iterative-disposal tests before their production changes.
+4. Retain row arguments through `instantiate`, TypeApplication construction,
+   rewriting, transformation, validation, and disposal.
+5. After the corpus reaches Core Apply construction, pass its already-zonked
+   typed row through the existing lowering-family and explicit-row admission
+   seams. Pure application admission remains unchanged.
+6. Run the combined corpus, focused effect row/Core/transform tests, Pure Core
+   locality tests, exact architecture owner scan, formatting, all-target
+   checking, and diff hygiene.
+
+Stop without layering another fix if this slice needs evaluator changes, a
+second proportional owner or traversal, a new budget, more than 322 net
+production lines for row instantiation, or more than 43 additional production
+lines for explicit Effect Core Apply admission.
+
 **Files:**
 
 - Modify: `spec/README.md`
