@@ -55,9 +55,9 @@ use crate::{
         EffectRow, EffectRowError, EffectRowVariable, InferenceVariableId, IterativeTypeOwner,
         Kind, Type, TypeVariableId, TypeWorkBudget, charge_type_cells, clone_kind_with_budget,
         clone_kinded_type_parameters_with_budget, discard_type_iteratively,
-        replace_type_iteratively, same_kind_with_budget, same_kinded_type_parameters_with_budget,
-        same_type, same_type_with_budget, substitute_type_and_row_variables_with,
-        substitute_type_variables_with,
+        effect_row_from_owned_parts_with_budget, replace_type_iteratively, same_kind_with_budget,
+        same_kinded_type_parameters_with_budget, same_type, same_type_with_budget,
+        substitute_type_and_row_variables_with, substitute_type_variables_with,
     },
 };
 
@@ -5051,13 +5051,17 @@ impl Elaborator {
                     | UnificationFailure::Invariant => invalid_state(),
                 }),
             })?;
-        let zonked = zonk_owned_type_with_rows(
-            ordinary,
-            &HashMap::new(),
-            &self.row_inference_solutions,
-            &mut self.type_work,
-        )
-        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let zonked = if self.row_inference_solutions.is_empty() {
+            ordinary
+        } else {
+            zonk_owned_type_with_rows(
+                ordinary,
+                &HashMap::new(),
+                &self.row_inference_solutions,
+                &mut self.type_work,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+        };
         let row_unresolved =
             type_contains_unsolved_row_inference(&zonked, &self.row_inference_solutions);
         Ok((zonked, unresolved || row_unresolved))
@@ -5117,6 +5121,9 @@ impl Elaborator {
             self.type_work
                 .charge(1)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            visited
+                .try_reserve(1)
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             if !self.authenticated_inference_solutions.contains(&identity)
                 || !visited.insert(identity)
             {
@@ -12261,12 +12268,6 @@ impl Deref for OwnedTypeBuffer {
     }
 }
 
-impl std::ops::DerefMut for OwnedTypeBuffer {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 impl OwnedTypeBuffer {
     fn push(&mut self, ty: Type) {
         self.0.push(ty);
@@ -12274,6 +12275,18 @@ impl OwnedTypeBuffer {
 
     fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
         self.0.try_reserve(additional)
+    }
+
+    fn pop(&mut self) -> Option<Type> {
+        self.0.pop()
+    }
+
+    fn reverse(&mut self) {
+        self.0.reverse();
+    }
+
+    fn extend(&mut self, types: impl IntoIterator<Item = Type>) {
+        self.0.extend(types);
     }
 
     fn into_vec(mut self) -> Vec<Type> {
@@ -14105,17 +14118,25 @@ fn zonk_owned_type_with_rows(
 
     struct Work(Vec<Task>);
 
-    impl std::ops::Deref for Work {
-        type Target = Vec<Task>;
-
-        fn deref(&self) -> &Self::Target {
-            &self.0
+    impl Work {
+        #[cfg(test)]
+        fn len(&self) -> usize {
+            self.0.len()
         }
-    }
 
-    impl std::ops::DerefMut for Work {
-        fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.0
+        fn pop(&mut self) -> Option<Task> {
+            self.0.pop()
+        }
+
+        fn try_reserve(
+            &mut self,
+            additional: usize,
+        ) -> Result<(), std::collections::TryReserveError> {
+            self.0.try_reserve(additional)
+        }
+
+        fn push(&mut self, task: Task) {
+            self.0.push(task);
         }
     }
 
@@ -14139,37 +14160,90 @@ fn zonk_owned_type_with_rows(
         }
     }
 
-    let mut work = Work(vec![Task::Visit(ty)]);
+    fn schedule(work: &mut Work, task: Task, budget: &mut TypeWorkBudget) -> Result<(), ()> {
+        budget.charge(1)?;
+        work.try_reserve(1).map_err(|_| ())?;
+        work.push(task);
+        Ok(())
+    }
+
+    fn retain(
+        rebuilt: &mut OwnedTypeBuffer,
+        ty: Type,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        let ty = IterativeTypeOwner::new(ty);
+        budget.charge(1)?;
+        rebuilt.try_reserve(1).map_err(|_| ())?;
+        rebuilt.push(ty.into_inner());
+        Ok(())
+    }
+
+    fn take_suffix(
+        rebuilt: &mut OwnedTypeBuffer,
+        count: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<OwnedTypeBuffer, ()> {
+        if count > rebuilt.len() {
+            return Err(());
+        }
+        budget.charge(count)?;
+        let mut suffix = OwnedTypeBuffer(Vec::new());
+        suffix.try_reserve(count).map_err(|_| ())?;
+        for _ in 0..count {
+            suffix.push(
+                rebuilt
+                    .pop()
+                    .expect("the checked suffix length is available"),
+            );
+        }
+        suffix.reverse();
+        Ok(suffix)
+    }
+
+    let mut work = Work(Vec::new());
+    schedule(&mut work, Task::Visit(ty), budget)?;
     let mut rebuilt = OwnedTypeBuffer(Vec::new());
     while let Some(task) = work.pop() {
         #[cfg(test)]
         record_zonk_rebuild_pending(work.len().saturating_add(1));
         match task {
             Task::Visit(Type::Inference(identity)) if solutions.contains_key(&identity) => {
-                work.push(Task::Visit(clone_type_with_budget(
-                    &solutions[&identity],
+                schedule(
+                    &mut work,
+                    Task::Visit(clone_type_with_budget(&solutions[&identity], budget)?),
                     budget,
-                )?));
+                )?;
             }
-            Task::Visit(Type::Int) => rebuilt.push(Type::Int),
-            Task::Visit(Type::Bool) => rebuilt.push(Type::Bool),
-            Task::Visit(Type::Unit) => rebuilt.push(Type::Unit),
-            Task::Visit(Type::Nominal(owner)) => rebuilt.push(Type::Nominal(owner)),
-            Task::Visit(Type::Variable(identity)) => rebuilt.push(Type::Variable(identity)),
-            Task::Visit(Type::Inference(identity)) => rebuilt.push(Type::Inference(identity)),
+            Task::Visit(Type::Int) => retain(&mut rebuilt, Type::Int, budget)?,
+            Task::Visit(Type::Bool) => retain(&mut rebuilt, Type::Bool, budget)?,
+            Task::Visit(Type::Unit) => retain(&mut rebuilt, Type::Unit, budget)?,
+            Task::Visit(Type::Nominal(owner)) => {
+                retain(&mut rebuilt, Type::Nominal(owner), budget)?
+            }
+            Task::Visit(Type::Variable(identity)) => {
+                retain(&mut rebuilt, Type::Variable(identity), budget)?
+            }
+            Task::Visit(Type::Inference(identity)) => {
+                retain(&mut rebuilt, Type::Inference(identity), budget)?
+            }
             Task::Visit(Type::Tuple(elements)) => {
-                work.push(Task::FinishTuple(elements.len()));
-                work.push(Task::VisitSequence(elements.into_vec().into_iter()));
+                schedule(&mut work, Task::FinishTuple(elements.len()), budget)?;
+                schedule(
+                    &mut work,
+                    Task::VisitSequence(elements.into_vec().into_iter()),
+                    budget,
+                )?;
             }
             Task::Visit(Type::Application(function, argument)) => {
-                work.push(Task::FinishApplication);
-                work.push(Task::Visit(*argument));
-                work.push(Task::Visit(*function));
+                schedule(&mut work, Task::FinishApplication, budget)?;
+                schedule(&mut work, Task::Visit(*argument), budget)?;
+                schedule(&mut work, Task::Visit(*function), budget)?;
             }
             Task::Visit(Type::Function(domain, codomain)) => {
-                work.push(Task::FinishFunction);
-                work.push(Task::Visit(*codomain));
-                work.push(Task::Visit(*domain));
+                schedule(&mut work, Task::FinishFunction, budget)?;
+                schedule(&mut work, Task::Visit(*codomain), budget)?;
+                schedule(&mut work, Task::Visit(*domain), budget)?;
             }
             Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
                 let crate::types::ComputationType { value, mut effects } = *codomain;
@@ -14184,6 +14258,8 @@ fn zonk_owned_type_with_rows(
                     let Some(solution) = row_solutions.get(&identity) else {
                         break;
                     };
+                    budget.charge(1)?;
+                    visited.try_reserve(1).map_err(|_| ())?;
                     if !visited.insert(identity) {
                         break;
                     }
@@ -14196,106 +14272,152 @@ fn zonk_owned_type_with_rows(
                         .expect("authenticated row solutions preserve lacks and occurs");
                 }
                 let (known, tail) = effects.into_parts();
-                let mut arguments = Vec::new();
-                let known = known
-                    .into_vec()
-                    .into_iter()
-                    .map(|instance| {
+                let mut arguments = OwnedTypeBuffer(Vec::new());
+                let mut known_shape = Vec::new();
+                for instance in known {
+                    let (effect, instance_arguments) = instance.into_parts();
+                    budget.charge(1)?;
+                    known_shape.try_reserve(1).map_err(|_| ())?;
+                    known_shape.push((effect, instance_arguments.len()));
+                    budget.charge(instance_arguments.len())?;
+                    arguments
+                        .try_reserve(instance_arguments.len())
+                        .map_err(|_| ())?;
+                    arguments.extend(instance_arguments.into_vec());
+                }
+                let tail = if let Some((variable, lacks)) = tail {
+                    let mut lacks_shape = Vec::new();
+                    for instance in lacks {
                         let (effect, instance_arguments) = instance.into_parts();
-                        let count = instance_arguments.len();
+                        budget.charge(1)?;
+                        lacks_shape.try_reserve(1).map_err(|_| ())?;
+                        lacks_shape.push((effect, instance_arguments.len()));
+                        budget.charge(instance_arguments.len())?;
+                        arguments
+                            .try_reserve(instance_arguments.len())
+                            .map_err(|_| ())?;
                         arguments.extend(instance_arguments.into_vec());
-                        (effect, count)
-                    })
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice();
-                let tail = tail.map(|(variable, lacks)| {
-                    let lacks = lacks
-                        .into_vec()
-                        .into_iter()
-                        .map(|instance| {
-                            let (effect, instance_arguments) = instance.into_parts();
-                            let count = instance_arguments.len();
-                            arguments.extend(instance_arguments.into_vec());
-                            (effect, count)
-                        })
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice();
-                    (variable, lacks)
-                });
+                    }
+                    Some((variable, lacks_shape.into_boxed_slice()))
+                } else {
+                    None
+                };
                 let argument_count = arguments.len();
-                work.push(Task::FinishEffectfulFunction(RowShape {
-                    known,
-                    tail,
-                    argument_count,
-                }));
-                work.push(Task::VisitSequence(arguments.into_iter()));
-                work.push(Task::Visit(value));
-                work.push(Task::Visit(*domain));
+                schedule(
+                    &mut work,
+                    Task::FinishEffectfulFunction(RowShape {
+                        known: known_shape.into_boxed_slice(),
+                        tail,
+                        argument_count,
+                    }),
+                    budget,
+                )?;
+                schedule(
+                    &mut work,
+                    Task::VisitSequence(arguments.into_vec().into_iter()),
+                    budget,
+                )?;
+                schedule(&mut work, Task::Visit(value), budget)?;
+                schedule(&mut work, Task::Visit(*domain), budget)?;
             }
             Task::Visit(Type::Forall(parameters, body)) => {
-                work.push(Task::FinishForall(parameters));
-                work.push(Task::Visit(*body));
+                schedule(&mut work, Task::FinishForall(parameters), budget)?;
+                schedule(&mut work, Task::Visit(*body), budget)?;
             }
             Task::VisitSequence(mut remaining) => {
                 if let Some(element) = remaining.next() {
-                    work.push(Task::VisitSequence(remaining));
-                    work.push(Task::Visit(element));
+                    schedule(&mut work, Task::VisitSequence(remaining), budget)?;
+                    schedule(&mut work, Task::Visit(element), budget)?;
                 }
             }
             Task::FinishTuple(count) => {
-                let start = rebuilt.len() - count;
-                let elements = rebuilt.split_off(start);
-                rebuilt.push(Type::Tuple(elements.into_boxed_slice()));
+                let elements = take_suffix(&mut rebuilt, count, budget)?;
+                retain(
+                    &mut rebuilt,
+                    Type::Tuple(elements.into_boxed_slice()),
+                    budget,
+                )?;
             }
             Task::FinishApplication => {
                 let argument = rebuilt.pop().expect("zonked application argument");
                 let function = rebuilt.pop().expect("zonked application function");
-                rebuilt.push(Type::Application(Box::new(function), Box::new(argument)));
+                retain(
+                    &mut rebuilt,
+                    Type::Application(Box::new(function), Box::new(argument)),
+                    budget,
+                )?;
             }
             Task::FinishFunction => {
                 let codomain = rebuilt.pop().expect("zonked codomain");
                 let domain = rebuilt.pop().expect("zonked domain");
-                rebuilt.push(Type::Function(Box::new(domain), Box::new(codomain)));
+                retain(
+                    &mut rebuilt,
+                    Type::Function(Box::new(domain), Box::new(codomain)),
+                    budget,
+                )?;
             }
             Task::FinishEffectfulFunction(shape) => {
-                let argument_start = rebuilt.len() - shape.argument_count;
-                let mut arguments = rebuilt.split_off(argument_start).into_iter();
-                let rebuild_instances =
-                    |shapes: Box<[(crate::types::EffectId, usize)]>,
-                     arguments: &mut std::vec::IntoIter<Type>| {
-                        shapes
-                            .into_vec()
-                            .into_iter()
-                            .map(|(effect, count)| {
-                                crate::types::EffectInstance::new(
-                                    effect,
-                                    arguments
-                                        .by_ref()
-                                        .take(count)
-                                        .collect::<Vec<_>>()
-                                        .into_boxed_slice(),
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .into_boxed_slice()
-                    };
-                let known = rebuild_instances(shape.known, &mut arguments);
-                let effects = if let Some((variable, lacks)) = shape.tail {
-                    EffectRow::with_tail(known, variable, rebuild_instances(lacks, &mut arguments))
+                fn rebuild_instances(
+                    shapes: Box<[(crate::types::EffectId, usize)]>,
+                    arguments: &mut OwnedTypeBuffer,
+                    budget: &mut TypeWorkBudget,
+                ) -> Result<Vec<crate::types::EffectInstance>, ()> {
+                    let mut instances = Vec::new();
+                    budget.charge(shapes.len())?;
+                    instances.try_reserve(shapes.len()).map_err(|_| ())?;
+                    for (effect, count) in shapes.into_vec().into_iter().rev() {
+                        if count > arguments.len() {
+                            return Err(());
+                        }
+                        budget.charge(count)?;
+                        let mut instance_arguments = OwnedTypeBuffer(Vec::new());
+                        instance_arguments.try_reserve(count).map_err(|_| ())?;
+                        for _ in 0..count {
+                            instance_arguments.push(
+                                arguments
+                                    .pop()
+                                    .expect("the row shape counted its zonked arguments"),
+                            );
+                        }
+                        instance_arguments.reverse();
+                        instances.push(crate::types::EffectInstance::new(
+                            effect,
+                            instance_arguments.into_boxed_slice(),
+                        ));
+                    }
+                    instances.reverse();
+                    Ok(instances)
+                }
+
+                let mut arguments = take_suffix(&mut rebuilt, shape.argument_count, budget)?;
+                let tail = if let Some((variable, lacks)) = shape.tail {
+                    Some((variable, rebuild_instances(lacks, &mut arguments, budget)?))
                 } else {
-                    EffectRow::closed(known)
+                    None
                 };
-                debug_assert!(arguments.next().is_none());
+                let known = rebuild_instances(shape.known, &mut arguments, budget)?;
+                if !arguments.is_empty() {
+                    return Err(());
+                }
+                let effects = effect_row_from_owned_parts_with_budget(known, tail, budget)?;
                 let codomain = rebuilt.pop().expect("zonked effectful codomain");
                 let domain = rebuilt.pop().expect("zonked effectful domain");
-                rebuilt.push(Type::function_computation(
-                    domain,
-                    crate::types::ComputationType::new(codomain, effects),
-                ));
+                retain(
+                    &mut rebuilt,
+                    Type::function_computation(
+                        domain,
+                        crate::types::ComputationType::new(codomain, effects),
+                    ),
+                    budget,
+                )?;
             }
             Task::FinishForall(parameters) => {
                 let body = rebuilt.pop().expect("zonked scheme body");
-                rebuilt.push(Type::Forall(parameters, Box::new(body)));
+                retain(
+                    &mut rebuilt,
+                    Type::Forall(parameters, Box::new(body)),
+                    budget,
+                )?;
             }
         }
     }
@@ -21484,17 +21606,26 @@ mod tests {
 
     #[test]
     fn row_solution_publication_is_exact_atomic_and_retryable() {
-        // Nine predecessor solution cells plus two charged input-row rebuilds:
-        // the open row/tail pair and the closed row/member pair.
-        const SOLUTION_WORK: usize = 9 + 2 + 2;
         let span = row_test_span("row-solution-budget.ash");
+        let mut calibration = Elaborator::new();
+        let calibration_open = calibration
+            .fresh_effect_row(span)
+            .expect("the calibration row variable registration should fit");
+        let calibration_closed =
+            EffectRow::singleton(row_test_effect("row-solution-calibration-effect.ash"));
+        calibration.type_work = TypeWorkBudget::unbounded();
+        calibration
+            .unify_effect_rows(&calibration_open, &calibration_closed)
+            .expect("the measured row solution should publish");
+        let solution_work = calibration.type_work.used();
+
         let mut elaborator = Elaborator::new();
         let open = elaborator
             .fresh_effect_row(span)
             .expect("the row variable registration should fit");
         let closed = EffectRow::singleton(row_test_effect("row-solution-effect.ash"));
 
-        elaborator.type_work = TypeWorkBudget::with_limit(SOLUTION_WORK - 1);
+        elaborator.type_work = TypeWorkBudget::with_limit(solution_work - 1);
         assert_eq!(
             elaborator.unify_effect_rows(&open, &closed),
             Err(UnificationFailure::Resource),
@@ -21502,9 +21633,9 @@ mod tests {
         assert!(elaborator.row_inference_solutions.is_empty());
         assert!(elaborator.authenticated_inference_solutions.is_empty());
 
-        elaborator.type_work = TypeWorkBudget::with_limit(SOLUTION_WORK);
+        elaborator.type_work = TypeWorkBudget::with_limit(solution_work);
         assert_eq!(elaborator.unify_effect_rows(&open, &closed), Ok(()));
-        assert_eq!(elaborator.type_work.used(), SOLUTION_WORK);
+        assert_eq!(elaborator.type_work.used(), solution_work);
         elaborator.type_work = TypeWorkBudget::default();
         assert_eq!(
             elaborator
@@ -21516,7 +21647,6 @@ mod tests {
 
     #[test]
     fn row_zonking_is_exact_atomic_and_retryable() {
-        const ZONK_WORK: usize = 7;
         let span = row_test_span("row-zonk-budget.ash");
         let mut elaborator = Elaborator::new();
         let open = elaborator
@@ -21527,7 +21657,11 @@ mod tests {
             .unify_effect_rows(&open, &closed)
             .expect("the row solution should publish");
 
-        elaborator.type_work = TypeWorkBudget::with_limit(ZONK_WORK - 1);
+        elaborator.type_work = TypeWorkBudget::unbounded();
+        assert_eq!(elaborator.zonk_effect_row(&open), Ok(closed.clone()));
+        let zonk_work = elaborator.type_work.used();
+
+        elaborator.type_work = TypeWorkBudget::with_limit(zonk_work - 1);
         assert_eq!(
             elaborator.zonk_effect_row(&open),
             Err(TypeError::Internal(
@@ -21536,9 +21670,83 @@ mod tests {
         );
         assert_eq!(elaborator.row_inference_solutions.len(), 1);
 
-        elaborator.type_work = TypeWorkBudget::with_limit(ZONK_WORK);
+        elaborator.type_work = TypeWorkBudget::with_limit(zonk_work);
         assert_eq!(elaborator.zonk_effect_row(&open), Ok(closed));
-        assert_eq!(elaborator.type_work.used(), ZONK_WORK);
+        assert_eq!(elaborator.type_work.used(), zonk_work);
+    }
+
+    #[test]
+    fn row_aware_type_zonker_charges_deep_solution_scratch_and_retries() {
+        const DEPTH: u32 = 1_024;
+        let effect = crate::types::EffectId::new(ModuleId::new(0), 0);
+        let first = InferenceVariableId::new(0);
+        let mut solutions = HashMap::new();
+        for current in 0..DEPTH {
+            let identity = InferenceVariableId::new(current);
+            let solution = if current + 1 == DEPTH {
+                EffectRow::singleton(crate::types::EffectInstance::new(effect, Box::new([])))
+            } else {
+                EffectRow::open(
+                    EffectRowVariable::inference(InferenceVariableId::new(current + 1)),
+                    Box::new([]),
+                )
+            };
+            solutions.insert(identity, solution);
+        }
+        let source = move || {
+            Type::function_computation(
+                Type::Unit,
+                crate::types::ComputationType::new(
+                    Type::Bool,
+                    EffectRow::open(EffectRowVariable::inference(first), Box::new([])),
+                ),
+            )
+        };
+
+        std::thread::Builder::new()
+            .name("deep-row-solution-zonk-owner".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let mut measured = TypeWorkBudget::unbounded();
+                let zonked = zonk_owned_type_with_rows(
+                    source(),
+                    &HashMap::new(),
+                    &solutions,
+                    &mut measured,
+                )
+                .expect("the measured deep solution chain should zonk");
+                let exact = measured.used();
+                assert!(
+                    exact > 2 * DEPTH as usize,
+                    "solution rebuild cells alone do not own the visited set, row shape, worklist, or rebuilt stack"
+                );
+
+                let mut one_short = TypeWorkBudget::with_limit(exact - 1);
+                assert_eq!(
+                    zonk_owned_type_with_rows(
+                        source(),
+                        &HashMap::new(),
+                        &solutions,
+                        &mut one_short,
+                    ),
+                    Err(())
+                );
+
+                let mut retry = TypeWorkBudget::with_limit(exact);
+                assert_eq!(
+                    zonk_owned_type_with_rows(
+                        source(),
+                        &HashMap::new(),
+                        &solutions,
+                        &mut retry,
+                    ),
+                    Ok(zonked)
+                );
+                assert_eq!(retry.used(), exact);
+            })
+            .expect("the deep row-solution zonker should start")
+            .join()
+            .expect("failure and success teardown must fit a small host stack");
     }
 
     #[test]

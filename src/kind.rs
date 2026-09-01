@@ -3171,6 +3171,12 @@ fn check_interface_application_kinds_in_owner_environments<'a>(
                 environments.install_owner_parameters(&implementation.head_parameters, budget)?;
                 check(&implementation.head, environments, budget)?;
                 for parameter in &implementation.prerequisite_only_parameters {
+                    if !binder_kind_is_admitted(&parameter.kind, false) {
+                        return Err(KindFailure::internal(
+                            parameter.origin.primary_span(),
+                            "this owner cannot bind an EffectRow parameter",
+                        ));
+                    }
                     environments.insert_declared(
                         parameter.id,
                         &parameter.kind,
@@ -5352,6 +5358,56 @@ mod tests {
         // Effect and operation declaration carriers enter with their syntax
         // checkpoint; that checkpoint must route them through the same
         // restricted owner gate rather than the scheme gate above.
+    }
+
+    #[test]
+    fn implementation_prerequisite_only_parameters_reject_effect_rows_during_preflight() {
+        let span = span();
+        let module = ModuleId::new(0);
+        let row = ResolvedTypeVariable {
+            id: TypeVariableId::resolved(module, 1),
+            spelling: "Effects".into(),
+            kind: Kind::EffectRow,
+            origin: Origin::Source(span),
+        };
+        let (registry, interface) = method_fixture(span, Vec::new());
+        let interface_id = interface.id;
+        let implementation = ResolvedImplementation {
+            id: ImplId::new(module, 0),
+            public: false,
+            head: interface_application(interface_id, 1, span),
+            head_parameters: Box::new([]),
+            prerequisite_only_parameters: Box::new([row.clone()]),
+            prerequisites: Box::new([]),
+            method_groups: Box::new([]),
+            span,
+        };
+        let mut parts = empty_module_parts(span);
+        parts.registry = Arc::new(registry.with_additional_type_variables(vec![row]));
+        parts.interfaces = vec![interface];
+        parts.implementations = vec![implementation];
+        parts.declaration_order = vec![
+            ResolvedDeclarationIndex::Interface(0),
+            ResolvedDeclarationIndex::Implementation(0),
+        ];
+        let mut environments = KindEnvironments::new();
+        environments
+            .insert_interface(
+                interface_id,
+                &parts.interfaces[0].parameters,
+                span,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .expect("the fixture interface should install");
+
+        assert!(matches!(
+            preflight_interface_application_kinds(
+                &parts,
+                &mut environments,
+                &mut TypeWorkBudget::unbounded(),
+            ),
+            Err(KindFailure::Internal(_))
+        ));
     }
 
     #[test]

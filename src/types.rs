@@ -729,31 +729,37 @@ impl EffectRow {
         }
 
         if let Some(tail) = &self.tail {
-            for instance in other
-                .known
-                .iter()
-                .filter(|instance| !contains_instance(&self.known, instance))
-            {
-                let admitted_by_shared_tail = other.tail.as_ref().is_some_and(|other_tail| {
+            for instance in &other.known {
+                if contains_instance_with_budget(&self.known, instance, budget)? {
+                    continue;
+                }
+                let admitted_by_shared_tail = if let Some(other_tail) = &other.tail {
                     other_tail.variable == tail.variable
-                        && contains_instance(&other_tail.lacks, instance)
-                });
-                if !contains_instance(&tail.lacks, instance) && !admitted_by_shared_tail {
+                        && contains_instance_with_budget(&other_tail.lacks, instance, budget)?
+                } else {
+                    false
+                };
+                if !contains_instance_with_budget(&tail.lacks, instance, budget)?
+                    && !admitted_by_shared_tail
+                {
                     return Ok(Err(EffectRowError::Ambiguous));
                 }
             }
         }
         if let Some(tail) = &other.tail {
-            for instance in self
-                .known
-                .iter()
-                .filter(|instance| !contains_instance(&other.known, instance))
-            {
-                let admitted_by_shared_tail = self.tail.as_ref().is_some_and(|self_tail| {
+            for instance in &self.known {
+                if contains_instance_with_budget(&other.known, instance, budget)? {
+                    continue;
+                }
+                let admitted_by_shared_tail = if let Some(self_tail) = &self.tail {
                     self_tail.variable == tail.variable
-                        && contains_instance(&self_tail.lacks, instance)
-                });
-                if !contains_instance(&tail.lacks, instance) && !admitted_by_shared_tail {
+                        && contains_instance_with_budget(&self_tail.lacks, instance, budget)?
+                } else {
+                    false
+                };
+                if !contains_instance_with_budget(&tail.lacks, instance, budget)?
+                    && !admitted_by_shared_tail
+                {
                     return Ok(Err(EffectRowError::Ambiguous));
                 }
             }
@@ -800,9 +806,11 @@ impl EffectRow {
         target: &EffectInstance,
         budget: &mut TypeWorkBudget,
     ) -> Result<Result<Self, EffectRowError>, ()> {
-        if contains_instance(&self.known, target) {
+        if let Some(index) = find_instance_index_with_budget(&self.known, target, budget)? {
             return rebuild_effect_row_with_budget(
-                self.known.iter().filter(|instance| *instance != target),
+                self.known[..index]
+                    .iter()
+                    .chain(self.known[index + 1..].iter()),
                 self.tail.as_ref().map(|tail| tail.variable),
                 self.tail.iter().flat_map(|tail| tail.lacks.iter()),
                 |argument, budget| clone_type_with_budget(argument, budget),
@@ -811,7 +819,7 @@ impl EffectRow {
             .map(Ok);
         }
         match &self.tail {
-            Some(tail) if !contains_instance(&tail.lacks, target) => {
+            Some(tail) if !contains_instance_with_budget(&tail.lacks, target, budget)? => {
                 Ok(Err(EffectRowError::Ambiguous))
             }
             _ => Ok(Err(EffectRowError::Missing)),
@@ -864,12 +872,10 @@ impl EffectRow {
         {
             return Ok(Err(EffectRowError::Infinite));
         }
-        if replacement
-            .known
-            .iter()
-            .any(|member| contains_instance(&tail.lacks, member))
-        {
-            return Ok(Err(EffectRowError::Missing));
+        for member in &replacement.known {
+            if contains_instance_with_budget(&tail.lacks, member, budget)? {
+                return Ok(Err(EffectRowError::Missing));
+            }
         }
 
         match &replacement.tail {
@@ -928,14 +934,15 @@ where
     where
         E: From<()>,
     {
-        budget.charge(1).map_err(E::from)?;
         let mut arguments = Vec::new();
         for argument in &instance.arguments {
             let argument = IterativeTypeOwner::new(map(argument, budget)?);
+            budget.charge(1).map_err(E::from)?;
             arguments.try_reserve(1).map_err(|_| E::from(()))?;
             arguments.push(argument);
         }
         let mut retained = Vec::new();
+        budget.charge(arguments.len()).map_err(E::from)?;
         retained
             .try_reserve(arguments.len())
             .map_err(|_| E::from(()))?;
@@ -946,64 +953,129 @@ where
         ))
     }
 
-    budget.charge(1).map_err(E::from)?;
     let mut rebuilt_known = Vec::new();
     for instance in known {
         let instance = rebuild_instance(instance, &mut map, budget)?;
+        budget.charge(1).map_err(E::from)?;
         rebuilt_known.try_reserve(1).map_err(|_| E::from(()))?;
         rebuilt_known.push(instance);
     }
-    let known = canonical_instances(rebuilt_known).into_boxed_slice();
     let rebuilt_tail = if let Some(variable) = tail {
-        budget.charge(1).map_err(E::from)?;
         let mut rebuilt_lacks = Vec::new();
         for instance in lacks {
             let instance = rebuild_instance(instance, &mut map, budget)?;
+            budget.charge(1).map_err(E::from)?;
             rebuilt_lacks.try_reserve(1).map_err(|_| E::from(()))?;
             rebuilt_lacks.push(instance);
         }
+        Some((variable, rebuilt_lacks))
+    } else {
+        None
+    };
+    effect_row_from_owned_parts_with_budget(rebuilt_known, rebuilt_tail, budget).map_err(E::from)
+}
+
+fn contains_instance_with_budget(
+    instances: &[EffectInstance],
+    target: &EffectInstance,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    Ok(find_instance_index_with_budget(instances, target, budget)?.is_some())
+}
+
+fn find_instance_index_with_budget(
+    instances: &[EffectInstance],
+    target: &EffectInstance,
+    budget: &mut TypeWorkBudget,
+) -> Result<Option<usize>, ()> {
+    for (index, instance) in instances.iter().enumerate() {
+        if compare_effect_instances_with_budget(instance, target, budget)? == Ordering::Equal {
+            return Ok(Some(index));
+        }
+    }
+    Ok(None)
+}
+
+fn canonical_instances_with_budget(
+    instances: Vec<EffectInstance>,
+    budget: &mut TypeWorkBudget,
+) -> Result<Vec<EffectInstance>, ()> {
+    let mut canonical = Vec::new();
+    for instance in instances {
+        let mut position = 0;
+        let mut duplicate = false;
+        while position < canonical.len() {
+            match compare_effect_instances_with_budget(&canonical[position], &instance, budget)? {
+                Ordering::Less => position += 1,
+                Ordering::Equal => {
+                    duplicate = true;
+                    break;
+                }
+                Ordering::Greater => break,
+            }
+        }
+        if duplicate {
+            continue;
+        }
+        budget.charge(1)?;
+        canonical.try_reserve(1).map_err(|_| ())?;
+        canonical.insert(position, instance);
+    }
+    Ok(canonical)
+}
+
+fn canonical_instances(instances: Vec<EffectInstance>) -> Vec<EffectInstance> {
+    canonical_instances_with_budget(instances, &mut TypeWorkBudget::unbounded())
+        .expect("an in-memory row can reserve its canonical member vector")
+}
+
+pub(crate) fn effect_row_from_owned_parts_with_budget(
+    known: Vec<EffectInstance>,
+    tail: Option<(EffectRowVariable, Vec<EffectInstance>)>,
+    budget: &mut TypeWorkBudget,
+) -> Result<EffectRow, ()> {
+    budget.charge(1)?;
+    let known = canonical_instances_with_budget(known, budget)?.into_boxed_slice();
+    let tail = if let Some((variable, lacks)) = tail {
+        budget.charge(1)?;
         Some(EffectRowTail {
             variable,
-            lacks: canonical_instances(rebuilt_lacks).into_boxed_slice(),
+            lacks: canonical_instances_with_budget(lacks, budget)?.into_boxed_slice(),
         })
     } else {
         None
     };
-    Ok(EffectRow {
-        known,
-        tail: rebuilt_tail,
-    })
+    Ok(EffectRow { known, tail })
 }
 
-fn contains_instance(instances: &[EffectInstance], target: &EffectInstance) -> bool {
-    instances.iter().any(|instance| instance == target)
+fn compare_effect_instances_with_budget(
+    left: &EffectInstance,
+    right: &EffectInstance,
+    budget: &mut TypeWorkBudget,
+) -> Result<Ordering, ()> {
+    budget.charge(1)?;
+    let effects = left.effect.cmp(&right.effect);
+    if effects != Ordering::Equal {
+        return Ok(effects);
+    }
+    let lengths = left.arguments.len().cmp(&right.arguments.len());
+    if lengths != Ordering::Equal {
+        return Ok(lengths);
+    }
+    for (left, right) in left.arguments.iter().zip(&right.arguments) {
+        let ordering = compare_types_with_budget(left, right, budget)?;
+        if ordering != Ordering::Equal {
+            return Ok(ordering);
+        }
+    }
+    Ok(Ordering::Equal)
 }
 
-fn canonical_instances(mut instances: Vec<EffectInstance>) -> Vec<EffectInstance> {
-    instances.sort_by(compare_effect_instances);
-    instances.dedup();
-    instances
-}
-
-fn compare_effect_instances(left: &EffectInstance, right: &EffectInstance) -> Ordering {
-    left.effect.cmp(&right.effect).then_with(|| {
-        left.arguments
-            .len()
-            .cmp(&right.arguments.len())
-            .then_with(|| {
-                left.arguments
-                    .iter()
-                    .zip(right.arguments.iter())
-                    .find_map(|(left, right)| {
-                        let ordering = compare_types(left, right);
-                        (ordering != Ordering::Equal).then_some(ordering)
-                    })
-                    .unwrap_or(Ordering::Equal)
-            })
-    })
-}
-
-fn compare_types(left: &Type, right: &Type) -> Ordering {
+fn compare_types_with_budget(
+    left: &Type,
+    right: &Type,
+    budget: &mut TypeWorkBudget,
+) -> Result<Ordering, ()> {
     enum Task<'a> {
         Types(&'a Type, &'a Type),
         Kinds(&'a Kind, &'a Kind),
@@ -1045,7 +1117,15 @@ fn compare_types(left: &Type, right: &Type) -> Ordering {
         }
     }
 
-    let mut work = vec![Task::Types(left, right)];
+    let mut work = Vec::new();
+    macro_rules! schedule {
+        ($task:expr) => {{
+            budget.charge(1)?;
+            work.try_reserve(1).map_err(|_| ())?;
+            work.push($task);
+        }};
+    }
+    schedule!(Task::Types(left, right));
     while let Some(task) = work.pop() {
         let ordering = match task {
             Task::Types(left, right) => {
@@ -1066,7 +1146,7 @@ fn compare_types(left: &Type, right: &Type) -> Ordering {
                             let lengths = left.len().cmp(&right.len());
                             if lengths == Ordering::Equal {
                                 for (left, right) in left.iter().zip(right).rev() {
-                                    work.push(Task::Types(left, right));
+                                    schedule!(Task::Types(left, right));
                                 }
                             }
                             lengths
@@ -1075,8 +1155,8 @@ fn compare_types(left: &Type, right: &Type) -> Ordering {
                             Type::Application(left_function, left_argument),
                             Type::Application(right_function, right_argument),
                         ) => {
-                            work.push(Task::Types(left_argument, right_argument));
-                            work.push(Task::Types(left_function, right_function));
+                            schedule!(Task::Types(left_argument, right_argument));
+                            schedule!(Task::Types(left_function, right_function));
                             Ordering::Equal
                         }
                         (
@@ -1085,13 +1165,13 @@ fn compare_types(left: &Type, right: &Type) -> Ordering {
                         ) => {
                             let lengths = left_parameters.len().cmp(&right_parameters.len());
                             if lengths == Ordering::Equal {
-                                work.push(Task::Types(left, right));
+                                schedule!(Task::Types(left, right));
                                 for ((left_id, left_kind), (right_id, right_kind)) in
                                     left_parameters.iter().zip(right_parameters).rev()
                                 {
-                                    work.push(Task::Kinds(left_kind, right_kind));
+                                    schedule!(Task::Kinds(left_kind, right_kind));
                                     if left_id != right_id {
-                                        return left_id.cmp(right_id);
+                                        return Ok(left_id.cmp(right_id));
                                     }
                                 }
                             }
@@ -1101,39 +1181,39 @@ fn compare_types(left: &Type, right: &Type) -> Ordering {
                             Type::Function(left_domain, left_value),
                             Type::Function(right_domain, right_value),
                         ) => {
-                            work.push(Task::Types(left_value, right_value));
-                            work.push(Task::Types(left_domain, right_domain));
+                            schedule!(Task::Types(left_value, right_value));
+                            schedule!(Task::Types(left_domain, right_domain));
                             Ordering::Equal
                         }
                         (
                             Type::EffectfulFunction(left_domain, left_computation),
                             Type::EffectfulFunction(right_domain, right_computation),
                         ) => {
-                            work.push(Task::Rows(
+                            schedule!(Task::Rows(
                                 &left_computation.effects,
                                 &right_computation.effects,
                             ));
-                            work.push(Task::Types(
+                            schedule!(Task::Types(
                                 &left_computation.value,
                                 &right_computation.value,
                             ));
-                            work.push(Task::Types(left_domain, right_domain));
+                            schedule!(Task::Types(left_domain, right_domain));
                             Ordering::Equal
                         }
                         (
                             Type::Function(left_domain, left_value),
                             Type::EffectfulFunction(right_domain, right_computation),
                         ) if right_computation.effects.is_empty() => {
-                            work.push(Task::Types(left_value, &right_computation.value));
-                            work.push(Task::Types(left_domain, right_domain));
+                            schedule!(Task::Types(left_value, &right_computation.value));
+                            schedule!(Task::Types(left_domain, right_domain));
                             Ordering::Equal
                         }
                         (
                             Type::EffectfulFunction(left_domain, left_computation),
                             Type::Function(right_domain, right_value),
                         ) if left_computation.effects.is_empty() => {
-                            work.push(Task::Types(&left_computation.value, right_value));
-                            work.push(Task::Types(left_domain, right_domain));
+                            schedule!(Task::Types(&left_computation.value, right_value));
+                            schedule!(Task::Types(left_domain, right_domain));
                             Ordering::Equal
                         }
                         (Type::Function(_, _), Type::EffectfulFunction(_, _)) => Ordering::Less,
@@ -1151,8 +1231,8 @@ fn compare_types(left: &Type, right: &Type) -> Ordering {
                     Kind::Arrow(right_domain, right_codomain),
                 ) = (left, right)
                 {
-                    work.push(Task::Kinds(left_codomain, right_codomain));
-                    work.push(Task::Kinds(left_domain, right_domain));
+                    schedule!(Task::Kinds(left_codomain, right_codomain));
+                    schedule!(Task::Kinds(left_domain, right_domain));
                     Ordering::Equal
                 } else {
                     Ordering::Equal
@@ -1164,26 +1244,26 @@ fn compare_types(left: &Type, right: &Type) -> Ordering {
                     lengths
                 } else {
                     match (&left.tail, &right.tail) {
-                        (None, Some(_)) => return Ordering::Less,
-                        (Some(_), None) => return Ordering::Greater,
+                        (None, Some(_)) => return Ok(Ordering::Less),
+                        (Some(_), None) => return Ok(Ordering::Greater),
                         (Some(left_tail), Some(right_tail)) => {
                             let variables = variable_order(left_tail.variable, right_tail.variable);
                             if variables != Ordering::Equal {
-                                return variables;
+                                return Ok(variables);
                             }
                             let lacks_lengths = left_tail.lacks.len().cmp(&right_tail.lacks.len());
                             if lacks_lengths != Ordering::Equal {
-                                return lacks_lengths;
+                                return Ok(lacks_lengths);
                             }
                             for (left, right) in left_tail.lacks.iter().zip(&right_tail.lacks).rev()
                             {
-                                work.push(Task::Instances(left, right));
+                                schedule!(Task::Instances(left, right));
                             }
                         }
                         (None, None) => {}
                     }
                     for (left, right) in left.known.iter().zip(&right.known).rev() {
-                        work.push(Task::Instances(left, right));
+                        schedule!(Task::Instances(left, right));
                     }
                     Ordering::Equal
                 }
@@ -1196,7 +1276,7 @@ fn compare_types(left: &Type, right: &Type) -> Ordering {
                     let lengths = left.arguments.len().cmp(&right.arguments.len());
                     if lengths == Ordering::Equal {
                         for (left, right) in left.arguments.iter().zip(&right.arguments).rev() {
-                            work.push(Task::Types(left, right));
+                            schedule!(Task::Types(left, right));
                         }
                     }
                     lengths
@@ -1204,10 +1284,10 @@ fn compare_types(left: &Type, right: &Type) -> Ordering {
             }
         };
         if ordering != Ordering::Equal {
-            return ordering;
+            return Ok(ordering);
         }
     }
-    Ordering::Equal
+    Ok(Ordering::Equal)
 }
 
 impl Clone for EffectRow {
@@ -4061,22 +4141,34 @@ mod tests {
         let left = EffectRow::with_tail(Box::new([left_member.clone()]), tail, Box::new([]));
         let right = EffectRow::with_tail(Box::new([right_member.clone()]), tail, Box::new([]));
 
-        let mut union_short = TypeWorkBudget::with_limit(9);
+        let mut union_measure = TypeWorkBudget::unbounded();
+        let expected_union = left
+            .union_with_budget(&right, &mut union_measure)
+            .expect("the measured union should fit")
+            .expect("the shared tail supplies both lacks facts");
+        let union_work = union_measure.used();
+        let mut union_short = TypeWorkBudget::with_limit(union_work - 1);
         assert_eq!(left.union_with_budget(&right, &mut union_short), Err(()));
         assert_eq!(left.known(), &[left_member.clone()]);
-        let mut union_exact = TypeWorkBudget::with_limit(10);
+        let mut union_exact = TypeWorkBudget::with_limit(union_work);
         let union = left
             .union_with_budget(&right, &mut union_exact)
             .expect("the exact union budget should fit")
             .expect("the shared tail supplies both lacks facts");
-        assert_eq!(union_exact.used(), 10);
+        assert_eq!(union, expected_union);
+        assert_eq!(union_exact.used(), union_work);
 
-        let mut removal_short = TypeWorkBudget::with_limit(7);
+        let mut removal_measure = TypeWorkBudget::unbounded();
+        let expected_removal = union
+            .remove_exact_with_budget(&left_member, &mut removal_measure)
+            .expect("the measured removal should fit");
+        let removal_work = removal_measure.used();
+        let mut removal_short = TypeWorkBudget::with_limit(removal_work - 1);
         assert_eq!(
             union.remove_exact_with_budget(&left_member, &mut removal_short),
             Err(()),
         );
-        let mut removal_exact = TypeWorkBudget::with_limit(8);
+        let mut removal_exact = TypeWorkBudget::with_limit(removal_work);
         let removed = EffectRow::with_tail(
             Box::new([right_member.clone()]),
             tail,
@@ -4086,23 +4178,40 @@ mod tests {
             union
                 .remove_exact_with_budget(&left_member, &mut removal_exact)
                 .expect("the exact removal budget should fit"),
-            Ok(removed),
+            Ok(removed.clone()),
         );
+        assert_eq!(expected_removal, Ok(removed));
+        assert_eq!(removal_exact.used(), removal_work);
 
         let open = EffectRow::open(tail, Box::new([]));
         let replacement = EffectRow::singleton(left_member.clone());
-        let mut tail_short = TypeWorkBudget::with_limit(2);
+        let mut tail_measure = TypeWorkBudget::unbounded();
+        let expected_tail = open
+            .substitute_tail_once_with_budget(tail, &replacement, &mut tail_measure)
+            .expect("the measured tail substitution should fit");
+        let tail_work = tail_measure.used();
+        let mut tail_short = TypeWorkBudget::with_limit(tail_work - 1);
         assert_eq!(
             open.substitute_tail_once_with_budget(tail, &replacement, &mut tail_short),
             Err(()),
         );
-        let mut tail_exact = TypeWorkBudget::with_limit(3);
+        let mut tail_exact = TypeWorkBudget::with_limit(tail_work);
         assert_eq!(
             open.substitute_tail_once_with_budget(tail, &replacement, &mut tail_exact),
             Ok(Ok(replacement.clone())),
         );
+        assert_eq!(expected_tail, Ok(replacement.clone()));
+        assert_eq!(tail_exact.used(), tail_work);
 
-        let mut map_short = TypeWorkBudget::with_limit(2);
+        let mut map_measure = TypeWorkBudget::unbounded();
+        replacement
+            .map_type_arguments_with_budget(
+                |argument, budget| clone_type_with_budget(argument, budget),
+                &mut map_measure,
+            )
+            .expect("the measured row-argument map should fit");
+        let map_work = map_measure.used();
+        let mut map_short = TypeWorkBudget::with_limit(map_work - 1);
         assert_eq!(
             replacement.map_type_arguments_with_budget(
                 |argument, budget| clone_type_with_budget(argument, budget),
@@ -4110,7 +4219,7 @@ mod tests {
             ),
             Err(()),
         );
-        let mut map_exact = TypeWorkBudget::with_limit(3);
+        let mut map_exact = TypeWorkBudget::with_limit(map_work);
         assert_eq!(
             replacement.map_type_arguments_with_budget(
                 |argument, budget| clone_type_with_budget(argument, budget),
@@ -4118,13 +4227,19 @@ mod tests {
             ),
             Ok(replacement),
         );
+        assert_eq!(map_exact.used(), map_work);
 
         let substituted = EffectRow::singleton(EffectInstance::new(
             effect,
             Box::new([Type::Variable(TypeVariableId::new(1))]),
         ));
         let replacements = HashMap::from([(TypeVariableId::new(1), Type::Bool)]);
-        let mut substitution_short = TypeWorkBudget::with_limit(2);
+        let mut substitution_measure = TypeWorkBudget::unbounded();
+        substituted
+            .substitute_type_variables_with_budget(&replacements, &mut substitution_measure)
+            .expect("the measured row substitution should fit");
+        let substitution_work = substitution_measure.used();
+        let mut substitution_short = TypeWorkBudget::with_limit(substitution_work - 1);
         assert_eq!(
             substituted
                 .substitute_type_variables_with_budget(&replacements, &mut substitution_short,),
@@ -4134,7 +4249,7 @@ mod tests {
             substituted.known()[0].arguments(),
             [Type::Variable(_)]
         ));
-        let mut substitution_exact = TypeWorkBudget::with_limit(3);
+        let mut substitution_exact = TypeWorkBudget::with_limit(substitution_work);
         assert_eq!(
             substituted
                 .substitute_type_variables_with_budget(&replacements, &mut substitution_exact,),
@@ -4143,6 +4258,36 @@ mod tests {
                 Box::new([Type::Bool]),
             ))),
         );
+        assert_eq!(substitution_exact.used(), substitution_work);
+    }
+
+    #[test]
+    fn row_union_charges_pending_membership_and_canonical_comparisons() {
+        let effect = EffectId::new(ModuleId::new(0), 0);
+        let member = EffectInstance::new(effect, Box::new([Type::Int]));
+        let tail = EffectRowVariable::rigid(TypeVariableId::new(0));
+        let left = EffectRow::with_tail(Box::new([member.clone()]), tail, Box::new([]));
+        let right = EffectRow::with_tail(Box::new([member.clone()]), tail, Box::new([]));
+
+        let mut measured = TypeWorkBudget::unbounded();
+        let union = left
+            .union_with_budget(&right, &mut measured)
+            .expect("the measured union should fit")
+            .expect("equal closed members have a principal union");
+        let exact = measured.used();
+        assert!(
+            exact > 5,
+            "the row, two candidate members, and their arguments cost five cells before membership and canonical comparisons"
+        );
+        assert_eq!(union, left);
+
+        let mut one_short = TypeWorkBudget::with_limit(exact - 1);
+        assert_eq!(left.union_with_budget(&right, &mut one_short), Err(()));
+        assert_eq!(left.known(), &[member.clone()]);
+
+        let mut retry = TypeWorkBudget::with_limit(exact);
+        assert_eq!(left.union_with_budget(&right, &mut retry), Ok(Ok(left)));
+        assert_eq!(retry.used(), exact);
     }
 
     #[test]

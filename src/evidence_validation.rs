@@ -17,6 +17,7 @@ use crate::{
         CheckedRequirement, ConstrainedScheme, EvidenceNode, EvidenceNodeId, EvidenceSelection,
         EvidenceSubstitution, ImplId, ImplMethodId, InterfaceApplication,
         InterfaceConstraintBudget, InterfaceId, MethodId, RequirementId, RequirementOwner,
+        same_type_with_constraint_budget as same_semantic_type_with_constraint_budget,
     },
     kind::{
         BodyFreeInterfaceMethodSeed, KindEnvironments, KindFailure, canonical_type_variable_kind,
@@ -2091,6 +2092,31 @@ fn collect_linked_constraint_variables(
     pending.push(root);
     while let Some(ty) = pending.pop() {
         charge(budget, 1, span)?;
+        if let Some(function) = ty.function_view() {
+            let effects = function.effects();
+            if effects.is_some_and(|effects| effects.tail().is_some()) {
+                return Err(unknown(span));
+            }
+            let effect_arguments = effects
+                .into_iter()
+                .flat_map(|effects| effects.known())
+                .flat_map(|instance| instance.arguments());
+            let children = effects
+                .map_or(0, |effects| {
+                    effects
+                        .known()
+                        .iter()
+                        .map(|instance| instance.arguments().len())
+                        .sum()
+                })
+                .saturating_add(2);
+            charge(budget, children, span)?;
+            pending.try_reserve(children).map_err(|_| resource(span))?;
+            pending.extend(effect_arguments.rev());
+            pending.push(function.value());
+            pending.push(function.domain());
+            continue;
+        }
         match ty {
             Type::Variable(identity) => {
                 let mut retained = false;
@@ -2114,13 +2140,13 @@ fn collect_linked_constraint_variables(
                     .map_err(|_| resource(span))?;
                 pending.extend(elements.iter().rev());
             }
-            Type::Application(function, argument) | Type::Function(function, argument) => {
+            Type::Application(function, argument) => {
                 charge(budget, 2, span)?;
                 pending.try_reserve(2).map_err(|_| resource(span))?;
                 pending.push(argument);
                 pending.push(function);
             }
-            Type::EffectfulFunction(_, _) => return Err(unknown(span)),
+            Type::Function(_, _) | Type::EffectfulFunction(_, _) => unreachable!(),
             Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
             Type::Inference(_) | Type::Forall(_, _) => return Err(unknown(span)),
         }
@@ -5539,6 +5565,31 @@ fn validate_type_with_application_policy(
         match task {
             Task::Visit(ty) => {
                 charge(budget, 1, span)?;
+                if let Some(function) = ty.function_view() {
+                    let effects = function.effects();
+                    if effects.is_some_and(|effects| effects.tail().is_some()) {
+                        return Err(invalid_root(span));
+                    }
+                    let effect_arguments = effects
+                        .into_iter()
+                        .flat_map(|effects| effects.known())
+                        .flat_map(|instance| instance.arguments());
+                    let children = effects
+                        .map_or(0, |effects| {
+                            effects
+                                .known()
+                                .iter()
+                                .map(|instance| instance.arguments().len())
+                                .sum()
+                        })
+                        .saturating_add(2);
+                    charge(budget, children, span)?;
+                    pending.try_reserve(children).map_err(|_| resource(span))?;
+                    pending.extend(effect_arguments.rev().map(Task::Visit));
+                    pending.push(Task::Visit(function.value()));
+                    pending.push(Task::Visit(function.domain()));
+                    continue;
+                }
                 match ty {
                     Type::Int | Type::Bool | Type::Unit => {}
                     Type::Nominal(id) => {
@@ -5563,13 +5614,7 @@ fn validate_type_with_application_policy(
                         pending.push(Task::Sequence(elements.iter()));
                     }
                     Type::Tuple(_) => return Err(invalid_root(span)),
-                    Type::Function(domain, codomain) => {
-                        charge(budget, 2, span)?;
-                        pending.try_reserve(2).map_err(|_| resource(span))?;
-                        pending.push(Task::Visit(codomain));
-                        pending.push(Task::Visit(domain));
-                    }
-                    Type::EffectfulFunction(_, _) => return Err(invalid_root(span)),
+                    Type::Function(_, _) | Type::EffectfulFunction(_, _) => unreachable!(),
                 }
             }
             Task::Sequence(mut remaining) => {
@@ -5591,39 +5636,7 @@ fn same_type_charged(
     budget: &mut InterfaceConstraintBudget,
     span: Span,
 ) -> Result<bool, EvidenceValidationFailure> {
-    let mut pending = Vec::new();
-    reserve_type_pairs(&mut pending, 1, budget, span)?;
-    pending.push((left, right));
-    while let Some((left, right)) = pending.pop() {
-        charge(budget, 1, span)?;
-        match (left, right) {
-            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
-            (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
-            (Type::Variable(left), Type::Variable(right)) if left == right => {}
-            (
-                Type::Application(left_function, left_argument),
-                Type::Application(right_function, right_argument),
-            ) => {
-                reserve_type_pairs(&mut pending, 2, budget, span)?;
-                pending.push((left_argument, right_argument));
-                pending.push((left_function, right_function));
-            }
-            (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
-                reserve_type_pairs(&mut pending, left.len(), budget, span)?;
-                pending.extend(left.iter().zip(right).rev());
-            }
-            (
-                Type::Function(left_domain, left_codomain),
-                Type::Function(right_domain, right_codomain),
-            ) => {
-                reserve_type_pairs(&mut pending, 2, budget, span)?;
-                pending.push((left_codomain, right_codomain));
-                pending.push((left_domain, right_domain));
-            }
-            _ => return Ok(false),
-        }
-    }
-    Ok(true)
+    same_semantic_type_with_constraint_budget(left, right, budget).map_err(|()| resource(span))
 }
 
 fn same_binders_charged(
@@ -5801,12 +5814,18 @@ fn substitute_evidence_type(
     budget: &mut InterfaceConstraintBudget,
     span: Span,
 ) -> Result<Type, EvidenceValidationFailure> {
+    struct RowShape {
+        known: Box<[(crate::types::EffectId, usize)]>,
+        argument_count: usize,
+    }
+
     enum Task<'a> {
         Visit(&'a Type, bool),
         Sequence(std::slice::Iter<'a, Type>, bool),
         FinishTuple(usize),
         FinishApplication,
         FinishFunction,
+        FinishEffectfulFunction(RowShape),
     }
 
     let mut work = Vec::new();
@@ -5854,15 +5873,48 @@ fn substitute_evidence_type(
                 work.push(Task::Visit(argument, substitute));
                 work.push(Task::Visit(function, substitute));
             }
-            Task::Visit(Type::Function(domain, codomain), substitute) => {
-                charge(budget, 3, span)?;
-                work.try_reserve(3).map_err(|_| resource(span))?;
-                work.push(Task::FinishFunction);
-                work.push(Task::Visit(codomain, substitute));
-                work.push(Task::Visit(domain, substitute));
+            Task::Visit(ty, substitute) if ty.function_view().is_some() => {
+                let function = ty
+                    .function_view()
+                    .expect("the guarded evidence type has a semantic function view");
+                let Some(effects) = function.effects() else {
+                    charge(budget, 3, span)?;
+                    work.try_reserve(3).map_err(|_| resource(span))?;
+                    work.push(Task::FinishFunction);
+                    work.push(Task::Visit(function.value(), substitute));
+                    work.push(Task::Visit(function.domain(), substitute));
+                    continue;
+                };
+                if effects.tail().is_some() {
+                    return Err(invalid_root(span));
+                }
+                let known = effects
+                    .known()
+                    .iter()
+                    .map(|instance| (instance.effect(), instance.arguments().len()))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
+                let argument_count = known.iter().map(|(_, count)| *count).sum::<usize>();
+                let tasks = argument_count.saturating_add(3);
+                charge(budget, tasks, span)?;
+                work.try_reserve(tasks).map_err(|_| resource(span))?;
+                work.push(Task::FinishEffectfulFunction(RowShape {
+                    known,
+                    argument_count,
+                }));
+                for argument in effects
+                    .known()
+                    .iter()
+                    .flat_map(|instance| instance.arguments())
+                    .rev()
+                {
+                    work.push(Task::Visit(argument, substitute));
+                }
+                work.push(Task::Visit(function.value(), substitute));
+                work.push(Task::Visit(function.domain(), substitute));
             }
-            Task::Visit(Type::EffectfulFunction(_, _), _) => {
-                return Err(invalid_root(span));
+            Task::Visit(Type::Function(_, _) | Type::EffectfulFunction(_, _), _) => {
+                unreachable!("function variants have a semantic function view")
             }
             Task::Sequence(mut remaining, substitute) => {
                 if let Some(next) = remaining.next() {
@@ -5902,6 +5954,38 @@ fn substitute_evidence_type(
                 rebuilt.push(Type::Function(
                     Box::new(domain.into_inner()),
                     Box::new(codomain.into_inner()),
+                ));
+            }
+            Task::FinishEffectfulFunction(shape) => {
+                if rebuilt.len() < shape.argument_count.saturating_add(2) {
+                    return Err(invalid_root(span));
+                }
+                reserve_rebuilt_type(&mut rebuilt, budget, span)?;
+                let arguments = rebuilt
+                    .split_off(rebuilt.len() - shape.argument_count)
+                    .into_boxed_slice();
+                let mut arguments = arguments.into_vec().into_iter();
+                let mut known = Vec::new();
+                known
+                    .try_reserve(shape.known.len())
+                    .map_err(|_| resource(span))?;
+                for (effect, count) in shape.known {
+                    known.push(crate::types::EffectInstance::new(
+                        effect,
+                        arguments.by_ref().take(count).collect(),
+                    ));
+                }
+                if arguments.next().is_some() {
+                    return Err(invalid_root(span));
+                }
+                let codomain = rebuilt.pop_owned().ok_or_else(|| invalid_root(span))?;
+                let domain = rebuilt.pop_owned().ok_or_else(|| invalid_root(span))?;
+                rebuilt.push(Type::function_computation(
+                    domain.into_inner(),
+                    crate::types::ComputationType::new(
+                        codomain.into_inner(),
+                        crate::types::EffectRow::closed(known.into_boxed_slice()),
+                    ),
                 ));
             }
         }
@@ -8836,6 +8920,104 @@ mod tests {
             fact.span,
         )
         .expect("the fixture head should instantiate within the default budget")
+    }
+
+    #[test]
+    fn linked_evidence_walkers_accept_closed_effectful_arguments_and_reject_open_tails() {
+        let program = entry_program("main : Unit -> Unit\nmain () = ()\n");
+        let span = program.result().span;
+        let parameter = TypeVariableId::new(0);
+        let effect = crate::types::EffectId::new(ModuleId::new(77), 0);
+        let closed = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Bool,
+                crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                    effect,
+                    Box::new([Type::Int]),
+                )),
+            ),
+        );
+
+        validate_type_with_application_policy(
+            &closed,
+            program.registry(),
+            &[],
+            &mut InterfaceConstraintBudget::default(),
+            span,
+        )
+        .expect("closed effectful values are valid linked interface arguments");
+        let closed_with_variable = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Bool,
+                crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                    effect,
+                    Box::new([Type::Variable(parameter)]),
+                )),
+            ),
+        );
+        let mut variables = Vec::new();
+        collect_linked_constraint_variables(
+            &closed_with_variable,
+            &mut variables,
+            &mut InterfaceConstraintBudget::default(),
+            span,
+        )
+        .expect("closed row arguments contribute their ordinary variables");
+        assert_eq!(variables, [parameter]);
+        assert!(
+            same_type_charged(
+                &closed,
+                &closed,
+                &mut InterfaceConstraintBudget::default(),
+                span,
+            )
+            .expect("closed effectful equality should authenticate")
+        );
+        let substituted = substitute_evidence_type(
+            &closed_with_variable,
+            &single_substitution(parameter, &Type::Int),
+            &mut InterfaceConstraintBudget::default(),
+            span,
+        )
+        .expect("evidence substitution should traverse closed row arguments");
+        assert_eq!(
+            substituted,
+            Type::function_computation(
+                Type::Unit,
+                crate::types::ComputationType::new(
+                    Type::Bool,
+                    crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                        effect,
+                        Box::new([Type::Int]),
+                    )),
+                ),
+            )
+        );
+
+        let open = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Bool,
+                crate::types::EffectRow::open(
+                    crate::types::EffectRowVariable::rigid(parameter),
+                    Box::new([]),
+                ),
+            ),
+        );
+        assert_eq!(
+            validate_type_with_application_policy(
+                &open,
+                program.registry(),
+                &[],
+                &mut InterfaceConstraintBudget::default(),
+                span,
+            )
+            .expect_err("an open row tail is invalid in a linked interface argument")
+            .reason(),
+            EvidenceValidationReason::InvalidEvidenceRoot
+        );
     }
 
     fn forged_fresh_current_node(

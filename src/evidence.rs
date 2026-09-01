@@ -14,6 +14,7 @@ use crate::{
         authenticate_implementation_application_goal,
         match_implementation_application_head_against_canonical_goal,
         match_implementation_application_head_in_environment,
+        same_type_with_constraint_budget as same_semantic_type_with_constraint_budget,
     },
     kind::{
         CanonicalEnvironmentFailure, KindEnvironments, KindFailure,
@@ -27,8 +28,7 @@ use crate::{
     types::{
         EffectRowVariable, IterativeTypeOwner, Kind, NominalTypeId, Type, TypeVariableId,
         TypeWorkBudget, clone_kind_with_budget, clone_type_with_budget, discard_type_iteratively,
-        same_kind_with_charge, same_kinded_type_parameters_with_charge,
-        substitute_type_variables_with,
+        same_kind_with_charge, substitute_type_variables_with,
     },
 };
 
@@ -4035,6 +4035,9 @@ enum GoalCell {
     Application,
     Tuple(usize),
     Function,
+    EffectfulFunction,
+    EffectRow(usize),
+    EffectInstance(crate::types::EffectId, usize),
     Variable(TypeVariableId),
 }
 
@@ -4066,6 +4069,50 @@ fn goal_key(
             cells
                 .try_reserve(1)
                 .map_err(|_| SelectionFailure::ConstraintResource)?;
+            if matches!(ty, Type::EffectfulFunction(_, _)) {
+                let function = ty
+                    .function_view()
+                    .expect("an effectful function has a semantic function view");
+                let effects = function
+                    .effects()
+                    .expect("an effectful function retains a nonempty or open row");
+                if effects.tail().is_some() {
+                    return Err(SelectionFailure::InvalidState);
+                }
+                let row_cells = effects.known().len().saturating_add(2);
+                constraint_work
+                    .charge(row_cells)
+                    .map_err(|()| SelectionFailure::ConstraintResource)?;
+                cells
+                    .try_reserve(row_cells)
+                    .map_err(|_| SelectionFailure::ConstraintResource)?;
+                cells.push(GoalCell::EffectfulFunction);
+                cells.push(GoalCell::EffectRow(effects.known().len()));
+                for instance in effects.known() {
+                    cells.push(GoalCell::EffectInstance(
+                        instance.effect(),
+                        instance.arguments().len(),
+                    ));
+                }
+                let effect_arguments = effects
+                    .known()
+                    .iter()
+                    .map(|instance| instance.arguments().len())
+                    .sum::<usize>();
+                let children = effect_arguments.saturating_add(2);
+                constraint_work
+                    .charge(children)
+                    .map_err(|()| SelectionFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(children)
+                    .map_err(|_| SelectionFailure::ConstraintResource)?;
+                for instance in effects.known().iter().rev() {
+                    pending.extend(instance.arguments().iter().rev());
+                }
+                pending.push(function.value());
+                pending.push(function.domain());
+                continue;
+            }
             match ty {
                 Type::Int => cells.push(GoalCell::Int),
                 Type::Bool => cells.push(GoalCell::Bool),
@@ -4103,9 +4150,7 @@ fn goal_key(
                     pending.push(codomain);
                     pending.push(domain);
                 }
-                Type::EffectfulFunction(_, _) => {
-                    return Err(SelectionFailure::InvalidState);
-                }
+                Type::EffectfulFunction(_, _) => unreachable!(),
                 Type::Variable(id) => cells.push(GoalCell::Variable(*id)),
                 Type::Inference(_) => {
                     return Err(SelectionFailure::Reason(InterfaceReason::Ambiguous));
@@ -4173,56 +4218,7 @@ fn same_type_with_constraint_budget(
     right: &Type,
     constraint_work: &mut InterfaceConstraintBudget,
 ) -> Result<bool, ()> {
-    constraint_work.charge(1)?;
-    let mut pending = Vec::new();
-    pending.try_reserve(1).map_err(|_| ())?;
-    pending.push((left, right));
-    while let Some((left, right)) = pending.pop() {
-        constraint_work.charge(1)?;
-        match (left, right) {
-            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
-            (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
-            (Type::Variable(left), Type::Variable(right)) if left == right => {}
-            (Type::Inference(left), Type::Inference(right)) if left == right => {}
-            (
-                Type::Application(left_function, left_argument),
-                Type::Application(right_function, right_argument),
-            ) => {
-                constraint_work.charge(2)?;
-                pending.try_reserve(2).map_err(|_| ())?;
-                pending.push((left_argument, right_argument));
-                pending.push((left_function, right_function));
-            }
-            (Type::Forall(left_parameters, left), Type::Forall(right_parameters, right)) => {
-                if !same_kinded_type_parameters_with_charge(
-                    left_parameters,
-                    right_parameters,
-                    |work| constraint_work.charge(work),
-                )? {
-                    return Ok(false);
-                }
-                constraint_work.charge(1)?;
-                pending.try_reserve(1).map_err(|_| ())?;
-                pending.push((left, right));
-            }
-            (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
-                constraint_work.charge(left.len())?;
-                pending.try_reserve(left.len()).map_err(|_| ())?;
-                pending.extend(left.iter().zip(right).rev());
-            }
-            (
-                Type::Function(left_domain, left_codomain),
-                Type::Function(right_domain, right_codomain),
-            ) => {
-                constraint_work.charge(2)?;
-                pending.try_reserve(2).map_err(|_| ())?;
-                pending.push((left_codomain, right_codomain));
-                pending.push((left_domain, right_domain));
-            }
-            _ => return Ok(false),
-        }
-    }
-    Ok(true)
+    same_semantic_type_with_constraint_budget(left, right, constraint_work)
 }
 
 #[cfg(test)]
@@ -8450,6 +8446,61 @@ mod tests {
         )
         .expect("one edge plus the retained prerequisite argument");
         assert_eq!(exact_prerequisite.used(), 3);
+    }
+
+    #[test]
+    fn selection_goal_keys_distinguish_closed_effect_rows_and_reject_open_tails() {
+        let interface = InterfaceId::new(ModuleId::new(10), 0);
+        let effect = crate::types::EffectId::new(ModuleId::new(11), 0);
+        let closed = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Bool,
+                crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                    effect,
+                    Box::new([Type::Int]),
+                )),
+            ),
+        );
+        let distinct = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Bool,
+                crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                    effect,
+                    Box::new([Type::Bool]),
+                )),
+            ),
+        );
+        let closed_key = goal_key(
+            &unary_application(interface, closed),
+            &mut InterfaceConstraintBudget::default(),
+        )
+        .expect("a closed effectful function is a valid selection argument");
+        let distinct_key = goal_key(
+            &unary_application(interface, distinct),
+            &mut InterfaceConstraintBudget::default(),
+        )
+        .expect("a distinct closed effectful function is also valid");
+        assert_ne!(closed_key, distinct_key);
+
+        let open = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Bool,
+                crate::types::EffectRow::open(
+                    EffectRowVariable::rigid(TypeVariableId::new(0)),
+                    Box::new([]),
+                ),
+            ),
+        );
+        assert_eq!(
+            goal_key(
+                &unary_application(interface, open),
+                &mut InterfaceConstraintBudget::default(),
+            ),
+            Err(SelectionFailure::InvalidState)
+        );
     }
 
     #[test]
