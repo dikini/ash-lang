@@ -5294,7 +5294,6 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         if !self.same_kind_charged(kind, &argument_kind)? {
                             return Err(invalid());
                         }
-                        self.charge_type_structure(argument)?;
                         replacements
                             .insert_replacing(*parameter, self.clone_type_charged(argument)?);
                     }

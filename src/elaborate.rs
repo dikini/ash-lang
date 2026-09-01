@@ -5709,9 +5709,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 && !requires_pure_core_projection(&fact.ty, None)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?)
         {
-            charge_type_cells(&fact.ty, &mut self.type_work)
+            let body = clone_type_with_budget(&fact.ty, &mut self.type_work)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let body = zonk_type(&fact.ty, &HashMap::new());
             if fact.quantified.is_empty() {
                 return Ok(body);
             }
@@ -10703,7 +10702,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             )?;
             body.set_node(node);
         }
-        let core_function_type = self.clone_type(&function_type.ty)?;
+        let core_function_type = self.pure_core_type(&function_type.ty)?;
         let node = self.builder.function(
             parameter,
             body.node,
