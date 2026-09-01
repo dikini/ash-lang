@@ -1316,6 +1316,27 @@ fn omitted_global_binder_rejects_mixed_type_and_row_tail_roles() {
 }
 
 #[test]
+fn omitted_global_binders_preserve_row_first_shared_encounter_order() {
+    let program = resolve_valid(concat!(
+        "row_first : (Unit -> Unit ! {| R}) -> A\n",
+        "row_first action = action\n",
+    ));
+    let ResolvedDefinitionKind::Equational(row_first) = &program.definitions()[0].kind else {
+        panic!("expected the row-first equational global");
+    };
+
+    assert_eq!(
+        row_first
+            .interface
+            .type_parameters
+            .iter()
+            .map(|parameter| (parameter.spelling.as_str(), &parameter.kind))
+            .collect::<Vec<_>>(),
+        [("R", &Kind::EffectRow), ("A", &Kind::Type)]
+    );
+}
+
+#[test]
 fn non_type_explicit_kinds_are_retained_on_every_declaration_binder_owner() {
     let program = resolve_valid(
         "type Holder<F : Type -> Type> = Holder\n\ninterface Transform<F : Type -> Type> {\ntransform : Holder<F> -> Bool\n}\n\ninterface Observe<A> {\nobserve : A -> Bool\n}\n\nuses<F : Type -> Type> : Holder<F> -> Bool\nuses value = true\n\nimpl<F : Type -> Type> Observe<Holder<F>> {\nobserve value = true\n}\n",

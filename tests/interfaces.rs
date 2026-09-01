@@ -519,6 +519,17 @@ fn absent_method_list_rejects_interface_method_local_type_variable() {
 }
 
 #[test]
+fn absent_method_list_owns_mixed_type_and_row_tail_parameter_failure() {
+    let error = check_error(concat!(
+        "interface Combine<A> {\n",
+        "combine : (A, B) -> Unit ! {| B}\n",
+        "}\n",
+    ));
+
+    assert_eq!(reason(&error), "interface.method-parameter");
+}
+
+#[test]
 fn polymorphic_method_occurrence_instantiates_all_binders_once() {
     let checked = checked_module(concat!(
         "interface Pairing<I> {\n",

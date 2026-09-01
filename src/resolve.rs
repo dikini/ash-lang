@@ -2129,6 +2129,7 @@ impl Resolver {
                 &declared,
                 &mut seen,
                 &mut names,
+                false,
                 &mut self.type_work,
             )?;
             let type_parameters =
@@ -2328,6 +2329,7 @@ impl Resolver {
                 &declared,
                 &mut seen,
                 &mut head_names,
+                false,
                 &mut self.type_work,
             )?;
         }
@@ -2347,6 +2349,7 @@ impl Resolver {
                     &declared,
                     &mut seen,
                     &mut prerequisite_only_names,
+                    false,
                     &mut self.type_work,
                 )?;
             }
@@ -6916,6 +6919,7 @@ impl Resolver {
                 operational.header.type_parameters.as_deref()
             }
         };
+        let infer_implicit_effect_rows = explicit.is_none();
         let declared = validate_explicit_type_parameters(explicit)?;
         let mut names = Vec::new();
         let mut seen = HashMap::new();
@@ -6928,6 +6932,7 @@ impl Resolver {
                     &declared,
                     &mut seen,
                     &mut names,
+                    infer_implicit_effect_rows,
                     &mut self.type_work,
                 )?;
                 for requirement in &equational.interface.requirements {
@@ -6939,6 +6944,7 @@ impl Resolver {
                             &declared,
                             &mut seen,
                             &mut names,
+                            infer_implicit_effect_rows,
                             &mut self.type_work,
                         )?;
                     }
@@ -6953,6 +6959,7 @@ impl Resolver {
                         &declared,
                         &mut seen,
                         &mut names,
+                        infer_implicit_effect_rows,
                         &mut self.type_work,
                     )?;
                 }
@@ -6963,6 +6970,7 @@ impl Resolver {
                     &declared,
                     &mut seen,
                     &mut names,
+                    infer_implicit_effect_rows,
                     &mut self.type_work,
                 )?;
                 for requirement in &operational.header.requirements {
@@ -6974,13 +6982,14 @@ impl Resolver {
                             &declared,
                             &mut seen,
                             &mut names,
+                            infer_implicit_effect_rows,
                             &mut self.type_work,
                         )?;
                     }
                 }
             }
         }
-        self.allocate_declaration_type_parameters(explicit, &names, true)
+        self.allocate_declaration_type_parameters(explicit, &names, infer_implicit_effect_rows)
     }
 
     fn resolve_expr(&mut self, expression: &SurfaceExpr) -> Result<ResolvedExpr, ResolveError> {
@@ -8237,6 +8246,7 @@ fn retain_free_type_name<'a>(
     role: FreeTypeNameRole,
     seen: &mut HashMap<&'a str, Option<FreeTypeNameRole>>,
     output: &mut Vec<FreeTypeName>,
+    reject_mixed_roles: bool,
 ) -> Result<(), ResolveError> {
     match seen.entry(name.text.as_str()) {
         std::collections::hash_map::Entry::Vacant(entry) => {
@@ -8248,7 +8258,7 @@ fn retain_free_type_name<'a>(
             Ok(())
         }
         std::collections::hash_map::Entry::Occupied(entry) => match entry.get() {
-            Some(existing) if *existing != role => Err(error(
+            Some(existing) if reject_mixed_roles && *existing != role => Err(error(
                 ResolveReason::TypeKind,
                 name.span,
                 "this parameter name is used both as an ordinary type and as an effect-row tail",
@@ -8265,6 +8275,7 @@ fn collect_free_type_names<'a>(
     declared: &HashSet<&str>,
     seen: &mut HashMap<&'a str, Option<FreeTypeNameRole>>,
     output: &mut Vec<FreeTypeName>,
+    reject_mixed_roles: bool,
     budget: &mut TypeWorkBudget,
 ) -> Result<(), ResolveError> {
     enum Task<'a> {
@@ -8292,7 +8303,13 @@ fn collect_free_type_names<'a>(
                         "free type discovery exceeded its work budget",
                     )
                 })?;
-                retain_free_type_name(tail, FreeTypeNameRole::EffectRow, seen, output)?;
+                retain_free_type_name(
+                    tail,
+                    FreeTypeNameRole::EffectRow,
+                    seen,
+                    output,
+                    reject_mixed_roles,
+                )?;
                 continue;
             }
         };
@@ -8311,7 +8328,13 @@ fn collect_free_type_names<'a>(
                 if declared.contains(name.text.as_str())
                     || (!nominals.contains_key(&name.text) && !interfaces.contains_key(&name.text))
                 {
-                    retain_free_type_name(name, FreeTypeNameRole::Type, seen, output)?;
+                    retain_free_type_name(
+                        name,
+                        FreeTypeNameRole::Type,
+                        seen,
+                        output,
+                        reject_mixed_roles,
+                    )?;
                 }
             }
             SurfaceTypeKind::Application {
@@ -8323,7 +8346,13 @@ fn collect_free_type_names<'a>(
                         || (!nominals.contains_key(&constructor.text)
                             && !interfaces.contains_key(&constructor.text)))
                 {
-                    retain_free_type_name(constructor, FreeTypeNameRole::Type, seen, output)?;
+                    retain_free_type_name(
+                        constructor,
+                        FreeTypeNameRole::Type,
+                        seen,
+                        output,
+                        reject_mixed_roles,
+                    )?;
                 }
                 work.push(Task::Slice(arguments.iter()));
             }
@@ -12112,6 +12141,7 @@ mod tests {
             &HashSet::new(),
             &mut seen,
             &mut output,
+            true,
             &mut budget,
         )
         .expect_err("the second name exceeds the remaining budget");
