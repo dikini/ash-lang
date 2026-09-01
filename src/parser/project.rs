@@ -490,6 +490,10 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             shape.token(&TokenKind::RightParen)?;
             shape.token(&TokenKind::Arrow)?;
             shape.node(NodeKind::Type)?;
+            if shape.peek_token_is(&TokenKind::Bang) {
+                shape.token(&TokenKind::Bang)?;
+                shape.node(NodeKind::EffectRow)?;
+            }
             if shape.peek_node_is(NodeKind::WhereClause) {
                 shape.node(NodeKind::WhereClause)?;
             }
@@ -1431,6 +1435,9 @@ fn project_definition(
                 .collect::<Result<Vec<_>, _>>()?;
             let result_type =
                 project_type(source, only_child_of_kind(header, NodeKind::Type)?, tokens)?;
+            let result_effects = optional_child_of_kind(header, NodeKind::EffectRow)?
+                .map(|row| project_effect_row(source, row, tokens))
+                .transpose()?;
             let requirements = project_requirements(source, header, tokens)?;
             let body = project_block(source, only_child_of_kind(node, NodeKind::Block)?, tokens)?;
             SurfaceDefinitionKind::InlineOperational(InlineOperationalGlobal {
@@ -1439,6 +1446,7 @@ fn project_definition(
                     type_parameters: project_optional_type_parameters(source, header, tokens)?,
                     parameters,
                     result_type,
+                    result_effects,
                     requirements,
                     span: node_span(source, header, tokens)?,
                 },

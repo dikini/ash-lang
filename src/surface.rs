@@ -306,6 +306,8 @@ pub struct SurfaceInlineOperationalHeader {
     pub parameters: Vec<SurfaceTypedPattern>,
     /// The declared result type.
     pub result_type: SurfaceType,
+    /// The optional explicit effect row on the result computation.
+    pub result_effects: Option<SurfaceEffectRow>,
     /// Ordered explicit interface requirements.
     pub requirements: Vec<SurfaceRequirement>,
     /// The complete header span, excluding the body.

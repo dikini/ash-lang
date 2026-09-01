@@ -1354,7 +1354,7 @@ fn inline_operational_global(parser: &mut Parser<'_>) -> TypeParametersOutcome {
     }
     let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
     let _ = parser.expect(&TokenKind::Arrow, ExpectedForm::Arrow);
-    type_expression(parser);
+    computation_type(parser);
     if parser.at(&TokenKind::Where) {
         where_clause(
             parser,
@@ -1447,7 +1447,9 @@ pub(super) fn perform_expression(parser: &mut Parser<'_>) {
     parser.start(NodeKind::PerformExpression);
     let _ = parser.bump();
     parser.start(NodeKind::OperationReference);
-    if matches!(parser.nth(2), Some(TokenKind::UpperIdentifier(_))) {
+    if parser.nth(1) == Some(&TokenKind::Dot)
+        && matches!(parser.nth(2), Some(TokenKind::UpperIdentifier(_)))
+    {
         qualified_name(parser, true);
     } else {
         expect_upper_identifier(parser);
@@ -2134,6 +2136,14 @@ fn type_expression(parser: &mut Parser<'_>) {
         }
     }
     parser.finish();
+}
+
+fn computation_type(parser: &mut Parser<'_>) {
+    type_expression(parser);
+    if parser.at(&TokenKind::Bang) {
+        let _ = parser.bump();
+        effect_row(parser);
+    }
 }
 
 fn effect_row(parser: &mut Parser<'_>) {

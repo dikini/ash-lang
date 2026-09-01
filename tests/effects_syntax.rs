@@ -116,3 +116,44 @@ fn perform_handle_and_resume_project_with_their_stated_precedence() {
     };
     assert!(matches!(resumed.kind, SurfaceExprKind::Add(_)));
 }
+
+#[test]
+fn inline_computation_result_and_generic_requests_project() {
+    let module = project(concat!(
+        "effect State<A : Type> {\n",
+        "get : Unit -> A\n",
+        "}\n\n",
+        "fn inline(value : Int) -> Int ! {State<Int>} {\nvalue\n}\n\n",
+        "local : Unit -> Int\n",
+        "local () = perform State<Int>.get ()\n\n",
+        "qualified : Unit -> Int\n",
+        "qualified () = perform Api.State<Int>.get ()\n",
+    ));
+
+    let SurfaceDefinitionKind::InlineOperational(inline) = &module.definitions[0].kind else {
+        panic!("the inline global should project")
+    };
+    let result_row = inline
+        .header
+        .result_effects
+        .as_ref()
+        .expect("the inline result row should project explicitly");
+    assert_eq!(result_row.effects[0].effect.member().text, "State");
+
+    let expected = [("State", "State"), ("Api", "State")];
+    for (definition, (qualifier, effect)) in module.definitions[1..].iter().zip(expected) {
+        let SurfaceDefinitionKind::Equational(definition) = &definition.kind else {
+            panic!("the request fixture should remain equational")
+        };
+        let SurfaceExprKind::Perform(request) = &definition.equations[0].body.kind else {
+            panic!("the request should project explicitly")
+        };
+        assert_eq!(
+            request.effect.qualifier().map_or(effect, |name| &name.text),
+            qualifier
+        );
+        assert_eq!(request.effect.member().text, effect);
+        assert_eq!(request.arguments.len(), 1);
+        assert_eq!(request.operation.text, "get");
+    }
+}

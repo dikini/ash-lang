@@ -8321,8 +8321,7 @@ impl ExportSummary {
         }
         for (position, effect) in self.effects.iter().enumerate() {
             if self.effect_positions.get(&effect.id) != Some(&position)
-                || !named_effects.contains(&effect.id)
-                || !effect.public
+                || (named_effects.contains(&effect.id) && !effect.public)
                 || effect.operations.is_empty()
             {
                 return Err(ResolvedBuildFailure::InvalidState);
@@ -10454,6 +10453,100 @@ impl ExportSummary {
             summary.hidden_nominal_order.push(imported.id);
         }
 
+        if !resolved.effects.is_empty() || resolved.imported.effects().next().is_some() {
+            let mut referenced_effects = HashSet::new();
+            for exported in summary.terms.values() {
+                collect_effect_identities(
+                    &exported.scheme.value_type,
+                    &mut referenced_effects,
+                    type_work,
+                )
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            }
+            for exported in summary.constructors.values() {
+                if let Some(payload) = &exported.payload {
+                    collect_effect_identities(payload, &mut referenced_effects, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            for exported in summary.hidden_constructors.values() {
+                if let Some(payload) = &exported.payload {
+                    collect_effect_identities(payload, &mut referenced_effects, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            for interface in summary.interfaces.iter().chain(&summary.hidden_interfaces) {
+                for method in &interface.methods {
+                    collect_effect_identities(
+                        &method.value_type,
+                        &mut referenced_effects,
+                        type_work,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            for effect in &summary.effects {
+                for operation in &effect.operations {
+                    collect_effect_identities(
+                        &operation.annotation.ty,
+                        &mut referenced_effects,
+                        type_work,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            for implementation in &summary.implementations {
+                for argument in implementation.fact.arguments() {
+                    collect_effect_identities(argument, &mut referenced_effects, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+                for prerequisite in &implementation.fact.prerequisites {
+                    for argument in prerequisite.arguments() {
+                        collect_effect_identities(argument, &mut referenced_effects, type_work)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    }
+                }
+                for method in &implementation.fact.methods {
+                    collect_effect_identities(
+                        &method.scheme.value_type,
+                        &mut referenced_effects,
+                        type_work,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            for effect in resolved.effects.iter().chain(resolved.imported.effects()) {
+                if !referenced_effects.contains(&effect.id)
+                    || summary.effect_positions.contains_key(&effect.id)
+                {
+                    continue;
+                }
+                type_work
+                    .charge(2)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                summary
+                    .effects
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                summary
+                    .effect_positions
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                let position = summary.effects.len();
+                summary.effects.push(
+                    clone_resolved_effect_with_budget(effect, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                );
+                if summary
+                    .effect_positions
+                    .insert(effect.id, position)
+                    .is_some()
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+            }
+        }
+
         Ok(summary)
     }
 
@@ -10479,6 +10572,16 @@ impl ExportSummary {
     pub fn effect(&self, spelling: &str) -> Option<&ResolvedEffectDeclaration> {
         let id = self.effect_names.get(spelling)?;
         self.effects.get(*self.effect_positions.get(id)?)
+    }
+
+    /// Looks up one retained canonical effect fact by semantic identity.
+    #[must_use]
+    pub fn effect_by_id(&self, id: EffectId) -> Option<&ResolvedEffectDeclaration> {
+        self.effects.get(*self.effect_positions.get(&id)?)
+    }
+
+    pub(crate) const fn has_effect_facts(&self) -> bool {
+        !self.effects.is_empty()
     }
 
     pub(crate) fn method(&self, spelling: &str) -> Option<MethodId> {
@@ -13442,6 +13545,59 @@ fn collect_nominal_identities(
                 work.push(body);
             }
             Type::Int | Type::Bool | Type::Unit | Type::Variable(_) | Type::Inference(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn collect_effect_identities(
+    root: &Type,
+    output: &mut HashSet<EffectId>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), ()> {
+    budget.charge(1)?;
+    let mut work = Vec::new();
+    work.try_reserve(1).map_err(|_| ())?;
+    work.push(root);
+    while let Some(ty) = work.pop() {
+        match ty {
+            Type::Tuple(elements) => {
+                budget.charge(elements.len())?;
+                work.try_reserve(elements.len()).map_err(|_| ())?;
+                work.extend(elements);
+            }
+            Type::Application(function, argument) | Type::Function(function, argument) => {
+                budget.charge(2)?;
+                work.try_reserve(2).map_err(|_| ())?;
+                work.push(argument);
+                work.push(function);
+            }
+            Type::EffectfulFunction(domain, codomain) => {
+                for instance in codomain.effects().known() {
+                    if !output.contains(&instance.effect()) {
+                        budget.charge(1)?;
+                        output.try_reserve(1).map_err(|_| ())?;
+                        output.insert(instance.effect());
+                    }
+                }
+                let children = codomain.effect_argument_count().saturating_add(2);
+                budget.charge(children)?;
+                work.try_reserve(children).map_err(|_| ())?;
+                codomain.extend_effect_arguments(&mut work);
+                work.push(codomain.value());
+                work.push(domain);
+            }
+            Type::Forall(_, body) => {
+                budget.charge(1)?;
+                work.try_reserve(1).map_err(|_| ())?;
+                work.push(body);
+            }
+            Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Variable(_)
+            | Type::Inference(_)
+            | Type::Nominal(_) => {}
         }
     }
     Ok(())

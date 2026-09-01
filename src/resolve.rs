@@ -65,8 +65,9 @@ use crate::{
     types::{
         ComputationType, ConstructorId, EffectId, EffectInstance, EffectRow, EffectRowVariable,
         IterativeTypeOwner, Kind, NominalTypeId, OperationId, Type, TypeVariableId, TypeWorkBudget,
-        charge_kind_nodes, charge_type_cells, clone_type_with_budget, discard_type_iteratively,
-        same_kind_with_charge,
+        charge_kind_nodes, charge_type_cells, clone_type_with_budget,
+        compare_effect_instances_with_budget, discard_type_iteratively,
+        effect_row_from_owned_parts_with_budget, same_kind_with_charge,
     },
 };
 
@@ -77,6 +78,60 @@ struct ImportedTypeCloneBuffer(Vec<Type>);
 struct ImportedTypeVariableBuffer(Vec<ResolvedTypeVariable>);
 
 struct ImportedConstructorFactBuffer(Vec<ImportedConstructorFact>);
+
+fn build_source_effect_row_with_budget(
+    written: Vec<(EffectInstance, crate::source::Span)>,
+    tail: Option<EffectRowVariable>,
+    span: crate::source::Span,
+    budget: &mut TypeWorkBudget,
+) -> Result<EffectRow, ResolveError> {
+    budget.charge(written.len()).map_err(|()| {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            span,
+            "effect-row retention exceeded its type-work budget",
+        )
+    })?;
+    let mut known = Vec::new();
+    known.try_reserve_exact(written.len()).map_err(|_| {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            span,
+            "effect-row retention could not reserve storage",
+        )
+    })?;
+    for (instance, instance_span) in written {
+        for existing in &known {
+            if compare_effect_instances_with_budget(existing, &instance, budget).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    instance_span,
+                    "effect-row duplicate comparison exceeded its type-work budget",
+                )
+            })? == std::cmp::Ordering::Equal
+            {
+                return Err(error(
+                    ResolveReason::DuplicateEffect,
+                    instance_span,
+                    "this exact effect instance is already present in the written row",
+                ));
+            }
+        }
+        known.push(instance);
+    }
+    effect_row_from_owned_parts_with_budget(
+        known,
+        tail.map(|variable| (variable, Vec::new())),
+        budget,
+    )
+    .map_err(|()| {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            span,
+            "effect-row rebuild exceeded its type-work budget",
+        )
+    })
+}
 
 #[derive(Clone, Copy)]
 struct ValidatedImportedConstructorRoute<'summary> {
@@ -1943,12 +1998,19 @@ impl Resolver {
                         )
                     })?;
                 for (operation, id) in declaration.operations.iter().zip(identity.operations) {
+                    if !matches!(
+                        &operation.annotation.kind,
+                        SurfaceTypeKind::Function(function) if function.effects.is_none()
+                    ) {
+                        return Err(error(
+                            ResolveReason::EffectOperationShape,
+                            operation.annotation.span,
+                            "an effect operation must have one outer function arrow with a pure result",
+                        ));
+                    }
                     let annotation = self.resolve_type(&operation.annotation)?;
                     let shape = annotation.ty.function_view();
-                    if shape.is_none()
-                        || shape
-                            .is_some_and(|view| view.effects().is_some_and(|row| !row.is_empty()))
-                    {
+                    if shape.is_none_or(|view| view.effects().is_some()) {
                         return Err(error(
                             ResolveReason::EffectOperationShape,
                             operation.annotation.span,
@@ -4104,6 +4166,14 @@ impl Resolver {
                 "imported nominal ordering could not reserve storage",
             )
         })?;
+        let mut seen_effects = Vec::new();
+        seen_effects.try_reserve(type_cells).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "imported effect ordering could not reserve storage",
+            )
+        })?;
         while let Some(task) = pending.pop() {
             let Task::Type(ty) = task else {
                 let Task::Sequence(mut remaining) = task else {
@@ -4152,6 +4222,33 @@ impl Resolver {
                     pending.push(Task::Type(domain));
                 }
                 Type::EffectfulFunction(domain, codomain) => {
+                    for instance in codomain.effects().known() {
+                        let identity = instance.effect();
+                        let mut already_seen = false;
+                        for retained in &seen_effects {
+                            self.type_work.charge(1).map_err(|()| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    span,
+                                    "imported effect membership exceeded its type-work budget",
+                                )
+                            })?;
+                            if retained == &identity {
+                                already_seen = true;
+                                break;
+                            }
+                        }
+                        if !already_seen {
+                            self.type_work.charge(1).map_err(|()| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    span,
+                                    "imported effect ordering exceeded its type-work budget",
+                                )
+                            })?;
+                            seen_effects.push(identity);
+                        }
+                    }
                     for argument in codomain.effect_arguments() {
                         pending.push(Task::Type(argument));
                     }
@@ -4171,6 +4268,16 @@ impl Resolver {
                 ));
             };
             self.retain_scheme_nominal_fact(exported, span)?;
+        }
+        for id in seen_effects {
+            let exported = summary.effect_by_id(id).ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "an exported scheme references missing effect metadata",
+                )
+            })?;
+            self.retain_imported_effect(exported, span)?;
         }
         Ok(())
     }
@@ -4563,7 +4670,7 @@ impl Resolver {
                     "constructor transaction staging could not reserve storage",
                 )
             })?;
-        for route in constructor_routes {
+        for route in &constructor_routes {
             if !route.requires_commit {
                 continue;
             }
@@ -4611,6 +4718,15 @@ impl Resolver {
             .commit_prepared_nominal_merges(&mut prepared_nominals);
         self.imported
             .commit_constructor_inserts(staged_constructors.into_vec());
+        if summary.has_effect_facts() {
+            for route in &constructor_routes {
+                let exported = route.exported;
+                if let Some(payload) = &exported.payload {
+                    self.retain_type_nominals(payload, summary, span)?;
+                }
+                self.retain_scheme_nominals(&exported.scheme, summary, span)?;
+            }
+        }
         Ok(())
     }
 
@@ -4877,16 +4993,34 @@ impl Resolver {
         &mut self,
         row: &crate::surface::SurfaceEffectRow,
     ) -> Result<EffectRow, ResolveError> {
-        let mut known = Vec::new();
-        known.try_reserve_exact(row.effects.len()).map_err(|_| {
+        self.type_work.charge(row.effects.len()).map_err(|()| {
             error(
                 ResolveReason::TypeResourceExhausted,
                 row.span,
                 "effect-row storage exceeded its type-work budget",
             )
         })?;
+        let mut resolved_instances = Vec::new();
+        resolved_instances
+            .try_reserve_exact(row.effects.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    row.span,
+                    "effect-row storage exceeded its type-work budget",
+                )
+            })?;
         for written in &row.effects {
             let effect = self.effect_reference(&written.effect)?;
+            self.type_work
+                .charge(written.arguments.len())
+                .map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        written.span,
+                        "effect-argument storage exceeded its type-work budget",
+                    )
+                })?;
             let mut arguments = Vec::new();
             arguments
                 .try_reserve_exact(written.arguments.len())
@@ -4902,37 +5036,28 @@ impl Resolver {
                 arguments.push(ty);
             }
             let instance = EffectInstance::new(effect, arguments.into_boxed_slice());
-            if known.iter().any(|existing| existing == &instance) {
-                return Err(error(
-                    ResolveReason::DuplicateEffect,
-                    written.span,
-                    "this exact effect instance is already present in the written row",
-                ));
-            }
-            known.push(instance);
+            resolved_instances.push((instance, written.span));
         }
-        let known = known.into_boxed_slice();
-        let Some(tail) = &row.tail else {
-            return Ok(EffectRow::closed(known));
-        };
-        let identity = self
-            .type_scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.get(&tail.text))
-            .copied()
-            .ok_or_else(|| {
-                error(
-                    ResolveReason::UnknownType,
-                    tail.span,
-                    "this effect-row tail parameter is not declared",
-                )
-            })?;
-        Ok(EffectRow::with_tail(
-            known,
-            EffectRowVariable::rigid(identity),
-            Box::new([]),
-        ))
+        let tail = row
+            .tail
+            .as_ref()
+            .map(|tail| {
+                self.type_scopes
+                    .iter()
+                    .rev()
+                    .find_map(|scope| scope.get(&tail.text))
+                    .copied()
+                    .map(EffectRowVariable::rigid)
+                    .ok_or_else(|| {
+                        error(
+                            ResolveReason::UnknownType,
+                            tail.span,
+                            "this effect-row tail parameter is not declared",
+                        )
+                    })
+            })
+            .transpose()?;
+        build_source_effect_row_with_budget(resolved_instances, tail, row.span, &mut self.type_work)
     }
 
     fn resolve_requirements(
@@ -12173,5 +12298,69 @@ mod tests {
             .expect("the disposal thread should start")
             .join()
             .expect("late resolver failure should dispose completed types iteratively");
+    }
+
+    #[test]
+    fn source_effect_row_rebuild_is_exact_retryable_and_stack_safe() {
+        const DEPTH: usize = 16_384;
+        std::thread::Builder::new()
+            .name("source-effect-row-rebuild".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("source-effect-row.ash", "{State<Int>}")
+                    .expect("the row fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 12).expect("the row range is ordered"))
+                    .expect("the row span should fit");
+                let effect = EffectId::new(ModuleId::new(41), 0);
+                let fixture = |reverse| {
+                    let nested = |leaf| {
+                        let mut argument = leaf;
+                        for _ in 0..DEPTH {
+                            argument = Type::function(Type::Unit, argument);
+                        }
+                        argument
+                    };
+                    let (first, second) = if reverse {
+                        (nested(Type::Bool), nested(Type::Int))
+                    } else {
+                        (nested(Type::Int), nested(Type::Bool))
+                    };
+                    vec![
+                        (
+                            EffectInstance::new(effect, vec![first].into_boxed_slice()),
+                            span,
+                        ),
+                        (
+                            EffectInstance::new(effect, vec![second].into_boxed_slice()),
+                            span,
+                        ),
+                    ]
+                };
+
+                let mut measured = TypeWorkBudget::unbounded();
+                let row =
+                    build_source_effect_row_with_budget(fixture(false), None, span, &mut measured)
+                        .expect("the unbounded measurement should rebuild the row");
+                let exact_work = measured.used();
+                drop(row);
+
+                let mut one_short = TypeWorkBudget::with_limit(exact_work - 1);
+                let failure =
+                    build_source_effect_row_with_budget(fixture(false), None, span, &mut one_short)
+                        .expect_err("one missing unit must publish no partial row");
+                assert_eq!(failure.reason, ResolveReason::TypeResourceExhausted);
+
+                let mut exact = TypeWorkBudget::with_limit(exact_work);
+                let row =
+                    build_source_effect_row_with_budget(fixture(true), None, span, &mut exact)
+                        .expect("a fresh exact retry should publish the complete row");
+                assert_eq!(exact.used(), exact_work);
+                assert_eq!(row.known().len(), 2);
+                drop(row);
+            })
+            .expect("the row owner test should start")
+            .join()
+            .expect("success, rejection, retry, and teardown should fit a small stack");
     }
 }

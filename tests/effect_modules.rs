@@ -248,3 +248,116 @@ fn effect_namespace_privacy_and_diamond_routes_preserve_one_identity() {
         ResolveReason::ImportConflict
     );
 }
+
+#[test]
+fn operation_rows_are_rejected_for_public_and_private_effects() {
+    for (visibility, spelling) in [("pub ", "Public"), ("", "Private")] {
+        let tree = ModuleTree::create();
+        let entry = tree.write(
+            "entry.ash",
+            &format!("{visibility}effect {spelling} {{\nbad : Unit -> Unit ! {{}}\n}}\n"),
+        );
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let ResolveModuleError::Resolution(error) = resolve_graph_error(&graph) else {
+            panic!("an explicit operation row should fail during resolution")
+        };
+        assert_eq!(
+            error.diagnostic().reason,
+            ResolveReason::EffectOperationShape
+        );
+    }
+}
+
+#[test]
+fn local_and_imported_effect_rows_authenticate_effect_arity() {
+    let local_tree = ModuleTree::create();
+    let local_entry = local_tree.write(
+        "entry.ash",
+        concat!(
+            "effect State<A : Type> {\nget : Unit -> A\n}\n\n",
+            "main : Unit -> Unit ! {State}\n",
+            "main () = ()\n",
+        ),
+    );
+    let local_graph = load_module_graph(&local_entry, &ModuleRoots::empty()).unwrap();
+    assert!(matches!(
+        resolve_graph_error(&local_graph),
+        ResolveModuleError::Kind(_)
+    ));
+
+    let imported_tree = ModuleTree::create();
+    let imported_entry = imported_tree.write(
+        "entry.ash",
+        concat!(
+            "import base (State)\n\n",
+            "type Box<A> = Boxed(A)\n\n",
+            "main : Unit -> Unit ! {State<Box>}\n",
+            "main () = ()\n",
+        ),
+    );
+    imported_tree.write(
+        "base.ash",
+        "pub effect State<A : Type> {\nget : Unit -> A\n}\n",
+    );
+    let imported_graph = load_module_graph(&imported_entry, &ModuleRoots::empty()).unwrap();
+    assert!(matches!(
+        resolve_graph_error(&imported_graph),
+        ResolveModuleError::Kind(_)
+    ));
+}
+
+#[test]
+fn hidden_effect_signature_closure_survives_facade_and_diamond_routes() {
+    let tree = ModuleTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "import left as Left\n",
+            "import right as Right\n\n",
+            "main : Unit -> Unit\n",
+            "main () = ()\n",
+        ),
+    );
+    tree.write(
+        "base.ash",
+        concat!(
+            "effect Hidden {\nping : Unit -> Unit\n}\n\n",
+            "pub type Exposed = Wrap (Unit -> Unit ! {Hidden})\n",
+        ),
+    );
+    tree.write("facade.ash", "pub import base (Exposed, Wrap)\n");
+    tree.write("left.ash", "pub import facade (Exposed, Wrap)\n");
+    tree.write("right.ash", "pub import facade (Exposed, Wrap)\n");
+
+    let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+    let base = module_named(&graph, "base.ash");
+    let entry = module_named(&graph, "entry.ash");
+    let checked = check_graph(&graph);
+    let hidden = EffectId::new(base.id(), 0);
+    for module in &checked {
+        assert!(module.exports().effect("Hidden").is_none());
+        if module.module() != entry.id() {
+            assert_eq!(
+                module
+                    .exports()
+                    .effect_by_id(hidden)
+                    .unwrap_or_else(|| panic!(
+                        "module {:?} lost the hidden effect",
+                        module.module()
+                    ))
+                    .id,
+                hidden
+            );
+        }
+    }
+    assert_eq!(
+        checked
+            .iter()
+            .find(|module| module.module() == entry.id())
+            .unwrap()
+            .effect(hidden)
+            .unwrap()
+            .id,
+        hidden
+    );
+}

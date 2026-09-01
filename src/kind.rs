@@ -287,6 +287,7 @@ pub(crate) struct KindEnvironments<'a> {
     omega: HashMap<InferenceVariableId, KindFact<'a>>,
     xi: HashMap<NominalTypeId, NominalKindFact>,
     iota: HashMap<InterfaceId, InterfaceKindFact<'a>>,
+    effects: Option<HashMap<crate::types::EffectId, &'a [crate::resolved::ResolvedTypeVariable]>>,
 }
 
 impl<'a> KindEnvironments<'a> {
@@ -296,7 +297,64 @@ impl<'a> KindEnvironments<'a> {
             omega: HashMap::new(),
             xi: HashMap::new(),
             iota: HashMap::new(),
+            effects: None,
         }
+    }
+
+    fn install_effects(
+        &mut self,
+        registry: &'a crate::resolved::ResolvedRegistry,
+        local: &'a [crate::resolved::ResolvedEffectDeclaration],
+        imported: impl Iterator<Item = &'a crate::resolved::ResolvedEffectDeclaration>,
+        budget: &mut TypeWorkBudget,
+        span: Span,
+    ) -> Result<(), KindFailure> {
+        let mut effects = HashMap::new();
+        for source in local {
+            budget.charge(1).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "effect-kind registry authentication exceeded its type-work budget",
+                )
+            })?;
+            effects.try_reserve(1).map_err(|_| {
+                KindFailure::resource(span, "effect-kind registry could not reserve storage")
+            })?;
+            let effect = registry.effect(source.id).ok_or_else(|| {
+                KindFailure::internal(span, "a local effect has no canonical registry fact")
+            })?;
+            if effects
+                .insert(effect.id, effect.parameters.as_ref())
+                .is_some()
+            {
+                return Err(KindFailure::internal(
+                    span,
+                    "the checked effect registry repeats a canonical identity",
+                ));
+            }
+        }
+        for effect in imported {
+            budget.charge(1).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "effect-kind registry authentication exceeded its type-work budget",
+                )
+            })?;
+            effects.try_reserve(1).map_err(|_| {
+                KindFailure::resource(span, "effect-kind registry could not reserve storage")
+            })?;
+            if effects
+                .insert(effect.id, effect.parameters.as_ref())
+                .is_some()
+            {
+                return Err(KindFailure::internal(
+                    span,
+                    "the checked effect registry repeats a canonical identity",
+                ));
+            }
+        }
+        self.effects = (!effects.is_empty()).then_some(effects);
+        Ok(())
     }
 
     pub(crate) fn contains_declared(&self, identity: TypeVariableId) -> bool {
@@ -1622,6 +1680,196 @@ impl<'a> KindEnvironments<'a> {
         type_mirror: Option<&Type>,
         root_function_domain_mirror: Option<&Type>,
         allowed_variables: Option<&HashSet<TypeVariableId>>,
+        visited_variables: Option<&mut HashSet<TypeVariableId>>,
+        fallback_span: Span,
+        budget: &mut SynthesisLedger<'_>,
+    ) -> Result<KindFact<'environment>, KindFailure>
+    where
+        'a: 'environment,
+    {
+        self.authenticate_effect_rows(ty, fallback_span, budget)?;
+        self.synthesize_core_with_ledger(
+            ty,
+            provenance,
+            type_mirror,
+            root_function_domain_mirror,
+            allowed_variables,
+            visited_variables,
+            fallback_span,
+            budget,
+        )
+    }
+
+    fn authenticate_effect_rows<'environment>(
+        &'environment self,
+        ty: &Type,
+        span: Span,
+        budget: &mut SynthesisLedger<'_>,
+    ) -> Result<(), KindFailure>
+    where
+        'a: 'environment,
+    {
+        let Some(effects) = &self.effects else {
+            return Ok(());
+        };
+        budget.charge(1).map_err(|()| {
+            KindFailure::resource(
+                span,
+                "effect-row authentication exceeded its owning work budget",
+            )
+        })?;
+        let mut pending = Vec::new();
+        pending.try_reserve(1).map_err(|_| {
+            KindFailure::resource(
+                span,
+                "effect-row authentication could not reserve traversal storage",
+            )
+        })?;
+        pending.push(ty);
+        while let Some(ty) = pending.pop() {
+            budget.charge(1).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "effect-row authentication exceeded its owning work budget",
+                )
+            })?;
+            match ty {
+                Type::Tuple(elements) => {
+                    budget.charge(elements.len()).map_err(|()| {
+                        KindFailure::resource(
+                            span,
+                            "effect-row authentication exceeded its owning work budget",
+                        )
+                    })?;
+                    pending.try_reserve(elements.len()).map_err(|_| {
+                        KindFailure::resource(
+                            span,
+                            "effect-row authentication could not reserve traversal storage",
+                        )
+                    })?;
+                    pending.extend(elements);
+                }
+                Type::Application(function, argument) | Type::Function(function, argument) => {
+                    budget.charge(2).map_err(|()| {
+                        KindFailure::resource(
+                            span,
+                            "effect-row authentication exceeded its owning work budget",
+                        )
+                    })?;
+                    pending.try_reserve(2).map_err(|_| {
+                        KindFailure::resource(
+                            span,
+                            "effect-row authentication could not reserve traversal storage",
+                        )
+                    })?;
+                    pending.push(function);
+                    pending.push(argument);
+                }
+                Type::EffectfulFunction(domain, computation) => {
+                    for instance in computation.effects().known() {
+                        budget.charge(1).map_err(|()| {
+                            KindFailure::resource(
+                                span,
+                                "effect-row identity lookup exceeded its owning work budget",
+                            )
+                        })?;
+                        let parameters = effects.get(&instance.effect()).ok_or_else(|| {
+                            KindFailure::internal(
+                                span,
+                                "an effect row names no canonical checked declaration",
+                            )
+                        })?;
+                        if parameters.len() != instance.arguments().len() {
+                            return Err(KindFailure::internal(
+                                span,
+                                "an effect row has the wrong canonical argument count",
+                            ));
+                        }
+                        for (argument, parameter) in
+                            instance.arguments().iter().zip(parameters.iter())
+                        {
+                            let found = self.synthesize_core_with_ledger(
+                                argument, None, None, None, None, None, span, budget,
+                            )?;
+                            let equal = same_kind_with_charge(&parameter.kind, found.kind, || {
+                                budget.charge(1)
+                            })
+                            .map_err(|()| {
+                                KindFailure::resource(
+                                    span,
+                                    "effect-argument kind checking exceeded its owning work budget",
+                                )
+                            })?;
+                            if !equal {
+                                return Err(KindFailure::internal(
+                                    span,
+                                    "an effect row argument has the wrong canonical kind",
+                                ));
+                            }
+                            budget.charge(1).map_err(|()| {
+                                KindFailure::resource(
+                                    span,
+                                    "effect-row authentication exceeded its owning work budget",
+                                )
+                            })?;
+                            pending.try_reserve(1).map_err(|_| {
+                                KindFailure::resource(
+                                    span,
+                                    "effect-row authentication could not reserve traversal storage",
+                                )
+                            })?;
+                            pending.push(argument);
+                        }
+                    }
+                    budget.charge(2).map_err(|()| {
+                        KindFailure::resource(
+                            span,
+                            "effect-row authentication exceeded its owning work budget",
+                        )
+                    })?;
+                    pending.try_reserve(2).map_err(|_| {
+                        KindFailure::resource(
+                            span,
+                            "effect-row authentication could not reserve traversal storage",
+                        )
+                    })?;
+                    pending.push(domain);
+                    pending.push(computation.value());
+                }
+                Type::Forall(_, body) => {
+                    budget.charge(1).map_err(|()| {
+                        KindFailure::resource(
+                            span,
+                            "effect-row authentication exceeded its owning work budget",
+                        )
+                    })?;
+                    pending.try_reserve(1).map_err(|_| {
+                        KindFailure::resource(
+                            span,
+                            "effect-row authentication could not reserve traversal storage",
+                        )
+                    })?;
+                    pending.push(body);
+                }
+                Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Variable(_)
+                | Type::Inference(_)
+                | Type::Nominal(_) => {}
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn synthesize_core_with_ledger<'environment>(
+        &'environment self,
+        ty: &Type,
+        provenance: Option<&ResolvedTypeProvenance>,
+        type_mirror: Option<&Type>,
+        root_function_domain_mirror: Option<&Type>,
+        allowed_variables: Option<&HashSet<TypeVariableId>>,
         mut visited_variables: Option<&mut HashSet<TypeVariableId>>,
         fallback_span: Span,
         budget: &mut SynthesisLedger<'_>,
@@ -2525,6 +2773,13 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
 ) -> Result<(), KindFailure> {
     authenticate_declaration_order(module, constructor_payload_provenance, budget)?;
     let mut environments = KindEnvironments::new();
+    environments.install_effects(
+        &module.registry,
+        &module.effects,
+        module.imported.effects(),
+        budget,
+        module.span,
+    )?;
     for nominal in module.registry.nominals() {
         let parameters = required_lookup(
             module.registry.canonical_nominal_parameters(nominal.id),
