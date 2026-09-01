@@ -1,6 +1,7 @@
 //! Bidirectional typed elaboration from resolved surface syntax to pure Core.
 
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     error::Error,
     fmt,
@@ -18,6 +19,7 @@ use crate::{
         BuildError, CORE_PAYLOAD_DEPTH_LIMIT, CoreBuilder, CoreMatchArm, CorePattern,
         CorePatternKind, EffectClause, EffectExprKind, EffectOperation, HandlerId, HandlerNode,
         NodeId, Primitive, RequestNode, ResumeNode, ResumeUse, TypedBinder,
+        function::ApplicationNode,
     },
     diagnostic::{Diagnostic, SourceLabel},
     evidence::{
@@ -1418,10 +1420,20 @@ fn substitute_fresh_type_variables_in_order(
         let mut replacement = TypeReplacementBuffer::new();
         replacement.try_reserve(1).map_err(|_| ())?;
         replacement.try_insert_unique(*source, Type::Variable(*fresh))?;
+        let mut row_replacement = HashMap::new();
+        row_replacement.try_reserve(1).map_err(|_| ())?;
+        row_replacement.insert(
+            *source,
+            EffectRow::open(EffectRowVariable::rigid(*fresh), Box::new([])),
+        );
         let input = current.as_deref().unwrap_or(ty);
-        let renamed = substitute_type_variables_with(input, replacement.as_map(), |cells| {
-            type_work.charge(cells)
-        })?;
+        let renamed = substitute_type_and_row_variables_with(
+            input,
+            replacement.as_map(),
+            &row_replacement,
+            |cells| type_work.charge(cells),
+        )?
+        .expect("renaming one rigid row tail preserves its constraints");
         match current.as_mut() {
             Some(current) => current.replace(renamed),
             None => current = Some(IterativeTypeOwner::new(renamed)),
@@ -1761,6 +1773,15 @@ pub trait CoreLoweringFamily: CoreOperationFamily {
         origin: Origin,
         operation: EffectOperation,
     ) -> Result<NodeId, BuildError>;
+    fn push_application(
+        builder: &mut CoreBuilder<Self>,
+        application: ApplicationNode,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        builder.application_with_effects(application, ty, effects, origin)
+    }
     fn recompute_clause_effect_rows(
         builder: &mut CoreBuilder<Self>,
         range: std::ops::Range<usize>,
@@ -1900,6 +1921,14 @@ enum ElaborationPurpose {
 }
 
 impl<F: CoreLoweringFamily> CoreElaborator<F> {
+    fn core_effect_row(&mut self, row: &EffectRow) -> Result<EffectRow, TypeError> {
+        if !F::EFFECTS {
+            return Ok(EffectRow::empty());
+        }
+        clone_effect_row_with_budget(row, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+    }
+
     fn push_effect_core(
         &mut self,
         ty: Type,
@@ -3223,33 +3252,33 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let solutions = &self.inference_solutions;
             let inference_variables = &self.inference_variables;
             let authenticated_solutions = &self.authenticated_inference_solutions;
-            let type_work = &mut self.type_work;
-            self.builder.rewrite_types(|ty| {
-                let (zonked, unresolved) =
-                    zonk_type_with_status_and_inference(ty, solutions, |work| match work {
-                        ZonkWork::TypeCells(cells) => type_work
-                            .charge(cells)
-                            .map_err(|()| BuildError::TypeWorkExceeded),
-                        ZonkWork::Inference(identity) => authenticate_zonk_inference_occurrence(
-                            identity,
-                            inference_variables,
-                            solutions,
-                            authenticated_solutions,
-                            type_work,
-                        )
-                        .map_err(|failure| match failure {
-                            UnificationFailure::Resource => BuildError::TypeWorkExceeded,
-                            UnificationFailure::Mismatch
-                            | UnificationFailure::Infinite
-                            | UnificationFailure::Invariant => BuildError::InvalidPayload,
-                        }),
-                    })?;
-                if unresolved {
-                    Err(BuildError::InvalidPayload)
-                } else {
-                    Ok(zonked)
-                }
-            })?;
+            let row_solutions = &self.row_inference_solutions;
+            let type_work = RefCell::new(&mut self.type_work);
+            self.builder.rewrite_types_and_rows(
+                None,
+                |ty| {
+                    zonk_core_type(
+                        ty,
+                        solutions,
+                        row_solutions,
+                        inference_variables,
+                        authenticated_solutions,
+                        &mut type_work.borrow_mut(),
+                        true,
+                    )
+                },
+                |row| {
+                    zonk_core_effect_row(
+                        row,
+                        solutions,
+                        row_solutions,
+                        inference_variables,
+                        authenticated_solutions,
+                        &mut type_work.borrow_mut(),
+                        true,
+                    )
+                },
+            )?;
         }
         self.builder.finish(root).map_err(Into::into)
     }
@@ -3388,11 +3417,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         fact: &TypeFact,
         rigid: bool,
         origin: Span,
-    ) -> Result<(Type, Vec<Type>), TypeError> {
+    ) -> Result<(Type, Vec<Type>, Vec<EffectRow>), TypeError> {
         if fact.quantified.is_empty() {
             return Ok((
                 clone_type_with_budget(&fact.ty, &mut self.type_work)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+                Vec::new(),
                 Vec::new(),
             ));
         }
@@ -3412,6 +3442,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         row_replacements
             .try_reserve(count)
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut row_arguments = Vec::new();
+        row_arguments
+            .try_reserve(count)
+            .map_err(|_| type_resource())?;
         let inference_marker = self.inference_variables.len();
         let next_inference = self.next_inference;
         let result = (|| {
@@ -3427,7 +3461,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             origin,
                         )?)
                     };
-                    row_replacements.insert(*binder, variable);
+                    row_replacements.insert(*binder, EffectRow::open(variable, Box::new([])));
+                    row_arguments.push(EffectRow::open(variable, Box::new([])));
                     continue;
                 }
                 let argument = if rigid {
@@ -3444,8 +3479,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 &row_replacements,
                 |cells| self.type_work.charge(cells),
             )
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            Ok((instantiated, arguments))
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+            .map_err(|_| invalid_state())?;
+            Ok((instantiated, arguments, row_arguments))
         })();
         if result.is_err() && !rigid {
             self.inference_variables.truncate(inference_marker);
@@ -3879,6 +3915,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         binder: BinderId,
         occurrence: &crate::resolved::ResolvedOccurrence,
         arguments: &[Type],
+        row_arguments: &[EffectRow],
         span: Span,
     ) -> Result<(), TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck {
@@ -3897,8 +3934,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         let mut selector = self.selection.take().ok_or_else(invalid_state)?;
         let result = (|| {
-            let mut replacements = TypeReplacementBuffer::new();
-            let requirement_count = {
+            let (replacements, row_replacements, requirement_count) = {
                 let Some(scheme) = selector.scheme(binder) else {
                     return if occurrence.evidence.is_empty() {
                         Ok(())
@@ -3906,36 +3942,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         Err(invalid_state())
                     };
                 };
-                let ordinary_parameter_count = scheme
-                    .type_parameters
-                    .iter()
-                    .filter(|(_, kind)| !matches!(kind, Kind::EffectRow))
-                    .count();
-                if ordinary_parameter_count != arguments.len()
-                    || scheme.requirements.len() != occurrence.evidence.len()
-                {
+                if scheme.requirements.len() != occurrence.evidence.len() {
                     return Err(invalid_state());
                 }
-                self.type_work
-                    .charge(ordinary_parameter_count)
-                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                replacements
-                    .try_reserve(ordinary_parameter_count)
-                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                for ((parameter, _), argument) in scheme
-                    .type_parameters
-                    .iter()
-                    .filter(|(_, kind)| !matches!(kind, Kind::EffectRow))
-                    .zip(arguments)
-                {
-                    if replacements
-                        .try_insert_unique(*parameter, self.clone_type(argument)?)
-                        .is_err()
-                    {
-                        return Err(invalid_state());
-                    }
-                }
-                scheme.requirements.len()
+                let (types, rows) = self.instantiation_replacements(
+                    &scheme.type_parameters,
+                    arguments,
+                    row_arguments,
+                )?;
+                (types, rows, scheme.requirements.len())
             };
             let declaration_span = selector
                 .scheme_declaration_span(binder)
@@ -3960,14 +3975,16 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         })?;
                     for argument in requirement.arguments() {
                         application_arguments.push(
-                            substitute_type_variables_with(
+                            substitute_type_and_row_variables_with(
                                 argument,
                                 replacements.as_map(),
+                                &row_replacements,
                                 |cells| self.type_work.charge(cells),
                             )
                             .map_err(|()| {
                                 TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                            })?,
+                            })?
+                            .map_err(|_| invalid_state())?,
                         );
                     }
                     InterfaceApplication::new(
@@ -4021,7 +4038,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ty: value_type.into_inner(),
                 quantified: fact_parameters,
             });
-            let (ty, arguments) = self.instantiate(&fact, false, span)?;
+            let (ty, arguments, row_arguments) = self.instantiate(&fact, false, span)?;
+            if !row_arguments.is_empty() {
+                return Err(invalid_state());
+            }
             let ty = IterativeTypeOwner::new(ty);
             let arguments = OwnedTypeBuffer(arguments);
             let interface_parameter_count = method_fact.interface_parameters().len();
@@ -4564,11 +4584,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         scheme: &LoweredScheme,
         arguments: &[Type],
+        row_arguments: &[EffectRow],
     ) -> Result<Type, TypeError> {
-        if scheme.binder_parameters().len() != arguments.len() {
-            return Err(invalid_state());
-        }
-        if arguments.is_empty() {
+        if arguments.is_empty() && row_arguments.is_empty() {
             return self.clone_type(&scheme.core_scheme);
         }
         let Type::Forall(parameters, body) = &scheme.core_scheme else {
@@ -4583,25 +4601,49 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         {
             return Err(invalid_state());
         }
+        self.instantiate_lowered_source_type(parameters, body, arguments, row_arguments)
+    }
+
+    fn instantiation_replacements(
+        &mut self,
+        parameters: &[(TypeVariableId, Kind)],
+        arguments: &[Type],
+        row_arguments: &[EffectRow],
+    ) -> Result<(TypeReplacementBuffer, HashMap<TypeVariableId, EffectRow>), TypeError> {
+        if parameters.len() != arguments.len() + row_arguments.len() {
+            return Err(invalid_state());
+        }
         self.type_work
-            .charge(arguments.len())
+            .charge(parameters.len())
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let mut replacements = TypeReplacementBuffer::new();
+        let (mut replacements, mut rows) = (TypeReplacementBuffer::new(), HashMap::new());
         replacements
             .try_reserve(arguments.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        for ((parameter, _), argument) in parameters.iter().zip(arguments) {
-            if replacements
-                .try_insert_unique(*parameter, self.clone_type(argument)?)
+        rows.try_reserve(row_arguments.len())
+            .map_err(|_| type_resource())?;
+        let (mut arguments, mut row_arguments) = (arguments.iter(), row_arguments.iter());
+        for (parameter, kind) in parameters {
+            if matches!(kind, Kind::EffectRow) {
+                rows.insert(
+                    *parameter,
+                    clone_effect_row_with_budget(
+                        row_arguments.next().ok_or_else(invalid_state)?,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| type_resource())?,
+                );
+            } else if replacements
+                .try_insert_unique(
+                    *parameter,
+                    self.clone_type(arguments.next().ok_or_else(invalid_state)?)?,
+                )
                 .is_err()
             {
                 return Err(invalid_state());
             }
         }
-        substitute_type_variables_with(body, replacements.as_map(), |cells| {
-            self.type_work.charge(cells)
-        })
-        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+        Ok((replacements, rows))
     }
 
     fn instantiate_lowered_source_type(
@@ -4609,29 +4651,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         parameters: &[(TypeVariableId, Kind)],
         ty: &Type,
         arguments: &[Type],
+        row_arguments: &[EffectRow],
     ) -> Result<Type, TypeError> {
-        if parameters.len() != arguments.len() {
-            return Err(invalid_state());
-        }
-        self.type_work
-            .charge(parameters.len())
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let mut replacements = TypeReplacementBuffer::new();
-        replacements
-            .try_reserve(arguments.len())
-            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        for ((parameter, _), argument) in parameters.iter().zip(arguments) {
-            if replacements
-                .try_insert_unique(*parameter, self.clone_type(argument)?)
-                .is_err()
-            {
-                return Err(invalid_state());
-            }
-        }
-        substitute_type_variables_with(ty, replacements.as_map(), |cells| {
-            self.type_work.charge(cells)
-        })
-        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+        let (replacements, row_replacements) =
+            self.instantiation_replacements(parameters, arguments, row_arguments)?;
+        substitute_type_and_row_variables_with(
+            ty,
+            replacements.as_map(),
+            &row_replacements,
+            |cells| self.type_work.charge(cells),
+        )
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+        .map_err(|_| invalid_state())
     }
 
     fn instantiate_lowered_source_application(
@@ -4639,6 +4670,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         parameters: &[(TypeVariableId, Kind)],
         application: &InterfaceApplication,
         arguments: &[Type],
+        row_arguments: &[EffectRow],
     ) -> Result<InterfaceApplication, TypeError> {
         self.type_work
             .charge(application.arguments().len())
@@ -4648,7 +4680,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .try_reserve(application.arguments().len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         for ty in application.arguments() {
-            instantiated.push(self.instantiate_lowered_source_type(parameters, ty, arguments)?);
+            instantiated.push(self.instantiate_lowered_source_type(
+                parameters,
+                ty,
+                arguments,
+                row_arguments,
+            )?);
         }
         Ok(InterfaceApplication::new(
             application.interface(),
@@ -4660,6 +4697,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         scheme: &LoweredScheme,
         arguments: &[Type],
+        row_arguments: &[EffectRow],
         occurrence: &crate::resolved::ResolvedOccurrence,
         lowering: &EvidenceLowering,
     ) -> Result<(), TypeError> {
@@ -4684,6 +4722,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 scheme.binder_parameters(),
                 source_application,
                 arguments,
+                row_arguments,
             )?;
             if checked_application.interface() != instantiated.interface()
                 || checked_application.arguments().len() != instantiated.arguments().len()
@@ -5299,40 +5338,49 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                     ));
                                 }
                                 let mut current_arguments = OwnedTypeBuffer(Vec::new());
+                                let mut current_row_arguments = Vec::new();
                                 if !source_parameters.is_empty() {
                                     let mut arguments = OwnedTypeBuffer(Vec::new());
-                                    self.type_work.charge(source_parameters.len()).map_err(
-                                        |()| {
-                                            TypeError::Internal(
-                                                ElaborationFailure::TypeResourceExhausted,
-                                            )
-                                        },
-                                    )?;
-                                    arguments.try_reserve(source_parameters.len()).map_err(
-                                        |_| {
-                                            TypeError::Internal(
-                                                ElaborationFailure::TypeResourceExhausted,
-                                            )
-                                        },
-                                    )?;
+                                    let mut row_arguments = Vec::new();
+                                    let row_count = adapter_parameters
+                                        .iter()
+                                        .filter(|(_, kind)| matches!(kind, Kind::EffectRow))
+                                        .count();
+                                    self.type_work
+                                        .charge(source_parameters.len())
+                                        .map_err(|()| type_resource())?;
+                                    arguments
+                                        .try_reserve(source_parameters.len() - row_count)
+                                        .map_err(|_| type_resource())?;
                                     for substitution in substitution {
                                         arguments.push(self.clone_type(substitution.argument())?);
                                     }
-                                    for (parameter, _) in &adapter_parameters {
-                                        arguments.push(Type::Variable(*parameter));
+                                    row_arguments
+                                        .try_reserve(row_count)
+                                        .map_err(|_| type_resource())?;
+                                    current_row_arguments
+                                        .try_reserve(row_count)
+                                        .map_err(|_| type_resource())?;
+                                    for (parameter, kind) in &adapter_parameters {
+                                        if matches!(kind, Kind::EffectRow) {
+                                            row_arguments.push(EffectRow::open(
+                                                EffectRowVariable::rigid(*parameter),
+                                                Box::new([]),
+                                            ));
+                                            current_row_arguments.push(EffectRow::open(
+                                                EffectRowVariable::rigid(*parameter),
+                                                Box::new([]),
+                                            ));
+                                        } else {
+                                            arguments.push(Type::Variable(*parameter));
+                                        }
                                     }
-                                    self.type_work.charge(arguments.len()).map_err(|()| {
-                                        TypeError::Internal(
-                                            ElaborationFailure::TypeResourceExhausted,
-                                        )
-                                    })?;
-                                    current_arguments.try_reserve(arguments.len()).map_err(
-                                        |_| {
-                                            TypeError::Internal(
-                                                ElaborationFailure::TypeResourceExhausted,
-                                            )
-                                        },
-                                    )?;
+                                    self.type_work
+                                        .charge(source_parameters.len())
+                                        .map_err(|()| type_resource())?;
+                                    current_arguments
+                                        .try_reserve(arguments.len())
+                                        .map_err(|_| type_resource())?;
                                     for argument in arguments.iter() {
                                         current_arguments.push(self.clone_type(argument)?);
                                     }
@@ -5340,12 +5388,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                         self.instantiate_lowered_core_body(
                                             &lowered.scheme,
                                             &arguments,
+                                            &row_arguments,
                                         )?,
                                     );
                                     let core_ty = self.clone_type(&instantiated)?;
-                                    let node = self.builder.type_application(
+                                    let node = self.builder.type_application_with_row_arguments(
                                         current.node,
                                         arguments.into_vec(),
+                                        row_arguments,
                                         core_ty,
                                         origin.clone(),
                                     )?;
@@ -5374,6 +5424,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                                 source_parameters,
                                                 &target_method.application,
                                                 &current_arguments,
+                                                &current_row_arguments,
                                             )?;
                                         let canonical_method = lowering
                                             .interface_methods
@@ -5410,6 +5461,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                                 source_parameters,
                                                 &lowered.application,
                                                 &current_arguments,
+                                                &current_row_arguments,
                                             )
                                         })
                                         .transpose()?;
@@ -6910,39 +6962,58 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let inference_solutions = &self.inference_solutions;
             let inference_variables = &self.inference_variables;
             let authenticated_solutions = &self.authenticated_inference_solutions;
-            let type_work = &mut self.type_work;
-            self.builder.rewrite_types_since(rewrite_checkpoint, |ty| {
-                let (zonked, _) = zonk_type_with_status_and_inference(
-                    ty,
-                    inference_solutions,
-                    |work| match work {
-                        ZonkWork::TypeCells(cells) => type_work
-                            .charge(cells)
-                            .map_err(|()| BuildError::TypeWorkExceeded),
-                        ZonkWork::Inference(identity) => authenticate_zonk_inference_occurrence(
-                            identity,
-                            inference_variables,
-                            inference_solutions,
-                            authenticated_solutions,
-                            type_work,
-                        )
-                        .map_err(|failure| match failure {
-                            UnificationFailure::Resource => BuildError::TypeWorkExceeded,
-                            UnificationFailure::Mismatch
-                            | UnificationFailure::Infinite
-                            | UnificationFailure::Invariant => BuildError::InvalidPayload,
-                        }),
-                    },
-                )?;
-                let renamed = substitute_fresh_type_variables_in_order(
-                    &zonked,
-                    &core_type_replacements,
-                    type_work,
-                )
-                .map_err(|()| BuildError::TypeWorkExceeded);
-                discard_type_iteratively(zonked);
-                renamed
-            })?;
+            let row_solutions = &self.row_inference_solutions;
+            let type_work = RefCell::new(&mut self.type_work);
+            self.builder.rewrite_types_and_rows(
+                Some(rewrite_checkpoint),
+                |ty| {
+                    let mut work = type_work.borrow_mut();
+                    let zonked = zonk_core_type(
+                        ty,
+                        inference_solutions,
+                        row_solutions,
+                        inference_variables,
+                        authenticated_solutions,
+                        &mut work,
+                        false,
+                    )?;
+                    let renamed = substitute_fresh_type_variables_in_order(
+                        &zonked,
+                        &core_type_replacements,
+                        &mut work,
+                    )
+                    .map_err(|()| BuildError::TypeWorkExceeded);
+                    discard_type_iteratively(zonked);
+                    renamed
+                },
+                |row| {
+                    let mut work = type_work.borrow_mut();
+                    let row = zonk_core_effect_row(
+                        row,
+                        inference_solutions,
+                        row_solutions,
+                        inference_variables,
+                        authenticated_solutions,
+                        &mut work,
+                        false,
+                    )?;
+                    let wrapper = Type::function_computation(
+                        Type::Unit,
+                        ComputationType::new(Type::Unit, row),
+                    );
+                    let renamed = substitute_fresh_type_variables_in_order(
+                        &wrapper,
+                        &core_type_replacements,
+                        &mut work,
+                    )
+                    .map_err(|()| BuildError::TypeWorkExceeded)?;
+                    discard_type_iteratively(wrapper);
+                    let Type::EffectfulFunction(_, computation) = renamed else {
+                        unreachable!()
+                    };
+                    Ok(computation.effects)
+                },
+            )?;
             let zonked_function_type = IterativeTypeOwner::new(self.zonk(&function.ty)?);
             let renamed_function_type = IterativeTypeOwner::new(
                 substitute_fresh_type_variables_in_order(
@@ -7641,8 +7712,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             request.operation,
             operand.node,
         );
-        let core_effects = clone_effect_row_with_budget(&effects, &mut self.type_work)
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let core_effects = self.core_effect_row(&effects)?;
         let node = self.push_effect_core(
             core_ty,
             core_effects,
@@ -7717,8 +7787,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let core_ty = self.pure_core_type(&ty)?;
         let active_handler = self.active_resumes[active_position].handler;
         let resume_node = ResumeNode::new(active_handler, owner, ResumeUse::Consumed, value.node);
-        let core_effects = clone_effect_row_with_budget(&effects, &mut self.type_work)
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let core_effects = self.core_effect_row(&effects)?;
         let node = self.push_effect_core(
             core_ty,
             core_effects,
@@ -7888,8 +7957,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 CoreMatchArm::new(pattern, body_node, origin),
             ));
         }
-        let core_effects = clone_effect_row_with_budget(&output, &mut self.type_work)
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let core_effects = self.core_effect_row(&output)?;
         let core_handler_effect =
             clone_effect_instance_with_budget(&handler.effect.instance, &mut self.type_work)
                 .map_err(|error| TypeError::Internal(error.into()))?;
@@ -7987,7 +8055,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         crate::resolved::ResolvedTermName::Global(binder) => {
                             let fact = context.fact(binder).ok_or_else(invalid_state)?;
                             let rigid = self.monomorphic_recursive.contains(&binder);
-                            let (ty, arguments) = self.instantiate(fact, rigid, current.span)?;
+                            let (ty, arguments, row_arguments) =
+                                self.instantiate(fact, rigid, current.span)?;
                             let ty = IterativeTypeOwner::new(ty);
                             let arguments = OwnedTypeBuffer(arguments);
                             let provenance = fact.provenance.clone();
@@ -8035,23 +8104,43 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                     for argument in arguments.iter() {
                                         current_arguments.push(self.clone_type(argument)?);
                                     }
+                                    let mut current_row_arguments = Vec::new();
+                                    self.type_work
+                                        .charge(row_arguments.len())
+                                        .map_err(|()| type_resource())?;
+                                    current_row_arguments
+                                        .try_reserve(row_arguments.len())
+                                        .map_err(|_| type_resource())?;
+                                    for row in &row_arguments {
+                                        current_row_arguments.push(
+                                            clone_effect_row_with_budget(row, &mut self.type_work)
+                                                .map_err(|()| type_resource())?,
+                                        );
+                                    }
                                     self.replay_lowered_global_determination(
                                         scheme,
                                         &current_arguments,
+                                        &current_row_arguments,
                                         occurrence,
                                         &lowering,
                                     )?;
-                                    if !arguments.is_empty() {
+                                    if !arguments.is_empty() || !row_arguments.is_empty() {
                                         let core_ty = IterativeTypeOwner::new(
-                                            self.instantiate_lowered_core_body(scheme, &arguments)?,
+                                            self.instantiate_lowered_core_body(
+                                                scheme,
+                                                &arguments,
+                                                &row_arguments,
+                                            )?,
                                         );
                                         let application_ty = self.clone_type(&core_ty)?;
-                                        let node = self.builder.type_application(
-                                            current.node,
-                                            arguments.into_vec(),
-                                            application_ty,
-                                            occurrence.origin.clone(),
-                                        )?;
+                                        let node =
+                                            self.builder.type_application_with_row_arguments(
+                                                current.node,
+                                                arguments.into_vec(),
+                                                row_arguments,
+                                                application_ty,
+                                                occurrence.origin.clone(),
+                                            )?;
                                         current.set_node(node);
                                         current.replace_type(core_ty.into_inner());
                                     }
@@ -8098,6 +8187,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                                         .binder_parameters(),
                                                     &target_method.application,
                                                     &current_arguments,
+                                                    &current_row_arguments,
                                                 )?;
                                             let canonical_method = lowering
                                                 .interface_methods
@@ -8131,6 +8221,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                     binder,
                                     occurrence,
                                     &arguments,
+                                    &row_arguments,
                                     current.span,
                                 )?;
                                 let scheme = self.pure_core_scheme(fact)?;
@@ -8139,14 +8230,25 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                     scheme,
                                     occurrence.origin.clone(),
                                 )?;
-                                if !arguments.is_empty() {
+                                if !arguments.is_empty() || F::EFFECTS && !row_arguments.is_empty()
+                                {
                                     let core_ty = self.pure_core_type(&ty)?;
-                                    node = self.builder.type_application(
-                                        node,
-                                        arguments.into_vec(),
-                                        core_ty,
-                                        occurrence.origin.clone(),
-                                    )?;
+                                    node = if F::EFFECTS {
+                                        self.builder.type_application_with_row_arguments(
+                                            node,
+                                            arguments.into_vec(),
+                                            row_arguments,
+                                            core_ty,
+                                            occurrence.origin.clone(),
+                                        )
+                                    } else {
+                                        self.builder.type_application(
+                                            node,
+                                            arguments.into_vec(),
+                                            core_ty,
+                                            occurrence.origin.clone(),
+                                        )
+                                    }?;
                                 }
                                 values.push(TypedNode {
                                     node,
@@ -8249,7 +8351,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             provenance: scheme_provenance,
                             quantified: quantified.into_boxed_slice(),
                         });
-                        let (ty, arguments) = self.instantiate(&fact, false, current.span)?;
+                        let (ty, arguments, row_arguments) =
+                            self.instantiate(&fact, false, current.span)?;
+                        if !row_arguments.is_empty() {
+                            return Err(invalid_state());
+                        }
                         let ty = IterativeTypeOwner::new(ty);
                         let arguments = OwnedTypeBuffer(arguments);
                         let TypeFact {
@@ -9407,7 +9513,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     ) -> Result<TypedNode, TypeError> {
         let function = TypedNodeOwner::new(function);
         let codomain = ProvenancedTypeOwner::new(codomain);
-        let core_codomain = IterativeTypeOwner::new(self.pure_core_type(&codomain.ty)?);
         let ProvenancedType {
             ty: codomain_ty,
             provenance: codomain_provenance,
@@ -9418,18 +9523,21 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         } else {
             self.unknown_provenance(&ty)?
         };
+        let effects = self.union_effects(&function.effects, &argument.effects, whole_span)?;
+        let effects = self.union_effects(&effects, &latent_effects, whole_span)?;
+        let core_codomain = IterativeTypeOwner::new(self.pure_core_type(&ty)?);
+        let core_effects = self.core_effect_row(&effects)?;
         let origin = Origin::Related {
             primary: Box::new(Origin::Source(whole_span)),
             related: vec![function_span, argument_span],
         };
-        let node = self.builder.application(
-            function.node,
-            argument.node,
+        let node = F::push_application(
+            &mut self.builder,
+            ApplicationNode::new(function.node, argument.node),
             core_codomain.into_inner(),
+            core_effects,
             origin,
         )?;
-        let effects = self.union_effects(&function.effects, &argument.effects, whole_span)?;
-        let effects = self.union_effects(&effects, &latent_effects, whole_span)?;
         Ok(TypedNode {
             node,
             ty: ty.into_inner(),
@@ -14344,6 +14452,10 @@ fn invalid_state() -> TypeError {
     TypeError::Internal(ElaborationFailure::InvalidState)
 }
 
+fn type_resource() -> TypeError {
+    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+}
+
 fn inference_registry_error(error: InferenceRegistryFailure) -> TypeError {
     match error {
         InferenceRegistryFailure::Resource => {
@@ -14654,6 +14766,74 @@ fn authenticate_zonk_inference_occurrence(
         }
     }
     Ok(())
+}
+
+fn zonk_core_type(
+    ty: &Type,
+    solutions: &HashMap<InferenceVariableId, Type>,
+    row_solutions: &HashMap<InferenceVariableId, EffectRow>,
+    inference_variables: &InferenceVariableRegistry,
+    authenticated_solutions: &HashSet<InferenceVariableId>,
+    type_work: &mut TypeWorkBudget,
+    strict: bool,
+) -> Result<Type, BuildError> {
+    let (zonked, unresolved) =
+        zonk_type_with_status_and_inference(ty, solutions, |work| match work {
+            ZonkWork::TypeCells(cells) => type_work
+                .charge(cells)
+                .map_err(|()| BuildError::TypeWorkExceeded),
+            ZonkWork::Inference(identity) => authenticate_zonk_inference_occurrence(
+                identity,
+                inference_variables,
+                solutions,
+                authenticated_solutions,
+                type_work,
+            )
+            .map_err(|failure| match failure {
+                UnificationFailure::Resource => BuildError::TypeWorkExceeded,
+                _ => BuildError::InvalidPayload,
+            }),
+        })?;
+    let zonked = zonk_owned_type_with_rows(zonked, &HashMap::new(), row_solutions, type_work)
+        .map_err(|()| BuildError::TypeWorkExceeded)?;
+    if strict
+        && (unresolved
+            || type_contains_unsolved_row_inference(&zonked, row_solutions, type_work)
+                .map_err(|()| BuildError::TypeWorkExceeded)?)
+    {
+        discard_type_iteratively(zonked);
+        Err(BuildError::InvalidPayload)
+    } else {
+        Ok(zonked)
+    }
+}
+
+fn zonk_core_effect_row(
+    row: &EffectRow,
+    solutions: &HashMap<InferenceVariableId, Type>,
+    row_solutions: &HashMap<InferenceVariableId, EffectRow>,
+    inference_variables: &InferenceVariableRegistry,
+    authenticated_solutions: &HashSet<InferenceVariableId>,
+    type_work: &mut TypeWorkBudget,
+    strict: bool,
+) -> Result<EffectRow, BuildError> {
+    let row =
+        clone_effect_row_with_budget(row, type_work).map_err(|()| BuildError::TypeWorkExceeded)?;
+    let wrapper = Type::function_computation(Type::Unit, ComputationType::new(Type::Unit, row));
+    let zonked = zonk_core_type(
+        &wrapper,
+        solutions,
+        row_solutions,
+        inference_variables,
+        authenticated_solutions,
+        type_work,
+        strict,
+    )?;
+    discard_type_iteratively(wrapper);
+    let Type::EffectfulFunction(_, computation) = zonked else {
+        unreachable!()
+    };
+    Ok(computation.effects)
 }
 
 fn resolved_build_error(error: ResolvedBuildFailure) -> TypeError {
@@ -19893,11 +20073,12 @@ mod tests {
             .type_work
             .charge(crate::types::TYPE_WORK_LIMIT - 16)
             .expect("the fixture leaves metadata plus the substituted result");
-        let (instantiated, arguments) = exact
+        let (instantiated, arguments, row_arguments) = exact
             .instantiate(&fact, false, span)
             .expect("the exact retained allocation cost should fit");
         assert_eq!(instantiated, Type::Unit);
         assert_eq!(arguments.len(), 3);
+        assert!(row_arguments.is_empty());
         assert_eq!(exact.inference_variables.len(), 3);
         assert_eq!(exact.type_work.charge(1), Err(()));
     }
@@ -19939,9 +20120,10 @@ mod tests {
 
         let mut exact = Elaborator::new();
         exact.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
-        let (_, arguments) = exact
+        let (_, arguments, row_arguments) = exact
             .instantiate(&fact, false, span)
             .expect("the exact kinded instantiation budget should fit");
+        assert!(row_arguments.is_empty());
         let [
             Type::Inference(function_inference),
             Type::Inference(argument_inference),
@@ -24236,10 +24418,11 @@ mod tests {
             provenance: TypeProvenance::unknown(&initializer),
             quantified: quantified.into_boxed_slice(),
         };
-        let (instantiated, ordinary_arguments) = Elaborator::new()
+        let (instantiated, ordinary_arguments, row_arguments) = Elaborator::new()
             .instantiate(&fact, false, span)
             .expect("a row-kind binder should instantiate freshly");
         assert!(ordinary_arguments.is_empty());
+        assert_eq!(row_arguments.len(), 1);
         let Type::EffectfulFunction(_, instantiated_codomain) = instantiated else {
             panic!("instantiation should retain the latent row");
         };

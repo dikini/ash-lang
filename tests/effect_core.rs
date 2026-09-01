@@ -96,8 +96,12 @@ fn checked_source_lowers_to_explicit_effect_core() {
             "import facade (Option, None, Some, Build)\n\n",
             "interface Identity<A> {\nidentity : A -> A\n}\n\n",
             "impl Identity<Int> {\nidentity value = value\n}\n\n",
+            "relay<R : EffectRow, A> : (Unit -> A ! { | R }) -> A ! { | R }\n",
+            "relay action = action ()\n\n",
+            "build_action : Unit -> Option<Int> ! {Build<Option>}\n",
+            "build_action () = perform Build<Option>.make (identity 40, 2)\n\n",
             "build : Unit -> Option<Int> ! {Build<Option>}\n",
-            "build () = perform Build<Option>.make (identity 40, 2)\n\n",
+            "build () = relay(build_action)\n\n",
             "main : Unit -> Option<Int>\n",
             "main () = handle (build ()) with Build<Option> {\n",
             "make (left, right) => {\n",
@@ -135,6 +139,18 @@ fn checked_source_lowers_to_explicit_effect_core() {
         .collect::<Vec<_>>();
     let program = validate_effect_modules(unchecked, &sources, &module_sources)
         .expect("lowered effect Core should validate with its module relation");
+    let program = validate_effect_modules(
+        identity_effect_traversal(&program).expect("row-aware identity transform"),
+        &sources,
+        &module_sources,
+    )
+    .expect("row-aware identity output should revalidate");
+    let program = validate_effect_modules(
+        fold_effect_literal_primitives(&program).expect("row-aware fold transform"),
+        &sources,
+        &module_sources,
+    )
+    .expect("row-aware fold output should revalidate");
     let mut pending = vec![program.root()];
     let mut seen = std::collections::HashSet::new();
     let mut operations = [0_usize; 3];

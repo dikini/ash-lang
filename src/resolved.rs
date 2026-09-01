@@ -6838,34 +6838,8 @@ fn same_kind_with_constraint_budget(
     right: &Kind,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<bool, ResolvedBuildFailure> {
-    constraint_work
-        .charge(1)
-        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-    let mut pending = Vec::new();
-    pending
-        .try_reserve(1)
-        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-    pending.push((left, right));
-    while let Some((left, right)) = pending.pop() {
-        match (left, right) {
-            (Kind::Type, Kind::Type) => {}
-            (
-                Kind::Arrow(left_domain, left_codomain),
-                Kind::Arrow(right_domain, right_codomain),
-            ) => {
-                constraint_work
-                    .charge(2)
-                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-                pending
-                    .try_reserve(2)
-                    .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-                pending.push((left_codomain, right_codomain));
-                pending.push((left_domain, right_domain));
-            }
-            _ => return Ok(false),
-        }
-    }
-    Ok(true)
+    same_kind_with_charge(left, right, || constraint_work.charge(1))
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)
 }
 
 fn same_origin_with_constraint_budget(

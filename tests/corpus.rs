@@ -218,6 +218,13 @@ const VALID_CASES: &[ValidCase] = &[
         expected_type: "Type",
         expected_stdout: "Type : Type\n",
     },
+    ValidCase {
+        id: "effect-kernel-combined",
+        path: "tests/fixtures/effects/valid/effect-kernel-combined.ash",
+        expected_value: "42",
+        expected_type: "Int",
+        expected_stdout: "42 : Int\n",
+    },
 ];
 
 const INVALID_CASES: &[InvalidCase] = &[

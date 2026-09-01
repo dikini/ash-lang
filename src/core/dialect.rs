@@ -39,10 +39,11 @@ use crate::{
     resolved::{BinderId, ResolvedRegistry},
     source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
     types::{
-        EffectRow, IterativeTypeOwner, Kind, Type, TypeVariableId, TypeWorkBudget,
-        charge_effect_row_cells, charge_kinded_type_parameters, clone_effect_row_with_budget,
-        clone_kinded_type_parameters_with_budget, clone_type_with_budget, discard_type_iteratively,
-        replace_type_iteratively, same_type_with_budget, substitute_type_variables_with,
+        EffectRow, EffectRowVariable, IterativeTypeOwner, Kind, Type, TypeVariableId,
+        TypeWorkBudget, charge_effect_row_cells, charge_kinded_type_parameters,
+        clone_effect_row_with_budget, clone_kinded_type_parameters_with_budget,
+        clone_type_with_budget, discard_type_iteratively, replace_type_iteratively,
+        same_type_with_budget, substitute_type_variables_with,
     },
 };
 
@@ -2383,6 +2384,21 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         )
     }
 
+    pub(crate) fn application_with_effects(
+        &mut self,
+        application: ApplicationNode,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        if F::REQUIRES_EMPTY_ROWS {
+            assert!(effects.is_empty(), "pure application row");
+            return self.application(application.function(), application.argument(), ty, origin);
+        }
+        let kind = PureExprKind::Computation(PureComputation::Apply(application));
+        self.push_explicit_kind(ty, effects, origin, || F::from_pure(kind))
+    }
+
     /// Adds an unchecked explicit type abstraction.
     pub fn type_abstraction(
         &mut self,
@@ -2538,9 +2554,27 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
+        self.type_application_with_row_arguments(function, arguments, Vec::new(), ty, origin)
+    }
+
+    pub(crate) fn type_application_with_row_arguments(
+        &mut self,
+        function: NodeId,
+        arguments: Vec<Type>,
+        row_arguments: Vec<EffectRow>,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        if !F::ALLOWS_EFFECTFUL_TYPES && !row_arguments.is_empty() {
+            let mut arguments = arguments;
+            discard_type_vector_iteratively(&mut arguments);
+            discard_type_iteratively(ty);
+            discard_origin_iteratively(origin);
+            return Err(BuildError::InvalidPayload);
+        }
         let mut admitted_arguments = Vec::new();
         let mut first_error = None;
-        let mut argument_rewrite = false;
+        let mut argument_rewrite = !row_arguments.is_empty();
         for argument in arguments {
             match admit_type_with_status(
                 argument,
@@ -2556,6 +2590,11 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
                 Err(error) => {
                     first_error.get_or_insert(error);
                 }
+            }
+        }
+        for row in &row_arguments {
+            if charge_effect_row_cells(row, &mut self.type_work).is_err() {
+                first_error.get_or_insert(BuildError::TypeWorkExceeded);
             }
         }
         let payloads = admit_payloads(ty, origin, &mut self.type_work, F::ALLOWS_EFFECTFUL_TYPES);
@@ -2578,10 +2617,13 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         self.push_admitted_tracking(
             ty,
             origin,
-            PureExprKind::Computation(PureComputation::TypeApplication(TypeApplicationNode::new(
-                function,
-                admitted_arguments,
-            ))),
+            PureExprKind::Computation(PureComputation::TypeApplication(
+                TypeApplicationNode::new_with_row_arguments(
+                    function,
+                    admitted_arguments,
+                    row_arguments,
+                ),
+            )),
             argument_rewrite || result_rewrite,
         )
     }
@@ -2652,7 +2694,8 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         R: FnMut(&Type) -> Result<Type, BuildError>,
     {
         let checkpoint = TypeRewriteCheckpoint(0);
-        let rewritten_requires_type_rewrite = self.rewrite_types_from(checkpoint, &mut rewrite)?;
+        let rewritten_requires_type_rewrite =
+            self.rewrite_types_from(checkpoint, &mut rewrite, None)?;
         self.requires_type_rewrite = rewritten_requires_type_rewrite;
         Ok(())
     }
@@ -2662,17 +2705,23 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         TypeRewriteCheckpoint(self.nodes.len())
     }
 
-    /// Rewrites type payloads only on nodes emitted after `checkpoint`.
-    pub(crate) fn rewrite_types_since<R>(
+    pub(crate) fn rewrite_types_and_rows<R, Q>(
         &mut self,
-        checkpoint: TypeRewriteCheckpoint,
+        checkpoint: Option<TypeRewriteCheckpoint>,
         mut rewrite: R,
+        mut rewrite_row: Q,
     ) -> Result<(), BuildError>
     where
         R: FnMut(&Type) -> Result<Type, BuildError>,
+        Q: FnMut(&EffectRow) -> Result<EffectRow, BuildError>,
     {
-        let rewritten_requires_type_rewrite = self.rewrite_types_from(checkpoint, &mut rewrite)?;
-        self.requires_type_rewrite |= rewritten_requires_type_rewrite;
+        let rewritten_requires_type_rewrite = self.rewrite_types_from(
+            checkpoint.unwrap_or(TypeRewriteCheckpoint(0)),
+            &mut rewrite,
+            Some(&mut rewrite_row),
+        )?;
+        self.requires_type_rewrite =
+            checkpoint.is_some() && self.requires_type_rewrite || rewritten_requires_type_rewrite;
         Ok(())
     }
 
@@ -2680,6 +2729,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         &mut self,
         checkpoint: TypeRewriteCheckpoint,
         rewrite: &mut R,
+        mut rewrite_row: Option<&mut dyn FnMut(&EffectRow) -> Result<EffectRow, BuildError>>,
     ) -> Result<bool, BuildError>
     where
         R: FnMut(&Type) -> Result<Type, BuildError>,
@@ -2690,15 +2740,17 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             .ok_or(BuildError::InvalidNodeId)?;
         let rewrite_type_work = &mut self.rewrite_type_work;
         let mut rewritten_requires_type_rewrite = false;
-        let mut rewrite_admitted = |ty: &Type| {
-            let rewritten = rewrite(ty)?;
-            let (rewritten, contains_inference) =
-                admit_rewritten_type(rewritten, rewrite_type_work, F::ALLOWS_EFFECTFUL_TYPES)?;
-            rewritten_requires_type_rewrite |= contains_inference;
-            Ok(rewritten)
-        };
+        macro_rules! rewrite_admitted {
+            ($ty:expr) => {{
+                let rewritten = rewrite($ty)?;
+                let (rewritten, contains_inference) =
+                    admit_rewritten_type(rewritten, rewrite_type_work, F::ALLOWS_EFFECTFUL_TYPES)?;
+                rewritten_requires_type_rewrite |= contains_inference;
+                Ok::<Type, BuildError>(rewritten)
+            }};
+        }
         for node in nodes {
-            let rewritten = rewrite_admitted(&node.ty)?;
+            let rewritten = rewrite_admitted!(&node.ty)?;
             replace_type_iteratively(&mut node.ty, rewritten);
             let Some(kind) = F::pure_mut(&mut node.kind) else {
                 continue;
@@ -2707,23 +2759,36 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
                 PureExprKind::Value(PureValue::Function(function)) => {
                     function
                         .parameter_mut()
-                        .rewrite_type(&mut rewrite_admitted)?;
+                        .rewrite_type(&mut |ty| rewrite_admitted!(ty))?;
                 }
                 PureExprKind::Computation(PureComputation::Bind(binding)) => {
-                    binding.binder_mut().rewrite_type(&mut rewrite_admitted)?;
+                    binding
+                        .binder_mut()
+                        .rewrite_type(&mut |ty| rewrite_admitted!(ty))?;
                 }
                 PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
                     for member in group.members_mut() {
-                        member.binder_mut().rewrite_type(&mut rewrite_admitted)?;
+                        member
+                            .binder_mut()
+                            .rewrite_type(&mut |ty| rewrite_admitted!(ty))?;
                     }
                 }
                 PureExprKind::Computation(PureComputation::Match(match_expression)) => {
                     for arm in match_expression.arms_mut() {
-                        arm.pattern_mut().rewrite_types(&mut rewrite_admitted)?;
+                        arm.pattern_mut()
+                            .rewrite_types(&mut |ty| rewrite_admitted!(ty))?;
                     }
                 }
                 PureExprKind::Computation(PureComputation::TypeApplication(application)) => {
-                    application.rewrite_types(&mut rewrite_admitted)?;
+                    application.rewrite_types(&mut |ty| rewrite_admitted!(ty))?;
+                    if let Some(rewrite_row) = rewrite_row.as_deref_mut() {
+                        application.rewrite_row_arguments(&mut |row| {
+                            let rewritten = rewrite_row(row)?;
+                            charge_effect_row_cells(&rewritten, rewrite_type_work)
+                                .map_err(|()| BuildError::TypeWorkExceeded)?;
+                            Ok(rewritten)
+                        })?;
+                    }
                 }
                 PureExprKind::Value(
                     PureValue::Integer(_)
@@ -2897,6 +2962,16 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         origin: Origin,
         operation: F::Operation,
     ) -> Result<NodeId, BuildError> {
+        self.push_explicit_kind(ty, effects, origin, || F::from_operation(operation))
+    }
+
+    fn push_explicit_kind(
+        &mut self,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+        kind: impl FnOnce() -> F::Kind,
+    ) -> Result<NodeId, BuildError> {
         let (ty, origin, requires_type_rewrite) =
             admit_payloads(ty, origin, &mut self.type_work, F::ALLOWS_EFFECTFUL_TYPES)?;
         if charge_effect_row_cells(&effects, &mut self.type_work).is_err() {
@@ -2925,7 +3000,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             ty,
             effects: F::store_effects(effects),
             origin: Some(origin),
-            kind: F::from_operation(operation),
+            kind: kind(),
         });
         self.requires_type_rewrite |= requires_type_rewrite;
         Ok(NodeId::new(arena, index))
@@ -3567,6 +3642,10 @@ fn admit_type_with_status(
                     discard_type_admission_work(work);
                     return Err(BuildError::TypeWorkExceeded);
                 }
+                contains_inference |= matches!(
+                    effects.tail().map(|tail| tail.variable()),
+                    Some(EffectRowVariable::Inference(_))
+                );
                 let child_depth = depth.saturating_add(1);
                 exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
                 work.push(TypeAdmissionTask::FinishEffectfulFunction(effects));
@@ -4361,9 +4440,13 @@ mod tests {
                     ty: Type::Unit,
                     origin: generated_origin(&source, 0),
                     kind: PureExprKind::Computation(PureComputation::TypeApplication(
-                        TypeApplicationNode::new(
+                        TypeApplicationNode::new_with_row_arguments(
                             NodeId::new(ArenaId::new(0), 0),
                             vec![application_type(DEPTH)],
+                            vec![EffectRow::singleton(crate::types::EffectInstance::new(
+                                crate::types::EffectId::new(ModuleId::new(0), 0),
+                                Box::new([application_type(DEPTH)]),
+                            ))],
                         ),
                     )),
                 }
@@ -5527,6 +5610,60 @@ mod tests {
                 )
                 .expect("exact prefix should fit");
             admit(&mut exact, body, clause).expect("a fresh exact admission should retry");
+            assert_eq!(exact.type_work.used(), TYPE_WORK_LIMIT);
+        }
+    }
+
+    #[test]
+    fn effect_row_type_application_admission_is_exact_atomic_and_retryable() {
+        use crate::core::effect::EffectOperationFamily;
+
+        let source = SourceFile::new("row-application-budget.ash", "()").expect("test source");
+        let origin = generated_origin(&source, 0);
+        let prepare = || {
+            let mut builder = CoreBuilder::<EffectOperationFamily>::with_effect_registry(Arc::new(
+                ResolvedRegistry::default(),
+            ));
+            let function = builder
+                .unit(Type::Unit, origin.clone())
+                .expect("function placeholder");
+            (builder, function)
+        };
+        let admit = |builder: &mut CoreBuilder<EffectOperationFamily>, function| {
+            builder.type_application_with_row_arguments(
+                function,
+                Vec::new(),
+                vec![EffectRow::open(
+                    EffectRowVariable::rigid(TypeVariableId::new(0)),
+                    Box::new([]),
+                )],
+                Type::Unit,
+                origin.clone(),
+            )
+        };
+
+        let (mut measured, function) = prepare();
+        let before = measured.type_work.used();
+        admit(&mut measured, function).expect("measured row admission");
+        let work = measured.type_work.used() - before;
+
+        let (mut short, function) = prepare();
+        let retained = short.nodes.len();
+        short
+            .charge_type_work_for_test(TYPE_WORK_LIMIT - short.type_work.used() - (work - 1))
+            .expect("one-short prefix");
+        assert_eq!(
+            admit(&mut short, function),
+            Err(BuildError::TypeWorkExceeded)
+        );
+        assert_eq!(short.nodes.len(), retained);
+
+        for _ in 0..2 {
+            let (mut exact, function) = prepare();
+            exact
+                .charge_type_work_for_test(TYPE_WORK_LIMIT - exact.type_work.used() - work)
+                .expect("exact prefix");
+            admit(&mut exact, function).expect("fresh exact retry");
             assert_eq!(exact.type_work.used(), TYPE_WORK_LIMIT);
         }
     }

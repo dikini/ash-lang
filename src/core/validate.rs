@@ -33,9 +33,10 @@ use crate::{
     source::{Origin, SourceFile, SourceId, Span},
     types::{
         ConstructorId, EffectInstance, EffectRow, IterativeTypeOwner, Kind, OperationId,
-        TYPE_WORK_LIMIT, Type, TypeWorkBudget, clone_type_with_budget, discard_type_iteratively,
-        rebuild_effect_row_with_budget, same_effect_rows_with_budget, same_type_with_budget,
-        substitute_type_variables_with,
+        TYPE_WORK_LIMIT, Type, TypeWorkBudget, clone_effect_row_with_budget,
+        clone_type_with_budget, discard_type_iteratively, rebuild_effect_row_with_budget,
+        same_effect_rows_with_budget, same_type_with_budget,
+        substitute_type_and_row_variables_with, substitute_type_variables_with,
     },
 };
 
@@ -3941,7 +3942,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         while let Some((left, right)) = work.pop() {
             self.charge_type_work(1)?;
             match (left, right) {
-                (Kind::Type, Kind::Type) => {}
+                (Kind::Type, Kind::Type) | (Kind::EffectRow, Kind::EffectRow) => {}
                 (
                     Kind::Arrow(left_domain, left_codomain),
                     Kind::Arrow(right_domain, right_codomain),
@@ -4011,6 +4012,15 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
         );
         let result = clone_type_with_budget(ty, &mut budget);
+        self.charge_type_work(budget.used())?;
+        result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))
+    }
+
+    fn clone_effect_row_charged(&self, row: &EffectRow) -> Result<EffectRow, ValidationError> {
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let result = clone_effect_row_with_budget(row, &mut budget);
         self.charge_type_work(budget.used())?;
         result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))
     }
@@ -5247,53 +5257,58 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
             }
             PureComputation::TypeApplication(application) => {
+                let invalid = || ValidationError::new(ValidationReason::TypeOperation, Some(id));
                 let function = self.node(application.function())?;
                 let Type::Forall(parameters, body) = &function.ty else {
-                    return Err(ValidationError::new(
-                        ValidationReason::TypeOperation,
-                        Some(id),
-                    ));
+                    return Err(invalid());
                 };
-                let mut invalid_argument = false;
-                for ((_, expected_kind), argument) in parameters.iter().zip(application.arguments())
+                if parameters.len()
+                    != application.arguments().len() + application.row_arguments().len()
+                    || (!F::ALLOWS_EFFECTFUL_TYPES && !application.row_arguments().is_empty())
                 {
-                    let Some(argument_kind) = self.synthesize_monotype_kind(
-                        argument,
-                        MonotypeVariableKinds::Core(type_binders),
-                    )?
-                    else {
-                        invalid_argument = true;
-                        continue;
-                    };
-                    invalid_argument |= !self.same_kind_charged(expected_kind, &argument_kind)?;
-                }
-                if parameters.len() != application.arguments().len() || invalid_argument {
-                    return Err(ValidationError::new(
-                        ValidationReason::TypeOperation,
-                        Some(id),
-                    ));
-                }
-                for argument in application.arguments() {
-                    self.charge_type_structure(argument)?;
+                    return Err(invalid());
                 }
                 self.charge_type_work(parameters.len())?;
                 let mut replacements = TypeReplacementMap::new();
+                let mut row_replacements = HashMap::new();
                 replacements
-                    .try_reserve(parameters.len())
+                    .try_reserve(application.arguments().len())
                     .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
-                for ((parameter, _), argument) in parameters.iter().zip(application.arguments()) {
-                    replacements.insert_replacing(*parameter, argument.clone());
+                row_replacements
+                    .try_reserve(application.row_arguments().len())
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+                let mut ordinary = application.arguments().iter();
+                let mut rows = application.row_arguments().iter();
+                for (parameter, kind) in parameters.iter() {
+                    if matches!(kind, Kind::EffectRow) {
+                        let row = rows.next().ok_or_else(invalid)?;
+                        row_replacements.insert(*parameter, self.clone_effect_row_charged(row)?);
+                    } else {
+                        let argument = ordinary.next().ok_or_else(invalid)?;
+                        let argument_kind = self
+                            .synthesize_monotype_kind(
+                                argument,
+                                MonotypeVariableKinds::Core(type_binders),
+                            )?
+                            .ok_or_else(invalid)?;
+                        if !self.same_kind_charged(kind, &argument_kind)? {
+                            return Err(invalid());
+                        }
+                        self.charge_type_structure(argument)?;
+                        replacements
+                            .insert_replacing(*parameter, self.clone_type_charged(argument)?);
+                    }
                 }
-                let instantiated = IterativeTypeOwner::new(substitute_type_variables_with(
+                let instantiated = substitute_type_and_row_variables_with(
                     body,
                     replacements.as_map(),
+                    &row_replacements,
                     |cells| self.charge_type_work(cells),
-                )?);
+                )?
+                .map_err(|_| invalid())?;
+                let instantiated = IterativeTypeOwner::new(instantiated);
                 if !self.same_type_charged(&node.ty, &instantiated)? {
-                    return Err(ValidationError::new(
-                        ValidationReason::TypeOperation,
-                        Some(id),
-                    ));
+                    return Err(invalid());
                 }
             }
         }
@@ -5753,6 +5768,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             for argument in operation.arguments() {
                                 self.charge_type_structure(argument)?;
                                 self.collect_free_type_variables(argument, &mut free)?;
+                            }
+                            for row in operation.row_arguments() {
+                                self.collect_effect_row_type_variables(row, &mut free)?;
                             }
                         }
                         Some(PureExprKind::Computation(PureComputation::TypeAbstraction(
@@ -6580,6 +6598,14 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             self.validate_effect_type_rows(&node.ty, type_binders, id)?;
             self.validate_effect_row(&node.effects, type_binders, id)?;
             match &node.kind {
+                EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::TypeApplication(application),
+                )) => {
+                    for row in application.row_arguments() {
+                        self.validate_effect_row(row, type_binders, id)?;
+                    }
+                    self.validate_pure_effect_row(id, node)?;
+                }
                 EffectExprKind::Pure(_) => self.validate_pure_effect_row(id, node)?,
                 EffectExprKind::Operation(EffectOperation::Request(request)) => {
                     self.validate_effect_instance(&request.effect, type_binders, id)?;
@@ -12754,6 +12780,78 @@ mod tests {
             validator.type_contains_variable_charged(&ty, tail),
             Ok(true)
         );
+    }
+
+    #[test]
+    fn effect_type_application_authenticates_complete_row_arguments() {
+        let file = source();
+        let node_origin = origin(&file);
+        let fixture = || {
+            let mut builder = crate::core::EffectCoreBuilder::with_effect_registry(Arc::new(
+                crate::resolved::ResolvedRegistry::default(),
+            ));
+            let outer = crate::types::TypeVariableId::generated(70);
+            let inner = crate::types::TypeVariableId::generated(71);
+            let body = builder.unit(Type::Unit, node_origin.clone()).unwrap();
+            let inner_abstraction = builder
+                .type_abstraction(
+                    vec![(inner, Kind::EffectRow)],
+                    body,
+                    Type::Forall(Box::new([(inner, Kind::EffectRow)]), Box::new(Type::Unit)),
+                    node_origin.clone(),
+                )
+                .unwrap();
+            let application = builder
+                .type_application_with_row_arguments(
+                    inner_abstraction,
+                    Vec::new(),
+                    vec![EffectRow::open(
+                        crate::types::EffectRowVariable::rigid(outer),
+                        Box::new([]),
+                    )],
+                    Type::Unit,
+                    node_origin.clone(),
+                )
+                .unwrap();
+            let root = builder
+                .type_abstraction(
+                    vec![(outer, Kind::EffectRow)],
+                    application,
+                    Type::Forall(Box::new([(outer, Kind::EffectRow)]), Box::new(Type::Unit)),
+                    node_origin.clone(),
+                )
+                .unwrap();
+            (
+                builder.finish(root).unwrap(),
+                application,
+                inner_abstraction,
+            )
+        };
+
+        let (program, _, _) = fixture();
+        Validator::new(&program, &[&file])
+            .run_effect()
+            .expect("the complete open row argument should authenticate");
+
+        let (mut forged, application, function) = fixture();
+        forged.nodes[application.index().unwrap()].kind =
+            super::super::effect::EffectOperationFamily::from_pure(PureExprKind::Computation(
+                PureComputation::TypeApplication(TypeApplicationNode::new_with_row_arguments(
+                    function,
+                    Vec::new(),
+                    vec![EffectRow::open(
+                        crate::types::EffectRowVariable::rigid(
+                            crate::types::TypeVariableId::generated(72),
+                        ),
+                        Box::new([]),
+                    )],
+                )),
+            ));
+        let error = Validator::new(&forged, &[&file])
+            .run_effect()
+            .expect_err("a forged complete row argument must be rejected");
+        assert_eq!(error.reason(), ValidationReason::TypeScope);
+        assert_eq!(error.node(), Some(application));
     }
 
     #[test]

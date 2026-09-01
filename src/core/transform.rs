@@ -588,11 +588,25 @@ fn rebuild_node<F: TransformFamily>(
             for argument in node.arguments() {
                 arguments.push(builder.clone_type_for_rebuild(argument)?);
             }
+            builder.charge_effect_metadata(node.row_arguments().len())?;
+            let mut row_arguments = Vec::new();
+            row_arguments
+                .try_reserve_exact(node.row_arguments().len())
+                .map_err(|_| TransformError::Build(BuildError::TypeWorkExceeded))?;
+            for row in node.row_arguments() {
+                row_arguments.push(builder.clone_effect_row_for_rebuild(row)?);
+            }
             let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
             let function = remap(remapped, node.function())?;
             let origin = expression.origin.clone();
             builder
-                .type_application(function, arguments.into_vec(), ty.into_inner(), origin)
+                .type_application_with_row_arguments(
+                    function,
+                    arguments.into_vec(),
+                    row_arguments,
+                    ty.into_inner(),
+                    origin,
+                )
                 .map_err(TransformError::from)
         }
     }

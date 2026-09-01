@@ -2430,15 +2430,18 @@ pub(crate) fn substitute_type_variables_with<E>(
     replacements: &HashMap<TypeVariableId, Type>,
     charge: impl FnMut(usize) -> Result<(), E>,
 ) -> Result<Type, E> {
-    substitute_type_and_row_variables_with(ty, replacements, &HashMap::new(), charge)
+    match substitute_type_and_row_variables_with(ty, replacements, &HashMap::new(), charge)? {
+        Ok(ty) => Ok(ty),
+        Err(_) => unreachable!("ordinary type substitution cannot violate row constraints"),
+    }
 }
 
 pub(crate) fn substitute_type_and_row_variables_with<E>(
     ty: &Type,
     replacements: &HashMap<TypeVariableId, Type>,
-    row_replacements: &HashMap<TypeVariableId, EffectRowVariable>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
     mut charge: impl FnMut(usize) -> Result<(), E>,
-) -> Result<Type, E> {
+) -> Result<Result<Type, EffectRowError>, E> {
     enum ChargeTask<'a> {
         Visit(&'a Type, bool),
         Slice(std::slice::Iter<'a, Type>, bool),
@@ -2498,9 +2501,10 @@ pub(crate) fn substitute_type_and_row_variables_with<E>(
                     }
                 }
                 let substitute = substitute
-                    && !parameters
-                        .iter()
-                        .any(|(parameter, _)| replacements.contains_key(parameter));
+                    && !parameters.iter().any(|(parameter, _)| {
+                        replacements.contains_key(parameter)
+                            || row_replacements.contains_key(parameter)
+                    });
                 work.push(ChargeTask::Visit(body, substitute));
             }
             ChargeTask::Visit(
@@ -2521,22 +2525,20 @@ pub(crate) fn substitute_type_and_row_variables_with<E>(
         }
     }
 
-    Ok(substitute_type_and_row_variables(
-        ty,
-        replacements,
-        row_replacements,
-    ))
+    substitute_type_and_row_variables(ty, replacements, row_replacements, &mut charge)
 }
 
-fn substitute_type_and_row_variables(
+fn substitute_type_and_row_variables<E>(
     ty: &Type,
     replacements: &HashMap<TypeVariableId, Type>,
-    row_replacements: &HashMap<TypeVariableId, EffectRowVariable>,
-) -> Type {
-    struct RowShape {
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<Result<Type, EffectRowError>, E> {
+    struct RowShape<'a> {
         known: Box<[(EffectId, usize)]>,
         tail: Option<(EffectRowVariable, Box<[(EffectId, usize)]>)>,
         argument_count: usize,
+        replacement: Option<(EffectRowVariable, &'a EffectRow)>,
     }
 
     enum Task<'a> {
@@ -2545,7 +2547,7 @@ fn substitute_type_and_row_variables(
         FinishTuple(usize),
         FinishApplication,
         FinishFunction,
-        FinishEffectfulFunction(RowShape),
+        FinishEffectfulFunction(RowShape<'a>),
         FinishForall(Box<[(TypeVariableId, Kind)]>),
     }
 
@@ -2584,20 +2586,20 @@ fn substitute_type_and_row_variables(
                     .map(|instance| (instance.effect, instance.arguments.len()))
                     .collect::<Vec<_>>()
                     .into_boxed_slice();
-                let tail = codomain.effects.tail.as_ref().map(|tail| {
-                    let variable = if substitute {
-                        match tail.variable {
-                            EffectRowVariable::Rigid(identity) => row_replacements
+                let replacement =
+                    codomain
+                        .effects
+                        .tail
+                        .as_ref()
+                        .and_then(|tail| match tail.variable {
+                            EffectRowVariable::Rigid(identity) if substitute => row_replacements
                                 .get(&identity)
-                                .copied()
-                                .unwrap_or(tail.variable),
-                            EffectRowVariable::Inference(_) => tail.variable,
-                        }
-                    } else {
-                        tail.variable
-                    };
+                                .map(|row| (tail.variable, row)),
+                            _ => None,
+                        });
+                let tail = codomain.effects.tail.as_ref().map(|tail| {
                     (
-                        variable,
+                        tail.variable,
                         tail.lacks
                             .iter()
                             .map(|instance| (instance.effect, instance.arguments.len()))
@@ -2622,6 +2624,7 @@ fn substitute_type_and_row_variables(
                     known,
                     tail,
                     argument_count: arguments.len(),
+                    replacement,
                 }));
                 for argument in arguments.into_iter().rev() {
                     work.push(Task::Visit(argument, substitute));
@@ -2632,9 +2635,10 @@ fn substitute_type_and_row_variables(
             Task::Visit(Type::Forall(parameters, body), substitute) => {
                 work.push(Task::FinishForall(parameters.clone()));
                 let substitute = substitute
-                    && !parameters
-                        .iter()
-                        .any(|(parameter, _)| replacements.contains_key(parameter));
+                    && !parameters.iter().any(|(parameter, _)| {
+                        replacements.contains_key(parameter)
+                            || row_replacements.contains_key(parameter)
+                    });
                 work.push(Task::Visit(body, substitute));
             }
             Task::Sequence(mut remaining, substitute) => {
@@ -2686,6 +2690,19 @@ fn substitute_type_and_row_variables(
                     EffectRow::closed(known)
                 };
                 debug_assert!(arguments.next().is_none());
+                let effects = if let Some((target, replacement)) = shape.replacement {
+                    let mut budget = TypeWorkBudget::unbounded();
+                    let substituted = effects
+                        .substitute_tail_once_with_budget(target, replacement, &mut budget)
+                        .expect("an in-memory row fits an unbounded budget");
+                    charge(budget.used())?;
+                    match substituted {
+                        Ok(effects) => effects,
+                        Err(error) => return Ok(Err(error)),
+                    }
+                } else {
+                    effects
+                };
                 let codomain = rebuilt.pop().expect("type reconstruction codomain");
                 let domain = rebuilt.pop().expect("type reconstruction domain");
                 rebuilt.push(Type::function_computation(
@@ -2699,7 +2716,7 @@ fn substitute_type_and_row_variables(
             }
         }
     }
-    rebuilt.pop().expect("one reconstructed type")
+    Ok(Ok(rebuilt.pop().expect("one reconstructed type")))
 }
 
 /// The internal kind language used to check type constructors.
@@ -4462,6 +4479,76 @@ mod tests {
             .expect("the nested-row test thread should start")
             .join()
             .expect("row clone, substitution, and disposal should fit a 256 KiB stack");
+    }
+
+    #[test]
+    fn type_substitution_replaces_one_row_binder_with_complete_rows() {
+        let binder = TypeVariableId::new(0);
+        let effect = EffectId::new(ModuleId::new(0), 0);
+        let member = EffectInstance::new(effect, Box::new([Type::Int]));
+        let source = Type::function_computation(
+            Type::Unit,
+            ComputationType::new(
+                Type::Bool,
+                EffectRow::open(EffectRowVariable::rigid(binder), Box::new([member.clone()])),
+            ),
+        );
+        assert_eq!(
+            substitute_type_and_row_variables_with(
+                &source,
+                &HashMap::new(),
+                &HashMap::from([(binder, EffectRow::singleton(member.clone()))]),
+                |_| Ok::<(), ()>(()),
+            ),
+            Ok(Err(EffectRowError::Missing)),
+        );
+        let replacement = EffectRow::open(
+            EffectRowVariable::rigid(TypeVariableId::new(1)),
+            Box::new([member]),
+        );
+        let substituted = substitute_type_and_row_variables_with(
+            &source,
+            &HashMap::new(),
+            &HashMap::from([(binder, replacement.clone())]),
+            |_| Ok::<(), ()>(()),
+        )
+        .unwrap()
+        .unwrap();
+        let Type::EffectfulFunction(_, computation) = substituted else {
+            panic!()
+        };
+        assert_eq!(computation.effects(), &replacement);
+
+        let replacements = HashMap::from([(binder, replacement)]);
+        let mut measured = TypeWorkBudget::default();
+        substitute_type_and_row_variables_with(&source, &HashMap::new(), &replacements, |cells| {
+            measured.charge(cells)
+        })
+        .unwrap()
+        .unwrap();
+        let exact = measured.used();
+        let mut short = TypeWorkBudget::with_limit(exact - 1);
+        assert!(
+            substitute_type_and_row_variables_with(
+                &source,
+                &HashMap::new(),
+                &replacements,
+                |cells| short.charge(cells),
+            )
+            .is_err()
+        );
+        for _ in 0..2 {
+            let mut retry = TypeWorkBudget::with_limit(exact);
+            substitute_type_and_row_variables_with(
+                &source,
+                &HashMap::new(),
+                &replacements,
+                |cells| retry.charge(cells),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(retry.used(), exact);
+        }
     }
 
     #[test]
