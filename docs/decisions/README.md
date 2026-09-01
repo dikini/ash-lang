@@ -15,3 +15,4 @@ Use [the template](template.md) and allocate the next `AD-NNNN` ID.
 - [AD-0007: Typed Core Dialects](AD-0007-typed-core-dialects.md)
 - [AD-0008: Explicit Evaluator Machine](AD-0008-explicit-evaluator-machine.md)
 - [AD-0009: Ordered Resolved-Global Binder Authority](AD-0009-ordered-resolved-global-binder-authority.md)
+- [AD-0010: Human Diagnostic Presentation and Localization](AD-0010-human-diagnostic-presentation-and-localization.md)
