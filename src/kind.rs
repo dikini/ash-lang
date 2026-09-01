@@ -793,7 +793,7 @@ impl<'a> KindEnvironments<'a> {
         span: Span,
         budget: &mut impl KindWorkLedger,
     ) -> Result<(), KindFailure> {
-        if !matches!(ty, Type::Function(_, _)) {
+        if ty.function_view().is_none() {
             return Err(KindFailure::internal(
                 span,
                 "a checked body-free interface method is not a function",
@@ -5293,6 +5293,68 @@ mod tests {
     }
 
     #[test]
+    fn effect_row_binders_are_limited_to_schemes_and_generalized_locals() {
+        let span = span();
+        let row = crate::resolved::ResolvedTypeVariable {
+            id: TypeVariableId::new(0),
+            spelling: "Effects".into(),
+            kind: Kind::EffectRow,
+            origin: Origin::Source(span),
+        };
+        let arrow = crate::resolved::ResolvedTypeVariable {
+            id: TypeVariableId::new(1),
+            spelling: "Constructor".into(),
+            kind: Kind::Arrow(Box::new(Kind::EffectRow), Box::new(Kind::Type)),
+            origin: Origin::Source(span),
+        };
+
+        let mut environments = KindEnvironments::new();
+        assert!(
+            environments
+                .install_scheme_parameters(
+                    std::slice::from_ref(&row),
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .is_ok(),
+            "global and eligible generalized-local schemes admit a root row binder",
+        );
+        assert!(
+            environments
+                .install_owner_parameters(
+                    std::slice::from_ref(&row),
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .is_err(),
+            "currently representable nominal, interface, and implementation owners share the restricted gate",
+        );
+        let method_parameters = [(row.id, Kind::EffectRow)];
+        assert!(
+            environments
+                .install_owner_pairs(
+                    &method_parameters,
+                    span,
+                    false,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .is_err(),
+            "method and implementation scheme mirrors remain restricted",
+        );
+        assert!(
+            environments
+                .install_scheme_parameters(
+                    std::slice::from_ref(&arrow),
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .is_err(),
+            "EffectRow is never admitted below a kind arrow",
+        );
+
+        // Effect and operation declaration carriers enter with their syntax
+        // checkpoint; that checkpoint must route them through the same
+        // restricted owner gate rather than the scheme gate above.
+    }
+
+    #[test]
     fn body_free_interface_method_separates_allowed_variables_from_required_seed() {
         let span = span();
         let key = TypeVariableId::new(0);
@@ -5468,6 +5530,43 @@ mod tests {
                 Err(KindFailure::Internal(_))
             ));
         }
+    }
+
+    #[test]
+    fn body_free_interface_method_accepts_a_closed_effectful_function() {
+        let span = span();
+        let parameter = TypeVariableId::new(0);
+        let type_kind = Kind::Type;
+        let mut environments = KindEnvironments::new();
+        environments
+            .insert_declared(
+                parameter,
+                &type_kind,
+                span,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .expect("the interface parameter should install");
+        let method = Type::function_computation(
+            Type::Variable(parameter),
+            crate::types::ComputationType::new(
+                Type::Bool,
+                crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                    crate::types::EffectId::new(ModuleId::new(0), 0),
+                    Box::new([]),
+                )),
+            ),
+        );
+
+        environments
+            .expect_body_free_interface_method_with_ledger(
+                &method,
+                &[parameter],
+                BodyFreeInterfaceMethodSeed::AllInterfaceParameters,
+                &[],
+                span,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .expect("a closed latent row remains a valid method value type");
     }
 
     #[test]

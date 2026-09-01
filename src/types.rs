@@ -574,6 +574,10 @@ impl EffectInstance {
     pub const fn arguments(&self) -> &[Type] {
         &self.arguments
     }
+
+    pub(crate) fn into_parts(mut self) -> (EffectId, Box<[Type]>) {
+        (self.effect, std::mem::take(&mut self.arguments))
+    }
 }
 
 impl Drop for EffectInstance {
@@ -686,6 +690,17 @@ impl EffectRow {
         self.tail.as_ref()
     }
 
+    pub(crate) fn into_parts(
+        mut self,
+    ) -> (
+        Box<[EffectInstance]>,
+        Option<(EffectRowVariable, Box<[EffectInstance]>)>,
+    ) {
+        let known = std::mem::take(&mut self.known);
+        let tail = self.tail.take().map(|tail| (tail.variable, tail.lacks));
+        (known, tail)
+    }
+
     /// Reports whether this row is closed and has no known members.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
@@ -694,9 +709,21 @@ impl EffectRow {
 
     /// Computes the least principal union admitted by the one-tail kernel.
     pub fn union(&self, other: &Self) -> Result<Self, EffectRowError> {
+        let mut budget = TypeWorkBudget::unbounded();
+        match self.union_with_budget(other, &mut budget) {
+            Ok(result) => result,
+            Err(()) => unreachable!("an in-memory row cannot exceed the address-space work bound"),
+        }
+    }
+
+    pub(crate) fn union_with_budget(
+        &self,
+        other: &Self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Result<Self, EffectRowError>, ()> {
         match (&self.tail, &other.tail) {
             (Some(left), Some(right)) if left.variable != right.variable => {
-                return Err(EffectRowError::Ambiguous);
+                return Ok(Err(EffectRowError::Ambiguous));
             }
             _ => {}
         }
@@ -707,8 +734,12 @@ impl EffectRow {
                 .iter()
                 .filter(|instance| !contains_instance(&self.known, instance))
             {
-                if !contains_instance(&tail.lacks, instance) {
-                    return Err(EffectRowError::Ambiguous);
+                let admitted_by_shared_tail = other.tail.as_ref().is_some_and(|other_tail| {
+                    other_tail.variable == tail.variable
+                        && contains_instance(&other_tail.lacks, instance)
+                });
+                if !contains_instance(&tail.lacks, instance) && !admitted_by_shared_tail {
+                    return Ok(Err(EffectRowError::Ambiguous));
                 }
             }
         }
@@ -718,48 +749,72 @@ impl EffectRow {
                 .iter()
                 .filter(|instance| !contains_instance(&other.known, instance))
             {
-                if !contains_instance(&tail.lacks, instance) {
-                    return Err(EffectRowError::Ambiguous);
+                let admitted_by_shared_tail = self.tail.as_ref().is_some_and(|self_tail| {
+                    self_tail.variable == tail.variable
+                        && contains_instance(&self_tail.lacks, instance)
+                });
+                if !contains_instance(&tail.lacks, instance) && !admitted_by_shared_tail {
+                    return Ok(Err(EffectRowError::Ambiguous));
                 }
             }
         }
 
-        let mut known = self.known.to_vec();
-        known.extend(other.known.iter().cloned());
-        let known = canonical_instances(known).into_boxed_slice();
-        let tail = match (&self.tail, &other.tail) {
-            (None, None) => None,
-            (Some(tail), None) | (None, Some(tail)) => Some(tail.clone()),
-            (Some(left), Some(right)) => {
-                let mut lacks = left.lacks.to_vec();
-                lacks.extend(right.lacks.iter().cloned());
-                Some(EffectRowTail {
-                    variable: left.variable,
-                    lacks: canonical_instances(lacks).into_boxed_slice(),
-                })
-            }
+        let known = self.known.iter().chain(other.known.iter());
+        let rebuilt = match (&self.tail, &other.tail) {
+            (None, None) => rebuild_effect_row_with_budget(
+                known,
+                None,
+                std::iter::empty(),
+                |argument, budget| clone_type_with_budget(argument, budget),
+                budget,
+            )?,
+            (Some(tail), None) | (None, Some(tail)) => rebuild_effect_row_with_budget(
+                known,
+                Some(tail.variable),
+                tail.lacks.iter(),
+                |argument, budget| clone_type_with_budget(argument, budget),
+                budget,
+            )?,
+            (Some(left), Some(right)) => rebuild_effect_row_with_budget(
+                known,
+                Some(left.variable),
+                left.lacks.iter().chain(right.lacks.iter()),
+                |argument, budget| clone_type_with_budget(argument, budget),
+                budget,
+            )?,
         };
-        Ok(Self { known, tail })
+        Ok(Ok(rebuilt))
     }
 
     /// Removes one exact member without masking another instance of the API.
     pub fn remove_exact(&self, target: &EffectInstance) -> Result<Self, EffectRowError> {
+        let mut budget = TypeWorkBudget::unbounded();
+        match self.remove_exact_with_budget(target, &mut budget) {
+            Ok(result) => result,
+            Err(()) => unreachable!("an in-memory row cannot exceed the address-space work bound"),
+        }
+    }
+
+    pub(crate) fn remove_exact_with_budget(
+        &self,
+        target: &EffectInstance,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Result<Self, EffectRowError>, ()> {
         if contains_instance(&self.known, target) {
-            let known = self
-                .known
-                .iter()
-                .filter(|instance| *instance != target)
-                .cloned()
-                .collect::<Vec<_>>()
-                .into_boxed_slice();
-            return Ok(Self {
-                known,
-                tail: self.tail.clone(),
-            });
+            return rebuild_effect_row_with_budget(
+                self.known.iter().filter(|instance| *instance != target),
+                self.tail.as_ref().map(|tail| tail.variable),
+                self.tail.iter().flat_map(|tail| tail.lacks.iter()),
+                |argument, budget| clone_type_with_budget(argument, budget),
+                budget,
+            )
+            .map(Ok);
         }
         match &self.tail {
-            Some(tail) if !contains_instance(&tail.lacks, target) => Err(EffectRowError::Ambiguous),
-            _ => Err(EffectRowError::Missing),
+            Some(tail) if !contains_instance(&tail.lacks, target) => {
+                Ok(Err(EffectRowError::Ambiguous))
+            }
+            _ => Ok(Err(EffectRowError::Missing)),
         }
     }
 
@@ -769,84 +824,155 @@ impl EffectRow {
     /// the elaborator's fixed-kind row transaction.
     #[must_use]
     pub fn substitute_type_variables(&self, replacements: &HashMap<TypeVariableId, Type>) -> Self {
-        substitute_effect_row_type_variables(self, replacements)
+        let mut budget = TypeWorkBudget::unbounded();
+        self.substitute_type_variables_with_budget(replacements, &mut budget)
+            .expect("an in-memory row cannot exceed the address-space work bound")
     }
 
-    pub(crate) fn substitute_tail_once(
+    pub(crate) fn substitute_type_variables_with_budget(
+        &self,
+        replacements: &HashMap<TypeVariableId, Type>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ()> {
+        rebuild_effect_row_with_budget(
+            self.known.iter(),
+            self.tail.as_ref().map(|tail| tail.variable),
+            self.tail.iter().flat_map(|tail| tail.lacks.iter()),
+            |argument, budget| {
+                substitute_type_variables_with(argument, replacements, |cells| budget.charge(cells))
+            },
+            budget,
+        )
+    }
+
+    pub(crate) fn substitute_tail_once_with_budget(
         &self,
         target: EffectRowVariable,
         replacement: &Self,
-    ) -> Result<Self, EffectRowError> {
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Result<Self, EffectRowError>, ()> {
         let Some(tail) = &self.tail else {
-            return Ok(self.clone());
+            return clone_effect_row_with_budget(self, budget).map(Ok);
         };
         if tail.variable != target {
-            return Ok(self.clone());
+            return clone_effect_row_with_budget(self, budget).map(Ok);
         }
         if replacement
             .tail
             .as_ref()
             .is_some_and(|replacement_tail| replacement_tail.variable == target)
         {
-            return Err(EffectRowError::Infinite);
+            return Ok(Err(EffectRowError::Infinite));
         }
         if replacement
             .known
             .iter()
             .any(|member| contains_instance(&tail.lacks, member))
         {
-            return Err(EffectRowError::Missing);
+            return Ok(Err(EffectRowError::Missing));
         }
 
-        let mut known = self.known.to_vec();
-        known.extend(replacement.known.iter().cloned());
         match &replacement.tail {
-            None => Ok(Self::closed(known.into_boxed_slice())),
-            Some(replacement_tail) => {
-                let mut lacks = tail.lacks.to_vec();
-                lacks.extend(replacement_tail.lacks.iter().cloned());
-                Ok(Self::with_tail(
-                    known.into_boxed_slice(),
-                    replacement_tail.variable,
-                    lacks.into_boxed_slice(),
-                ))
-            }
+            None => rebuild_effect_row_with_budget(
+                self.known.iter().chain(replacement.known.iter()),
+                None,
+                std::iter::empty(),
+                |argument, budget| clone_type_with_budget(argument, budget),
+                budget,
+            )
+            .map(Ok),
+            Some(replacement_tail) => rebuild_effect_row_with_budget(
+                self.known.iter().chain(replacement.known.iter()),
+                Some(replacement_tail.variable),
+                tail.lacks.iter().chain(replacement_tail.lacks.iter()),
+                |argument, budget| clone_type_with_budget(argument, budget),
+                budget,
+            )
+            .map(Ok),
         }
     }
 
-    pub(crate) fn map_type_arguments(&self, mut map: impl FnMut(&Type) -> Type) -> Self {
-        let map_instance =
-            |instance: &EffectInstance, map: &mut dyn FnMut(&Type) -> Type| -> EffectInstance {
-                EffectInstance::new(
-                    instance.effect,
-                    instance
-                        .arguments
-                        .iter()
-                        .map(map)
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice(),
-                )
-            };
-        let known = self
-            .known
-            .iter()
-            .map(|instance| map_instance(instance, &mut map))
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-        if let Some(tail) = &self.tail {
-            Self::with_tail(
-                known,
-                tail.variable,
-                tail.lacks
-                    .iter()
-                    .map(|instance| map_instance(instance, &mut map))
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice(),
-            )
-        } else {
-            Self::closed(known)
-        }
+    pub(crate) fn map_type_arguments_with_budget<E>(
+        &self,
+        map: impl FnMut(&Type, &mut TypeWorkBudget) -> Result<Type, E>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, E>
+    where
+        E: From<()>,
+    {
+        rebuild_effect_row_with_budget(
+            self.known.iter(),
+            self.tail.as_ref().map(|tail| tail.variable),
+            self.tail.iter().flat_map(|tail| tail.lacks.iter()),
+            map,
+            budget,
+        )
     }
+}
+
+fn rebuild_effect_row_with_budget<'a, E>(
+    known: impl IntoIterator<Item = &'a EffectInstance>,
+    tail: Option<EffectRowVariable>,
+    lacks: impl IntoIterator<Item = &'a EffectInstance>,
+    mut map: impl FnMut(&Type, &mut TypeWorkBudget) -> Result<Type, E>,
+    budget: &mut TypeWorkBudget,
+) -> Result<EffectRow, E>
+where
+    E: From<()>,
+{
+    fn rebuild_instance<E>(
+        instance: &EffectInstance,
+        map: &mut impl FnMut(&Type, &mut TypeWorkBudget) -> Result<Type, E>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<EffectInstance, E>
+    where
+        E: From<()>,
+    {
+        budget.charge(1).map_err(E::from)?;
+        let mut arguments = Vec::new();
+        for argument in &instance.arguments {
+            let argument = IterativeTypeOwner::new(map(argument, budget)?);
+            arguments.try_reserve(1).map_err(|_| E::from(()))?;
+            arguments.push(argument);
+        }
+        let mut retained = Vec::new();
+        retained
+            .try_reserve(arguments.len())
+            .map_err(|_| E::from(()))?;
+        retained.extend(arguments.into_iter().map(IterativeTypeOwner::into_inner));
+        Ok(EffectInstance::new(
+            instance.effect,
+            retained.into_boxed_slice(),
+        ))
+    }
+
+    budget.charge(1).map_err(E::from)?;
+    let mut rebuilt_known = Vec::new();
+    for instance in known {
+        let instance = rebuild_instance(instance, &mut map, budget)?;
+        rebuilt_known.try_reserve(1).map_err(|_| E::from(()))?;
+        rebuilt_known.push(instance);
+    }
+    let known = canonical_instances(rebuilt_known).into_boxed_slice();
+    let rebuilt_tail = if let Some(variable) = tail {
+        budget.charge(1).map_err(E::from)?;
+        let mut rebuilt_lacks = Vec::new();
+        for instance in lacks {
+            let instance = rebuild_instance(instance, &mut map, budget)?;
+            rebuilt_lacks.try_reserve(1).map_err(|_| E::from(()))?;
+            rebuilt_lacks.push(instance);
+        }
+        Some(EffectRowTail {
+            variable,
+            lacks: canonical_instances(rebuilt_lacks).into_boxed_slice(),
+        })
+    } else {
+        None
+    };
+    Ok(EffectRow {
+        known,
+        tail: rebuilt_tail,
+    })
 }
 
 fn contains_instance(instances: &[EffectInstance], target: &EffectInstance) -> bool {
@@ -1317,6 +1443,32 @@ pub enum Type {
     EffectfulFunction(Box<Type>, Box<ComputationType>),
 }
 
+/// Borrowed semantic view of one function value type.
+#[derive(Clone, Copy)]
+pub struct FunctionTypeView<'a> {
+    domain: &'a Type,
+    value: &'a Type,
+    effects: Option<&'a EffectRow>,
+}
+
+impl<'a> FunctionTypeView<'a> {
+    #[must_use]
+    pub const fn domain(self) -> &'a Type {
+        self.domain
+    }
+
+    #[must_use]
+    pub const fn value(self) -> &'a Type {
+        self.value
+    }
+
+    /// Returns `None` for the canonical empty computation row.
+    #[must_use]
+    pub const fn effects(self) -> Option<&'a EffectRow> {
+        self.effects
+    }
+}
+
 /// Crate-internal ownership guard for a type crossing fallible work.
 ///
 /// The contained type is dismantled iteratively unless it is explicitly
@@ -1360,6 +1512,24 @@ impl Drop for IterativeTypeOwner {
 }
 
 impl Type {
+    /// Borrows the semantic domain and computation codomain of a function.
+    #[must_use]
+    pub fn function_view(&self) -> Option<FunctionTypeView<'_>> {
+        match self {
+            Self::Function(domain, value) => Some(FunctionTypeView {
+                domain,
+                value,
+                effects: None,
+            }),
+            Self::EffectfulFunction(domain, computation) => Some(FunctionTypeView {
+                domain,
+                value: computation.value(),
+                effects: (!computation.effects().is_empty()).then_some(computation.effects()),
+            }),
+            _ => None,
+        }
+    }
+
     /// Compatibility constructor for a function with an empty latent row.
     #[must_use]
     pub fn function(domain: Type, codomain: Type) -> Self {
@@ -2242,10 +2412,6 @@ pub(crate) fn substitute_type_and_row_variables_with<E>(
     ))
 }
 
-fn substitute_type_variables(ty: &Type, replacements: &HashMap<TypeVariableId, Type>) -> Type {
-    substitute_type_and_row_variables(ty, replacements, &HashMap::new())
-}
-
 fn substitute_type_and_row_variables(
     ty: &Type,
     replacements: &HashMap<TypeVariableId, Type>,
@@ -2418,42 +2584,6 @@ fn substitute_type_and_row_variables(
         }
     }
     rebuilt.pop().expect("one reconstructed type")
-}
-
-fn substitute_effect_row_type_variables(
-    row: &EffectRow,
-    replacements: &HashMap<TypeVariableId, Type>,
-) -> EffectRow {
-    let substitute_instance = |instance: &EffectInstance| {
-        EffectInstance::new(
-            instance.effect,
-            instance
-                .arguments
-                .iter()
-                .map(|argument| substitute_type_variables(argument, replacements))
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-        )
-    };
-    let known = row
-        .known
-        .iter()
-        .map(&substitute_instance)
-        .collect::<Vec<_>>()
-        .into_boxed_slice();
-    if let Some(tail) = &row.tail {
-        EffectRow::with_tail(
-            known,
-            tail.variable,
-            tail.lacks
-                .iter()
-                .map(substitute_instance)
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-        )
-    } else {
-        EffectRow::closed(known)
-    }
 }
 
 /// The internal kind language used to check type constructors.
@@ -3923,6 +4053,99 @@ mod tests {
     }
 
     #[test]
+    fn row_algebra_owners_are_exact_atomic_and_retryable() {
+        let effect = EffectId::new(ModuleId::new(0), 0);
+        let left_member = EffectInstance::new(effect, Box::new([Type::Int]));
+        let right_member = EffectInstance::new(effect, Box::new([Type::Bool]));
+        let tail = EffectRowVariable::rigid(TypeVariableId::new(0));
+        let left = EffectRow::with_tail(Box::new([left_member.clone()]), tail, Box::new([]));
+        let right = EffectRow::with_tail(Box::new([right_member.clone()]), tail, Box::new([]));
+
+        let mut union_short = TypeWorkBudget::with_limit(9);
+        assert_eq!(left.union_with_budget(&right, &mut union_short), Err(()));
+        assert_eq!(left.known(), &[left_member.clone()]);
+        let mut union_exact = TypeWorkBudget::with_limit(10);
+        let union = left
+            .union_with_budget(&right, &mut union_exact)
+            .expect("the exact union budget should fit")
+            .expect("the shared tail supplies both lacks facts");
+        assert_eq!(union_exact.used(), 10);
+
+        let mut removal_short = TypeWorkBudget::with_limit(7);
+        assert_eq!(
+            union.remove_exact_with_budget(&left_member, &mut removal_short),
+            Err(()),
+        );
+        let mut removal_exact = TypeWorkBudget::with_limit(8);
+        let removed = EffectRow::with_tail(
+            Box::new([right_member.clone()]),
+            tail,
+            Box::new([left_member.clone(), right_member]),
+        );
+        assert_eq!(
+            union
+                .remove_exact_with_budget(&left_member, &mut removal_exact)
+                .expect("the exact removal budget should fit"),
+            Ok(removed),
+        );
+
+        let open = EffectRow::open(tail, Box::new([]));
+        let replacement = EffectRow::singleton(left_member.clone());
+        let mut tail_short = TypeWorkBudget::with_limit(2);
+        assert_eq!(
+            open.substitute_tail_once_with_budget(tail, &replacement, &mut tail_short),
+            Err(()),
+        );
+        let mut tail_exact = TypeWorkBudget::with_limit(3);
+        assert_eq!(
+            open.substitute_tail_once_with_budget(tail, &replacement, &mut tail_exact),
+            Ok(Ok(replacement.clone())),
+        );
+
+        let mut map_short = TypeWorkBudget::with_limit(2);
+        assert_eq!(
+            replacement.map_type_arguments_with_budget(
+                |argument, budget| clone_type_with_budget(argument, budget),
+                &mut map_short,
+            ),
+            Err(()),
+        );
+        let mut map_exact = TypeWorkBudget::with_limit(3);
+        assert_eq!(
+            replacement.map_type_arguments_with_budget(
+                |argument, budget| clone_type_with_budget(argument, budget),
+                &mut map_exact,
+            ),
+            Ok(replacement),
+        );
+
+        let substituted = EffectRow::singleton(EffectInstance::new(
+            effect,
+            Box::new([Type::Variable(TypeVariableId::new(1))]),
+        ));
+        let replacements = HashMap::from([(TypeVariableId::new(1), Type::Bool)]);
+        let mut substitution_short = TypeWorkBudget::with_limit(2);
+        assert_eq!(
+            substituted
+                .substitute_type_variables_with_budget(&replacements, &mut substitution_short,),
+            Err(()),
+        );
+        assert!(matches!(
+            substituted.known()[0].arguments(),
+            [Type::Variable(_)]
+        ));
+        let mut substitution_exact = TypeWorkBudget::with_limit(3);
+        assert_eq!(
+            substituted
+                .substitute_type_variables_with_budget(&replacements, &mut substitution_exact,),
+            Ok(EffectRow::singleton(EffectInstance::new(
+                effect,
+                Box::new([Type::Bool]),
+            ))),
+        );
+    }
+
+    #[test]
     fn effectful_function_closed_operations_share_one_exact_cell_formula() {
         const CELLS: usize = 7;
         let ty = Type::function_computation(
@@ -4011,5 +4234,37 @@ mod tests {
             .expect("the nested-row test thread should start")
             .join()
             .expect("row clone, substitution, and disposal should fit a 256 KiB stack");
+    }
+
+    #[test]
+    fn charged_row_rebuild_failure_discards_staged_arguments_on_a_small_stack() {
+        const DEPTH: usize = 4_096;
+        const FIRST_ARGUMENT_WORK: usize = 2 * DEPTH + 1;
+
+        std::thread::Builder::new()
+            .name("failed-row-rebuild".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut deep = Type::Unit;
+                for _ in 0..DEPTH {
+                    deep = Type::Application(Box::new(Type::Unit), Box::new(deep));
+                }
+                let row = EffectRow::singleton(EffectInstance::new(
+                    EffectId::new(ModuleId::new(0), 0),
+                    Box::new([deep, Type::Bool]),
+                ));
+                let mut short = TypeWorkBudget::with_limit(2 + FIRST_ARGUMENT_WORK);
+                assert_eq!(
+                    row.map_type_arguments_with_budget(
+                        |argument, budget| clone_type_with_budget(argument, budget),
+                        &mut short,
+                    ),
+                    Err(()),
+                );
+                drop(row);
+            })
+            .expect("the failed row-rebuild thread should start")
+            .join()
+            .expect("a partial row rebuild should dismantle staged arguments iteratively");
     }
 }

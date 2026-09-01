@@ -181,6 +181,28 @@ fn union_retains_one_shared_tail_and_rejects_unrelated_tails() {
 }
 
 #[test]
+fn same_tail_union_combines_operand_local_lacks_before_admitting_members() {
+    let source = SourceFile::new("same-tail-union.ash", "").expect("fixture should fit");
+    let module = ModuleId::from(source.id());
+    let left = effect(module, 0, Vec::<Type>::new());
+    let right = effect(module, 1, Vec::<Type>::new());
+    let shared = EffectRowVariable::rigid(TypeVariableId::new(9));
+
+    let union = EffectRow::with_tail(Box::new([left.clone()]), shared, Box::new([])).union(
+        &EffectRow::with_tail(Box::new([right.clone()]), shared, Box::new([])),
+    );
+
+    assert_eq!(
+        union,
+        Ok(EffectRow::with_tail(
+            Box::new([left, right]),
+            shared,
+            Box::new([]),
+        )),
+    );
+}
+
+#[test]
 fn computation_rendering_distinguishes_latent_rows_and_canonicalizes_pure_functions() {
     let source = SourceFile::new("render-effect-row.ash", "").expect("fixture should fit");
     let module = ModuleId::from(source.id());
