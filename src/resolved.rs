@@ -16389,6 +16389,47 @@ impl ResolvedRegistry {
     }
 
     #[cfg(test)]
+    pub(crate) fn corrupt_first_lexical_nominal_as_data_for_core_test(&mut self) -> bool {
+        let Some(nominal) = self.lexical_nominals.first_mut() else {
+            return false;
+        };
+        nominal.declaration_kind = ResolvedNominalDeclarationKind::Data;
+        if let Some(representation) = nominal.representation.take() {
+            discard_type_iteratively(representation);
+        }
+        nominal.representation_provenance = None;
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn duplicate_second_lexical_identity_for_core_test(&mut self) -> bool {
+        let [first, second, ..] = self.lexical_nominals.as_mut() else {
+            return false;
+        };
+        second.replace_identity_for_core_test(first.id);
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_first_lexical_representation_effect_for_core_test(
+        &mut self,
+        effect: EffectId,
+    ) -> bool {
+        let Some(Type::EffectfulFunction(_, computation)) = self
+            .lexical_nominals
+            .first_mut()
+            .and_then(|nominal| nominal.representation.as_mut())
+        else {
+            return false;
+        };
+        computation.effects = EffectRow::singleton(crate::types::EffectInstance::new(
+            effect,
+            Box::new([Type::Int]),
+        ));
+        true
+    }
+
+    #[cfg(test)]
     pub(crate) fn global_parameter_position_for_core_test(&self, owner: BinderId) -> Option<usize> {
         self.global_parameter_positions.get(&owner).copied()
     }
@@ -16922,6 +16963,13 @@ pub struct ResolvedNominalType {
     pub representation_provenance: Option<ResolvedTypeProvenance>,
     /// Declaration provenance.
     pub origin: Origin,
+}
+
+#[cfg(test)]
+impl ResolvedNominalType {
+    fn replace_identity_for_core_test(&mut self, replacement: NominalTypeId) {
+        self.id = replacement;
+    }
 }
 
 /// One resolved source type binder.

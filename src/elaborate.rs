@@ -16912,11 +16912,17 @@ fn computation_nominal_identities(
     let mut identities = HashSet::new();
     collect_nominal_identities(ty, &mut identities, budget)
         .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    budget
+        .charge(1)
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
     for instance in effects
         .known()
         .iter()
         .chain(effects.tail().into_iter().flat_map(|tail| tail.lacks()))
     {
+        budget
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         for argument in instance.arguments() {
             collect_nominal_identities(argument, &mut identities, budget)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
@@ -19406,7 +19412,11 @@ pub(crate) fn checked_program_contains_effect_syntax(
     }
 
     let registry = program.registry();
-    for nominal in registry.nominals() {
+    for nominal in registry
+        .nominals()
+        .iter()
+        .chain(registry.lexical_nominals())
+    {
         let parameters = registry
             .nominal_parameters(nominal.id)
             .ok_or_else(resource)?;

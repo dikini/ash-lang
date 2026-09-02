@@ -3638,12 +3638,18 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     ) -> Result<(), ValidationError> {
         let registry = &self.program.registry;
         let relation = self.module_sources.as_ref();
+        let mut identities = HashSet::new();
+        identities
+            .try_reserve(registry.lexical_nominals().len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
         for nominal in registry.lexical_nominals() {
             let source = relation
                 .and_then(|relation| relation.get(&nominal.id.module()).copied())
                 .or(fallback_source)
                 .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
-            if !nominal.id.is_lexical()
+            if nominal.declaration_kind != ResolvedNominalDeclarationKind::Newtype
+                || !nominal.id.is_lexical()
+                || !identities.insert(nominal.id)
                 || nominal.origin.primary_span().source() != source
                 || !origin_depth_within_limit(&nominal.origin)
                 || !valid_upper_spelling(&nominal.spelling)
@@ -6123,6 +6129,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
     fn validate_local_scope_bijection(&self) -> Result<(), ValidationError> {
         let scope_count = self.program.registry.lexical_nominals().len();
+        if scope_count == 0 {
+            return Ok(());
+        }
         self.charge_type_work(
             scope_count
                 .checked_mul(2)
@@ -6736,11 +6745,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let Some(free) = requirements.get(index).and_then(Option::as_ref) else {
             return Err(ValidationError::new(ValidationReason::Scope, Some(id)));
         };
-        let resume_count = free
+        let capability_count = free
             .keys()
-            .filter(|key| matches!(key, ScopeRequirementKey::Resume(_, _)))
+            .filter(|key| {
+                matches!(
+                    key,
+                    ScopeRequirementKey::Resume(_, _) | ScopeRequirementKey::LocalNominal(_)
+                )
+            })
             .count();
-        self.charge_type_work(resume_count)?;
+        self.charge_type_work(capability_count)?;
         let mut cloned = HashMap::new();
         cloned
             .try_reserve(free.len())
@@ -6860,11 +6874,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         occurrence: NodeId,
         requirements: &mut ScopeRequirements,
     ) -> Result<(), ValidationError> {
+        self.charge_type_work(1)?;
         for instance in row
             .known()
             .iter()
             .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
         {
+            self.charge_type_work(1)?;
             for argument in instance.arguments() {
                 self.collect_type_local_nominals(argument, occurrence, requirements)?;
             }
@@ -7026,7 +7042,13 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         let mut nominal_parameter_owners = self.validate_registry()?;
         self.validate_effect_registry(self.module_sources.as_ref(), &mut nominal_parameter_owners)?;
         let empty_type_binders = CoreTypeBinders::new();
-        for nominal in self.program.registry.nominals() {
+        for nominal in self
+            .program
+            .registry
+            .nominals()
+            .iter()
+            .chain(self.program.registry.lexical_nominals())
+        {
             if let Some(representation) = nominal.representation.as_ref() {
                 self.validate_effect_type_rows(
                     representation,
@@ -9505,21 +9527,96 @@ mod tests {
     }
 
     #[test]
-    fn local_nominal_scope_validation_is_exact_atomic_and_retryable() {
-        fn fixture() -> LinkedCoreValidationFixture {
-            LinkedCoreValidationFixture::compile(
+    fn linked_core_rejects_wrong_kind_and_duplicate_local_facts_during_registry_validation() {
+        for duplicate in [false, true] {
+            let mut fixture = LinkedCoreValidationFixture::compile(
                 "",
                 concat!(
                     "main : Unit -> Int\n",
                     "main () = {\n",
                     "    newtype Hidden = Hidden(Int)\n",
+                    "    newtype Other = Other(Int)\n",
                     "    match Hidden(42) {\n",
                     "        Hidden(value) => value\n",
                     "    }\n",
                     "}\n",
                 ),
                 &[],
+            );
+            let registry = Arc::get_mut(&mut fixture.program.registry)
+                .expect("the unchecked fixture owns its registry");
+            assert!(if duplicate {
+                registry.duplicate_second_lexical_identity_for_core_test()
+            } else {
+                registry.corrupt_first_lexical_nominal_as_data_for_core_test()
+            });
+
+            let error = fixture
+                .validate()
+                .expect_err("forged local facts must fail registry validation");
+            assert_eq!(error.reason(), ValidationReason::Registry);
+            assert_eq!(error.node(), None);
+        }
+    }
+
+    #[test]
+    fn local_nominal_scope_validation_is_exact_atomic_and_retryable() {
+        const ROW_WIDTH: usize = 16;
+
+        fn fixture() -> LinkedCoreValidationFixture {
+            LinkedCoreValidationFixture::compile(
+                "",
+                concat!(
+                    "main : Unit -> Int\n",
+                    "main () = {\n",
+                    "    newtype Left = Left(Int)\n",
+                    "    newtype Right = Right(Int)\n",
+                    "    match (Left(40), Right(2)) {\n",
+                    "        (Left(left), Right(right)) => left + right\n",
+                    "    }\n",
+                    "}\n",
+                ),
+                &[],
             )
+        }
+
+        fn exercise_wide_local_row(validator: &Validator<'_, '_>) -> Result<(), ValidationError> {
+            let owners = validator.program.registry.lexical_nominals();
+            let [left, right] = owners else {
+                panic!("the exact fixture should retain two local identities")
+            };
+            let row = EffectRow::closed(
+                (0..ROW_WIDTH)
+                    .map(|index| {
+                        EffectInstance::new(
+                            crate::types::EffectId::new(
+                                ModuleId::new(99),
+                                u32::try_from(index).expect("row ordinal"),
+                            ),
+                            Box::new([Type::Nominal(if index % 2 == 0 {
+                                left.id
+                            } else {
+                                right.id
+                            })]),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            );
+            let occurrence = validator.program.root;
+            let mut requirements = HashMap::new();
+            validator.collect_row_local_nominals(&row, occurrence, &mut requirements)?;
+            let mut cached = vec![None; validator.program.nodes.len()];
+            cached[occurrence.index().expect("root index")] = Some(requirements);
+            let propagated = validator.requirements_for(&cached, occurrence)?;
+            assert_eq!(
+                propagated
+                    .keys()
+                    .filter(|key| matches!(key, ScopeRequirementKey::LocalNominal(_)))
+                    .count(),
+                2,
+            );
+            Ok(())
         }
 
         fn attempt(initial_type_work: usize) -> ConsumingModuleValidationAttempt {
@@ -9548,6 +9645,37 @@ mod tests {
 
         let measured = fixture();
         let sources = linked_fixture_sources(&measured);
+        let row_validator =
+            Validator::new_modules(&measured.program, &sources, &measured.module_sources)
+                .expect("the row fixture module/source relation should initialize");
+        exercise_wide_local_row(&row_validator).expect("the measured local row should fit");
+        // One row header + W instance headers + W nominal argument cells and
+        // W identity-index insertions, then two first and propagated entries.
+        const EXACT_ROW_WORK: usize = 1 + ROW_WIDTH + 2 * ROW_WIDTH + 2 + 2;
+        assert_eq!(row_validator.type_work.get(), EXACT_ROW_WORK);
+
+        let short = Validator::new_modules(&measured.program, &sources, &measured.module_sources)
+            .expect("the one-short row relation should initialize");
+        short
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (EXACT_ROW_WORK - 1))
+            .expect("the one-short row prefix should fit");
+        assert_eq!(
+            exercise_wide_local_row(&short)
+                .expect_err("one missing row unit must reject")
+                .reason(),
+            ValidationReason::Resource,
+        );
+        for _ in 0..2 {
+            let retry =
+                Validator::new_modules(&measured.program, &sources, &measured.module_sources)
+                    .expect("the retry row relation should initialize");
+            retry
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_ROW_WORK)
+                .expect("the exact row prefix should fit");
+            exercise_wide_local_row(&retry).expect("a fresh exact row retry should fit");
+            assert_eq!(retry.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+        }
+
         let mut validator =
             Validator::new_modules(&measured.program, &sources, &measured.module_sources)
                 .expect("the canonical module/source relation should initialize");
@@ -13982,6 +14110,60 @@ mod tests {
             retry.run_effect().expect("fresh exact retry");
             assert_eq!(retry.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
         }
+    }
+
+    #[test]
+    fn effect_core_rejects_forged_local_representation_effect_metadata() {
+        use crate::elaborate::EffectElaborator;
+
+        let directory = LinkedValidationDirectory::create();
+        let path = directory.write(
+            "local-representation-effect.ash",
+            concat!(
+                "effect Ask<A> {\nask : Unit -> Unit\n}\n\n",
+                "main : Unit -> Int\n",
+                "main () = {\n",
+                "    newtype Hidden = Hidden(Unit -> Unit ! {Ask<Int>})\n",
+                "    42\n",
+                "}\n",
+            ),
+        );
+        let graph = load_module_graph(&path, &ModuleRoots::empty()).expect("effect graph");
+        let source = graph.module(graph.entry()).unwrap().source().clone();
+        let module_sources = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry())
+            .expect("effect linked program");
+        let linked = validate_linked_facts_for_test(linked).expect("effect checked program");
+        let mut elaborator =
+            EffectElaborator::for_module_program(&linked).expect("effect elaborator");
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .expect("effect lowering");
+        let mut program = elaborator.finish(typed.node).expect("effect Core");
+        drop(linked);
+        Validator::new_modules(&program, &[&source], &module_sources)
+            .expect("the canonical module relation should initialize")
+            .run_effect()
+            .expect("untampered effectful local representation should authenticate");
+        let effect = program.registry.effects()[0].id;
+        assert!(
+            Arc::get_mut(&mut program.registry)
+                .expect("the unchecked effect Core owns its registry")
+                .replace_first_lexical_representation_effect_for_core_test(
+                    crate::types::EffectId::new(effect.module(), u32::MAX),
+                )
+        );
+
+        let error = Validator::new_modules(&program, &[&source], &module_sources)
+            .expect("the canonical module relation should initialize")
+            .run_effect()
+            .expect_err("forged local representation effect metadata must reject");
+        assert_eq!(error.reason(), ValidationReason::EffectIdentity);
+        assert_eq!(error.node(), Some(program.root));
     }
 
     #[test]
