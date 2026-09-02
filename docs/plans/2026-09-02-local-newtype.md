@@ -137,7 +137,7 @@ Run:
 
 ```text
 cargo test --locked --test local_newtypes_syntax --test parser
-cargo test --locked --test newtypes_syntax
+cargo test --locked --test module_newtypes --test newtype_resources
 cargo fmt --check
 cargo check --locked --all-targets
 git diff --check

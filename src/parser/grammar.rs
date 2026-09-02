@@ -2562,7 +2562,7 @@ mod tests {
         );
         assert!(exact_work > baseline.tokens().len());
 
-        let exact = parse_with_limit(&source, exact_work);
+        let exact = parse_newtype_with_limit(&source, exact_work);
         assert_eq!(exact.resource_failure(), None);
         assert!(
             exact
@@ -2572,7 +2572,7 @@ mod tests {
         );
 
         let one_short_limit = exact_work - 1;
-        let one_short = parse_with_limit(&source, one_short_limit);
+        let one_short = parse_newtype_with_limit(&source, one_short_limit);
         assert_eq!(
             one_short.resource_failure(),
             Some(ResourceFailure::SyntaxWork {
@@ -2581,7 +2581,7 @@ mod tests {
         );
         assert!(one_short.root().is_none());
 
-        let retry = parse_with_limit(&source, exact_work);
+        let retry = parse_newtype_with_limit(&source, exact_work);
         assert_eq!(retry.resource_failure(), None);
         assert_eq!(retry.tokens().len(), baseline.tokens().len());
         assert_eq!(retry.events().len(), baseline.events().len());
@@ -2602,7 +2602,7 @@ mod tests {
             "{:?}",
             baseline.parse_diagnostics()
         );
-        let exact = parse_with_limit(&source, exact_work);
+        let exact = parse_newtype_with_limit(&source, exact_work);
         assert_eq!(exact.resource_failure(), None);
         assert!(
             exact
@@ -2612,7 +2612,7 @@ mod tests {
         );
 
         let one_short_limit = exact_work - 1;
-        let one_short = parse_with_limit(&source, one_short_limit);
+        let one_short = parse_newtype_with_limit(&source, one_short_limit);
         assert_eq!(
             one_short.resource_failure(),
             Some(ResourceFailure::SyntaxWork {
@@ -2621,13 +2621,13 @@ mod tests {
         );
         assert!(one_short.root().is_none());
 
-        let retry = parse_with_limit(&source, exact_work);
+        let retry = parse_newtype_with_limit(&source, exact_work);
         assert_eq!(retry.resource_failure(), None);
         assert_eq!(retry.tokens().len(), baseline.tokens().len());
         assert_eq!(retry.events().len(), baseline.events().len());
     }
 
-    fn parse_with_limit(source: &SourceFile, limit: usize) -> super::super::ConcreteTree {
+    fn parse_newtype_with_limit(source: &SourceFile, limit: usize) -> super::super::ConcreteTree {
         let mut budget = SyntaxBudget::with_limit(limit);
         let lexed = lex_with_budget(source, &mut budget).expect("limited lexing should fit spans");
         parse_with_budget(lexed, &mut budget)

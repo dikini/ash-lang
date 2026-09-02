@@ -134,6 +134,20 @@ fn malformed_local_newtype_shape_recovers_without_losing_tokens() {
 
     assert!(!tree.parse_diagnostics().is_empty());
     assert_token_complete(&tree);
+    let recovery_event = tree
+        .events()
+        .iter()
+        .position(|event| matches!(event, Event::Error(_)))
+        .expect("the malformed local newtype should retain its recovery event");
+    let following_binding = tree
+        .events()
+        .iter()
+        .position(|event| matches!(event, Event::Start(ash::parser::NodeKind::LocalBinding)))
+        .expect("the following binding should remain in the concrete tree");
+    assert!(
+        recovery_event < following_binding,
+        "the following binding must occur after local newtype recovery"
+    );
     assert_eq!(
         project_module(&source, &tree),
         Err(ProjectionError::RecoveryNodesPresent)
