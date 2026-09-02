@@ -7456,6 +7456,11 @@ impl Resolver {
                             SurfaceLocalDeclaration::Recursive(group) => {
                                 tasks.push(ResolveTask::VisitRecursiveGroup(group));
                             }
+                            SurfaceLocalDeclaration::Newtype(_) => {
+                                unreachable!(
+                                    "local newtype resolution is not installed at the syntax checkpoint"
+                                )
+                            }
                         }
                     }
                 }

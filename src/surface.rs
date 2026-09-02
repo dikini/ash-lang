@@ -467,6 +467,8 @@ pub enum SurfaceLocalDeclaration {
     Binding(Box<SurfaceBinding>),
     /// A simultaneous recursive binding group.
     Recursive(SurfaceRecursiveGroup),
+    /// A private nominal representation declaration.
+    Newtype(SurfaceTypeDeclaration),
 }
 
 /// One simultaneous local recursive binding group.
