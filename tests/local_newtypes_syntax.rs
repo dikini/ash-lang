@@ -146,6 +146,13 @@ fn visibility_modifiers_remain_rejected_in_block_position() {
         concat!(
             "main : Unit -> Int\n",
             "main () = {\n",
+            "    opaque newtype Hidden = Hidden(Int)\n",
+            "    1\n",
+            "}\n",
+        ),
+        concat!(
+            "main : Unit -> Int\n",
+            "main () = {\n",
             "    pub newtype Hidden = Hidden(Int)\n",
             "    1\n",
             "}\n",

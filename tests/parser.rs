@@ -1463,6 +1463,53 @@ fn structural_depth_budget_bounds_parenthesized_types() {
     });
 }
 
+fn local_newtype_depth_source(depth: usize) -> String {
+    format!(
+        "main : Unit -> Int\nmain () = {{\nnewtype Deep = Deep({}Int{})\n1\n}}\n",
+        "(".repeat(depth),
+        ")".repeat(depth)
+    )
+}
+
+#[test]
+fn structural_depth_budget_bounds_local_newtype_representation() {
+    let accepted_source = SourceFile::new(
+        "local-newtype-depth-boundary.ash",
+        local_newtype_depth_source(STRUCTURAL_DEPTH_LIMIT - 1),
+    )
+    .expect("the boundary source should fit");
+    let accepted = parse(lex(&accepted_source).expect("the boundary source should lex"));
+    assert_eq!(accepted.resource_failure(), None);
+    assert!(
+        accepted
+            .events()
+            .iter()
+            .any(|event| matches!(event, Event::Start(NodeKind::NewtypeDeclaration)))
+    );
+    project(&accepted_source, &accepted).expect("the local newtype boundary should project");
+
+    let rejected_source = SourceFile::new(
+        "local-newtype-depth-overflow.ash",
+        local_newtype_depth_source(STRUCTURAL_DEPTH_LIMIT),
+    )
+    .expect("the overflow source should fit");
+    let rejected = parse(lex(&rejected_source).expect("the overflow source should lex"));
+    assert_eq!(
+        rejected.resource_failure(),
+        Some(ResourceFailure::StructuralDepth {
+            limit: STRUCTURAL_DEPTH_LIMIT
+        })
+    );
+    assert_eq!(
+        project(&rejected_source, &rejected),
+        Err(ProjectionError::ResourceLimit(
+            ResourceFailure::StructuralDepth {
+                limit: STRUCTURAL_DEPTH_LIMIT
+            }
+        ))
+    );
+}
+
 fn nested_constructor_pattern_source(depth: usize) -> String {
     let mut source = "type Loop =\nEnd\n| Step(Loop)\n\nmatch End {\n".to_owned();
     source.push_str(&"Step(".repeat(depth));
