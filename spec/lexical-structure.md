@@ -9,14 +9,17 @@ order mark is not part of the source language.
 An ordinary identifier starts with an ASCII lowercase letter or underscore and
 continues with ASCII letters, decimal digits, or underscores. Ordinary
 identifiers name term binders and module-path segments. A constructor, nominal
-type, interface, type-variable, module-alias, or uppercase import identifier
-starts with an ASCII uppercase letter and has the same continuation characters.
+type, interface, effect, type-variable, module-alias, or uppercase import
+identifier starts with an ASCII uppercase letter and has the same continuation
+characters.
 Resolution determines the meaning of an uppercase occurrence from its
 syntactic position and scope.
 
-The reserved words `fn`, `let`, `rec`, `and`, `type`, `newtype`, `interface`, `impl`,
-`where`, `match`, `import`, `as`, `pub`, `opaque`, `Int`, `Bool`, `Unit`,
-`true`, and `false` cannot be identifiers. The single spelling `_` is the
+The reserved words `fn`, `let`, `rec`, `and`, `type`, `newtype`, `interface`,
+`impl`, `effect`, `perform`, `handle`, `with`, `resume`, `where`, `match`,
+`import`, `as`, `pub`, `opaque`, `Int`, `Bool`, `Unit`, `true`, and `false`
+cannot be identifiers. A source binder that used one of the five effect-kernel
+spellings before they became reserved must be renamed. The single spelling `_` is the
 wildcard token rather than an ordinary identifier; spellings such as `_tail`
 remain ordinary identifiers.
 
@@ -26,14 +29,17 @@ integer. There is no fixed-width overflow. A leading zero in a multi-digit
 integer is invalid. A leading `-` is not part of an integer literal.
 
 The remaining punctuation admitted by Ash is `(`, `)`, `{`, `}`, `<`, `>`,
-`@`, `.`, `:`, `=`, `==`, `+`, `*`, `->`, `=>`, `|`, and comma. `@`
-introduces a named module root. A period separates module-path segments or a
-module alias from a qualified member; it does not begin a floating-point
-literal. Angle brackets delimit parameter lists on nominal, global, and
+`@`, `.`, `:`, `=`, `==`, `+`, `*`, `->`, `=>`, `!`, `|`, and comma. `@`
+introduces a named module root. A period separates module-path segments, a
+module alias from a qualified member, or an effect from one of its operations;
+it does not begin a floating-point literal. `!` introduces a latent effect row
+on a computation result. Angle brackets delimit parameter lists on nominal, global, and
 implementation declarations, method parameter lists, named type applications,
 and interface declarations and applications. Angle brackets delimit nonempty
-ordered parameter and argument lists on interfaces. The longest token wins
-where one spelling prefixes another.
+ordered parameter and argument lists on interfaces. They also
+delimit effect declaration parameter lists and named effect applications. Every
+written angle-bracketed parameter or argument list is nonempty. The longest
+token wins where one spelling prefixes another.
 Semicolon is recognized only to provide its specified source rejection; no
 grammar production admits it as source punctuation.
 

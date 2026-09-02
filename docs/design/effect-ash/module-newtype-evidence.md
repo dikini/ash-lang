@@ -8,9 +8,12 @@ the accepted proposal, implementation task, and execution plan after those
 transition-only artifacts leave the current tree.
 
 Integration and any Effects Ash milestone tag are separate lifecycle actions.
-Local or runtime-fresh identity, existential escape, effects, handlers,
-resources, providers, hooks, dynamic loading, proof evidence, implicit
-coercions, runtime type tags, and ABI guarantees remain separate work.
+At the module-`newtype` checkpoint, local or runtime-fresh identity,
+existential escape, effects, handlers, resources, providers, hooks, dynamic
+loading, proof evidence, implicit coercions, runtime type tags, and ABI
+guarantees remained separate work. This integration branch now combines the
+separately completed resume-required effect kernel; this report remains scoped
+to the module-`newtype` checkpoint.
 
 ## Scope and checkpoints
 

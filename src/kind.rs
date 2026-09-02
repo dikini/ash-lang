@@ -18,14 +18,35 @@ use crate::{
     },
     source::Span,
     types::{
-        InferenceVariableId, Kind, NominalTypeId, Type, TypeVariableId, TypeWorkBudget,
+        EffectRow, InferenceVariableId, Kind, NominalTypeId, Type, TypeVariableId, TypeWorkBudget,
         charge_kind_descendants, charge_kind_with_charge, clone_arrows_with_budget,
-        clone_kind_with_budget, render_kind_with_budget, same_kind_with_budget,
-        same_kind_with_charge,
+        clone_kind_with_budget, render_kind_with_budget, same_effect_rows_with_charge,
+        same_kind_with_budget, same_kind_with_charge,
     },
 };
 
 static TYPE_KIND: Kind = Kind::Type;
+
+pub(crate) fn binder_kind_is_admitted(kind: &Kind, allow_effect_row: bool) -> bool {
+    match kind {
+        Kind::Type => true,
+        Kind::EffectRow => allow_effect_row,
+        Kind::Arrow(_, _) => {
+            let mut work = vec![kind];
+            while let Some(kind) = work.pop() {
+                match kind {
+                    Kind::Type => {}
+                    Kind::EffectRow => return false,
+                    Kind::Arrow(domain, codomain) => {
+                        work.push(codomain);
+                        work.push(domain);
+                    }
+                }
+            }
+            true
+        }
+    }
+}
 
 /// Minimal charging seam for the total kind-synthesis engine.
 ///
@@ -266,6 +287,7 @@ pub(crate) struct KindEnvironments<'a> {
     omega: HashMap<InferenceVariableId, KindFact<'a>>,
     xi: HashMap<NominalTypeId, NominalKindFact>,
     iota: HashMap<InterfaceId, InterfaceKindFact<'a>>,
+    effects: Option<HashMap<crate::types::EffectId, &'a [crate::resolved::ResolvedTypeVariable]>>,
 }
 
 impl<'a> KindEnvironments<'a> {
@@ -275,7 +297,64 @@ impl<'a> KindEnvironments<'a> {
             omega: HashMap::new(),
             xi: HashMap::new(),
             iota: HashMap::new(),
+            effects: None,
         }
+    }
+
+    fn install_effects(
+        &mut self,
+        registry: &'a crate::resolved::ResolvedRegistry,
+        local: &'a [crate::resolved::ResolvedEffectDeclaration],
+        imported: impl Iterator<Item = &'a crate::resolved::ResolvedEffectDeclaration>,
+        budget: &mut TypeWorkBudget,
+        span: Span,
+    ) -> Result<(), KindFailure> {
+        let mut effects = HashMap::new();
+        for source in local {
+            budget.charge(1).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "effect-kind registry authentication exceeded its type-work budget",
+                )
+            })?;
+            effects.try_reserve(1).map_err(|_| {
+                KindFailure::resource(span, "effect-kind registry could not reserve storage")
+            })?;
+            let effect = registry.effect(source.id).ok_or_else(|| {
+                KindFailure::internal(span, "a local effect has no canonical registry fact")
+            })?;
+            if effects
+                .insert(effect.id, effect.parameters.as_ref())
+                .is_some()
+            {
+                return Err(KindFailure::internal(
+                    span,
+                    "the checked effect registry repeats a canonical identity",
+                ));
+            }
+        }
+        for effect in imported {
+            budget.charge(1).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "effect-kind registry authentication exceeded its type-work budget",
+                )
+            })?;
+            effects.try_reserve(1).map_err(|_| {
+                KindFailure::resource(span, "effect-kind registry could not reserve storage")
+            })?;
+            if effects
+                .insert(effect.id, effect.parameters.as_ref())
+                .is_some()
+            {
+                return Err(KindFailure::internal(
+                    span,
+                    "the checked effect registry repeats a canonical identity",
+                ));
+            }
+        }
+        self.effects = (!effects.is_empty()).then_some(effects);
+        Ok(())
     }
 
     pub(crate) fn contains_declared(&self, identity: TypeVariableId) -> bool {
@@ -297,6 +376,12 @@ impl<'a> KindEnvironments<'a> {
         origin: Span,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), KindFailure> {
+        if !binder_kind_is_admitted(kind, true) {
+            return Err(KindFailure::internal(
+                origin,
+                "EffectRow cannot occur beneath a kind arrow",
+            ));
+        }
         budget.charge(1).map_err(|()| {
             KindFailure::resource(
                 origin,
@@ -338,6 +423,35 @@ impl<'a> KindEnvironments<'a> {
     ) -> Result<(), KindFailure> {
         self.clear_declared();
         for parameter in parameters {
+            if !binder_kind_is_admitted(&parameter.kind, false) {
+                return Err(KindFailure::internal(
+                    parameter.origin.primary_span(),
+                    "this owner cannot bind an EffectRow parameter",
+                ));
+            }
+            self.insert_declared(
+                parameter.id,
+                &parameter.kind,
+                parameter.origin.primary_span(),
+                budget,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn install_scheme_parameters(
+        &mut self,
+        parameters: &'a [crate::resolved::ResolvedTypeVariable],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), KindFailure> {
+        self.clear_declared();
+        for parameter in parameters {
+            if !binder_kind_is_admitted(&parameter.kind, true) {
+                return Err(KindFailure::internal(
+                    parameter.origin.primary_span(),
+                    "EffectRow cannot occur beneath a kind arrow",
+                ));
+            }
             self.insert_declared(
                 parameter.id,
                 &parameter.kind,
@@ -352,10 +466,21 @@ impl<'a> KindEnvironments<'a> {
         &mut self,
         parameters: &'a [(TypeVariableId, Kind)],
         origin: Span,
+        allow_effect_row: bool,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), KindFailure> {
         self.clear_declared();
         for (identity, kind) in parameters {
+            if !binder_kind_is_admitted(kind, allow_effect_row) {
+                return Err(KindFailure::internal(
+                    origin,
+                    if allow_effect_row {
+                        "EffectRow cannot occur beneath a kind arrow"
+                    } else {
+                        "this owner cannot bind an EffectRow parameter"
+                    },
+                ));
+            }
             self.insert_declared(*identity, kind, origin, budget)?;
         }
         Ok(())
@@ -409,6 +534,14 @@ impl<'a> KindEnvironments<'a> {
         }
         self.clear_declared();
         for (parameter, source) in parameters.iter().zip(source_parameters) {
+            if !binder_kind_is_admitted(&parameter.kind, false)
+                || !binder_kind_is_admitted(&source.kind, false)
+            {
+                return Err(KindFailure::internal(
+                    span,
+                    "an implementation owner cannot bind an EffectRow parameter",
+                ));
+            }
             if parameter.id != source.id {
                 return Err(KindFailure::internal(
                     span,
@@ -718,7 +851,7 @@ impl<'a> KindEnvironments<'a> {
         span: Span,
         budget: &mut impl KindWorkLedger,
     ) -> Result<(), KindFailure> {
-        if !matches!(ty, Type::Function(_, _)) {
+        if ty.function_view().is_none() {
             return Err(KindFailure::internal(
                 span,
                 "a checked body-free interface method is not a function",
@@ -1289,6 +1422,25 @@ impl<'a> KindEnvironments<'a> {
         self.expect_value_type_parts(&resolved.ty, &resolved.provenance, resolved.span, budget)
     }
 
+    pub(crate) fn expect_computation_type(
+        &self,
+        value: &ResolvedType,
+        effects: &EffectRow,
+        effect_argument_provenance: &[ResolvedTypeProvenance],
+        effect_argument_roots: &[usize],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), KindFailure> {
+        self.expect_value_type(value, budget)?;
+        let mut ledger = SynthesisLedger::Resolved(budget);
+        self.authenticate_effect_row(
+            effects,
+            effect_argument_provenance,
+            effect_argument_roots,
+            value.span,
+            &mut ledger,
+        )
+    }
+
     pub(crate) fn expect_value_type_parts(
         &self,
         ty: &Type,
@@ -1547,6 +1699,489 @@ impl<'a> KindEnvironments<'a> {
         type_mirror: Option<&Type>,
         root_function_domain_mirror: Option<&Type>,
         allowed_variables: Option<&HashSet<TypeVariableId>>,
+        visited_variables: Option<&mut HashSet<TypeVariableId>>,
+        fallback_span: Span,
+        budget: &mut SynthesisLedger<'_>,
+    ) -> Result<KindFact<'environment>, KindFailure>
+    where
+        'a: 'environment,
+    {
+        self.authenticate_effect_rows(ty, provenance, fallback_span, budget)?;
+        self.synthesize_core_with_ledger(
+            ty,
+            provenance,
+            provenance.map(ResolvedTypeProvenance::root),
+            type_mirror,
+            root_function_domain_mirror,
+            allowed_variables,
+            visited_variables,
+            fallback_span,
+            budget,
+        )
+    }
+
+    fn authenticate_effect_rows<'environment>(
+        &'environment self,
+        ty: &Type,
+        provenance: Option<&ResolvedTypeProvenance>,
+        span: Span,
+        budget: &mut SynthesisLedger<'_>,
+    ) -> Result<(), KindFailure>
+    where
+        'a: 'environment,
+    {
+        let Some(effects) = &self.effects else {
+            return Ok(());
+        };
+        budget.charge(1).map_err(|()| {
+            KindFailure::resource(
+                span,
+                "effect-row authentication exceeded its owning work budget",
+            )
+        })?;
+        let mut pending = Vec::new();
+        pending.try_reserve(1).map_err(|_| {
+            KindFailure::resource(
+                span,
+                "effect-row authentication could not reserve traversal storage",
+            )
+        })?;
+        pending.push((ty, provenance.map(ResolvedTypeProvenance::root)));
+        self.authenticate_effect_type_queue(effects, provenance, span, budget, pending)
+    }
+
+    fn authenticate_effect_row<'environment>(
+        &'environment self,
+        row: &EffectRow,
+        argument_provenance: &[ResolvedTypeProvenance],
+        argument_roots: &[usize],
+        span: Span,
+        budget: &mut SynthesisLedger<'_>,
+    ) -> Result<(), KindFailure>
+    where
+        'a: 'environment,
+    {
+        if row.is_empty() {
+            if !argument_provenance.is_empty() || !argument_roots.is_empty() {
+                return Err(KindFailure::internal(
+                    span,
+                    "a pure computation retained effect-argument provenance",
+                ));
+            }
+            return Ok(());
+        }
+        self.authenticate_effect_row_tail(row, None, None, span, budget)?;
+        let Some(effects) = &self.effects else {
+            return Ok(());
+        };
+        let mut roots = argument_roots.iter();
+        for instance in row.known() {
+            budget.charge(1).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "effect-row identity lookup exceeded its owning work budget",
+                )
+            })?;
+            let parameters = effects.get(&instance.effect()).ok_or_else(|| {
+                KindFailure::internal(span, "an effect row names no canonical checked declaration")
+            })?;
+            if parameters.len() != instance.arguments().len() {
+                return Err(KindFailure::internal(
+                    span,
+                    "an effect row has the wrong canonical argument count",
+                ));
+            }
+            for (argument, parameter) in instance.arguments().iter().zip(parameters.iter()) {
+                let provenance = roots
+                    .next()
+                    .and_then(|root| argument_provenance.get(*root))
+                    .ok_or_else(|| {
+                        KindFailure::internal(
+                            span,
+                            "a computation row has incomplete effect-argument provenance",
+                        )
+                    })?;
+                let found = self.synthesize_with_ledger(
+                    argument,
+                    Some(provenance),
+                    None,
+                    None,
+                    None,
+                    None,
+                    span,
+                    budget,
+                )?;
+                let equal = same_kind_with_charge(&parameter.kind, found.kind, || budget.charge(1))
+                    .map_err(|()| {
+                        KindFailure::resource(
+                            found.occurrence,
+                            "effect-argument kind checking exceeded its owning work budget",
+                        )
+                    })?;
+                if !equal {
+                    let diagnostic_budget = budget.resolved_budget(found.occurrence)?;
+                    return Err(KindFailure::Source(Box::new(structured_error(
+                        KindReason::Argument,
+                        found.occurrence,
+                        "this effect argument has the wrong kind",
+                        &parameter.kind,
+                        found.kind,
+                        Some((
+                            parameter.origin.primary_span(),
+                            "the effect parameter kind is declared here",
+                        )),
+                        diagnostic_budget,
+                    )?)));
+                }
+            }
+        }
+        if roots.next().is_some() || argument_provenance.len() != argument_roots.len() {
+            return Err(KindFailure::internal(
+                span,
+                "a computation row has surplus effect-argument provenance",
+            ));
+        }
+        Ok(())
+    }
+
+    fn authenticate_effect_type_queue<'environment>(
+        &'environment self,
+        effects: &HashMap<crate::types::EffectId, &'a [crate::resolved::ResolvedTypeVariable]>,
+        provenance: Option<&ResolvedTypeProvenance>,
+        span: Span,
+        budget: &mut SynthesisLedger<'_>,
+        mut pending: Vec<(&Type, Option<usize>)>,
+    ) -> Result<(), KindFailure>
+    where
+        'a: 'environment,
+    {
+        while let Some((ty, root)) = pending.pop() {
+            budget.charge(1).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "effect-row authentication exceeded its owning work budget",
+                )
+            })?;
+            let node = match (provenance, root) {
+                (Some(provenance), Some(root)) => provenance.nodes().get(root),
+                (None, None) => None,
+                _ => {
+                    return Err(KindFailure::internal(
+                        span,
+                        "an effect-bearing type has mismatched provenance ownership",
+                    ));
+                }
+            };
+            match ty {
+                Type::Tuple(elements) => {
+                    let roots = match node {
+                        Some(ResolvedTypeProvenanceNode::Tuple {
+                            elements: roots, ..
+                        }) if roots.len() == elements.len() => Some(roots.as_ref()),
+                        Some(_) => {
+                            return Err(KindFailure::internal(
+                                span,
+                                "an effect-bearing tuple has incomplete provenance",
+                            ));
+                        }
+                        None => None,
+                    };
+                    budget.charge(elements.len()).map_err(|()| {
+                        KindFailure::resource(
+                            span,
+                            "effect-row authentication exceeded its owning work budget",
+                        )
+                    })?;
+                    pending.try_reserve(elements.len()).map_err(|_| {
+                        KindFailure::resource(
+                            span,
+                            "effect-row authentication could not reserve traversal storage",
+                        )
+                    })?;
+                    pending.extend(
+                        elements
+                            .iter()
+                            .enumerate()
+                            .map(|(index, element)| (element, roots.map(|roots| roots[index]))),
+                    );
+                }
+                Type::Application(function, argument) | Type::Function(function, argument) => {
+                    let (function_root, argument_root) = match (ty, node) {
+                        (
+                            Type::Application(_, _),
+                            Some(ResolvedTypeProvenanceNode::Application {
+                                function,
+                                argument,
+                                ..
+                            }),
+                        ) => (Some(*function), Some(*argument)),
+                        (
+                            Type::Function(_, _),
+                            Some(ResolvedTypeProvenanceNode::Function {
+                                domain,
+                                codomain,
+                                effect_arguments,
+                                ..
+                            }),
+                        ) if effect_arguments.is_empty() => (Some(*domain), Some(*codomain)),
+                        (_, Some(_)) => {
+                            return Err(KindFailure::internal(
+                                span,
+                                "an effect-bearing type has mismatched structural provenance",
+                            ));
+                        }
+                        (_, None) => (None, None),
+                    };
+                    budget.charge(2).map_err(|()| {
+                        KindFailure::resource(
+                            span,
+                            "effect-row authentication exceeded its owning work budget",
+                        )
+                    })?;
+                    pending.try_reserve(2).map_err(|_| {
+                        KindFailure::resource(
+                            span,
+                            "effect-row authentication could not reserve traversal storage",
+                        )
+                    })?;
+                    pending.push((function, function_root));
+                    pending.push((argument, argument_root));
+                }
+                Type::EffectfulFunction(domain, computation) => {
+                    let (domain_root, codomain_root, argument_roots) = match node {
+                        Some(ResolvedTypeProvenanceNode::Function {
+                            domain,
+                            codomain,
+                            effect_arguments,
+                            ..
+                        }) if effect_arguments.len() == computation.effect_argument_count() => (
+                            Some(*domain),
+                            Some(*codomain),
+                            Some(effect_arguments.as_ref()),
+                        ),
+                        Some(_) => {
+                            return Err(KindFailure::internal(
+                                span,
+                                "an effectful function has incomplete provenance",
+                            ));
+                        }
+                        None => (None, None, None),
+                    };
+                    self.authenticate_effect_row_into(
+                        computation.effects(),
+                        effects,
+                        provenance,
+                        argument_roots,
+                        span,
+                        budget,
+                        &mut pending,
+                    )?;
+                    budget.charge(2).map_err(|()| {
+                        KindFailure::resource(
+                            span,
+                            "effect-row authentication exceeded its owning work budget",
+                        )
+                    })?;
+                    pending.try_reserve(2).map_err(|_| {
+                        KindFailure::resource(
+                            span,
+                            "effect-row authentication could not reserve traversal storage",
+                        )
+                    })?;
+                    pending.push((domain, domain_root));
+                    pending.push((computation.value(), codomain_root));
+                }
+                Type::Forall(_, body) => {
+                    budget.charge(1).map_err(|()| {
+                        KindFailure::resource(
+                            span,
+                            "effect-row authentication exceeded its owning work budget",
+                        )
+                    })?;
+                    pending.try_reserve(1).map_err(|_| {
+                        KindFailure::resource(
+                            span,
+                            "effect-row authentication could not reserve traversal storage",
+                        )
+                    })?;
+                    pending.push((body, None));
+                }
+                Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Variable(_)
+                | Type::Inference(_)
+                | Type::Nominal(_) => {}
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn authenticate_effect_row_into<'environment, 'row>(
+        &'environment self,
+        row: &'row EffectRow,
+        effects: &HashMap<crate::types::EffectId, &'a [crate::resolved::ResolvedTypeVariable]>,
+        provenance: Option<&ResolvedTypeProvenance>,
+        argument_roots: Option<&[usize]>,
+        span: Span,
+        budget: &mut SynthesisLedger<'_>,
+        pending: &mut Vec<(&'row Type, Option<usize>)>,
+    ) -> Result<(), KindFailure>
+    where
+        'a: 'environment,
+    {
+        let mut roots = argument_roots.map(<[usize]>::iter);
+        for instance in row.known() {
+            budget.charge(1).map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "effect-row identity lookup exceeded its owning work budget",
+                )
+            })?;
+            let parameters = effects.get(&instance.effect()).ok_or_else(|| {
+                KindFailure::internal(span, "an effect row names no canonical checked declaration")
+            })?;
+            if parameters.len() != instance.arguments().len() {
+                return Err(KindFailure::internal(
+                    span,
+                    "an effect row has the wrong canonical argument count",
+                ));
+            }
+            for (argument, parameter) in instance.arguments().iter().zip(parameters.iter()) {
+                let argument_root = match roots.as_mut() {
+                    Some(roots) => Some(*roots.next().ok_or_else(|| {
+                        KindFailure::internal(
+                            span,
+                            "an effect row has incomplete argument provenance",
+                        )
+                    })?),
+                    None => None,
+                };
+                let found = self.synthesize_core_with_ledger(
+                    argument,
+                    provenance,
+                    argument_root,
+                    None,
+                    None,
+                    None,
+                    None,
+                    span,
+                    budget,
+                )?;
+                let equal = same_kind_with_charge(&parameter.kind, found.kind, || budget.charge(1))
+                    .map_err(|()| {
+                        KindFailure::resource(
+                            span,
+                            "effect-argument kind checking exceeded its owning work budget",
+                        )
+                    })?;
+                if !equal {
+                    if provenance.is_none() {
+                        return Err(KindFailure::internal(
+                            span,
+                            "an effect row argument has the wrong canonical kind",
+                        ));
+                    }
+                    let diagnostic_budget = budget.resolved_budget(found.occurrence)?;
+                    return Err(KindFailure::Source(Box::new(structured_error(
+                        KindReason::Argument,
+                        found.occurrence,
+                        "this effect argument has the wrong kind",
+                        &parameter.kind,
+                        found.kind,
+                        Some((
+                            parameter.origin.primary_span(),
+                            "the effect parameter kind is declared here",
+                        )),
+                        diagnostic_budget,
+                    )?)));
+                }
+                budget.charge(1).map_err(|()| {
+                    KindFailure::resource(
+                        span,
+                        "effect-row authentication exceeded its owning work budget",
+                    )
+                })?;
+                pending.try_reserve(1).map_err(|_| {
+                    KindFailure::resource(
+                        span,
+                        "effect-row authentication could not reserve traversal storage",
+                    )
+                })?;
+                pending.push((argument, argument_root));
+            }
+        }
+        if roots.is_some_and(|mut roots| roots.next().is_some()) {
+            return Err(KindFailure::internal(
+                span,
+                "an effect row has surplus argument provenance",
+            ));
+        }
+        Ok(())
+    }
+
+    fn authenticate_effect_row_tail<'environment>(
+        &'environment self,
+        row: &EffectRow,
+        allowed_variables: Option<&HashSet<TypeVariableId>>,
+        visited_variables: Option<&mut HashSet<TypeVariableId>>,
+        span: Span,
+        budget: &mut SynthesisLedger<'_>,
+    ) -> Result<(), KindFailure>
+    where
+        'a: 'environment,
+    {
+        let Some(tail) = row.tail() else {
+            return Ok(());
+        };
+        let fact = match tail.variable() {
+            crate::types::EffectRowVariable::Rigid(identity) => {
+                if allowed_variables.is_some_and(|allowed| !allowed.contains(&identity)) {
+                    return Err(KindFailure::internal(
+                        span,
+                        "an effect row references a non-owner tail",
+                    ));
+                }
+                if let Some(visited) = visited_variables {
+                    visited.insert(identity);
+                }
+                self.delta.get(&identity).ok_or_else(|| {
+                    KindFailure::internal(span, "an effect-row tail has no canonical binder kind")
+                })?
+            }
+            crate::types::EffectRowVariable::Inference(identity) => {
+                self.omega.get(&identity).ok_or_else(|| {
+                    KindFailure::internal(span, "an effect-row tail has no fixed inference kind")
+                })?
+            }
+        };
+        let is_row = same_kind_with_charge(fact.kind, &Kind::EffectRow, || budget.charge(1))
+            .map_err(|()| {
+                KindFailure::resource(
+                    span,
+                    "effect-row tail kind checking exceeded its work budget",
+                )
+            })?;
+        if is_row {
+            Ok(())
+        } else {
+            Err(KindFailure::internal(
+                span,
+                "an effect-row tail does not have kind EffectRow",
+            ))
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn synthesize_core_with_ledger<'environment>(
+        &'environment self,
+        ty: &Type,
+        provenance: Option<&ResolvedTypeProvenance>,
+        provenance_root: Option<usize>,
+        type_mirror: Option<&Type>,
+        root_function_domain_mirror: Option<&Type>,
+        allowed_variables: Option<&HashSet<TypeVariableId>>,
         mut visited_variables: Option<&mut HashSet<TypeVariableId>>,
         fallback_span: Span,
         budget: &mut SynthesisLedger<'_>,
@@ -1613,11 +2248,7 @@ impl<'a> KindEnvironments<'a> {
                 "kind-synthesis current-state retention exceeded its owning work budget",
             )
         })?;
-        let mut current = State::Visit(
-            ty,
-            type_mirror,
-            provenance.map(ResolvedTypeProvenance::root),
-        );
+        let mut current = State::Visit(ty, type_mirror, provenance_root);
         let mut root_function_domain_mirror = root_function_domain_mirror;
         let mut at_root = true;
         let mut work = Vec::<Continuation<'_, 'environment>>::new();
@@ -1893,12 +2524,24 @@ impl<'a> KindEnvironments<'a> {
                             );
                             State::Visit(function, function_mirror, function_root)
                         }
-                        Type::Function(domain, codomain) => {
+                        Type::Function(_, _) | Type::EffectfulFunction(_, _) => {
+                            let (domain, codomain) = match ty {
+                                Type::Function(domain, codomain) => {
+                                    (domain.as_ref(), codomain.as_ref())
+                                }
+                                Type::EffectfulFunction(domain, codomain) => {
+                                    (domain.as_ref(), codomain.value())
+                                }
+                                _ => unreachable!(),
+                            };
                             charge_synthesis_cell(span, budget)?;
                             let (mut domain_mirror, codomain_mirror) = match type_mirror {
                                 None => (None, None),
                                 Some(Type::Function(domain, codomain)) => {
                                     (Some(domain.as_ref()), Some(codomain.as_ref()))
+                                }
+                                Some(Type::EffectfulFunction(domain, codomain)) => {
+                                    (Some(domain.as_ref()), Some(codomain.value()))
                                 }
                                 Some(_) => {
                                     return Err(KindFailure::internal(
@@ -1907,6 +2550,34 @@ impl<'a> KindEnvironments<'a> {
                                     ));
                                 }
                             };
+                            if let Type::EffectfulFunction(_, computation) = ty {
+                                if let Some(Type::EffectfulFunction(_, mirror)) = type_mirror {
+                                    let equal = same_effect_rows_with_charge(
+                                        computation.effects(),
+                                        mirror.effects(),
+                                        |work| budget.charge(work),
+                                    )
+                                    .map_err(|()| {
+                                        KindFailure::resource(
+                                            span,
+                                            "computation-row authentication exceeded its owning work budget",
+                                        )
+                                    })?;
+                                    if !equal {
+                                        return Err(KindFailure::internal(
+                                            span,
+                                            "a linked source computation row does not match its checked row",
+                                        ));
+                                    }
+                                }
+                                self.authenticate_effect_row_tail(
+                                    computation.effects(),
+                                    allowed_variables,
+                                    visited_variables.as_deref_mut(),
+                                    span,
+                                    budget,
+                                )?;
+                            }
                             if domain_override.is_some() {
                                 if domain_mirror.is_some() {
                                     return Err(KindFailure::internal(
@@ -1920,8 +2591,19 @@ impl<'a> KindEnvironments<'a> {
                                 Some(ResolvedTypeProvenanceNode::Function {
                                     domain,
                                     codomain,
+                                    effect_arguments,
                                     ..
-                                }) => (Some(*domain), Some(*codomain)),
+                                }) if match ty {
+                                    Type::Function(_, _) => effect_arguments.is_empty(),
+                                    Type::EffectfulFunction(_, computation) => {
+                                        effect_arguments.len()
+                                            == computation.effect_argument_count()
+                                    }
+                                    _ => false,
+                                } =>
+                                {
+                                    (Some(*domain), Some(*codomain))
+                                }
                                 Some(_) => {
                                     return Err(KindFailure::internal(
                                         span,
@@ -2300,6 +2982,39 @@ pub(crate) fn canonical_body_free_environments<'a>(
                 pending.push(argument);
                 pending.push(function);
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                if let Some(tail) = codomain.effects().tail() {
+                    let crate::types::EffectRowVariable::Rigid(identity) = tail.variable() else {
+                        return Err(CanonicalEnvironmentFailure::InvalidState);
+                    };
+                    if !environments.contains_declared(identity) {
+                        discovery_budget
+                            .charge(1)
+                            .map_err(|()| CanonicalEnvironmentFailure::ConstraintResource)?;
+                        let parameter = registry
+                            .type_variable(identity)
+                            .ok_or(CanonicalEnvironmentFailure::InvalidState)?;
+                        environments
+                            .insert_declared(
+                                identity,
+                                &parameter.kind,
+                                parameter.origin.primary_span(),
+                                retention_budget,
+                            )
+                            .map_err(map_canonical_environment_retention_failure)?;
+                    }
+                }
+                let children = codomain.effect_argument_count().saturating_add(2);
+                discovery_budget
+                    .charge(children)
+                    .map_err(|()| CanonicalEnvironmentFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(children)
+                    .map_err(|_| CanonicalEnvironmentFailure::ConstraintResource)?;
+                codomain.extend_effect_arguments(&mut pending);
+                pending.push(codomain.value());
+                pending.push(domain);
+            }
             Type::Inference(_) | Type::Forall(_, _) => {
                 return Err(CanonicalEnvironmentFailure::InvalidState);
             }
@@ -2345,6 +3060,13 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
 ) -> Result<(), KindFailure> {
     authenticate_declaration_order(module, constructor_payload_provenance, budget)?;
     let mut environments = KindEnvironments::new();
+    environments.install_effects(
+        &module.registry,
+        &module.effects,
+        module.imported.effects(),
+        budget,
+        module.span,
+    )?;
     for nominal in module.registry.nominals() {
         let parameters = required_lookup(
             module.registry.canonical_nominal_parameters(nominal.id),
@@ -2530,6 +3252,15 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                 )?;
                 check_interface(interface, &module.registry, &mut environments, budget)?
             }
+            crate::resolved::ResolvedDeclarationIndex::Effect(index) => {
+                let effect = required_lookup(
+                    module.effects.get(index),
+                    module.span,
+                    "declaration order contains an invalid effect index",
+                    budget,
+                )?;
+                check_effect(effect, &module.registry, &mut environments, budget)?
+            }
             crate::resolved::ResolvedDeclarationIndex::Global(index) => {
                 let definition = required_lookup(
                     module.definitions.get(index),
@@ -2573,6 +3304,7 @@ fn authenticate_declaration_order(
 ) -> Result<(), KindFailure> {
     let mut next_type = 0;
     let mut next_interface = 0;
+    let mut next_effect = 0;
     let mut next_global = 0;
     let mut next_implementation = 0;
     for declaration in &module.declaration_order {
@@ -2591,6 +3323,11 @@ fn authenticate_declaration_order(
             crate::resolved::ResolvedDeclarationIndex::Interface(index) => {
                 let ordered = index == next_interface && index < module.interfaces.len();
                 next_interface = next_interface.saturating_add(1);
+                ordered
+            }
+            crate::resolved::ResolvedDeclarationIndex::Effect(index) => {
+                let ordered = index == next_effect && index < module.effects.len();
+                next_effect = next_effect.saturating_add(1);
                 ordered
             }
             crate::resolved::ResolvedDeclarationIndex::Global(index) => {
@@ -2620,6 +3357,7 @@ fn authenticate_declaration_order(
     })?;
     if next_type != module.registry.nominals().len()
         || next_interface != module.interfaces.len()
+        || next_effect != module.effects.len()
         || next_global != module.definitions.len()
         || next_implementation != module.implementations.len()
     {
@@ -2692,6 +3430,12 @@ fn authenticate_imported_environments<'a>(
             )?;
             environments.install_owner_parameters(&interface.parameters, budget)?;
             for parameter in method.type_parameters() {
+                if !binder_kind_is_admitted(&parameter.kind, false) {
+                    return Err(KindFailure::internal(
+                        parameter.origin.primary_span(),
+                        "an interface method cannot bind an EffectRow parameter",
+                    ));
+                }
                 environments.insert_declared(
                     parameter.id,
                     &parameter.kind,
@@ -2705,7 +3449,7 @@ fn authenticate_imported_environments<'a>(
 
     for global in imported.globals() {
         let span = global.origin.primary_span();
-        environments.install_owner_pairs(&global.scheme.type_parameters, span, budget)?;
+        environments.install_owner_pairs(&global.scheme.type_parameters, span, true, budget)?;
         environments.expect_body_free_value_type(&global.scheme.value_type, span, budget)?;
         for requirement in &global.scheme.requirements {
             environments.expect_body_free_interface_argument(
@@ -2738,6 +3482,7 @@ fn authenticate_imported_environments<'a>(
             environments.install_owner_pairs(
                 &method.scheme.type_parameters,
                 method.span,
+                false,
                 budget,
             )?;
             environments.expect_body_free_value_type(
@@ -2840,6 +3585,12 @@ fn check_interface<'a>(
         if method.has_explicit_type_parameters {
             environments.install_owner_parameters(&interface.parameters, budget)?;
             for parameter in &method.type_parameters {
+                if !binder_kind_is_admitted(&parameter.kind, false) {
+                    return Err(KindFailure::internal(
+                        parameter.origin.primary_span(),
+                        "an interface method cannot bind an EffectRow parameter",
+                    ));
+                }
                 environments.insert_declared(
                     parameter.id,
                     &parameter.kind,
@@ -2858,6 +3609,20 @@ fn check_interface<'a>(
             }
         }
         environments.expect_value_type(&method.annotation, budget)?;
+    }
+    Ok(DeclarationKindOutcome::Checked)
+}
+
+fn check_effect<'a>(
+    effect: &'a crate::resolved::ResolvedEffectDeclaration,
+    registry: &crate::resolved::ResolvedRegistry,
+    environments: &mut KindEnvironments<'a>,
+    budget: &mut TypeWorkBudget,
+) -> Result<DeclarationKindOutcome, KindFailure> {
+    authenticate_owner_parameters(registry, &effect.parameters, budget)?;
+    environments.install_owner_parameters(&effect.parameters, budget)?;
+    for operation in &effect.operations {
+        environments.expect_value_type(&operation.annotation, budget)?;
     }
     Ok(DeclarationKindOutcome::Checked)
 }
@@ -2994,7 +3759,8 @@ fn check_interface_application_kinds_in_owner_environments<'a>(
         })?;
         match *declaration {
             crate::resolved::ResolvedDeclarationIndex::Type(_)
-            | crate::resolved::ResolvedDeclarationIndex::Interface(_) => {}
+            | crate::resolved::ResolvedDeclarationIndex::Interface(_)
+            | crate::resolved::ResolvedDeclarationIndex::Effect(_) => {}
             crate::resolved::ResolvedDeclarationIndex::Global(index) => {
                 let definition = module.definitions.get(index).ok_or_else(|| {
                     KindFailure::internal(
@@ -3012,7 +3778,7 @@ fn check_interface_application_kinds_in_owner_environments<'a>(
                     }
                 };
                 authenticate_owner_parameters(&module.registry, parameters, budget)?;
-                environments.install_owner_parameters(parameters, budget)?;
+                environments.install_scheme_parameters(parameters, budget)?;
                 for requirement in requirements.iter() {
                     check(&requirement.application, environments, budget)?;
                 }
@@ -3037,6 +3803,12 @@ fn check_interface_application_kinds_in_owner_environments<'a>(
                 environments.install_owner_parameters(&implementation.head_parameters, budget)?;
                 check(&implementation.head, environments, budget)?;
                 for parameter in &implementation.prerequisite_only_parameters {
+                    if !binder_kind_is_admitted(&parameter.kind, false) {
+                        return Err(KindFailure::internal(
+                            parameter.origin.primary_span(),
+                            "this owner cannot bind an EffectRow parameter",
+                        ));
+                    }
                     environments.insert_declared(
                         parameter.id,
                         &parameter.kind,
@@ -3070,7 +3842,8 @@ fn visit_interface_applications(
         })?;
         match *declaration {
             crate::resolved::ResolvedDeclarationIndex::Type(_)
-            | crate::resolved::ResolvedDeclarationIndex::Interface(_) => {}
+            | crate::resolved::ResolvedDeclarationIndex::Interface(_)
+            | crate::resolved::ResolvedDeclarationIndex::Effect(_) => {}
             crate::resolved::ResolvedDeclarationIndex::Global(index) => {
                 let definition = module.definitions.get(index).ok_or_else(|| {
                     KindFailure::internal(
@@ -3120,7 +3893,7 @@ fn check_definition<'a>(
     match &definition.kind {
         ResolvedDefinitionKind::Equational(global) => {
             authenticate_owner_parameters(registry, &global.interface.type_parameters, budget)?;
-            environments.install_owner_parameters(&global.interface.type_parameters, budget)?;
+            environments.install_scheme_parameters(&global.interface.type_parameters, budget)?;
             environments.expect_value_type(&global.interface.annotation, budget)?;
             let mut determined = Vec::new();
             collect_type_variables(
@@ -3154,7 +3927,7 @@ fn check_definition<'a>(
         }
         ResolvedDefinitionKind::InlineOperational(global) => {
             authenticate_owner_parameters(registry, &global.header.type_parameters, budget)?;
-            environments.install_owner_parameters(&global.header.type_parameters, budget)?;
+            environments.install_scheme_parameters(&global.header.type_parameters, budget)?;
             let mut determined = Vec::new();
             for parameter in &global.header.parameters {
                 environments.expect_value_type(&parameter.annotation, budget)?;
@@ -3165,7 +3938,13 @@ fn check_definition<'a>(
                     budget,
                 )?;
             }
-            environments.expect_value_type(&global.header.result_type, budget)?;
+            environments.expect_computation_type(
+                &global.header.result_type,
+                &global.header.result_effects,
+                &global.header.result_effect_argument_provenance,
+                &global.header.result_effect_argument_roots,
+                budget,
+            )?;
             collect_type_variables(
                 &global.header.result_type.ty,
                 global.header.result_type.span,
@@ -3238,6 +4017,36 @@ fn collect_type_variables(
             Type::Application(function, argument) | Type::Function(function, argument) => {
                 push_determination_work(&mut work, argument, span, budget)?;
                 push_determination_work(&mut work, function, span, budget)?;
+            }
+            Type::EffectfulFunction(domain, codomain) => {
+                if let Some(tail) = codomain.effects().tail() {
+                    let crate::types::EffectRowVariable::Rigid(identity) = tail.variable() else {
+                        return Err(KindFailure::internal(
+                            span,
+                            "row inference entered global determination discovery",
+                        ));
+                    };
+                    if !contains_type_variable_with_budget(output, identity, span, budget)? {
+                        budget.charge(1).map_err(|()| {
+                            KindFailure::resource(
+                                span,
+                                "global row-tail determination retention exceeded its type-work budget",
+                            )
+                        })?;
+                        output.try_reserve(1).map_err(|_| {
+                            KindFailure::resource(
+                                span,
+                                "global row-tail determination could not reserve storage",
+                            )
+                        })?;
+                        output.push(identity);
+                    }
+                }
+                for argument in codomain.effect_arguments() {
+                    push_determination_work(&mut work, argument, span, budget)?;
+                }
+                push_determination_work(&mut work, codomain.value(), span, budget)?;
+                push_determination_work(&mut work, domain, span, budget)?;
             }
             Type::Forall(_, _) => {
                 return Err(KindFailure::internal(
@@ -3655,6 +4464,34 @@ fn check_expression_work<'a>(
                         budget,
                     )?;
                 }
+                ResolvedExprKind::Perform(request) => push_body_work(
+                    &mut work,
+                    BodyWork::Expression(&request.operand),
+                    request.operand.span,
+                    budget,
+                )?,
+                ResolvedExprKind::Handle(handler) => {
+                    for clause in handler.clauses.iter().rev() {
+                        push_body_work(
+                            &mut work,
+                            BodyWork::Expression(&clause.body),
+                            clause.body.span,
+                            budget,
+                        )?;
+                    }
+                    push_body_work(
+                        &mut work,
+                        BodyWork::Expression(&handler.body),
+                        handler.body.span,
+                        budget,
+                    )?;
+                }
+                ResolvedExprKind::Resume(resume) => push_body_work(
+                    &mut work,
+                    BodyWork::Expression(&resume.value),
+                    resume.value.span,
+                    budget,
+                )?,
                 ResolvedExprKind::Integer(_)
                 | ResolvedExprKind::Boolean(_)
                 | ResolvedExprKind::Unit
@@ -3802,7 +4639,7 @@ fn charge_kind_descendants_with_ledger(
         return charge_kind_descendants(kind, type_work);
     }
     match kind {
-        Kind::Type => Ok(()),
+        Kind::Type | Kind::EffectRow => Ok(()),
         Kind::Arrow(domain, codomain) => {
             charge_kind_with_charge(domain, || budget.charge(1))?;
             charge_kind_with_charge(codomain, || budget.charge(1))
@@ -3838,7 +4675,8 @@ fn authenticate_kind_descendants_with_ledger(
     let mut pending = Vec::new();
     loop {
         match current {
-            (Kind::Type, Kind::Type, None | Some(Kind::Type)) => {}
+            (Kind::Type, Kind::Type, None | Some(Kind::Type))
+            | (Kind::EffectRow, Kind::EffectRow, None | Some(Kind::EffectRow)) => {}
             (
                 Kind::Arrow(canonical_domain, canonical_codomain),
                 Kind::Arrow(first_domain, first_codomain),
@@ -3849,7 +4687,9 @@ fn authenticate_kind_descendants_with_ledger(
                     Some(Kind::Arrow(domain, codomain)) => {
                         (Some(domain.as_ref()), Some(codomain.as_ref()))
                     }
-                    Some(Kind::Type) => return Err(LinkedKindMirrorFailure::Mismatch),
+                    Some(Kind::Type | Kind::EffectRow) => {
+                        return Err(LinkedKindMirrorFailure::Mismatch);
+                    }
                 };
                 budget
                     .charge(1)
@@ -4934,6 +5774,7 @@ mod tests {
             direct_dependencies: Vec::new(),
             declaration_order: Vec::new(),
             interfaces: Vec::new(),
+            effects: Vec::new(),
             implementations: Vec::new(),
             definitions: Vec::new(),
             export_candidate: ResolvedExportCandidate::default(),
@@ -5126,6 +5967,118 @@ mod tests {
     }
 
     #[test]
+    fn effect_row_binders_are_limited_to_schemes_and_generalized_locals() {
+        let span = span();
+        let row = crate::resolved::ResolvedTypeVariable {
+            id: TypeVariableId::new(0),
+            spelling: "Effects".into(),
+            kind: Kind::EffectRow,
+            origin: Origin::Source(span),
+        };
+        let arrow = crate::resolved::ResolvedTypeVariable {
+            id: TypeVariableId::new(1),
+            spelling: "Constructor".into(),
+            kind: Kind::Arrow(Box::new(Kind::EffectRow), Box::new(Kind::Type)),
+            origin: Origin::Source(span),
+        };
+
+        let mut environments = KindEnvironments::new();
+        assert!(
+            environments
+                .install_scheme_parameters(
+                    std::slice::from_ref(&row),
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .is_ok(),
+            "global and eligible generalized-local schemes admit a root row binder",
+        );
+        assert!(
+            environments
+                .install_owner_parameters(
+                    std::slice::from_ref(&row),
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .is_err(),
+            "currently representable nominal, interface, and implementation owners share the restricted gate",
+        );
+        let method_parameters = [(row.id, Kind::EffectRow)];
+        assert!(
+            environments
+                .install_owner_pairs(
+                    &method_parameters,
+                    span,
+                    false,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .is_err(),
+            "method and implementation scheme mirrors remain restricted",
+        );
+        assert!(
+            environments
+                .install_scheme_parameters(
+                    std::slice::from_ref(&arrow),
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .is_err(),
+            "EffectRow is never admitted below a kind arrow",
+        );
+
+        // Effect and operation declaration carriers enter with their syntax
+        // checkpoint; that checkpoint must route them through the same
+        // restricted owner gate rather than the scheme gate above.
+    }
+
+    #[test]
+    fn implementation_prerequisite_only_parameters_reject_effect_rows_during_preflight() {
+        let span = span();
+        let module = ModuleId::new(0);
+        let row = ResolvedTypeVariable {
+            id: TypeVariableId::resolved(module, 1),
+            spelling: "Effects".into(),
+            kind: Kind::EffectRow,
+            origin: Origin::Source(span),
+        };
+        let (registry, interface) = method_fixture(span, Vec::new());
+        let interface_id = interface.id;
+        let implementation = ResolvedImplementation {
+            id: ImplId::new(module, 0),
+            public: false,
+            head: interface_application(interface_id, 1, span),
+            head_parameters: Box::new([]),
+            prerequisite_only_parameters: Box::new([row.clone()]),
+            prerequisites: Box::new([]),
+            method_groups: Box::new([]),
+            span,
+        };
+        let mut parts = empty_module_parts(span);
+        parts.registry = Arc::new(registry.with_additional_type_variables(vec![row]));
+        parts.interfaces = vec![interface];
+        parts.implementations = vec![implementation];
+        parts.declaration_order = vec![
+            ResolvedDeclarationIndex::Interface(0),
+            ResolvedDeclarationIndex::Implementation(0),
+        ];
+        let mut environments = KindEnvironments::new();
+        environments
+            .insert_interface(
+                interface_id,
+                &parts.interfaces[0].parameters,
+                span,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .expect("the fixture interface should install");
+
+        assert!(matches!(
+            preflight_interface_application_kinds(
+                &parts,
+                &mut environments,
+                &mut TypeWorkBudget::unbounded(),
+            ),
+            Err(KindFailure::Internal(_))
+        ));
+    }
+
+    #[test]
     fn body_free_interface_method_separates_allowed_variables_from_required_seed() {
         let span = span();
         let key = TypeVariableId::new(0);
@@ -5301,6 +6254,43 @@ mod tests {
                 Err(KindFailure::Internal(_))
             ));
         }
+    }
+
+    #[test]
+    fn body_free_interface_method_accepts_a_closed_effectful_function() {
+        let span = span();
+        let parameter = TypeVariableId::new(0);
+        let type_kind = Kind::Type;
+        let mut environments = KindEnvironments::new();
+        environments
+            .insert_declared(
+                parameter,
+                &type_kind,
+                span,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .expect("the interface parameter should install");
+        let method = Type::function_computation(
+            Type::Variable(parameter),
+            crate::types::ComputationType::new(
+                Type::Bool,
+                crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                    crate::types::EffectId::new(ModuleId::new(0), 0),
+                    Box::new([]),
+                )),
+            ),
+        );
+
+        environments
+            .expect_body_free_interface_method_with_ledger(
+                &method,
+                &[parameter],
+                BodyFreeInterfaceMethodSeed::AllInterfaceParameters,
+                &[],
+                span,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .expect("a closed latent row remains a valid method value type");
     }
 
     #[test]

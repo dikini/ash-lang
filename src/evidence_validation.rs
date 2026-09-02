@@ -17,6 +17,7 @@ use crate::{
         CheckedRequirement, ConstrainedScheme, EvidenceNode, EvidenceNodeId, EvidenceSelection,
         EvidenceSubstitution, ImplId, ImplMethodId, InterfaceApplication,
         InterfaceConstraintBudget, InterfaceId, MethodId, RequirementId, RequirementOwner,
+        same_type_with_constraint_budget as same_semantic_type_with_constraint_budget,
     },
     kind::{
         BodyFreeInterfaceMethodSeed, KindEnvironments, KindFailure, canonical_type_variable_kind,
@@ -2091,6 +2092,34 @@ fn collect_linked_constraint_variables(
     pending.push(root);
     while let Some(ty) = pending.pop() {
         charge(budget, 1, span)?;
+        if let Some(function) = ty.function_view() {
+            let effects = function.effects();
+            if effects.is_some_and(|effects| effects.tail().is_some()) {
+                return Err(unknown(span));
+            }
+            let mut effect_argument_count = 0usize;
+            if let Some(effects) = effects {
+                for member in effects.known() {
+                    charge(budget, 1, span)?;
+                    effect_argument_count = effect_argument_count
+                        .checked_add(member.arguments().len())
+                        .ok_or_else(|| resource(span))?;
+                }
+            }
+            let effect_arguments = effects
+                .into_iter()
+                .flat_map(|effects| effects.known())
+                .flat_map(|instance| instance.arguments());
+            let children = effect_argument_count
+                .checked_add(2)
+                .ok_or_else(|| resource(span))?;
+            charge(budget, children, span)?;
+            pending.try_reserve(children).map_err(|_| resource(span))?;
+            pending.extend(effect_arguments.rev());
+            pending.push(function.value());
+            pending.push(function.domain());
+            continue;
+        }
         match ty {
             Type::Variable(identity) => {
                 let mut retained = false;
@@ -2114,12 +2143,13 @@ fn collect_linked_constraint_variables(
                     .map_err(|_| resource(span))?;
                 pending.extend(elements.iter().rev());
             }
-            Type::Application(function, argument) | Type::Function(function, argument) => {
+            Type::Application(function, argument) => {
                 charge(budget, 2, span)?;
                 pending.try_reserve(2).map_err(|_| resource(span))?;
                 pending.push(argument);
                 pending.push(function);
             }
+            Type::Function(_, _) | Type::EffectfulFunction(_, _) => unreachable!(),
             Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
             Type::Inference(_) | Type::Forall(_, _) => return Err(unknown(span)),
         }
@@ -4072,6 +4102,17 @@ fn collect_method_evidence_expression_occurrences(
                 pending.extend(matched.arms.iter().rev().map(|arm| &arm.body));
                 pending.push(&matched.scrutinee);
             }
+            ResolvedExprKind::Perform(request) => pending.push(&request.operand),
+            ResolvedExprKind::Handle(handler) => {
+                let child_count = handler.clauses.len().saturating_add(1);
+                charge(constraint_work, child_count, expression.span)?;
+                pending
+                    .try_reserve(child_count)
+                    .map_err(|_| resource(expression.span))?;
+                pending.extend(handler.clauses.iter().rev().map(|clause| &clause.body));
+                pending.push(&handler.body);
+            }
+            ResolvedExprKind::Resume(resume) => pending.push(&resume.value),
         }
     }
     Ok(())
@@ -4198,6 +4239,7 @@ fn authenticate_linked_constructor_payloads<'a>(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LinkedBinderOwner {
     Nominal(NominalTypeId),
+    Effect(crate::types::EffectId),
     Interface(InterfaceId),
     Method(MethodId),
     Global(BinderId),
@@ -4300,6 +4342,41 @@ fn authenticate_linked_registry_facts(
     }
     if constructor_count != registry.constructors().len() {
         return Err(unknown(span));
+    }
+
+    for effect in registry.effects() {
+        charge(budget, 1, effect.span)?;
+        if !modules.contains(&effect.id.module())
+            || registry.effect(effect.id) != Some(effect)
+            || effect.operations.is_empty()
+        {
+            return Err(unknown(effect.span));
+        }
+        for parameter in &effect.parameters {
+            charge(budget, 1, parameter.origin.primary_span())?;
+            let canonical = registry
+                .type_variable(parameter.id)
+                .ok_or_else(|| unknown(parameter.origin.primary_span()))?;
+            if !same_binders_charged(
+                std::slice::from_ref(canonical),
+                std::slice::from_ref(parameter),
+                budget,
+                parameter.origin.primary_span(),
+            )? || owners
+                .insert(parameter.id, LinkedBinderOwner::Effect(effect.id))
+                .is_some()
+            {
+                return Err(unknown(parameter.origin.primary_span()));
+            }
+        }
+        for (ordinal, operation) in effect.operations.iter().enumerate() {
+            charge(budget, 1, operation.span)?;
+            if operation.id.owner() != effect.id
+                || usize::try_from(operation.id.operation()) != Ok(ordinal)
+            {
+                return Err(unknown(operation.span));
+            }
+        }
     }
 
     for group in program.groups() {
@@ -4481,6 +4558,7 @@ fn validate_occurrences<'a>(
                         .ok_or_else(|| resource(group.span()))?;
                 }
                 ResolvedDeclarationIndex::Type(_) => {}
+                ResolvedDeclarationIndex::Effect(_) => {}
                 ResolvedDeclarationIndex::Global(_)
                 | ResolvedDeclarationIndex::Implementation(_)
                 | ResolvedDeclarationIndex::Interface(_) => return Err(unknown(group.span())),
@@ -4718,6 +4796,14 @@ fn validate_pending_expressions<'a>(
                 pending.extend(matched.arms.iter().rev().map(|arm| &arm.body));
                 pending.push(matched.scrutinee.as_ref());
             }
+            ResolvedExprKind::Perform(request) => pending.push(request.operand.as_ref()),
+            ResolvedExprKind::Handle(handler) => {
+                let additional = handler.clauses.len().saturating_add(1);
+                reserve_expressions(pending, additional, budget, expression.span)?;
+                pending.extend(handler.clauses.iter().rev().map(|clause| &clause.body));
+                pending.push(handler.body.as_ref());
+            }
+            ResolvedExprKind::Resume(resume) => pending.push(resume.value.as_ref()),
         }
     }
     Ok(())
@@ -5458,6 +5544,67 @@ fn implementation_head_matches(
             }
             continue;
         }
+        match (candidate.function_view(), goal.function_view()) {
+            (Some(candidate_function), Some(goal_function)) => {
+                let effect_argument_count =
+                    match (candidate_function.effects(), goal_function.effects()) {
+                        (None, None) => 0,
+                        (Some(candidate_effects), Some(goal_effects))
+                            if candidate_effects.tail().is_none()
+                                && goal_effects.tail().is_none()
+                                && candidate_effects.known().len()
+                                    == goal_effects.known().len() =>
+                        {
+                            let mut arguments = 0usize;
+                            for (candidate_instance, goal_instance) in
+                                candidate_effects.known().iter().zip(goal_effects.known())
+                            {
+                                charge(budget, 1, span)?;
+                                if candidate_instance.effect() != goal_instance.effect()
+                                    || candidate_instance.arguments().len()
+                                        != goal_instance.arguments().len()
+                                {
+                                    return Ok(false);
+                                }
+                                arguments = arguments
+                                    .checked_add(candidate_instance.arguments().len())
+                                    .ok_or_else(|| resource(span))?;
+                            }
+                            arguments
+                        }
+                        _ => return Ok(false),
+                    };
+                reserve_type_pairs(
+                    &mut pending,
+                    effect_argument_count.saturating_add(2),
+                    budget,
+                    span,
+                )?;
+                if let (Some(candidate_effects), Some(goal_effects)) =
+                    (candidate_function.effects(), goal_function.effects())
+                {
+                    for (candidate_instance, goal_instance) in candidate_effects
+                        .known()
+                        .iter()
+                        .zip(goal_effects.known())
+                        .rev()
+                    {
+                        pending.extend(
+                            candidate_instance
+                                .arguments()
+                                .iter()
+                                .zip(goal_instance.arguments())
+                                .rev(),
+                        );
+                    }
+                }
+                pending.push((candidate_function.value(), goal_function.value()));
+                pending.push((candidate_function.domain(), goal_function.domain()));
+                continue;
+            }
+            (Some(_), None) | (None, Some(_)) => return Ok(false),
+            (None, None) => {}
+        }
         match (candidate, goal) {
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
@@ -5473,14 +5620,8 @@ fn implementation_head_matches(
                 reserve_type_pairs(&mut pending, left.len(), budget, span)?;
                 pending.extend(left.iter().zip(right).rev());
             }
-            (
-                Type::Function(left_domain, left_codomain),
-                Type::Function(right_domain, right_codomain),
-            ) => {
-                reserve_type_pairs(&mut pending, 2, budget, span)?;
-                pending.push((left_codomain, right_codomain));
-                pending.push((left_domain, right_domain));
-            }
+            (Type::Function(_, _), Type::Function(_, _))
+            | (Type::EffectfulFunction(_, _), Type::EffectfulFunction(_, _)) => unreachable!(),
             _ => return Ok(false),
         }
     }
@@ -5538,6 +5679,34 @@ fn validate_type_with_application_policy(
         match task {
             Task::Visit(ty) => {
                 charge(budget, 1, span)?;
+                if let Some(function) = ty.function_view() {
+                    let effects = function.effects();
+                    if effects.is_some_and(|effects| effects.tail().is_some()) {
+                        return Err(invalid_root(span));
+                    }
+                    let mut effect_argument_count = 0usize;
+                    if let Some(effects) = effects {
+                        for member in effects.known() {
+                            charge(budget, 1, span)?;
+                            effect_argument_count = effect_argument_count
+                                .checked_add(member.arguments().len())
+                                .ok_or_else(|| resource(span))?;
+                        }
+                    }
+                    let effect_arguments = effects
+                        .into_iter()
+                        .flat_map(|effects| effects.known())
+                        .flat_map(|instance| instance.arguments());
+                    let children = effect_argument_count
+                        .checked_add(2)
+                        .ok_or_else(|| resource(span))?;
+                    charge(budget, children, span)?;
+                    pending.try_reserve(children).map_err(|_| resource(span))?;
+                    pending.extend(effect_arguments.rev().map(Task::Visit));
+                    pending.push(Task::Visit(function.value()));
+                    pending.push(Task::Visit(function.domain()));
+                    continue;
+                }
                 match ty {
                     Type::Int | Type::Bool | Type::Unit => {}
                     Type::Nominal(id) => {
@@ -5562,12 +5731,7 @@ fn validate_type_with_application_policy(
                         pending.push(Task::Sequence(elements.iter()));
                     }
                     Type::Tuple(_) => return Err(invalid_root(span)),
-                    Type::Function(domain, codomain) => {
-                        charge(budget, 2, span)?;
-                        pending.try_reserve(2).map_err(|_| resource(span))?;
-                        pending.push(Task::Visit(codomain));
-                        pending.push(Task::Visit(domain));
-                    }
+                    Type::Function(_, _) | Type::EffectfulFunction(_, _) => unreachable!(),
                 }
             }
             Task::Sequence(mut remaining) => {
@@ -5589,39 +5753,7 @@ fn same_type_charged(
     budget: &mut InterfaceConstraintBudget,
     span: Span,
 ) -> Result<bool, EvidenceValidationFailure> {
-    let mut pending = Vec::new();
-    reserve_type_pairs(&mut pending, 1, budget, span)?;
-    pending.push((left, right));
-    while let Some((left, right)) = pending.pop() {
-        charge(budget, 1, span)?;
-        match (left, right) {
-            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
-            (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
-            (Type::Variable(left), Type::Variable(right)) if left == right => {}
-            (
-                Type::Application(left_function, left_argument),
-                Type::Application(right_function, right_argument),
-            ) => {
-                reserve_type_pairs(&mut pending, 2, budget, span)?;
-                pending.push((left_argument, right_argument));
-                pending.push((left_function, right_function));
-            }
-            (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
-                reserve_type_pairs(&mut pending, left.len(), budget, span)?;
-                pending.extend(left.iter().zip(right).rev());
-            }
-            (
-                Type::Function(left_domain, left_codomain),
-                Type::Function(right_domain, right_codomain),
-            ) => {
-                reserve_type_pairs(&mut pending, 2, budget, span)?;
-                pending.push((left_codomain, right_codomain));
-                pending.push((left_domain, right_domain));
-            }
-            _ => return Ok(false),
-        }
-    }
-    Ok(true)
+    same_semantic_type_with_constraint_budget(left, right, budget).map_err(|()| resource(span))
 }
 
 fn same_binders_charged(
@@ -5799,12 +5931,18 @@ fn substitute_evidence_type(
     budget: &mut InterfaceConstraintBudget,
     span: Span,
 ) -> Result<Type, EvidenceValidationFailure> {
+    struct RowShape {
+        known: Box<[(crate::types::EffectId, usize)]>,
+        argument_count: usize,
+    }
+
     enum Task<'a> {
         Visit(&'a Type, bool),
         Sequence(std::slice::Iter<'a, Type>, bool),
         FinishTuple(usize),
         FinishApplication,
         FinishFunction,
+        FinishEffectfulFunction(RowShape),
     }
 
     let mut work = Vec::new();
@@ -5852,12 +5990,54 @@ fn substitute_evidence_type(
                 work.push(Task::Visit(argument, substitute));
                 work.push(Task::Visit(function, substitute));
             }
-            Task::Visit(Type::Function(domain, codomain), substitute) => {
-                charge(budget, 3, span)?;
-                work.try_reserve(3).map_err(|_| resource(span))?;
-                work.push(Task::FinishFunction);
-                work.push(Task::Visit(codomain, substitute));
-                work.push(Task::Visit(domain, substitute));
+            Task::Visit(ty, substitute) if ty.function_view().is_some() => {
+                let function = ty
+                    .function_view()
+                    .expect("the guarded evidence type has a semantic function view");
+                let Some(effects) = function.effects() else {
+                    charge(budget, 3, span)?;
+                    work.try_reserve(3).map_err(|_| resource(span))?;
+                    work.push(Task::FinishFunction);
+                    work.push(Task::Visit(function.value(), substitute));
+                    work.push(Task::Visit(function.domain(), substitute));
+                    continue;
+                };
+                if effects.tail().is_some() {
+                    return Err(invalid_root(span));
+                }
+                let mut known = Vec::new();
+                let mut argument_count = 0usize;
+                for instance in effects.known() {
+                    charge(budget, 1, span)?;
+                    argument_count = argument_count
+                        .checked_add(instance.arguments().len())
+                        .ok_or_else(|| resource(span))?;
+                    known.try_reserve(1).map_err(|_| resource(span))?;
+                    known.push((instance.effect(), instance.arguments().len()));
+                }
+                let known = known.into_boxed_slice();
+                let tasks = argument_count
+                    .checked_add(3)
+                    .ok_or_else(|| resource(span))?;
+                charge(budget, tasks, span)?;
+                work.try_reserve(tasks).map_err(|_| resource(span))?;
+                work.push(Task::FinishEffectfulFunction(RowShape {
+                    known,
+                    argument_count,
+                }));
+                for argument in effects
+                    .known()
+                    .iter()
+                    .flat_map(|instance| instance.arguments())
+                    .rev()
+                {
+                    work.push(Task::Visit(argument, substitute));
+                }
+                work.push(Task::Visit(function.value(), substitute));
+                work.push(Task::Visit(function.domain(), substitute));
+            }
+            Task::Visit(Type::Function(_, _) | Type::EffectfulFunction(_, _), _) => {
+                unreachable!("function variants have a semantic function view")
             }
             Task::Sequence(mut remaining, substitute) => {
                 if let Some(next) = remaining.next() {
@@ -5897,6 +6077,53 @@ fn substitute_evidence_type(
                 rebuilt.push(Type::Function(
                     Box::new(domain.into_inner()),
                     Box::new(codomain.into_inner()),
+                ));
+            }
+            Task::FinishEffectfulFunction(shape) => {
+                if rebuilt.len() < shape.argument_count.saturating_add(2) {
+                    return Err(invalid_root(span));
+                }
+                reserve_rebuilt_type(&mut rebuilt, budget, span)?;
+                charge(budget, shape.argument_count, span)?;
+                let mut arguments = TypeBuffer::new();
+                arguments
+                    .try_reserve(shape.argument_count)
+                    .map_err(|_| resource(span))?;
+                for _ in 0..shape.argument_count {
+                    let argument = rebuilt.pop_owned().ok_or_else(|| invalid_root(span))?;
+                    arguments.push(argument.into_inner());
+                }
+                let mut known = Vec::new();
+                charge(budget, shape.known.len(), span)?;
+                known
+                    .try_reserve(shape.known.len())
+                    .map_err(|_| resource(span))?;
+                for (effect, count) in shape.known {
+                    charge(budget, count, span)?;
+                    let mut instance_arguments = TypeBuffer::new();
+                    instance_arguments
+                        .try_reserve(count)
+                        .map_err(|_| resource(span))?;
+                    for _ in 0..count {
+                        let argument = arguments.pop_owned().ok_or_else(|| invalid_root(span))?;
+                        instance_arguments.push(argument.into_inner());
+                    }
+                    known.push(crate::types::EffectInstance::new(
+                        effect,
+                        instance_arguments.into_boxed_slice(),
+                    ));
+                }
+                if arguments.len() != 0 {
+                    return Err(invalid_root(span));
+                }
+                let codomain = rebuilt.pop_owned().ok_or_else(|| invalid_root(span))?;
+                let domain = rebuilt.pop_owned().ok_or_else(|| invalid_root(span))?;
+                rebuilt.push(Type::function_computation(
+                    domain.into_inner(),
+                    crate::types::ComputationType::new(
+                        codomain.into_inner(),
+                        crate::types::EffectRow::closed(known.into_boxed_slice()),
+                    ),
                 ));
             }
         }
@@ -8831,6 +9058,194 @@ mod tests {
             fact.span,
         )
         .expect("the fixture head should instantiate within the default budget")
+    }
+
+    #[test]
+    fn linked_evidence_walkers_accept_closed_effectful_arguments_and_reject_open_tails() {
+        let program = entry_program("main : Unit -> Unit\nmain () = ()\n");
+        let span = program.result().span;
+        let parameter = TypeVariableId::new(0);
+        let effect = crate::types::EffectId::new(ModuleId::new(77), 0);
+        let closed = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Bool,
+                crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                    effect,
+                    Box::new([Type::Int]),
+                )),
+            ),
+        );
+
+        validate_type_with_application_policy(
+            &closed,
+            program.registry(),
+            &[],
+            &mut InterfaceConstraintBudget::default(),
+            span,
+        )
+        .expect("closed effectful values are valid linked interface arguments");
+        let closed_with_variable = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Bool,
+                crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                    effect,
+                    Box::new([Type::Variable(parameter)]),
+                )),
+            ),
+        );
+        let mut variables = Vec::new();
+        collect_linked_constraint_variables(
+            &closed_with_variable,
+            &mut variables,
+            &mut InterfaceConstraintBudget::default(),
+            span,
+        )
+        .expect("closed row arguments contribute their ordinary variables");
+        assert_eq!(variables, [parameter]);
+        assert!(
+            same_type_charged(
+                &closed,
+                &closed,
+                &mut InterfaceConstraintBudget::default(),
+                span,
+            )
+            .expect("closed effectful equality should authenticate")
+        );
+        let substituted = substitute_evidence_type(
+            &closed_with_variable,
+            &single_substitution(parameter, &Type::Int),
+            &mut InterfaceConstraintBudget::default(),
+            span,
+        )
+        .expect("evidence substitution should traverse closed row arguments");
+        assert_eq!(
+            substituted,
+            Type::function_computation(
+                Type::Unit,
+                crate::types::ComputationType::new(
+                    Type::Bool,
+                    crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                        effect,
+                        Box::new([Type::Int]),
+                    )),
+                ),
+            )
+        );
+
+        let open = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Bool,
+                crate::types::EffectRow::open(
+                    crate::types::EffectRowVariable::rigid(parameter),
+                    Box::new([]),
+                ),
+            ),
+        );
+        assert_eq!(
+            validate_type_with_application_policy(
+                &open,
+                program.registry(),
+                &[],
+                &mut InterfaceConstraintBudget::default(),
+                span,
+            )
+            .expect_err("an open row tail is invalid in a linked interface argument")
+            .reason(),
+            EvidenceValidationReason::InvalidEvidenceRoot
+        );
+    }
+
+    #[test]
+    fn nullary_closed_row_evidence_work_is_proportional_exact_and_retryable() {
+        const NARROW: u32 = 1;
+        const WIDE: u32 = 8;
+        let program = entry_program("main : Unit -> Unit\nmain () = ()\n");
+        let span = program.result().span;
+        let closed = |width| {
+            let members = (0..width)
+                .map(|declaration| {
+                    crate::types::EffectInstance::new(
+                        crate::types::EffectId::new(ModuleId::new(77), declaration),
+                        Box::new([]),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            Type::function_computation(
+                Type::Unit,
+                crate::types::ComputationType::new(
+                    Type::Bool,
+                    crate::types::EffectRow::closed(members),
+                ),
+            )
+        };
+        let exercise = |ty: &Type, budget: &mut InterfaceConstraintBudget| {
+            validate_type_with_application_policy(ty, program.registry(), &[], budget, span)?;
+            let mut variables = Vec::new();
+            collect_linked_constraint_variables(ty, &mut variables, budget, span)?;
+            if !same_type_charged(ty, ty, budget, span)? {
+                return Err(invalid_root(span));
+            }
+            substitute_evidence_type(ty, &[], budget, span)?;
+            Ok::<(), EvidenceValidationFailure>(())
+        };
+
+        let mut narrow_work = InterfaceConstraintBudget::default();
+        exercise(&closed(NARROW), &mut narrow_work).expect("the narrow row should fit");
+        let mut measured = InterfaceConstraintBudget::default();
+        let wide = closed(WIDE);
+        exercise(&wide, &mut measured).expect("the measured wide row should fit");
+        let exact = measured.used();
+        assert_eq!(
+            exact - narrow_work.used(),
+            5 * (WIDE - NARROW) as usize,
+            "each nullary member owns equality, collection, validation, shape, and retained-member work"
+        );
+
+        let mut one_short = InterfaceConstraintBudget::with_limit(exact - 1);
+        assert_eq!(
+            exercise(&wide, &mut one_short)
+                .expect_err("one short must reject before returning evidence")
+                .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted
+        );
+        let mut retry = InterfaceConstraintBudget::with_limit(exact);
+        exercise(&wide, &mut retry).expect("the exact ledger should retry successfully");
+        assert_eq!(retry.used(), exact);
+
+        let late_mismatch = closed(WIDE - 1);
+        let Type::EffectfulFunction(domain, computation) = late_mismatch else {
+            panic!("the fixture is effectful")
+        };
+        let mut members = computation.effects().known().to_vec();
+        members.push(crate::types::EffectInstance::new(
+            crate::types::EffectId::new(ModuleId::new(77), 99),
+            Box::new([]),
+        ));
+        let late_mismatch = Type::function_computation(
+            *domain,
+            crate::types::ComputationType::new(
+                computation.value().clone(),
+                crate::types::EffectRow::closed(members.into_boxed_slice()),
+            ),
+        );
+        let mismatch_work = WIDE as usize + 2;
+        let mut mismatch_short = InterfaceConstraintBudget::with_limit(mismatch_work - 1);
+        assert_eq!(
+            same_type_charged(&wide, &late_mismatch, &mut mismatch_short, span)
+                .expect_err("one short must fail before the late member comparison")
+                .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted
+        );
+        let mut mismatch_exact = InterfaceConstraintBudget::with_limit(mismatch_work);
+        assert_eq!(
+            same_type_charged(&wide, &late_mismatch, &mut mismatch_exact, span),
+            Ok(false)
+        );
+        assert_eq!(mismatch_exact.used(), mismatch_work);
     }
 
     fn forged_fresh_current_node(
@@ -12382,6 +12797,47 @@ mod tests {
             group.span(),
         )
         .expect("the exact node-validation budget should fit");
+    }
+
+    #[test]
+    fn linked_selection_accepts_a_specific_closed_effectful_implementation_head() {
+        let mut program = generic_program();
+        let module = program.groups()[0].module();
+        let closed = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Bool,
+                crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                    crate::types::EffectId::new(module, 0),
+                    Box::new([Type::Int]),
+                )),
+            ),
+        );
+        let registry =
+            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
+                .expect(
+                    "the linked registry should authenticate before the retained head mutation",
+                );
+        assert!(program.replace_first_implementation_argument_for_test(module, closed.clone()));
+        let group = &program.groups()[0];
+        let fact = &group.implementation_facts()[0];
+        let methods = fact
+            .methods
+            .iter()
+            .map(|method| method.id)
+            .collect::<Vec<_>>();
+        let selection =
+            implementation_selection_for_argument(fact.id, fact.interface(), &methods, closed);
+        validate_selection(
+            &program,
+            &registry,
+            group,
+            &selection,
+            fact.interface(),
+            &mut InterfaceConstraintBudget::default(),
+            group.span(),
+        )
+        .expect("the selected specific closed-effect head should match its linked goal");
     }
 
     #[test]

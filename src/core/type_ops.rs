@@ -2,7 +2,8 @@
 
 use super::NodeId;
 use crate::types::{
-    Kind, NominalTypeId, Type, TypeVariableId, discard_type_iteratively, replace_type_iteratively,
+    EffectRow, Kind, NominalTypeId, Type, TypeVariableId, discard_type_iteratively,
+    replace_type_iteratively,
 };
 
 /// The direction of one explicit module-newtype representation conversion.
@@ -91,13 +92,30 @@ impl TypeAbstractionNode {
 pub struct TypeApplicationNode {
     function: NodeId,
     arguments: Box<[Type]>,
+    row_arguments: Box<[EffectRow]>,
 }
 
 impl TypeApplicationNode {
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "validation and transform tests construct pure type applications directly"
+        )
+    )]
     pub(crate) fn new(function: NodeId, arguments: Vec<Type>) -> Self {
+        Self::new_with_row_arguments(function, arguments, Vec::new())
+    }
+
+    pub(crate) fn new_with_row_arguments(
+        function: NodeId,
+        arguments: Vec<Type>,
+        row_arguments: Vec<EffectRow>,
+    ) -> Self {
         Self {
             function,
             arguments: arguments.into_boxed_slice(),
+            row_arguments: row_arguments.into_boxed_slice(),
         }
     }
 
@@ -113,6 +131,12 @@ impl TypeApplicationNode {
         &self.arguments
     }
 
+    /// Returns the ordered complete effect-row arguments.
+    #[must_use]
+    pub fn row_arguments(&self) -> &[EffectRow] {
+        &self.row_arguments
+    }
+
     pub(super) fn rewrite_types<F>(&mut self, rewrite: &mut F) -> Result<(), super::BuildError>
     where
         F: FnMut(&Type) -> Result<Type, super::BuildError>,
@@ -124,9 +148,23 @@ impl TypeApplicationNode {
         Ok(())
     }
 
+    pub(super) fn rewrite_row_arguments<F>(
+        &mut self,
+        rewrite: &mut F,
+    ) -> Result<(), super::BuildError>
+    where
+        F: FnMut(&EffectRow) -> Result<EffectRow, super::BuildError>,
+    {
+        for argument in &mut self.row_arguments {
+            *argument = rewrite(argument)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn discard_metadata(self) {
         for argument in self.arguments.into_vec() {
             discard_type_iteratively(argument);
         }
+        drop(self.row_arguments);
     }
 }

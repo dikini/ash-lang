@@ -19,10 +19,14 @@ for later suspension, concurrency, proofs, and existentials?
 
 ## Current context
 
-The current [specification](../../spec/README.md) is normative. Ash is pure,
-rank-1, and passively linked. Module structure and interface selection erase
-before evaluation. Ash has no effect rows, handlers, source continuations,
-resource lifetimes, runtime interface lookup, or dynamic module loading.
+At this design note's original planning boundary, the
+[specification](../../spec/README.md) defined pure, rank-1, passively linked
+Ash. Module structure and interface selection erased before evaluation, and
+Ash had no effect rows, handlers, source continuations, resource lifetimes,
+runtime interface lookup, or dynamic module loading. The completed
+module-`newtype` and resume-required effect-kernel checkpoints supersede the
+first parts of that historical inventory on this integration branch; neither
+checkpoint is current on `main` yet.
 
 [DN-0026](DN-0026-effect-ash-resource-first-milestones.md) supplies the
 resource-first decomposition. It remains exploratory evidence. This note
@@ -31,17 +35,17 @@ records the current program-level planning direction under the repository's
 candidate semantics into current Ash.
 
 [AD-0007](../decisions/AD-0007-typed-core-dialects.md) requires closed typed
-Core dialects and an operation-family boundary. Production Core is still a
-pure-specific dialect; the generic operation-family form currently exists only
-as an architecture probe. [AD-0008](../decisions/AD-0008-explicit-evaluator-machine.md)
-provides an explicit stack-safe evaluator machine, but its frames are
+Core dialects and an operation-family boundary. The effect-kernel checkpoint
+uses that boundary while retaining the closed Pure dialect.
+[AD-0008](../decisions/AD-0008-explicit-evaluator-machine.md) provides the
+explicit stack-safe evaluator machine used by the kernel; its frames remain
 implementation state rather than source-language continuations.
 
-The existing nominal carrier identifies module declarations. It has no lexical
-or runtime-fresh identity class. The existing semantic type algebra has no
-effect-row form. The current evidence plan has abstract and implementation
-sources, but no authenticated lexical exact-evidence source. These are product
-gaps, not permissions to choose representations in a task.
+The retained nominal carrier identifies module declarations but has no lexical
+or runtime-fresh identity class. The kernel adds the bounded effect-row form,
+not local exact-evidence authority. Authenticated lexical exact evidence and
+the later identity classes remain product gaps, not permissions to choose
+representations in a task.
 
 ## Closure boundary
 
@@ -284,15 +288,15 @@ At this design note's original planning boundary, the programme had not chosen
 `newtype` grammar or escape, row algebra or inference, handler syntax or
 forwarding rules, capture classification, resource acquisition syntax,
 hook-chain mutation observation, cleanup order or failure combination, or the
-foreign representation. Accepted CP-0012 and the product-branch specification
-now choose module-`newtype` grammar and semantics without choosing local or
-runtime-fresh identity.
+foreign representation. The completed module-`newtype` and resume-required
+effect-kernel product checkpoints now resolve the first two bounded questions;
+this integration branch combines them without making either checkpoint current
+on `main`.
 
-After separately authorized integration, the next planning question is which
-exact local-`newtype` identity, scope, and escape semantics provide useful
-evidence for resource scope without importing runtime identity, resources,
-effects, or existentials. The later questions remain owned by their proposal
-capsules.
+The next planning questions are the exact local-`newtype` identity, scope, and
+escape semantics, scoped exact evidence, and capture and checked-discard rules
+needed before safe resource scope. The later questions remain owned by their
+proposal capsules.
 
 ## Supporting evidence
 

@@ -21,10 +21,10 @@ use crate::{
     module::ModuleId,
     source::{Origin, Span, discard_origin_iteratively},
     types::{
-        ConstructorId, IterativeTypeOwner, Kind, NominalTypeId, Type, TypeVariableId,
-        TypeWorkBudget, charge_kind_with_charge, charge_type_cells, clone_arrows_with_budget,
-        clone_kind_with_budget, clone_type_with_budget, discard_type_iteratively,
-        same_kind_with_charge,
+        ConstructorId, EffectId, EffectRow, EffectRowVariable, IterativeTypeOwner, Kind,
+        NominalTypeId, OperationId, Type, TypeVariableId, TypeWorkBudget, charge_kind_with_charge,
+        charge_type_cells, clone_arrows_with_budget, clone_kind_with_budget,
+        clone_type_with_budget, discard_type_iteratively, same_kind_with_charge,
     },
 };
 
@@ -180,6 +180,8 @@ pub enum ResolvedDeclarationIndex {
     Type(usize),
     /// An interface declaration.
     Interface(usize),
+    /// An effect declaration.
+    Effect(usize),
     /// An ordinary global definition.
     Global(usize),
     /// An implementation declaration.
@@ -223,6 +225,7 @@ pub struct ResolvedModule {
     direct_dependencies: Box<[DirectDependencyRoute]>,
     declaration_order: Box<[ResolvedDeclarationIndex]>,
     interfaces: Box<[ResolvedInterfaceDeclaration]>,
+    effects: Box<[ResolvedEffectDeclaration]>,
     implementations: Box<[ResolvedImplementation]>,
     definitions: Box<[ResolvedDefinition]>,
     export_candidate: ResolvedExportCandidate,
@@ -236,6 +239,7 @@ pub(crate) struct ResolvedModuleParts {
     pub direct_dependencies: Vec<DirectDependencyRoute>,
     pub declaration_order: Vec<ResolvedDeclarationIndex>,
     pub interfaces: Vec<ResolvedInterfaceDeclaration>,
+    pub effects: Vec<ResolvedEffectDeclaration>,
     pub implementations: Vec<ResolvedImplementation>,
     pub definitions: Vec<ResolvedDefinition>,
     pub export_candidate: ResolvedExportCandidate,
@@ -251,6 +255,7 @@ impl ResolvedModule {
             direct_dependencies: std::mem::take(&mut parts.direct_dependencies).into_boxed_slice(),
             declaration_order: std::mem::take(&mut parts.declaration_order).into_boxed_slice(),
             interfaces: std::mem::take(&mut parts.interfaces).into_boxed_slice(),
+            effects: std::mem::take(&mut parts.effects).into_boxed_slice(),
             implementations: std::mem::take(&mut parts.implementations).into_boxed_slice(),
             definitions: std::mem::take(&mut parts.definitions).into_boxed_slice(),
             export_candidate: std::mem::take(&mut parts.export_candidate),
@@ -293,6 +298,12 @@ impl ResolvedModule {
         &self.interfaces
     }
 
+    /// Returns local effect declarations in category-local source order.
+    #[must_use]
+    pub const fn effects(&self) -> &[ResolvedEffectDeclaration] {
+        &self.effects
+    }
+
     /// Returns local implementation declarations in category-local source order.
     #[must_use]
     pub const fn implementations(&self) -> &[ResolvedImplementation] {
@@ -307,6 +318,10 @@ impl ResolvedModule {
 
     fn take_interfaces(&mut self) -> Box<[ResolvedInterfaceDeclaration]> {
         std::mem::take(&mut self.interfaces)
+    }
+
+    fn take_effects(&mut self) -> Box<[ResolvedEffectDeclaration]> {
+        std::mem::take(&mut self.effects)
     }
 
     /// Moves resolved globals across a successful checker-owned transition.
@@ -360,6 +375,9 @@ impl Drop for ResolvedModuleParts {
         for interface in self.interfaces.drain(..) {
             discard_resolved_interface_iteratively(interface);
         }
+        for effect in self.effects.drain(..) {
+            discard_resolved_effect_iteratively(effect);
+        }
         for definition in self.definitions.drain(..) {
             discard_resolved_definition_iteratively(definition);
         }
@@ -373,6 +391,9 @@ impl Drop for ResolvedModule {
     fn drop(&mut self) {
         for interface in self.take_interfaces().into_vec() {
             discard_resolved_interface_iteratively(interface);
+        }
+        for effect in self.take_effects().into_vec() {
+            discard_resolved_effect_iteratively(effect);
         }
         for definition in self.take_definitions().into_vec() {
             discard_resolved_definition_iteratively(definition);
@@ -784,6 +805,8 @@ pub struct CheckedModule {
     direct_dependencies: Box<[DirectDependencyRoute]>,
     declaration_order: Box<[ResolvedDeclarationIndex]>,
     interfaces: Box<[ResolvedInterfaceDeclaration]>,
+    effects: Box<[ResolvedEffectDeclaration]>,
+    imported_effects: Box<[ResolvedEffectDeclaration]>,
     implementations: Box<[CheckedImplementationBody]>,
     definitions: Box<[CheckedDefinition]>,
     available_implementations: Box<[AvailableImplementation]>,
@@ -820,6 +843,8 @@ impl CheckedModule {
             direct_dependencies: std::mem::take(&mut resolved.direct_dependencies),
             declaration_order: std::mem::take(&mut resolved.declaration_order),
             interfaces: std::mem::take(&mut resolved.interfaces),
+            effects: std::mem::take(&mut resolved.effects),
+            imported_effects: std::mem::take(&mut resolved.imported).into_effects(),
             implementations: parts.implementations,
             definitions: parts.definitions,
             available_implementations: parts.available_implementations,
@@ -861,6 +886,21 @@ impl CheckedModule {
     #[must_use]
     pub const fn interfaces(&self) -> &[ResolvedInterfaceDeclaration] {
         &self.interfaces
+    }
+
+    /// Returns checked local effect declarations in source order.
+    #[must_use]
+    pub const fn effects(&self) -> &[ResolvedEffectDeclaration] {
+        &self.effects
+    }
+
+    /// Looks up one local or selected imported canonical effect fact.
+    #[must_use]
+    pub fn effect(&self, id: EffectId) -> Option<&ResolvedEffectDeclaration> {
+        self.effects
+            .iter()
+            .chain(self.imported_effects.iter())
+            .find(|effect| effect.id == id)
     }
 
     /// Returns local implementations retained for interface checking.
@@ -954,6 +994,12 @@ impl Drop for CheckedModule {
     fn drop(&mut self) {
         for interface in std::mem::take(&mut self.interfaces).into_vec() {
             discard_resolved_interface_iteratively(interface);
+        }
+        for effect in std::mem::take(&mut self.effects).into_vec() {
+            discard_resolved_effect_iteratively(effect);
+        }
+        for effect in std::mem::take(&mut self.imported_effects).into_vec() {
+            discard_resolved_effect_iteratively(effect);
         }
         for checked in self.schemes.drain(..) {
             drop(checked.scheme);
@@ -2558,7 +2604,10 @@ impl ResolvedModuleProgram {
                 | ResolvedExprKind::Equal(_)
                 | ResolvedExprKind::Block(_)
                 | ResolvedExprKind::Function(_)
-                | ResolvedExprKind::Match(_) => None,
+                | ResolvedExprKind::Match(_)
+                | ResolvedExprKind::Perform(_)
+                | ResolvedExprKind::Handle(_)
+                | ResolvedExprKind::Resume(_) => None,
             })
         else {
             return false;
@@ -3590,6 +3639,8 @@ pub struct ImportedFacts {
     constructors: HashMap<ConstructorId, ImportedConstructorFact>,
     interfaces: Vec<ImportedInterfaceFact>,
     interface_positions: HashMap<InterfaceId, usize>,
+    effects: Vec<ResolvedEffectDeclaration>,
+    effect_positions: HashMap<EffectId, usize>,
     implementations: Vec<ImportedImplementationFact>,
     implementation_positions: HashMap<ImplId, usize>,
     public_implementation_order: Vec<ImplId>,
@@ -3608,6 +3659,11 @@ fn discard_canonical_representation_fact(fact: CanonicalRepresentationFact) {
 }
 
 impl ImportedFacts {
+    fn into_effects(mut self) -> Box<[ResolvedEffectDeclaration]> {
+        let effects = std::mem::take(&mut self.effects);
+        effects.into_boxed_slice()
+    }
+
     /// Looks up one imported checked global by semantic identity.
     #[must_use]
     pub fn global(&self, id: BinderId) -> Option<&ImportedGlobalScheme> {
@@ -3686,6 +3742,35 @@ impl ImportedFacts {
                 .get(*self.interface_positions.get(&id)?)?
                 .fact,
         )
+    }
+
+    /// Looks up one imported canonical effect fact by identity.
+    #[must_use]
+    pub fn effect(&self, id: EffectId) -> Option<&ResolvedEffectDeclaration> {
+        self.effects.get(*self.effect_positions.get(&id)?)
+    }
+
+    pub(crate) fn effects(&self) -> impl Iterator<Item = &ResolvedEffectDeclaration> {
+        self.effects.iter()
+    }
+
+    pub(crate) fn insert_effect(
+        &mut self,
+        fact: ResolvedEffectDeclaration,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        if let Some(position) = self.effect_positions.get(&fact.id).copied() {
+            let slot = self.effects.get_mut(position).ok_or(())?;
+            discard_resolved_effect_iteratively(std::mem::replace(slot, fact));
+            return Ok(());
+        }
+        budget.charge(2)?;
+        self.effects.try_reserve(1).map_err(|_| ())?;
+        self.effect_positions.try_reserve(1).map_err(|_| ())?;
+        let position = self.effects.len();
+        self.effect_positions.insert(fact.id, position);
+        self.effects.push(fact);
+        Ok(())
     }
 
     /// Looks up one selected public implementation by semantic identity.
@@ -4386,6 +4471,10 @@ impl Drop for ImportedFacts {
             drop(imported.fact);
         }
         self.interface_positions.clear();
+        for effect in self.effects.drain(..) {
+            discard_resolved_effect_iteratively(effect);
+        }
+        self.effect_positions.clear();
         for imported in self.implementations.drain(..) {
             drop(imported.fact);
         }
@@ -5207,6 +5296,8 @@ pub struct ResolvedExportCandidate {
     constructor_order: Vec<String>,
     interfaces: HashMap<String, CandidateInterface>,
     interface_order: Vec<String>,
+    effects: HashMap<String, CandidateEffect>,
+    effect_order: Vec<String>,
     methods: HashMap<String, CandidateMethod>,
     method_order: Vec<String>,
     hidden_nominals: HashMap<NominalTypeId, CandidateHiddenNominal>,
@@ -5238,6 +5329,12 @@ impl ResolvedExportCandidate {
     #[must_use]
     pub fn interface(&self, spelling: &str) -> Option<&CandidateInterface> {
         self.interfaces.get(spelling)
+    }
+
+    /// Looks up one public effect candidate.
+    #[must_use]
+    pub fn effect(&self, spelling: &str) -> Option<&CandidateEffect> {
+        self.effects.get(spelling)
     }
 
     /// Looks up one public method-name candidate.
@@ -5332,6 +5429,22 @@ impl ResolvedExportCandidate {
             candidate,
             budget,
             |_candidate: CandidateInterface| {},
+        )
+    }
+
+    pub(crate) fn try_insert_effect(
+        &mut self,
+        spelling: String,
+        candidate: CandidateEffect,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        try_insert_ordered(
+            &mut self.effects,
+            &mut self.effect_order,
+            spelling,
+            candidate,
+            budget,
+            |_candidate| {},
         )
     }
 
@@ -5479,6 +5592,8 @@ impl Drop for ResolvedExportCandidate {
         self.constructor_order.clear();
         self.interfaces.clear();
         self.interface_order.clear();
+        self.effects.clear();
+        self.effect_order.clear();
         self.methods.clear();
         self.method_order.clear();
         for (_, candidate) in self.hidden_nominals.drain() {
@@ -5529,6 +5644,14 @@ pub struct CandidateConstructor {
 pub struct CandidateInterface {
     /// Stable defining interface identity.
     pub id: InterfaceId,
+    pub(crate) source: CandidateFactSource,
+}
+
+/// One effect identity selected for publication under a source spelling.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidateEffect {
+    /// Stable defining effect identity.
+    pub id: EffectId,
     pub(crate) source: CandidateFactSource,
 }
 
@@ -5910,6 +6033,10 @@ pub struct ExportSummary {
     hidden_constructor_order: Vec<ConstructorId>,
     interface_names: HashMap<String, InterfaceId>,
     interface_name_order: Vec<String>,
+    effect_names: HashMap<String, EffectId>,
+    effect_name_order: Vec<String>,
+    effects: Vec<ResolvedEffectDeclaration>,
+    effect_positions: HashMap<EffectId, usize>,
     method_names: HashMap<String, MethodId>,
     method_name_order: Vec<String>,
     interfaces: Vec<CheckedInterfaceFact>,
@@ -6203,6 +6330,7 @@ fn map_summary_kind_failure(failure: KindFailure) -> ResolvedBuildFailure {
 enum SummaryBinderOwner {
     Nominal(NominalTypeId),
     Interface(InterfaceId),
+    Effect(EffectId),
     Method(MethodId),
     Global(BinderId),
     Implementation(ImplId),
@@ -6223,6 +6351,7 @@ fn register_summary_parameter<'a>(
     let expected_module = match owner {
         SummaryBinderOwner::Nominal(identity) => identity.module(),
         SummaryBinderOwner::Interface(identity) => identity.module(),
+        SummaryBinderOwner::Effect(identity) => identity.module(),
         SummaryBinderOwner::Method(identity) => identity.interface().module(),
         SummaryBinderOwner::Global(identity) => identity
             .module()
@@ -6356,6 +6485,26 @@ fn authenticate_summary_type_variables(
                 pending.push(argument);
                 pending.push(function);
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                if let Some(variable) = codomain.tail_variable() {
+                    match variable {
+                        EffectRowVariable::Rigid(variable) if allowed.contains(&variable) => {}
+                        EffectRowVariable::Rigid(_) | EffectRowVariable::Inference(_) => {
+                            return Err(ResolvedBuildFailure::InvalidState);
+                        }
+                    }
+                }
+                let children = codomain.effect_argument_count().saturating_add(2);
+                type_work
+                    .charge(children)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                pending
+                    .try_reserve(children)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                codomain.extend_effect_arguments(&mut pending);
+                pending.push(codomain.value());
+                pending.push(domain);
+            }
         }
     }
     Ok(())
@@ -6406,6 +6555,30 @@ fn collect_summary_constraint_variables(
                     .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
                 pending.push(argument);
                 pending.push(function);
+            }
+            Type::EffectfulFunction(domain, codomain) => {
+                if let Some(variable) = codomain.tail_variable() {
+                    let EffectRowVariable::Rigid(variable) = variable else {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    };
+                    constraint_work
+                        .charge(1)
+                        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                    output
+                        .try_reserve(1)
+                        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+                    output.insert(variable);
+                }
+                let children = codomain.effect_argument_count().saturating_add(2);
+                constraint_work
+                    .charge(children)
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(children)
+                    .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+                codomain.extend_effect_arguments(&mut pending);
+                pending.push(codomain.value());
+                pending.push(domain);
             }
             Type::Forall(_, _) | Type::Inference(_) => {
                 return Err(ResolvedBuildFailure::InvalidState);
@@ -6832,34 +7005,8 @@ fn same_kind_with_constraint_budget(
     right: &Kind,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<bool, ResolvedBuildFailure> {
-    constraint_work
-        .charge(1)
-        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-    let mut pending = Vec::new();
-    pending
-        .try_reserve(1)
-        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-    pending.push((left, right));
-    while let Some((left, right)) = pending.pop() {
-        match (left, right) {
-            (Kind::Type, Kind::Type) => {}
-            (
-                Kind::Arrow(left_domain, left_codomain),
-                Kind::Arrow(right_domain, right_codomain),
-            ) => {
-                constraint_work
-                    .charge(2)
-                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-                pending
-                    .try_reserve(2)
-                    .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-                pending.push((left_codomain, right_codomain));
-                pending.push((left_domain, right_domain));
-            }
-            _ => return Ok(false),
-        }
-    }
-    Ok(true)
+    same_kind_with_charge(left, right, || constraint_work.charge(1))
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)
 }
 
 fn same_origin_with_constraint_budget(
@@ -7028,16 +7175,22 @@ fn same_resolved_type_provenance_with_constraint_budget(
                     span: left_span,
                     domain: left_domain,
                     codomain: left_codomain,
+                    effect_arguments: left_effect_arguments,
                 },
                 ResolvedTypeProvenanceNode::Function {
                     span: right_span,
                     domain: right_domain,
                     codomain: right_codomain,
+                    effect_arguments: right_effect_arguments,
                 },
             ) => {
+                constraint_work
+                    .charge(left_effect_arguments.len())
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
                 if left_span != right_span
                     || left_domain != right_domain
                     || left_codomain != right_codomain
+                    || left_effect_arguments != right_effect_arguments
                 {
                     return Ok(false);
                 }
@@ -7763,6 +7916,71 @@ fn same_summary_type_after_substitutions(
                 continue;
             }
         }
+        match (source.function_view(), actual.function_view()) {
+            (Some(source_function), Some(actual_function)) => {
+                let effect_argument_count =
+                    match (source_function.effects(), actual_function.effects()) {
+                        (None, None) => 0,
+                        (Some(source_effects), Some(actual_effects))
+                            if source_effects.tail().is_none()
+                                && actual_effects.tail().is_none()
+                                && source_effects.known().len() == actual_effects.known().len() =>
+                        {
+                            let mut arguments = 0usize;
+                            for (source_instance, actual_instance) in
+                                source_effects.known().iter().zip(actual_effects.known())
+                            {
+                                constraint_work
+                                    .charge(1)
+                                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                                if source_instance.effect() != actual_instance.effect()
+                                    || source_instance.arguments().len()
+                                        != actual_instance.arguments().len()
+                                {
+                                    return Ok(false);
+                                }
+                                arguments = arguments
+                                    .checked_add(source_instance.arguments().len())
+                                    .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+                            }
+                            arguments
+                        }
+                        _ => return Ok(false),
+                    };
+                let children = effect_argument_count
+                    .checked_add(2)
+                    .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+                constraint_work
+                    .charge(children)
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(children)
+                    .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+                if let (Some(source_effects), Some(actual_effects)) =
+                    (source_function.effects(), actual_function.effects())
+                {
+                    for (source_instance, actual_instance) in source_effects
+                        .known()
+                        .iter()
+                        .zip(actual_effects.known())
+                        .rev()
+                    {
+                        pending.extend(
+                            source_instance
+                                .arguments()
+                                .iter()
+                                .zip(actual_instance.arguments())
+                                .rev(),
+                        );
+                    }
+                }
+                pending.push((source_function.value(), actual_function.value()));
+                pending.push((source_function.domain(), actual_function.domain()));
+                continue;
+            }
+            (Some(_), None) | (None, Some(_)) => return Ok(false),
+            (None, None) => {}
+        }
         match (source, actual) {
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
@@ -7779,10 +7997,6 @@ fn same_summary_type_after_substitutions(
             (
                 Type::Application(left_function, left_argument),
                 Type::Application(right_function, right_argument),
-            )
-            | (
-                Type::Function(left_function, left_argument),
-                Type::Function(right_function, right_argument),
             ) => {
                 constraint_work
                     .charge(2)
@@ -7793,6 +8007,8 @@ fn same_summary_type_after_substitutions(
                 pending.push((left_argument, right_argument));
                 pending.push((left_function, right_function));
             }
+            (Type::Function(_, _), Type::Function(_, _))
+            | (Type::EffectfulFunction(_, _), Type::EffectfulFunction(_, _)) => unreachable!(),
             (Type::Inference(_), _)
             | (_, Type::Inference(_))
             | (Type::Forall(_, _), _)
@@ -8236,7 +8452,9 @@ impl ExportSummary {
             || self.nominals.len() != self.nominal_order.len()
             || self.constructors.len() != self.constructor_order.len()
             || self.interface_names.len() != self.interface_name_order.len()
+            || self.effect_names.len() != self.effect_name_order.len()
             || self.method_names.len() != self.method_name_order.len()
+            || self.effects.len() != self.effect_positions.len()
         {
             return Err(ResolvedBuildFailure::InvalidState);
         }
@@ -8279,6 +8497,7 @@ impl ExportSummary {
             .nominal_order
             .len()
             .checked_add(self.interface_name_order.len())
+            .and_then(|count| count.checked_add(self.effect_name_order.len()))
             .ok_or(ResolvedBuildFailure::ConstraintResource)?;
         let mut type_spellings = HashSet::new();
         constraint_work
@@ -8292,6 +8511,8 @@ impl ExportSummary {
         }) || self.interface_name_order.iter().any(|spelling| {
             !self.interface_names.contains_key(spelling)
                 || !type_spellings.insert(spelling.as_str())
+        }) || self.effect_name_order.iter().any(|spelling| {
+            !self.effect_names.contains_key(spelling) || !type_spellings.insert(spelling.as_str())
         }) {
             return Err(ResolvedBuildFailure::InvalidState);
         }
@@ -8367,6 +8588,66 @@ impl ExportSummary {
 
         let mut environments = KindEnvironments::new();
         let mut canonical_variables = HashMap::new();
+        let mut named_effects = HashSet::new();
+        constraint_work
+            .charge(
+                self.effect_name_order
+                    .len()
+                    .saturating_add(self.effects.len()),
+            )
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        named_effects
+            .try_reserve(self.effect_name_order.len())
+            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+        for spelling in &self.effect_name_order {
+            let identity = self
+                .effect_names
+                .get(spelling)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            if !self.effect_positions.contains_key(identity) {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            named_effects.insert(*identity);
+        }
+        for (position, effect) in self.effects.iter().enumerate() {
+            if self.effect_positions.get(&effect.id) != Some(&position)
+                || (named_effects.contains(&effect.id) && !effect.public)
+                || effect.operations.is_empty()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            register_summary_parameters(
+                &effect.parameters,
+                SummaryBinderOwner::Effect(effect.id),
+                &mut canonical_variables,
+                &mut environments,
+                type_work,
+            )?;
+            for (operation_index, operation) in effect.operations.iter().enumerate() {
+                if operation.id.owner() != effect.id
+                    || usize::try_from(operation.id.operation()) != Ok(operation_index)
+                    || operation
+                        .annotation
+                        .ty
+                        .function_view()
+                        .is_none_or(|view| view.effects().is_some())
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                authenticate_summary_type_variables(
+                    &operation.annotation.ty,
+                    effect.parameters.iter().map(|parameter| parameter.id),
+                    type_work,
+                )?;
+                environments
+                    .expect_body_free_value_type_with_ledger(
+                        &operation.annotation.ty,
+                        operation.span,
+                        type_work,
+                    )
+                    .map_err(map_summary_kind_failure)?;
+            }
+        }
         let mut canonical_nominals = HashMap::<
             NominalTypeId,
             (
@@ -9452,6 +9733,10 @@ impl ExportSummary {
             hidden_constructor_order: Vec::new(),
             interface_names: HashMap::new(),
             interface_name_order: Vec::new(),
+            effect_names: HashMap::new(),
+            effect_name_order: Vec::new(),
+            effects: Vec::new(),
+            effect_positions: HashMap::new(),
             method_names: HashMap::new(),
             method_name_order: Vec::new(),
             interfaces: Vec::new(),
@@ -9540,6 +9825,10 @@ impl ExportSummary {
             hidden_constructor_order: Vec::new(),
             interface_names: HashMap::new(),
             interface_name_order: Vec::new(),
+            effect_names: HashMap::new(),
+            effect_name_order: Vec::new(),
+            effects: Vec::new(),
+            effect_positions: HashMap::new(),
             method_names: HashMap::new(),
             method_name_order: Vec::new(),
             interfaces: Vec::new(),
@@ -9560,6 +9849,7 @@ impl ExportSummary {
             .checked_add(resolved.export_candidate.nominals.len())
             .and_then(|count| count.checked_add(resolved.export_candidate.constructors.len()))
             .and_then(|count| count.checked_add(resolved.export_candidate.interfaces.len()))
+            .and_then(|count| count.checked_add(resolved.export_candidate.effects.len()))
             .and_then(|count| count.checked_add(resolved.export_candidate.methods.len()))
             .ok_or(ResolvedBuildFailure::TypeResource)?;
         type_work
@@ -9580,6 +9870,10 @@ impl ExportSummary {
         summary
             .interface_name_order
             .try_reserve_exact(resolved.export_candidate.interfaces.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        summary
+            .effect_name_order
+            .try_reserve_exact(resolved.export_candidate.effects.len())
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         summary
             .method_name_order
@@ -9779,6 +10073,60 @@ impl ExportSummary {
             )?);
             if summary
                 .interface_positions
+                .insert(candidate.id, position)
+                .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        }
+
+        summary
+            .effects
+            .try_reserve(resolved.export_candidate.effects.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        summary
+            .effect_positions
+            .try_reserve(resolved.export_candidate.effects.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        summary
+            .effect_names
+            .try_reserve(resolved.export_candidate.effects.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for spelling in &resolved.export_candidate.effect_order {
+            let candidate = resolved
+                .export_candidate
+                .effects
+                .get(spelling)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            let source = match candidate.source {
+                CandidateFactSource::Local => resolved
+                    .effects
+                    .iter()
+                    .find(|effect| effect.id == candidate.id),
+                CandidateFactSource::Imported => resolved.imported.effect(candidate.id),
+            }
+            .ok_or(ResolvedBuildFailure::InvalidState)?;
+            let owner_is_publisher = candidate.id.module() == resolved.module;
+            if owner_is_publisher != (candidate.source == CandidateFactSource::Local)
+                || source.id != candidate.id
+                || summary
+                    .effect_names
+                    .insert(spelling.clone(), candidate.id)
+                    .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            summary.effect_name_order.push(spelling.clone());
+            if summary.effect_positions.contains_key(&candidate.id) {
+                continue;
+            }
+            let position = summary.effects.len();
+            summary.effects.push(
+                clone_resolved_effect_with_budget(source, type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+            );
+            if summary
+                .effect_positions
                 .insert(candidate.id, position)
                 .is_some()
             {
@@ -10693,6 +11041,100 @@ impl ExportSummary {
             summary.hidden_nominal_order.push(imported.id);
         }
 
+        if !resolved.effects.is_empty() || resolved.imported.effects().next().is_some() {
+            let mut referenced_effects = HashSet::new();
+            for exported in summary.terms.values() {
+                collect_effect_identities(
+                    &exported.scheme.value_type,
+                    &mut referenced_effects,
+                    type_work,
+                )
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            }
+            for exported in summary.constructors.values() {
+                if let Some(payload) = &exported.payload {
+                    collect_effect_identities(payload, &mut referenced_effects, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            for exported in summary.hidden_constructors.values() {
+                if let Some(payload) = &exported.payload {
+                    collect_effect_identities(payload, &mut referenced_effects, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            for interface in summary.interfaces.iter().chain(&summary.hidden_interfaces) {
+                for method in &interface.methods {
+                    collect_effect_identities(
+                        &method.value_type,
+                        &mut referenced_effects,
+                        type_work,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            for effect in &summary.effects {
+                for operation in &effect.operations {
+                    collect_effect_identities(
+                        &operation.annotation.ty,
+                        &mut referenced_effects,
+                        type_work,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            for implementation in &summary.implementations {
+                for argument in implementation.fact.arguments() {
+                    collect_effect_identities(argument, &mut referenced_effects, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+                for prerequisite in &implementation.fact.prerequisites {
+                    for argument in prerequisite.arguments() {
+                        collect_effect_identities(argument, &mut referenced_effects, type_work)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    }
+                }
+                for method in &implementation.fact.methods {
+                    collect_effect_identities(
+                        &method.scheme.value_type,
+                        &mut referenced_effects,
+                        type_work,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            for effect in resolved.effects.iter().chain(resolved.imported.effects()) {
+                if !referenced_effects.contains(&effect.id)
+                    || summary.effect_positions.contains_key(&effect.id)
+                {
+                    continue;
+                }
+                type_work
+                    .charge(2)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                summary
+                    .effects
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                summary
+                    .effect_positions
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                let position = summary.effects.len();
+                summary.effects.push(
+                    clone_resolved_effect_with_budget(effect, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                );
+                if summary
+                    .effect_positions
+                    .insert(effect.id, position)
+                    .is_some()
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+            }
+        }
+
         Ok(summary)
     }
 
@@ -10711,6 +11153,23 @@ impl ExportSummary {
     pub(crate) fn interface(&self, spelling: &str) -> Option<&CheckedInterfaceFact> {
         let id = self.interface_names.get(spelling)?;
         self.interfaces.get(*self.interface_positions.get(id)?)
+    }
+
+    /// Looks up one public canonical effect fact by exported spelling.
+    #[must_use]
+    pub fn effect(&self, spelling: &str) -> Option<&ResolvedEffectDeclaration> {
+        let id = self.effect_names.get(spelling)?;
+        self.effects.get(*self.effect_positions.get(id)?)
+    }
+
+    /// Looks up one retained canonical effect fact by semantic identity.
+    #[must_use]
+    pub fn effect_by_id(&self, id: EffectId) -> Option<&ResolvedEffectDeclaration> {
+        self.effects.get(*self.effect_positions.get(&id)?)
+    }
+
+    pub(crate) const fn has_effect_facts(&self) -> bool {
+        !self.effects.is_empty()
     }
 
     pub(crate) fn method(&self, spelling: &str) -> Option<MethodId> {
@@ -10744,6 +11203,14 @@ impl ExportSummary {
         })
     }
 
+    pub(crate) fn effect_names(&self) -> impl Iterator<Item = (&str, EffectId)> {
+        self.effect_name_order.iter().filter_map(|spelling| {
+            self.effect_names
+                .get(spelling)
+                .map(|id| (spelling.as_str(), *id))
+        })
+    }
+
     pub(crate) fn method_names(&self) -> impl Iterator<Item = (&str, MethodId)> {
         self.method_name_order.iter().filter_map(|spelling| {
             self.method_names
@@ -10766,15 +11233,19 @@ impl ExportSummary {
             .checked_add(self.nominals.len())
             .and_then(|count| count.checked_add(self.constructors.len()))
             .and_then(|count| count.checked_add(self.interface_names.len()))
+            .and_then(|count| count.checked_add(self.effect_names.len()))
             .and_then(|count| count.checked_add(self.method_names.len()))
             .and_then(|count| count.checked_add(self.withheld_order.len()))
     }
 
-    pub(crate) fn namespace_capacities(&self) -> Option<(usize, usize, usize, usize, usize)> {
+    pub(crate) fn namespace_capacities(
+        &self,
+    ) -> Option<(usize, usize, usize, usize, usize, usize)> {
         Some((
             self.terms.len().checked_add(self.method_names.len())?,
             self.nominals.len(),
             self.interface_names.len(),
+            self.effect_names.len(),
             self.constructors.len(),
             self.withheld_order.len(),
         ))
@@ -11087,6 +11558,10 @@ impl ExportSummary {
             hidden_constructor_order: Vec::new(),
             interface_names: HashMap::new(),
             interface_name_order: Vec::new(),
+            effect_names: HashMap::new(),
+            effect_name_order: Vec::new(),
+            effects: Vec::new(),
+            effect_positions: HashMap::new(),
             method_names: HashMap::new(),
             method_name_order: Vec::new(),
             interfaces: Vec::new(),
@@ -13721,12 +14196,73 @@ fn collect_nominal_identities(
                 work.push(codomain);
                 work.push(domain);
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                let children = codomain.effect_argument_count().saturating_add(2);
+                budget.charge(children)?;
+                work.try_reserve(children).map_err(|_| ())?;
+                codomain.extend_effect_arguments(&mut work);
+                work.push(codomain.value());
+                work.push(domain);
+            }
             Type::Forall(_, body) => {
                 budget.charge(1)?;
                 work.try_reserve(1).map_err(|_| ())?;
                 work.push(body);
             }
             Type::Int | Type::Bool | Type::Unit | Type::Variable(_) | Type::Inference(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn collect_effect_identities(
+    root: &Type,
+    output: &mut HashSet<EffectId>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), ()> {
+    budget.charge(1)?;
+    let mut work = Vec::new();
+    work.try_reserve(1).map_err(|_| ())?;
+    work.push(root);
+    while let Some(ty) = work.pop() {
+        match ty {
+            Type::Tuple(elements) => {
+                budget.charge(elements.len())?;
+                work.try_reserve(elements.len()).map_err(|_| ())?;
+                work.extend(elements);
+            }
+            Type::Application(function, argument) | Type::Function(function, argument) => {
+                budget.charge(2)?;
+                work.try_reserve(2).map_err(|_| ())?;
+                work.push(argument);
+                work.push(function);
+            }
+            Type::EffectfulFunction(domain, codomain) => {
+                for instance in codomain.effects().known() {
+                    if !output.contains(&instance.effect()) {
+                        budget.charge(1)?;
+                        output.try_reserve(1).map_err(|_| ())?;
+                        output.insert(instance.effect());
+                    }
+                }
+                let children = codomain.effect_argument_count().saturating_add(2);
+                budget.charge(children)?;
+                work.try_reserve(children).map_err(|_| ())?;
+                codomain.extend_effect_arguments(&mut work);
+                work.push(codomain.value());
+                work.push(domain);
+            }
+            Type::Forall(_, body) => {
+                budget.charge(1)?;
+                work.try_reserve(1).map_err(|_| ())?;
+                work.push(body);
+            }
+            Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Variable(_)
+            | Type::Inference(_)
+            | Type::Nominal(_) => {}
         }
     }
     Ok(())
@@ -13807,6 +14343,12 @@ impl Drop for ExportSummary {
         self.hidden_constructor_order.clear();
         self.interface_names.clear();
         self.interface_name_order.clear();
+        self.effect_names.clear();
+        self.effect_name_order.clear();
+        for effect in self.effects.drain(..) {
+            discard_resolved_effect_iteratively(effect);
+        }
+        self.effect_positions.clear();
         self.method_names.clear();
         self.method_name_order.clear();
         for fact in self.interfaces.drain(..) {
@@ -13864,6 +14406,8 @@ pub struct ResolvedRegistry {
     constructors: Box<[ResolvedConstructor]>,
     nominal_positions: HashMap<NominalTypeId, usize>,
     constructor_positions: HashMap<ConstructorId, usize>,
+    effects: Box<[ResolvedEffectDeclaration]>,
+    effect_positions: HashMap<EffectId, usize>,
     nominal_parameters: HashMap<NominalTypeId, Box<[ResolvedTypeVariable]>>,
     type_variables: HashMap<TypeVariableId, ResolvedTypeVariable>,
     global_parameter_rows: Box<[ResolvedGlobalParameterRow]>,
@@ -13982,6 +14526,9 @@ struct CombinedRegistryCounts {
     nominals: usize,
     family_entries: usize,
     constructors: usize,
+    effects: usize,
+    effect_operations: usize,
+    effect_parameters: usize,
     nominal_parameters: usize,
     interfaces: usize,
     interface_parameters: usize,
@@ -14001,6 +14548,8 @@ struct CombinedRegistryBuilder {
     constructors: ResolvedConstructorBuffer,
     nominal_positions: HashMap<NominalTypeId, usize>,
     constructor_positions: HashMap<ConstructorId, usize>,
+    effects: Vec<ResolvedEffectDeclaration>,
+    effect_positions: HashMap<EffectId, usize>,
     parameter_rows: ResolvedNominalParameterBuffer,
     canonical_variables: ResolvedTypeVariableBuffer,
     nominal_parameters: HashMap<NominalTypeId, Box<[ResolvedTypeVariable]>>,
@@ -14016,6 +14565,8 @@ impl CombinedRegistryBuilder {
             constructors: ResolvedConstructorBuffer(Vec::new()),
             nominal_positions: HashMap::new(),
             constructor_positions: HashMap::new(),
+            effects: Vec::new(),
+            effect_positions: HashMap::new(),
             parameter_rows: ResolvedNominalParameterBuffer(Vec::new()),
             canonical_variables: ResolvedTypeVariableBuffer(Vec::new()),
             nominal_parameters: HashMap::new(),
@@ -14040,6 +14591,14 @@ impl CombinedRegistryBuilder {
         builder
             .constructor_positions
             .try_reserve(counts.constructors)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        builder
+            .effects
+            .try_reserve_exact(counts.effects)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        builder
+            .effect_positions
+            .try_reserve(counts.effects)
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         builder
             .parameter_rows
@@ -14138,6 +14697,8 @@ impl CombinedRegistryBuilder {
             constructors: constructors.into_boxed_slice(),
             nominal_positions: std::mem::take(&mut self.nominal_positions),
             constructor_positions: std::mem::take(&mut self.constructor_positions),
+            effects: std::mem::take(&mut self.effects).into_boxed_slice(),
+            effect_positions: std::mem::take(&mut self.effect_positions),
             nominal_parameters: std::mem::take(&mut self.nominal_parameters),
             type_variables: std::mem::take(&mut self.type_variables),
             global_parameter_rows: std::mem::take(&mut self.global_parameter_rows)
@@ -14160,6 +14721,9 @@ impl Drop for CombinedRegistryBuilder {
         }
         for parameter in self.type_variables.drain().map(|(_, parameter)| parameter) {
             discard_resolved_type_variable(parameter);
+        }
+        for effect in self.effects.drain(..) {
+            discard_resolved_effect_iteratively(effect);
         }
     }
 }
@@ -14205,6 +14769,23 @@ fn checked_registry_counts(
         let registry = checked.registry();
         checked_accumulate(&mut counts.nominals, registry.nominals.len())?;
         checked_accumulate(&mut counts.constructors, registry.constructors.len())?;
+        checked_accumulate(&mut counts.effects, registry.effects.len())?;
+        for effect in registry.effects.iter() {
+            checked_accumulate(&mut counts.effect_operations, effect.operations.len())?;
+            checked_accumulate(&mut counts.effect_parameters, effect.parameters.len())?;
+            for parameter in effect.parameters.iter() {
+                type_accumulate(
+                    &mut counts.retention_type_work,
+                    retained_type_variable_work(parameter)?,
+                )?;
+            }
+            for operation in effect.operations.iter() {
+                let mut operation_work = TypeWorkBudget::unbounded();
+                charge_type_cells(&operation.annotation.ty, &mut operation_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                type_accumulate(&mut counts.retention_type_work, operation_work.used())?;
+            }
+        }
         checked_accumulate(&mut counts.interfaces, checked.interface_facts().len())?;
         for interface in checked.interface_facts() {
             checked_accumulate(&mut counts.interface_parameters, interface.parameters.len())?;
@@ -14270,6 +14851,7 @@ fn checked_registry_counts(
     let non_method_type_variables = counts
         .nominal_parameters
         .checked_add(counts.interface_parameters)
+        .and_then(|count| count.checked_add(counts.effect_parameters))
         .and_then(|count| count.checked_add(counts.global_parameters))
         .and_then(|count| count.checked_add(counts.implementation_parameters))
         .ok_or(ResolvedBuildFailure::ConstraintResource)?;
@@ -14292,6 +14874,9 @@ fn checked_registry_counts(
                 .and_then(|constructors| work.checked_add(constructors))
         })
         .and_then(|work| work.checked_add(counts.type_variables))
+        .and_then(|work| work.checked_add(counts.effects.checked_mul(2)?))
+        .and_then(|work| work.checked_add(counts.effect_operations))
+        .and_then(|work| work.checked_add(counts.effect_parameters))
         .and_then(|work| {
             counts
                 .global_rows
@@ -14311,6 +14896,8 @@ fn checked_registry_counts(
         )
         .and_then(|work| work.checked_add(counts.family_entries))
         .and_then(|work| work.checked_add(counts.constructors))
+        .and_then(|work| work.checked_add(counts.effects))
+        .and_then(|work| work.checked_add(counts.effect_operations))
         .and_then(|work| work.checked_add(counts.interface_parameters))
         .and_then(|work| work.checked_add(counts.schemes))
         .and_then(|work| work.checked_add(counts.implementations))
@@ -14320,6 +14907,7 @@ fn checked_registry_counts(
         .checked_add(counts.nominals)
         .and_then(|work| work.checked_add(counts.family_entries))
         .and_then(|work| work.checked_add(counts.constructors))
+        .and_then(|work| work.checked_add(counts.effects))
         .and_then(|work| work.checked_add(counts.global_rows))
         .ok_or(ResolvedBuildFailure::ConstraintResource)?;
     counts.fixed_constraint_work = deterministic_visits
@@ -14352,6 +14940,7 @@ fn validate_checked_registries<'a>(
     let mut nominal_ids = HashSet::new();
     let mut family_ids = HashSet::new();
     let mut constructor_ids = HashSet::new();
+    let mut effect_ids = HashSet::new();
     let mut global_owners = HashSet::new();
     module_ids
         .try_reserve(counts.modules)
@@ -14364,6 +14953,9 @@ fn validate_checked_registries<'a>(
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
     constructor_ids
         .try_reserve(counts.constructors)
+        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+    effect_ids
+        .try_reserve(counts.effects)
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
     global_owners
         .try_reserve(counts.global_rows)
@@ -14443,6 +15035,28 @@ fn validate_checked_registries<'a>(
                 return Err(ResolvedBuildFailure::InvalidState);
             }
         }
+        if registry.effect_positions.len() != registry.effects.len() {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        for (position, effect) in registry.effects.iter().enumerate() {
+            if effect.id.module() != module
+                || !effect_ids.insert(effect.id)
+                || registry.effect_positions.get(&effect.id) != Some(&position)
+                || effect.operations.is_empty()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            for (ordinal, operation) in effect.operations.iter().enumerate() {
+                if operation.id.owner() != effect.id
+                    || usize::try_from(operation.id.operation()) != Ok(ordinal)
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+            }
+            local_variable_count = local_variable_count
+                .checked_add(effect.parameters.len())
+                .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+        }
         if family_ids.len() != constructor_ids.len() {
             return Err(ResolvedBuildFailure::InvalidState);
         }
@@ -14481,6 +15095,7 @@ fn validate_checked_registries<'a>(
         || nominal_ids.len() != counts.nominals
         || family_ids.len() != counts.family_entries
         || constructor_ids.len() != counts.constructors
+        || effect_ids.len() != counts.effects
         || global_owners.len() != counts.global_rows
     {
         return Err(ResolvedBuildFailure::InvalidState);
@@ -14518,6 +15133,26 @@ fn validate_checked_registries<'a>(
                 }
                 previous = Some(parameter.id.local());
                 if !type_variable_ids.insert(parameter.id) {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                let canonical = registry
+                    .type_variables
+                    .get(&parameter.id)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                if !same_checker_type_variable_after_base_charge(
+                    canonical,
+                    parameter,
+                    constraint_work,
+                )? {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+            }
+        }
+        for effect in registry.effects.iter() {
+            for parameter in effect.parameters.iter() {
+                if parameter.id.module() != Some(checked.module())
+                    || !type_variable_ids.insert(parameter.id)
+                {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
                 let canonical = registry
@@ -14734,6 +15369,20 @@ fn retain_checked_registries(
             debug_assert!(displaced.is_none());
             builder.constructors.0.push(retained);
         }
+        for effect in registry.effects.iter() {
+            let position = builder.effects.len();
+            let mut unbounded = TypeWorkBudget::unbounded();
+            let retained = clone_resolved_effect_with_budget(effect, &mut unbounded)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            if builder
+                .effect_positions
+                .insert(effect.id, position)
+                .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            builder.effects.push(retained);
+        }
         for scheme in checked.schemes() {
             if !scheme.scheme.type_parameters.is_empty() {
                 builder.retain_global_parameter_row(
@@ -14789,6 +15438,8 @@ impl ResolvedRegistry {
             constructors: constructors.into_boxed_slice(),
             nominal_positions,
             constructor_positions,
+            effects: Box::new([]),
+            effect_positions: HashMap::new(),
             nominal_parameters: HashMap::new(),
             type_variables: HashMap::new(),
             global_parameter_rows: Box::new([]),
@@ -15012,6 +15663,24 @@ impl ResolvedRegistry {
             .with_type_parameters_with_budget(parameters.into_vec(), budget)
             .map_err(|()| ResolvedBuildFailure::TypeResource)?
             .with_abstract_nominal_facts(abstract_nominal_names, abstract_nominal_kinds);
+        let effect_count = self.effects.len().saturating_add(imported.effects.len());
+        let mut effects = Vec::new();
+        effects
+            .try_reserve_exact(effect_count)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for effect in self.effects.iter().chain(imported.effects()) {
+            if effects
+                .iter()
+                .any(|existing: &ResolvedEffectDeclaration| existing.id == effect.id)
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            effects.push(
+                clone_resolved_effect_with_budget(effect, budget)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+            );
+        }
+        registry = registry.with_effects(effects);
         for nominal in &self.nominals {
             let parameters = self
                 .nominal_parameters
@@ -15159,6 +15828,31 @@ impl ResolvedRegistry {
             self.insert_type_variable(parameter);
         }
         self
+    }
+
+    pub(crate) fn with_effects(mut self, effects: Vec<ResolvedEffectDeclaration>) -> Self {
+        self.effect_positions = effects
+            .iter()
+            .enumerate()
+            .map(|(position, effect)| (effect.id, position))
+            .collect();
+        let displaced = std::mem::replace(&mut self.effects, effects.into_boxed_slice());
+        for effect in displaced.into_vec() {
+            discard_resolved_effect_iteratively(effect);
+        }
+        self
+    }
+
+    /// Looks up one canonical effect declaration by stable identity.
+    #[must_use]
+    pub fn effect(&self, id: EffectId) -> Option<&ResolvedEffectDeclaration> {
+        self.effects.get(*self.effect_positions.get(&id)?)
+    }
+
+    /// Returns canonical linked effects in deterministic module/declaration order.
+    #[must_use]
+    pub const fn effects(&self) -> &[ResolvedEffectDeclaration] {
+        &self.effects
     }
 
     fn with_abstract_nominal_facts(
@@ -15465,6 +16159,7 @@ impl ResolvedRegistry {
         enum Task<'a> {
             Type(&'a Type),
             ApplicationSpine(&'a Type),
+            EffectRow(&'a crate::types::EffectRow),
             Text(&'static str),
         }
 
@@ -15473,6 +16168,7 @@ impl ResolvedRegistry {
         while let Some(task) = work.pop() {
             match task {
                 Task::Text(text) => output.push_str(text),
+                Task::EffectRow(row) => output.push_str(&row.to_string()),
                 Task::Type(Type::Int) => output.push_str("Int"),
                 Task::Type(Type::Bool) => output.push_str("Bool"),
                 Task::Type(Type::Unit) => output.push_str("Unit"),
@@ -15510,7 +16206,12 @@ impl ResolvedRegistry {
                         work.push(Task::ApplicationSpine(function));
                     } else {
                         work.push(Task::Text("<"));
-                        if matches!(function.as_ref(), Type::Function(_, _) | Type::Forall(_, _)) {
+                        if matches!(
+                            function.as_ref(),
+                            Type::Function(_, _)
+                                | Type::EffectfulFunction(_, _)
+                                | Type::Forall(_, _)
+                        ) {
                             work.push(Task::Text(")"));
                             work.push(Task::Type(function));
                             work.push(Task::Text("("));
@@ -15558,6 +16259,22 @@ impl ResolvedRegistry {
                         work.push(Task::Type(domain));
                     }
                 }
+                Task::Type(Type::EffectfulFunction(domain, codomain)) => {
+                    work.push(Task::EffectRow(codomain.effects()));
+                    work.push(Task::Text(" ! "));
+                    work.push(Task::Type(codomain.value()));
+                    work.push(Task::Text(" -> "));
+                    if matches!(
+                        domain.as_ref(),
+                        Type::Function(_, _) | Type::EffectfulFunction(_, _)
+                    ) {
+                        work.push(Task::Text(")"));
+                        work.push(Task::Type(domain));
+                        work.push(Task::Text("("));
+                    } else {
+                        work.push(Task::Type(domain));
+                    }
+                }
             }
         }
         output
@@ -15571,12 +16288,14 @@ impl ResolvedRegistry {
     fn discard_owned_payloads(&mut self) {
         let nominals = std::mem::take(&mut self.nominals);
         let constructors = std::mem::take(&mut self.constructors);
+        let effects = std::mem::take(&mut self.effects);
         let nominal_parameters = std::mem::take(&mut self.nominal_parameters);
         let type_variables = std::mem::take(&mut self.type_variables);
         let global_parameter_rows = std::mem::take(&mut self.global_parameter_rows);
         let abstract_nominal_kinds = std::mem::take(&mut self.abstract_nominal_kinds);
         self.nominal_positions.clear();
         self.constructor_positions.clear();
+        self.effect_positions.clear();
         self.global_parameter_positions.clear();
         for nominal in nominals.into_vec() {
             if let Some(representation) = nominal.representation {
@@ -15589,6 +16308,9 @@ impl ResolvedRegistry {
                 discard_type_iteratively(payload);
             }
             discard_origin_iteratively(constructor.origin);
+        }
+        for effect in effects.into_vec() {
+            discard_resolved_effect_iteratively(effect);
         }
         for parameters in nominal_parameters.into_values() {
             discard_resolved_type_variables(parameters);
@@ -15733,6 +16455,41 @@ fn clone_resolved_type_variable_buffer_with_budget(
     Ok(cloned)
 }
 
+pub(crate) fn clone_resolved_effect_with_budget(
+    effect: &ResolvedEffectDeclaration,
+    budget: &mut TypeWorkBudget,
+) -> Result<ResolvedEffectDeclaration, ()> {
+    budget.charge(effect.operations.len().saturating_add(1))?;
+    let parameters = clone_resolved_type_variable_buffer_with_budget(&effect.parameters, budget)?;
+    let mut operations = Vec::new();
+    operations
+        .try_reserve_exact(effect.operations.len())
+        .map_err(|_| ())?;
+    for operation in &effect.operations {
+        operations.push(ResolvedEffectOperation {
+            id: operation.id,
+            spelling: operation.spelling.clone(),
+            annotation: ResolvedType {
+                ty: clone_type_with_budget(&operation.annotation.ty, budget)?,
+                provenance: operation.annotation.provenance.clone(),
+                origin: operation.annotation.origin.clone(),
+                span: operation.annotation.span,
+            },
+            origin: operation.origin.clone(),
+            span: operation.span,
+        });
+    }
+    Ok(ResolvedEffectDeclaration {
+        id: effect.id,
+        public: effect.public,
+        spelling: effect.spelling.clone(),
+        parameters: parameters.into_boxed_slice(),
+        operations: operations.into_boxed_slice(),
+        origin: effect.origin.clone(),
+        span: effect.span,
+    })
+}
+
 fn discard_resolved_type_variables(parameters: Box<[ResolvedTypeVariable]>) {
     for parameter in parameters.into_vec() {
         discard_resolved_type_variable(parameter);
@@ -15853,6 +16610,8 @@ pub enum ResolvedTypeProvenanceNode {
         span: Span,
         domain: usize,
         codomain: usize,
+        /// Provenance roots for canonical latent-row arguments.
+        effect_arguments: Box<[usize]>,
     },
     /// One canonical unary type application and its causal source argument.
     Application {
@@ -15949,6 +16708,40 @@ pub struct ResolvedInterfaceDeclaration {
     /// Causal declaration provenance.
     pub origin: Origin,
     /// Complete declaration span.
+    pub span: Span,
+}
+
+/// One module-owned effect API after name resolution.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedEffectDeclaration {
+    /// Stable module-qualified effect identity.
+    pub id: EffectId,
+    /// Whether the complete API may be exported.
+    pub public: bool,
+    /// Exact declared spelling.
+    pub spelling: String,
+    /// Ordered ordinary type parameters.
+    pub parameters: Box<[ResolvedTypeVariable]>,
+    /// Nonempty operations in declaration order.
+    pub operations: Box<[ResolvedEffectOperation]>,
+    /// Causal declaration provenance.
+    pub origin: Origin,
+    /// Complete declaration span.
+    pub span: Span,
+}
+
+/// One resolved signature-only operation local to its owning effect.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedEffectOperation {
+    /// Stable identity derived from owner and declaration order.
+    pub id: OperationId,
+    /// Exact declared spelling.
+    pub spelling: String,
+    /// Resolved source value type.
+    pub annotation: ResolvedType,
+    /// Causal operation provenance.
+    pub origin: Origin,
+    /// Complete operation signature span.
     pub span: Span,
 }
 
@@ -16258,6 +17051,12 @@ pub struct ResolvedInlineOperationalHeader {
     pub parameters: Vec<ResolvedTypedPattern>,
     /// Declared result type.
     pub result_type: ResolvedType,
+    /// Declared result effect row, or the canonical empty row when omitted.
+    pub result_effects: EffectRow,
+    /// Source provenance for result-row arguments in resolver encounter order.
+    pub result_effect_argument_provenance: Box<[ResolvedTypeProvenance]>,
+    /// Canonical result-row argument order as indices into retained provenance.
+    pub result_effect_argument_roots: Box<[usize]>,
     /// Ordered explicit interface requirements.
     pub requirements: Box<[ResolvedRequirement]>,
     /// Implicit outer type binders in first-occurrence order.
@@ -16405,6 +17204,87 @@ pub enum ResolvedExprKind {
     Function(ResolvedFunctionExpr),
     /// A structured match.
     Match(ResolvedMatchExpr),
+    /// One exact operation request.
+    Perform(ResolvedPerformExpr),
+    /// A lexical handler for one exact effect instance.
+    Handle(ResolvedHandleExpr),
+    /// A use of the nearest clause-scoped resume capability.
+    Resume(ResolvedResumeExpr),
+}
+
+/// Stable identity for one lexical handler clause's resume capability.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ResumeId(u32);
+
+impl ResumeId {
+    /// Creates one resolver-allocated clause capability identity.
+    #[must_use]
+    pub const fn new(identity: u32) -> Self {
+        Self(identity)
+    }
+}
+
+/// One resolved exact effect instance occurrence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedEffectInstance {
+    /// Canonical semantic instance.
+    pub instance: crate::types::EffectInstance,
+    /// Causal source provenance.
+    pub origin: Origin,
+    /// Complete instance span.
+    pub span: Span,
+}
+
+/// One resolved operation request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedPerformExpr {
+    /// Exact owner instance.
+    pub effect: ResolvedEffectInstance,
+    /// Canonical owner-local operation identity.
+    pub operation: crate::types::OperationId,
+    /// Exact source operation spelling.
+    pub spelling: String,
+    /// Strict operation operand.
+    pub operand: Box<ResolvedExpr>,
+    /// Operation-name provenance.
+    pub origin: Origin,
+}
+
+/// One resolved lexical handler.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedHandleExpr {
+    /// Handled computation.
+    pub body: Box<ResolvedExpr>,
+    /// Exact handled instance.
+    pub effect: ResolvedEffectInstance,
+    /// Source-ordered clauses.
+    pub clauses: Vec<ResolvedHandlerClause>,
+}
+
+/// One resolved operation clause.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedHandlerClause {
+    /// Canonical owner-local operation identity.
+    pub operation: crate::types::OperationId,
+    /// Exact source operation spelling.
+    pub spelling: String,
+    /// Clause-scoped resume identity.
+    pub resume: ResumeId,
+    /// Operation-domain pattern.
+    pub pattern: ResolvedPattern,
+    /// Clause body.
+    pub body: ResolvedExpr,
+    /// Complete clause span.
+    pub span: Span,
+}
+
+/// One resolved resume use.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedResumeExpr {
+    /// Nearest owning clause, or `None` for a source-invalid outside use.
+    pub owner: Option<ResumeId>,
+    /// Strict resumed value expression.
+    pub value: Box<ResolvedExpr>,
 }
 
 /// One resolved constructor occurrence.
@@ -16540,6 +17420,17 @@ pub(crate) fn discard_resolved_interface_iteratively(interface: ResolvedInterfac
     discard_origin_iteratively(interface.origin);
 }
 
+pub(crate) fn discard_resolved_effect_iteratively(effect: ResolvedEffectDeclaration) {
+    for parameter in effect.parameters.into_vec() {
+        discard_resolved_type_variable(parameter);
+    }
+    for operation in effect.operations.into_vec() {
+        discard_resolved_type(operation.annotation);
+        discard_origin_iteratively(operation.origin);
+    }
+    discard_origin_iteratively(effect.origin);
+}
+
 fn discard_external_interface(interface: ResolvedExternalInterface) {
     discard_binder(interface.name);
     discard_resolved_type(interface.annotation);
@@ -16653,6 +17544,20 @@ fn discard_resolved_body_work(
                     expressions.push(arm.body);
                 }
             }
+            ResolvedExprKind::Perform(request) => {
+                expressions.push(*request.operand);
+                discard_origin_iteratively(request.effect.origin);
+                discard_origin_iteratively(request.origin);
+            }
+            ResolvedExprKind::Handle(handler) => {
+                expressions.push(*handler.body);
+                discard_origin_iteratively(handler.effect.origin);
+                for clause in handler.clauses {
+                    patterns.push(clause.pattern);
+                    expressions.push(clause.body);
+                }
+            }
+            ResolvedExprKind::Resume(resume) => expressions.push(*resume.value),
         }
     }
     while let Some(pattern) = patterns.pop() {
@@ -18653,6 +19558,7 @@ mod tests {
             direct_dependencies: Vec::new(),
             declaration_order: vec![ResolvedDeclarationIndex::Interface(0)],
             interfaces: vec![resolved_interface],
+            effects: Vec::new(),
             implementations: Vec::new(),
             definitions: Vec::new(),
             export_candidate,
@@ -18773,6 +19679,7 @@ mod tests {
             direct_dependencies: Vec::new(),
             declaration_order: vec![ResolvedDeclarationIndex::Interface(0)],
             interfaces: vec![resolved_interface],
+            effects: Vec::new(),
             implementations: Vec::new(),
             definitions: Vec::new(),
             export_candidate,
@@ -19424,6 +20331,8 @@ mod tests {
                 constructors,
                 nominal_positions,
                 constructor_positions,
+                effects,
+                effect_positions,
                 nominal_parameters,
                 type_variables,
                 global_parameter_rows,
@@ -19445,6 +20354,8 @@ mod tests {
                 constructors,
                 nominal_positions,
                 constructor_positions,
+                effects,
+                effect_positions,
                 nominal_parameters,
                 type_variables,
                 global_parameter_rows,
@@ -19469,6 +20380,7 @@ mod tests {
         let module = ModuleId::new(9_700);
         let nominal = NominalTypeId::new(module, 0);
         let constructor = ConstructorId::new(nominal, 0);
+        let effect = EffectId::new(module, 0);
         let parameter_id = TypeVariableId::resolved(module, 0);
         let mut kind = Kind::Type;
         let mut payload = Type::Variable(parameter_id);
@@ -19505,13 +20417,39 @@ mod tests {
                 origin: Origin::Source(span),
             }],
         )
-        .with_type_parameters(vec![(nominal, vec![parameter])]);
+        .with_type_parameters(vec![(nominal, vec![parameter])])
+        .with_effects(vec![ResolvedEffectDeclaration {
+            id: effect,
+            public: false,
+            spelling: "DeepEffect".into(),
+            parameters: Box::new([]),
+            operations: vec![ResolvedEffectOperation {
+                id: OperationId::new(effect, 0),
+                spelling: "step".into(),
+                annotation: ResolvedType {
+                    ty: Type::Function(Box::new(Type::Unit), Box::new(Type::Unit)),
+                    provenance: ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                },
+                origin: Origin::Source(span),
+                span,
+            }]
+            .into_boxed_slice(),
+            origin: Origin::Source(span),
+            span,
+        }]);
         vec![CheckedModule {
             module,
             registry: Arc::new(registry),
             direct_dependencies: Box::new([]),
             declaration_order: Box::new([]),
             interfaces: Box::new([]),
+            effects: Box::new([]),
+            imported_effects: Box::new([]),
             implementations: Box::new([]),
             definitions: Box::new([]),
             available_implementations: Box::new([]),
@@ -19532,11 +20470,11 @@ mod tests {
         // constructor inventory, binder-identity index, and the complete
         // record/Origin/Kind mirror. TypeWork retains both binder copies and
         // the constructor payload only after authentication succeeds.
-        const CONSTRAINT_WORK: usize = 3 * DEPTH + 13;
+        const CONSTRAINT_WORK: usize = 3 * DEPTH + 16;
         // The fixed eight cells retain the family-id slice, both nominal
         // staging/destination rows and positions, both constructor
         // carrier/position cells, and the canonical-variable staging slot.
-        const TYPE_WORK: usize = 6 * DEPTH + 13;
+        const TYPE_WORK: usize = 6 * DEPTH + 19;
         std::thread::Builder::new()
             .name("deep-combined-registry".to_owned())
             .stack_size(256 * 1024)
@@ -19556,8 +20494,8 @@ mod tests {
                 );
                 assert_eq!(
                     constraint_short.used(),
-                    CONSTRAINT_WORK - 2,
-                    "the final two-child Kind comparison charge is atomic",
+                    CONSTRAINT_WORK - 1,
+                    "the one-short Kind traversal charges every completed visit",
                 );
                 assert_eq!(untouched_type.used(), 0);
 
@@ -19589,6 +20527,7 @@ mod tests {
                     assert_eq!(type_work.used(), TYPE_WORK);
                     let owner = NominalTypeId::new(ModuleId::new(9_700), 0);
                     let constructor = ConstructorId::new(owner, 0);
+                    let effect = EffectId::new(ModuleId::new(9_700), 0);
                     let parameter = TypeVariableId::resolved(ModuleId::new(9_700), 0);
                     assert_eq!(
                         combined
@@ -19596,6 +20535,7 @@ mod tests {
                             .map(|nominal| nominal.constructors.as_ref()),
                         Some([constructor].as_slice()),
                     );
+                    assert_eq!(combined.effect(effect).unwrap().operations.len(), 1);
                     let payload = combined
                         .constructor(constructor)
                         .and_then(|constructor| constructor.payload.as_ref())
@@ -19791,6 +20731,8 @@ mod tests {
             direct_dependencies: Box::new([]),
             declaration_order: Box::new([]),
             interfaces: Box::new([]),
+            effects: Box::new([]),
+            imported_effects: Box::new([]),
             implementations: Box::new([]),
             definitions: Box::new([]),
             available_implementations: Box::new([AvailableImplementation::local(
@@ -20048,6 +20990,8 @@ mod tests {
             direct_dependencies: Box::new([]),
             declaration_order: Box::new([]),
             interfaces: Box::new([]),
+            effects: Box::new([]),
+            imported_effects: Box::new([]),
             implementations: Box::new([]),
             definitions: Box::new([]),
             available_implementations: Box::new([]),
@@ -21011,7 +21955,7 @@ mod tests {
                     authenticate_scheme_parameter_mirror(&scheme, &parameters, &mut mirror_short,),
                     Err(ResolvedBuildFailure::ConstraintResource),
                 );
-                assert_eq!(mirror_short.used(), MIRROR_WORK - 2);
+                assert_eq!(mirror_short.used(), MIRROR_WORK - 1);
                 let mut mirror_exact =
                     crate::interface::InterfaceConstraintBudget::with_limit(MIRROR_WORK);
                 authenticate_scheme_parameter_mirror(&scheme, &parameters, &mut mirror_exact)
@@ -21978,6 +22922,45 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn effectful_interface_method_summary_authenticates_after_head_substitution() {
+        let mut summary =
+            implementation_summary_with_prerequisite_dependents([Type::Bool, Type::Unit]);
+        summary.implementations[0].fact.prerequisites = Box::new([]);
+        summary.implementations[0].fact.methods[0]
+            .scheme
+            .requirements = Box::new([]);
+        let parameter = summary.interfaces[0].parameters[0].id;
+        let effect = crate::types::EffectId::new(summary.module, 0);
+        summary.interfaces[0].methods[0].value_type = Type::function_computation(
+            Type::Variable(parameter),
+            crate::types::ComputationType::new(
+                Type::Int,
+                crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                    effect,
+                    Box::new([Type::Variable(parameter)]),
+                )),
+            ),
+        );
+        summary.implementations[0].fact.methods[0].scheme.value_type = Type::function_computation(
+            Type::Int,
+            crate::types::ComputationType::new(
+                Type::Int,
+                crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                    effect,
+                    Box::new([Type::Int]),
+                )),
+            ),
+        );
+
+        summary
+            .authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .expect("the effectful method summary should match after interface substitution");
     }
 
     #[test]
@@ -25316,6 +26299,7 @@ mod tests {
             direct_dependencies: Vec::new(),
             declaration_order: vec![ResolvedDeclarationIndex::Interface(0)],
             interfaces: vec![interface],
+            effects: Vec::new(),
             implementations: Vec::new(),
             definitions: Vec::new(),
             export_candidate: ResolvedExportCandidate::default(),
@@ -25484,6 +26468,7 @@ mod tests {
                 ResolvedDeclarationIndex::Implementation(0),
             ],
             interfaces: Vec::new(),
+            effects: Vec::new(),
             implementations: Vec::new(),
             definitions: Vec::new(),
             export_candidate: ResolvedExportCandidate::default(),
@@ -25503,6 +26488,10 @@ mod tests {
             hidden_constructor_order: Vec::new(),
             interface_names: HashMap::new(),
             interface_name_order: Vec::new(),
+            effect_names: HashMap::new(),
+            effect_name_order: Vec::new(),
+            effects: Vec::new(),
+            effect_positions: HashMap::new(),
             method_names: HashMap::new(),
             method_name_order: Vec::new(),
             interfaces: Vec::new(),
@@ -25625,6 +26614,7 @@ mod tests {
                     direct_dependencies: Vec::new(),
                     declaration_order: vec![ResolvedDeclarationIndex::Global(0)],
                     interfaces: Vec::new(),
+                    effects: Vec::new(),
                     implementations: Vec::new(),
                     definitions: vec![ResolvedDefinition {
                         kind: ResolvedDefinitionKind::Equational(ResolvedEquationalGlobal {
@@ -25903,6 +26893,8 @@ mod tests {
                     constructors: Box::new([]),
                     nominal_positions: HashMap::new(),
                     constructor_positions: HashMap::new(),
+                    effects: Box::new([]),
+                    effect_positions: HashMap::new(),
                     nominal_parameters: HashMap::from([(
                         nominal,
                         vec![parameter(generated_origin(&source, DEPTH))].into_boxed_slice(),
@@ -25948,6 +26940,7 @@ mod tests {
                     direct_dependencies: Vec::new(),
                     declaration_order: Vec::new(),
                     interfaces: Vec::new(),
+                    effects: Vec::new(),
                     implementations: Vec::new(),
                     definitions: Vec::new(),
                     export_candidate,
@@ -26147,6 +27140,7 @@ mod tests {
             direct_dependencies,
             declaration_order: Vec::new(),
             interfaces: Vec::new(),
+            effects: Vec::new(),
             implementations: Vec::new(),
             definitions: Vec::new(),
             export_candidate: ResolvedExportCandidate::default(),
@@ -26349,6 +27343,7 @@ mod tests {
             direct_dependencies: Vec::new(),
             declaration_order: Vec::new(),
             interfaces: Vec::new(),
+            effects: Vec::new(),
             implementations: Vec::new(),
             definitions: Vec::new(),
             export_candidate,
@@ -26444,6 +27439,7 @@ mod tests {
             direct_dependencies: Vec::new(),
             declaration_order: Vec::new(),
             interfaces: Vec::new(),
+            effects: Vec::new(),
             implementations: vec![implementation],
             definitions: Vec::new(),
             export_candidate: ResolvedExportCandidate::default(),
@@ -26539,6 +27535,7 @@ mod tests {
                     direct_dependencies: Vec::new(),
                     declaration_order: Vec::new(),
                     interfaces: Vec::new(),
+                    effects: Vec::new(),
                     implementations: Vec::new(),
                     definitions: Vec::new(),
                     export_candidate,
@@ -26641,6 +27638,7 @@ mod tests {
                     direct_dependencies: Vec::new(),
                     declaration_order: Vec::new(),
                     interfaces: Vec::new(),
+                    effects: Vec::new(),
                     implementations: Vec::new(),
                     definitions: Vec::new(),
                     export_candidate,
@@ -26757,6 +27755,7 @@ mod tests {
             direct_dependencies: Vec::new(),
             declaration_order: Vec::new(),
             interfaces: Vec::new(),
+            effects: Vec::new(),
             implementations: Vec::new(),
             definitions: Vec::new(),
             export_candidate,
@@ -26884,6 +27883,7 @@ mod tests {
             direct_dependencies: vec![DirectDependencyRoute::new(base, interface_span)],
             declaration_order: Vec::new(),
             interfaces: Vec::new(),
+            effects: Vec::new(),
             implementations: Vec::new(),
             definitions: Vec::new(),
             export_candidate,

@@ -15,6 +15,8 @@ pub(super) enum ExpressionPrefixForm {
     Block,
     Function,
     Match,
+    Handler,
+    Resume,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,6 +27,7 @@ pub(super) enum PrimaryForm {
     Qualified,
     UpperIdentifier,
     Parenthesized,
+    Perform,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -129,6 +132,8 @@ const CURRENT_ASH_DIALECT: ParserDialect = ParserDialect {
         ExpressionPrefixForm::Block,
         ExpressionPrefixForm::Function,
         ExpressionPrefixForm::Match,
+        ExpressionPrefixForm::Handler,
+        ExpressionPrefixForm::Resume,
     ],
     expression: ExpressionDialect {
         primary_forms: &[
@@ -138,6 +143,7 @@ const CURRENT_ASH_DIALECT: ParserDialect = ParserDialect {
             PrimaryForm::Qualified,
             PrimaryForm::UpperIdentifier,
             PrimaryForm::Parenthesized,
+            PrimaryForm::Perform,
         ],
         infix: &[
             InfixDescriptor {
@@ -371,6 +377,7 @@ fn expect_upper_identifier(parser: &mut Parser<'_>) {
 fn starts_module_declaration(parser: &Parser<'_>) -> bool {
     parser.at(&TokenKind::Type)
         || parser.at(&TokenKind::Newtype)
+        || parser.at(&TokenKind::Effect)
         || parser.at(&TokenKind::Interface)
         || parser.at(&TokenKind::Impl)
         || starts_global(parser)
@@ -380,6 +387,7 @@ fn starts_module_declaration(parser: &Parser<'_>) -> bool {
                 Some(
                     TokenKind::Type
                         | TokenKind::Newtype
+                        | TokenKind::Effect
                         | TokenKind::Opaque
                         | TokenKind::Interface
                         | TokenKind::Impl
@@ -401,6 +409,10 @@ fn module_declaration(parser: &mut Parser<'_>) -> TypeParametersOutcome {
         || parser.at(&TokenKind::Pub) && matches!(parser.nth(1), Some(TokenKind::Interface))
     {
         interface_declaration(parser)
+    } else if parser.at(&TokenKind::Effect)
+        || parser.at(&TokenKind::Pub) && matches!(parser.nth(1), Some(TokenKind::Effect))
+    {
+        effect_declaration(parser)
     } else if parser.at(&TokenKind::Impl)
         || parser.at(&TokenKind::Pub) && matches!(parser.nth(1), Some(TokenKind::Impl))
     {
@@ -432,6 +444,104 @@ enum TypeParameterOwnerBoundary {
     Implementation,
     Interface,
     InterfaceMethod,
+    Effect,
+}
+
+fn effect_declaration(parser: &mut Parser<'_>) -> TypeParametersOutcome {
+    parser.start(NodeKind::EffectDeclaration);
+    if parser.at(&TokenKind::Pub) {
+        let _ = parser.bump();
+    }
+    let _ = parser.expect(&TokenKind::Effect, ExpectedForm::Identifier);
+    let recovery_start = parser.pending_recovery_count();
+    if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+        let _ = parser.bump();
+        if parser.at(&TokenKind::Less) {
+            let outcome = type_parameters(parser, TypeParameterOwnerBoundary::Effect);
+            if outcome.stops_declaration() {
+                parser.finish();
+                return outcome;
+            }
+        }
+    } else {
+        report_pending_expected(parser, ExpectedForm::Identifier);
+    }
+    recover_pending_header(
+        parser,
+        recovery_start,
+        HeaderRecoveryBoundary::OpeningBrace(SynchronizationBoundary::InterfaceBodyOpeningBrace),
+    );
+    if !declaration_body_starts(
+        parser,
+        SynchronizationBoundary::InterfaceBodyOpeningBrace,
+        SynchronizationBoundary::InterfaceClosingBrace,
+    ) {
+        parser.finish();
+        return TypeParametersOutcome::Complete;
+    }
+    let _ = parser.bump();
+    let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+    let mut has_operation = false;
+    loop {
+        if matches!(parser.current(), Some(TokenKind::Identifier(_))) {
+            has_operation = true;
+            effect_operation(parser);
+        } else if matches!(
+            parser.current(),
+            Some(TokenKind::RightBrace | TokenKind::EndOfFile)
+        ) {
+            break;
+        } else {
+            has_operation = true;
+            recover_effect_operation(parser);
+        }
+        if parser.at(&TokenKind::LineEnd) {
+            let _ = parser.bump();
+        }
+    }
+    if !has_operation {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::EffectOperation);
+    }
+    let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
+    parser.finish();
+    TypeParametersOutcome::Complete
+}
+
+fn effect_operation(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::EffectOperation);
+    let recovery_start = parser.pending_recovery_count();
+    binder(parser);
+    if !parser.at(&TokenKind::Colon) {
+        report_pending_expected(parser, ExpectedForm::Colon);
+        consume_to_line_or_brace(parser);
+    } else {
+        let _ = parser.bump();
+        if starts_type(parser) {
+            type_expression(parser);
+        } else {
+            report_pending_expected(parser, ExpectedForm::Type);
+            consume_to_line_or_brace(parser);
+        }
+    }
+    resolve_line_eof_or_brace(
+        parser,
+        recovery_start,
+        SynchronizationBoundary::InterfaceClosingBrace,
+    );
+    parser.finish();
+}
+
+fn recover_effect_operation(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::Error);
+    let recovery_start = parser.pending_recovery_count();
+    report_pending_expected(parser, ExpectedForm::EffectOperation);
+    consume_to_line_or_brace(parser);
+    resolve_line_eof_or_brace(
+        parser,
+        recovery_start,
+        SynchronizationBoundary::InterfaceClosingBrace,
+    );
+    parser.finish();
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1379,7 +1489,7 @@ fn inline_operational_global(parser: &mut Parser<'_>) -> TypeParametersOutcome {
     }
     let _ = parser.expect(&TokenKind::RightParen, ExpectedForm::RightParen);
     let _ = parser.expect(&TokenKind::Arrow, ExpectedForm::Arrow);
-    type_expression(parser);
+    computation_type(parser);
     if parser.at(&TokenKind::Where) {
         where_clause(
             parser,
@@ -1407,6 +1517,8 @@ pub(super) fn expression(parser: &mut Parser<'_>) {
         Some(ExpressionPrefixForm::Block) => block_expression(parser),
         Some(ExpressionPrefixForm::Function) => function_expression(parser),
         Some(ExpressionPrefixForm::Match) => match_expression(parser),
+        Some(ExpressionPrefixForm::Handler) => handler_expression(parser),
+        Some(ExpressionPrefixForm::Resume) => resume_expression(parser),
         None => expression::operator_expression(parser),
     }
 }
@@ -1420,7 +1532,75 @@ fn expression_prefix_form(parser: &Parser<'_>) -> Option<ExpressionPrefixForm> {
             ExpressionPrefixForm::Block => parser.at(&TokenKind::LeftBrace),
             ExpressionPrefixForm::Function => parser.at(&TokenKind::Fn),
             ExpressionPrefixForm::Match => parser.at(&TokenKind::Match),
+            ExpressionPrefixForm::Handler => parser.at(&TokenKind::Handle),
+            ExpressionPrefixForm::Resume => parser.at(&TokenKind::Resume),
         })
+}
+
+fn resume_expression(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::ResumeExpression);
+    let _ = parser.bump();
+    expression(parser);
+    parser.finish();
+}
+
+fn handler_expression(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::HandlerExpression);
+    let _ = parser.bump();
+    expression(parser);
+    let _ = parser.expect(&TokenKind::With, ExpectedForm::Expression);
+    effect_instance(parser);
+    let _ = parser.expect(&TokenKind::LeftBrace, ExpectedForm::LeftBrace);
+    let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+    if matches!(
+        parser.current(),
+        Some(TokenKind::RightBrace | TokenKind::EndOfFile)
+    ) {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+    while !matches!(
+        parser.current(),
+        Some(TokenKind::RightBrace | TokenKind::EndOfFile)
+    ) {
+        parser.start(NodeKind::HandlerClause);
+        binder(parser);
+        pattern(parser);
+        let _ = parser.expect(&TokenKind::FatArrow, ExpectedForm::FatArrow);
+        expression(parser);
+        parser.finish();
+        if parser.at(&TokenKind::LineEnd) {
+            let _ = parser.bump();
+        } else {
+            break;
+        }
+    }
+    let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
+    parser.finish();
+}
+
+pub(super) fn perform_expression(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::PerformExpression);
+    let _ = parser.bump();
+    parser.start(NodeKind::OperationReference);
+    if parser.nth(1) == Some(&TokenKind::Dot)
+        && matches!(parser.nth(2), Some(TokenKind::UpperIdentifier(_)))
+    {
+        qualified_name(parser, true);
+    } else {
+        expect_upper_identifier(parser);
+    }
+    if parser.at(&TokenKind::Less) {
+        type_arguments(parser);
+    }
+    let _ = parser.expect(&TokenKind::Dot, ExpectedForm::Identifier);
+    expect_lower_identifier(parser);
+    parser.finish();
+    if expression::starts_primary(parser) {
+        expression::primary_expression(parser);
+    } else {
+        parser.report(ParseReason::ExpectedOperand, ExpectedForm::Operand);
+    }
+    parser.finish();
 }
 
 fn match_expression(parser: &mut Parser<'_>) {
@@ -1769,6 +1949,7 @@ fn at_type_parameter_owner(parser: &Parser<'_>, owner: TypeParameterOwnerBoundar
         }
         TypeParameterOwnerBoundary::Interface => parser.at(&TokenKind::LeftBrace),
         TypeParameterOwnerBoundary::InterfaceMethod => parser.at(&TokenKind::Colon),
+        TypeParameterOwnerBoundary::Effect => parser.at(&TokenKind::LeftBrace),
     }
 }
 
@@ -1805,6 +1986,7 @@ const fn type_parameter_owner_boundary(
         TypeParameterOwnerBoundary::InterfaceMethod => {
             SynchronizationBoundary::InterfaceMethodColon
         }
+        TypeParameterOwnerBoundary::Effect => SynchronizationBoundary::InterfaceBodyOpeningBrace,
     }
 }
 
@@ -1862,7 +2044,7 @@ fn kind_atom(parser: &mut Parser<'_>, owner: TypeParameterOwnerBoundary) -> bool
         return false;
     }
     match parser.current() {
-        Some(TokenKind::UpperIdentifier(name)) if name == "Type" => {
+        Some(TokenKind::UpperIdentifier(name)) if name == "Type" || name == "EffectRow" => {
             let _ = parser.bump();
             true
         }
@@ -1924,6 +2106,7 @@ fn at_kind_owner(parser: &Parser<'_>, owner: TypeParameterOwnerBoundary) -> bool
                 Some(TokenKind::UpperIdentifier(name)) if name == "Type"
             ) && starts_implementation_interface_application(parser)
         }
+        TypeParameterOwnerBoundary::Effect => parser.at(&TokenKind::LeftBrace),
         _ => at_type_parameter_owner(parser, owner),
     }
 }
@@ -2082,6 +2265,55 @@ fn type_expression(parser: &mut Parser<'_>) {
         } else {
             parser.consume_rest();
         }
+        if parser.at(&TokenKind::Bang) {
+            let _ = parser.bump();
+            effect_row(parser);
+        }
+    }
+    parser.finish();
+}
+
+fn computation_type(parser: &mut Parser<'_>) {
+    type_expression(parser);
+    if parser.at(&TokenKind::Bang) {
+        let _ = parser.bump();
+        effect_row(parser);
+    }
+}
+
+fn effect_row(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::EffectRow);
+    let _ = parser.expect(&TokenKind::LeftBrace, ExpectedForm::EffectRow);
+    if parser.at(&TokenKind::Pipe) {
+        let _ = parser.bump();
+        expect_upper_identifier(parser);
+    } else if matches!(parser.current(), Some(TokenKind::UpperIdentifier(_))) {
+        effect_instance(parser);
+        while parser.at(&TokenKind::Comma) {
+            let _ = parser.bump();
+            effect_instance(parser);
+        }
+        if parser.at(&TokenKind::Pipe) {
+            let _ = parser.bump();
+            expect_upper_identifier(parser);
+        }
+    }
+    let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::EffectRow);
+    parser.finish();
+}
+
+fn effect_instance(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::EffectInstance);
+    if parser
+        .nth(1)
+        .is_some_and(|kind| matches!(kind, TokenKind::Dot))
+    {
+        qualified_name(parser, true);
+    } else {
+        expect_upper_identifier(parser);
+    }
+    if parser.at(&TokenKind::Less) {
+        type_arguments(parser);
     }
     parser.finish();
 }
@@ -2253,6 +2485,8 @@ mod tests {
             ShadowPrefixForm::Existing(ExpressionPrefixForm::Block) => "block parser",
             ShadowPrefixForm::Existing(ExpressionPrefixForm::Function) => "function parser",
             ShadowPrefixForm::Existing(ExpressionPrefixForm::Match) => "match parser",
+            ShadowPrefixForm::Existing(ExpressionPrefixForm::Handler) => "handler parser",
+            ShadowPrefixForm::Existing(ExpressionPrefixForm::Resume) => "resume parser",
             ShadowPrefixForm::Mock(node) => mock_nested_feature::parse(node),
         }
     }

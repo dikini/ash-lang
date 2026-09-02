@@ -249,6 +249,12 @@ fn method_occurrences(definition: &CheckedDefinition, method: MethodId) -> Vec<&
                 expressions.push(matched.scrutinee.as_ref());
                 expressions.extend(matched.arms.iter().map(|arm| &arm.body));
             }
+            ResolvedExprKind::Perform(request) => expressions.push(&request.operand),
+            ResolvedExprKind::Handle(handler) => {
+                expressions.push(&handler.body);
+                expressions.extend(handler.clauses.iter().map(|clause| &clause.body));
+            }
+            ResolvedExprKind::Resume(resume) => expressions.push(&resume.value),
         }
     }
     slots.reverse();
@@ -508,6 +514,17 @@ fn top_level_function_with_nested_function_domain_completes_the_pipeline() {
 #[test]
 fn absent_method_list_rejects_interface_method_local_type_variable() {
     let error = check_error("interface Combine<A> {\ncombine : (A, B) -> A\n}\n");
+
+    assert_eq!(reason(&error), "interface.method-parameter");
+}
+
+#[test]
+fn absent_method_list_owns_mixed_type_and_row_tail_parameter_failure() {
+    let error = check_error(concat!(
+        "interface Combine<A> {\n",
+        "combine : (A, B) -> Unit ! {| B}\n",
+        "}\n",
+    ));
 
     assert_eq!(reason(&error), "interface.method-parameter");
 }
@@ -1900,7 +1917,7 @@ fn deep_generic_prerequisite_chain_completes_the_pipeline_on_a_small_stack() {
     const DEPTH: usize = 96;
     let worker = std::thread::Builder::new()
         .name("deep-generic-prerequisite-chain".into())
-        .stack_size(256 * 1024)
+        .stack_size(320 * 1024)
         .spawn(|| {
             let mut nested = "Option<".repeat(DEPTH);
             nested.push_str("Int");

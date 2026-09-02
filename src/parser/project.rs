@@ -7,13 +7,15 @@ use crate::{
         ApplicationExpr, BinaryExpr, EquationalGlobal, FunctionExpr, FunctionType,
         InlineOperationalGlobal, SurfaceBinder, SurfaceBinding, SurfaceBlock,
         SurfaceConstructorDeclaration, SurfaceDeclarationIndex, SurfaceDefinition,
-        SurfaceDefinitionKind, SurfaceDeterminationSide, SurfaceEquation, SurfaceExpr,
-        SurfaceExprKind, SurfaceExternalInterface, SurfaceImplementation, SurfaceImport,
-        SurfaceImportItem, SurfaceImportSelection, SurfaceInlineOperationalHeader,
-        SurfaceInterfaceDeclaration, SurfaceInterfaceDetermination, SurfaceInterfaceMethod,
-        SurfaceKind, SurfaceKindKind, SurfaceLocalDeclaration, SurfaceMatchArm, SurfaceMatchExpr,
-        SurfaceModule, SurfaceModulePath, SurfaceName, SurfaceNominalDeclarationKind,
-        SurfacePattern, SurfacePatternKind, SurfaceQualifiedName, SurfaceRecursiveGroup,
+        SurfaceDefinitionKind, SurfaceDeterminationSide, SurfaceEffectDeclaration,
+        SurfaceEffectInstance, SurfaceEffectOperation, SurfaceEffectRow, SurfaceEquation,
+        SurfaceExpr, SurfaceExprKind, SurfaceExternalInterface, SurfaceHandleExpr,
+        SurfaceHandlerClause, SurfaceImplementation, SurfaceImport, SurfaceImportItem,
+        SurfaceImportSelection, SurfaceInlineOperationalHeader, SurfaceInterfaceDeclaration,
+        SurfaceInterfaceDetermination, SurfaceInterfaceMethod, SurfaceKind, SurfaceKindKind,
+        SurfaceLocalDeclaration, SurfaceMatchArm, SurfaceMatchExpr, SurfaceModule,
+        SurfaceModulePath, SurfaceName, SurfaceNominalDeclarationKind, SurfacePattern,
+        SurfacePatternKind, SurfacePerformExpr, SurfaceQualifiedName, SurfaceRecursiveGroup,
         SurfaceRecursiveMember, SurfaceReference, SurfaceRequirement, SurfaceType,
         SurfaceTypeDeclaration, SurfaceTypeKind, SurfaceTypeParameter, SurfaceTypeVisibility,
         SurfaceTypedPattern,
@@ -158,7 +160,7 @@ fn structural_weight(node: &ConcreteNode) -> usize {
         {
             super::PATTERN_STRUCTURAL_WEIGHT
         }
-        NodeKind::MatchExpression => super::MATCH_STRUCTURAL_WEIGHT,
+        NodeKind::MatchExpression | NodeKind::HandlerExpression => super::MATCH_STRUCTURAL_WEIGHT,
         NodeKind::Type if child_nodes(node).any(|child| child.kind == NodeKind::Type) => 1,
         NodeKind::Kind if child_nodes(node).any(|child| child.kind == NodeKind::Kind) => 1,
         _ => 0,
@@ -217,6 +219,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             while shape.peek_node_is(NodeKind::TypeDeclaration)
                 || shape.peek_node_is(NodeKind::NewtypeDeclaration)
                 || shape.peek_node_is(NodeKind::InterfaceDeclaration)
+                || shape.peek_node_is(NodeKind::EffectDeclaration)
                 || shape.peek_node_is(NodeKind::ImplementationDeclaration)
                 || shape.peek_node_is(NodeKind::EquationalGlobal)
                 || shape.peek_node_is(NodeKind::InlineOperationalGlobal)
@@ -376,6 +379,29 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             shape.token(&TokenKind::Colon)?;
             shape.node(NodeKind::Type)?;
         }
+        NodeKind::EffectDeclaration => {
+            shape.optional_token(&TokenKind::Pub)?;
+            shape.token(&TokenKind::Effect)?;
+            shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            if shape.peek_node_is(NodeKind::TypeParameters) {
+                shape.node(NodeKind::TypeParameters)?;
+            }
+            shape.token(&TokenKind::LeftBrace)?;
+            shape.token(&TokenKind::LineEnd)?;
+            shape.node(NodeKind::EffectOperation)?;
+            while shape.peek_token_is(&TokenKind::LineEnd) {
+                shape.token(&TokenKind::LineEnd)?;
+                if shape.peek_node_is(NodeKind::EffectOperation) {
+                    shape.node(NodeKind::EffectOperation)?;
+                }
+            }
+            shape.token(&TokenKind::RightBrace)?;
+        }
+        NodeKind::EffectOperation => {
+            shape.node(NodeKind::Binder)?;
+            shape.token(&TokenKind::Colon)?;
+            shape.node(NodeKind::Type)?;
+        }
         NodeKind::WhereClause => {
             shape.token(&TokenKind::Where)?;
             shape.node(NodeKind::InterfaceApplication)?;
@@ -479,6 +505,10 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             shape.token(&TokenKind::RightParen)?;
             shape.token(&TokenKind::Arrow)?;
             shape.node(NodeKind::Type)?;
+            if shape.peek_token_is(&TokenKind::Bang) {
+                shape.token(&TokenKind::Bang)?;
+                shape.node(NodeKind::EffectRow)?;
+            }
             if shape.peek_node_is(NodeKind::WhereClause) {
                 shape.node(NodeKind::WhereClause)?;
             }
@@ -553,6 +583,55 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             shape.token(&TokenKind::FatArrow)?;
             shape.expression()?;
         }
+        NodeKind::HandlerExpression => {
+            shape.token(&TokenKind::Handle)?;
+            shape.expression()?;
+            shape.token(&TokenKind::With)?;
+            shape.node(NodeKind::EffectInstance)?;
+            shape.token(&TokenKind::LeftBrace)?;
+            shape.token(&TokenKind::LineEnd)?;
+            shape.node(NodeKind::HandlerClause)?;
+            while shape.peek_token_is(&TokenKind::LineEnd) {
+                shape.token(&TokenKind::LineEnd)?;
+                if shape.peek_node_is(NodeKind::HandlerClause) {
+                    shape.node(NodeKind::HandlerClause)?;
+                }
+            }
+            shape.token(&TokenKind::RightBrace)?;
+        }
+        NodeKind::HandlerClause => {
+            shape.node(NodeKind::Binder)?;
+            shape.node(NodeKind::Pattern)?;
+            shape.token(&TokenKind::FatArrow)?;
+            shape.expression()?;
+        }
+        NodeKind::ResumeExpression => {
+            shape.token(&TokenKind::Resume)?;
+            shape.expression()?;
+        }
+        NodeKind::PerformExpression => {
+            shape.token(&TokenKind::Perform)?;
+            shape.node(NodeKind::OperationReference)?;
+            shape.node(NodeKind::PrimaryExpression)?;
+        }
+        NodeKind::OperationReference => {
+            if shape.peek_node_is(NodeKind::QualifiedName) {
+                shape.node(NodeKind::QualifiedName)?;
+            } else {
+                shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            }
+            if shape.peek_token_is(&TokenKind::Less) {
+                shape.token(&TokenKind::Less)?;
+                shape.node(NodeKind::Type)?;
+                while shape.peek_token_is(&TokenKind::Comma) {
+                    shape.token(&TokenKind::Comma)?;
+                    shape.node(NodeKind::Type)?;
+                }
+                shape.token(&TokenKind::Greater)?;
+            }
+            shape.token(&TokenKind::Dot)?;
+            shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
+        }
         NodeKind::EqualityExpression => shape.binary(&TokenKind::EqualEqual)?,
         NodeKind::AdditiveExpression => shape.binary(&TokenKind::Plus)?,
         NodeKind::MultiplicativeExpression => shape.binary(&TokenKind::Star)?,
@@ -563,6 +642,8 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
         NodeKind::PrimaryExpression => {
             if shape.peek_node_is(NodeKind::ParenthesizedExpression) {
                 shape.node(NodeKind::ParenthesizedExpression)?;
+            } else if shape.peek_node_is(NodeKind::PerformExpression) {
+                shape.node(NodeKind::PerformExpression)?;
             } else if shape.peek_node_is(NodeKind::QualifiedName) {
                 shape.node(NodeKind::QualifiedName)?;
             } else {
@@ -664,6 +745,44 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             if shape.peek_token_is(&TokenKind::Arrow) {
                 shape.token(&TokenKind::Arrow)?;
                 shape.node(NodeKind::Type)?;
+                if shape.peek_token_is(&TokenKind::Bang) {
+                    shape.token(&TokenKind::Bang)?;
+                    shape.node(NodeKind::EffectRow)?;
+                }
+            }
+        }
+        NodeKind::EffectRow => {
+            shape.token(&TokenKind::LeftBrace)?;
+            if shape.peek_token_is(&TokenKind::Pipe) {
+                shape.token(&TokenKind::Pipe)?;
+                shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            } else if shape.peek_node_is(NodeKind::EffectInstance) {
+                shape.node(NodeKind::EffectInstance)?;
+                while shape.peek_token_is(&TokenKind::Comma) {
+                    shape.token(&TokenKind::Comma)?;
+                    shape.node(NodeKind::EffectInstance)?;
+                }
+                if shape.peek_token_is(&TokenKind::Pipe) {
+                    shape.token(&TokenKind::Pipe)?;
+                    shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+                }
+            }
+            shape.token(&TokenKind::RightBrace)?;
+        }
+        NodeKind::EffectInstance => {
+            if shape.peek_node_is(NodeKind::QualifiedName) {
+                shape.node(NodeKind::QualifiedName)?;
+            } else {
+                shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            }
+            if shape.peek_token_is(&TokenKind::Less) {
+                shape.token(&TokenKind::Less)?;
+                shape.node(NodeKind::Type)?;
+                while shape.peek_token_is(&TokenKind::Comma) {
+                    shape.token(&TokenKind::Comma)?;
+                    shape.node(NodeKind::Type)?;
+                }
+                shape.token(&TokenKind::Greater)?;
             }
         }
         NodeKind::Kind => {
@@ -671,7 +790,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                 shape.node(NodeKind::ParenthesizedKind)?;
             } else {
                 shape.token_matching(
-                    |kind| matches!(kind, TokenKind::UpperIdentifier(name) if name == "Type"),
+                    |kind| matches!(kind, TokenKind::UpperIdentifier(name) if name == "Type" || name == "EffectRow"),
                 )?;
             }
             if shape.peek_token_is(&TokenKind::Arrow) {
@@ -893,6 +1012,7 @@ fn project_surface_module(
     let mut declaration_order = Vec::new();
     let mut type_declarations = Vec::new();
     let mut interfaces = Vec::new();
+    let mut effects = Vec::new();
     let mut implementations = Vec::new();
     let mut definitions = Vec::new();
     for child in child_nodes(node) {
@@ -909,6 +1029,10 @@ fn project_surface_module(
             NodeKind::InterfaceDeclaration => {
                 declaration_order.push(SurfaceDeclarationIndex::Interface(interfaces.len()));
                 interfaces.push(project_interface_declaration(source, child, tokens)?);
+            }
+            NodeKind::EffectDeclaration => {
+                declaration_order.push(SurfaceDeclarationIndex::Effect(effects.len()));
+                effects.push(project_effect_declaration(source, child, tokens)?);
             }
             NodeKind::ImplementationDeclaration => {
                 declaration_order.push(SurfaceDeclarationIndex::Implementation(
@@ -928,8 +1052,53 @@ fn project_surface_module(
         declaration_order,
         type_declarations,
         interfaces,
+        effects,
         implementations,
         definitions,
+        span: node_span(source, node, tokens)?,
+    })
+}
+
+fn project_effect_declaration(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<SurfaceEffectDeclaration, ProjectionError> {
+    require_kind(node, NodeKind::EffectDeclaration)?;
+    let public = direct_tokens(node, tokens).any(|token| token.kind == TokenKind::Pub);
+    let name = direct_tokens(node, tokens)
+        .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+        .map(surface_name)
+        .transpose()?
+        .ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))?;
+    let parameters = project_optional_type_parameters(source, node, tokens)?.unwrap_or_default();
+    let operations = child_nodes(node)
+        .filter(|child| child.kind == NodeKind::EffectOperation)
+        .map(|operation| project_effect_operation(source, operation, tokens))
+        .collect::<Result<Vec<_>, _>>()?;
+    if operations.is_empty() {
+        return malformed(InternalReason::UnexpectedShape);
+    }
+    Ok(SurfaceEffectDeclaration {
+        public,
+        name,
+        parameters,
+        operations,
+        span: node_span(source, node, tokens)?,
+    })
+}
+
+fn project_effect_operation(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<SurfaceEffectOperation, ProjectionError> {
+    require_kind(node, NodeKind::EffectOperation)?;
+    Ok(SurfaceEffectOperation {
+        name: project_binder(only_child_of_kind(node, NodeKind::Binder)?, tokens)?.name,
+        annotation: project_type(source, only_child_of_kind(node, NodeKind::Type)?, tokens)?,
         span: node_span(source, node, tokens)?,
     })
 }
@@ -1311,6 +1480,9 @@ fn project_definition(
                 .collect::<Result<Vec<_>, _>>()?;
             let result_type =
                 project_type(source, only_child_of_kind(header, NodeKind::Type)?, tokens)?;
+            let result_effects = optional_child_of_kind(header, NodeKind::EffectRow)?
+                .map(|row| project_effect_row(source, row, tokens))
+                .transpose()?;
             let requirements = project_requirements(source, header, tokens)?;
             let body = project_block(source, only_child_of_kind(node, NodeKind::Block)?, tokens)?;
             SurfaceDefinitionKind::InlineOperational(InlineOperationalGlobal {
@@ -1319,6 +1491,7 @@ fn project_definition(
                     type_parameters: project_optional_type_parameters(source, header, tokens)?,
                     parameters,
                     result_type,
+                    result_effects,
                     requirements,
                     span: node_span(source, header, tokens)?,
                 },
@@ -1513,11 +1686,81 @@ fn project_expression(
                     );
                     tasks.push(ExpressionTask::Visit(scrutinee));
                 }
+                NodeKind::PerformExpression => {
+                    let reference = only_child_of_kind(node, NodeKind::OperationReference)?;
+                    let (effect, arguments, operation) =
+                        project_operation_reference(source, reference, tokens)?;
+                    let operand = expression_child(node)?;
+                    tasks.push(ExpressionTask::FinishPerform {
+                        effect,
+                        arguments,
+                        operation,
+                        span: node_span(source, node, tokens)?,
+                    });
+                    tasks.push(ExpressionTask::Visit(operand));
+                }
+                NodeKind::ResumeExpression => {
+                    let value = expression_child(node)?;
+                    tasks.push(ExpressionTask::FinishResume(node_span(
+                        source, node, tokens,
+                    )?));
+                    tasks.push(ExpressionTask::Visit(value));
+                }
+                NodeKind::HandlerExpression => {
+                    let body = expression_child(node)?;
+                    let effect = project_effect_instance(
+                        source,
+                        only_child_of_kind(node, NodeKind::EffectInstance)?,
+                        tokens,
+                    )?;
+                    let clauses = child_nodes(node)
+                        .filter(|child| child.kind == NodeKind::HandlerClause)
+                        .map(|clause| {
+                            let operation = project_binder(
+                                only_child_of_kind(clause, NodeKind::Binder)?,
+                                tokens,
+                            )?
+                            .name;
+                            let pattern = project_pattern(
+                                source,
+                                only_child_of_kind(clause, NodeKind::Pattern)?,
+                                tokens,
+                            )?;
+                            Ok((
+                                operation,
+                                pattern,
+                                expression_child(clause)?,
+                                node_span(source, clause, tokens)?,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, ProjectionError>>()?;
+                    tasks.push(ExpressionTask::FinishHandle {
+                        effect,
+                        clauses: clauses
+                            .iter()
+                            .map(|(operation, pattern, _, span)| {
+                                (operation.clone(), pattern.clone(), *span)
+                            })
+                            .collect(),
+                        span: node_span(source, node, tokens)?,
+                    });
+                    tasks.extend(
+                        clauses
+                            .into_iter()
+                            .rev()
+                            .map(|(_, _, body, _)| ExpressionTask::Visit(body)),
+                    );
+                    tasks.push(ExpressionTask::Visit(body));
+                }
                 NodeKind::PrimaryExpression => {
                     if let Some(group) =
                         optional_child_of_kind(node, NodeKind::ParenthesizedExpression)?
                     {
                         schedule_group(source, group, tokens, &mut tasks, &mut projected)?;
+                    } else if let Some(perform) =
+                        optional_child_of_kind(node, NodeKind::PerformExpression)?
+                    {
+                        tasks.push(ExpressionTask::Visit(perform));
                     } else if let Some(name) =
                         optional_child_of_kind(node, NodeKind::QualifiedName)?
                     {
@@ -1608,6 +1851,71 @@ fn project_expression(
                     kind: SurfaceExprKind::Match(SurfaceMatchExpr {
                         scrutinee: Box::new(scrutinee),
                         arms: projected_arms,
+                    }),
+                    span,
+                });
+            }
+            ExpressionTask::FinishPerform {
+                effect,
+                arguments,
+                operation,
+                span,
+            } => {
+                let operand = projected.pop().ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                projected.push(SurfaceExpr {
+                    kind: SurfaceExprKind::Perform(SurfacePerformExpr {
+                        effect,
+                        arguments,
+                        operation,
+                        operand: Box::new(operand),
+                    }),
+                    span,
+                });
+            }
+            ExpressionTask::FinishResume(span) => {
+                let value = projected.pop().ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                projected.push(SurfaceExpr {
+                    kind: SurfaceExprKind::Resume(Box::new(value)),
+                    span,
+                });
+            }
+            ExpressionTask::FinishHandle {
+                effect,
+                clauses,
+                span,
+            } => {
+                let split = projected
+                    .len()
+                    .checked_sub(clauses.len().saturating_add(1))
+                    .ok_or(ProjectionError::MalformedTree(
+                        InternalReason::UnexpectedShape,
+                    ))?;
+                let mut expressions = projected.split_off(split).into_iter();
+                let body = expressions.next().ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                let clauses = clauses
+                    .into_iter()
+                    .map(|(operation, pattern, clause_span)| {
+                        Ok(SurfaceHandlerClause {
+                            operation,
+                            pattern,
+                            body: expressions.next().ok_or(ProjectionError::MalformedTree(
+                                InternalReason::UnexpectedShape,
+                            ))?,
+                            span: clause_span,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, ProjectionError>>()?;
+                projected.push(SurfaceExpr {
+                    kind: SurfaceExprKind::Handle(SurfaceHandleExpr {
+                        body: Box::new(body),
+                        effect,
+                        clauses,
                     }),
                     span,
                 });
@@ -1715,6 +2023,18 @@ enum ExpressionTask<'a> {
         operator_span: Span,
     },
     FinishApplication,
+    FinishPerform {
+        effect: SurfaceReference,
+        arguments: Vec<SurfaceType>,
+        operation: SurfaceName,
+        span: Span,
+    },
+    FinishResume(Span),
+    FinishHandle {
+        effect: SurfaceEffectInstance,
+        clauses: Vec<(SurfaceName, SurfacePattern, Span)>,
+        span: Span,
+    },
     FinishTuple {
         count: usize,
         span: Span,
@@ -2177,11 +2497,13 @@ fn project_kind(
             .ok_or(ProjectionError::MalformedTree(
                 InternalReason::UnexpectedShape,
             ))?;
-        if !matches!(&token.kind, TokenKind::UpperIdentifier(name) if name == "Type") {
-            return malformed(InternalReason::UnexpectedShape);
-        }
+        let kind = match &token.kind {
+            TokenKind::UpperIdentifier(name) if name == "Type" => SurfaceKindKind::Type,
+            TokenKind::UpperIdentifier(name) if name == "EffectRow" => SurfaceKindKind::EffectRow,
+            _ => return malformed(InternalReason::UnexpectedShape),
+        };
         SurfaceKind {
-            kind: SurfaceKindKind::Type,
+            kind,
             span: token.span,
         }
     };
@@ -2211,7 +2533,13 @@ fn project_type(
                 require_kind(node, NodeKind::Type)?;
                 let atomic = only_child_of_kind(node, NodeKind::AtomicType)?;
                 if let Some(codomain) = optional_child_of_kind(node, NodeKind::Type)? {
-                    tasks.push(TypeTask::FinishFunction(node_span(source, node, tokens)?));
+                    let effects = optional_child_of_kind(node, NodeKind::EffectRow)?
+                        .map(|row| project_effect_row(source, row, tokens))
+                        .transpose()?;
+                    tasks.push(TypeTask::FinishFunction {
+                        span: node_span(source, node, tokens)?,
+                        effects,
+                    });
                     tasks.push(TypeTask::VisitType(codomain));
                     tasks.push(TypeTask::VisitAtomic(atomic));
                 } else {
@@ -2276,7 +2604,7 @@ fn project_type(
                     }
                 }
             }
-            TypeTask::FinishFunction(span) => {
+            TypeTask::FinishFunction { span, effects } => {
                 let codomain = projected.pop().ok_or(ProjectionError::MalformedTree(
                     InternalReason::UnexpectedShape,
                 ))?;
@@ -2287,6 +2615,7 @@ fn project_type(
                     kind: SurfaceTypeKind::Function(FunctionType {
                         domain: Box::new(domain),
                         codomain: Box::new(codomain),
+                        effects,
                     }),
                     span,
                 });
@@ -2342,10 +2671,93 @@ fn project_type(
     ))
 }
 
+fn project_effect_row(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<SurfaceEffectRow, ProjectionError> {
+    require_kind(node, NodeKind::EffectRow)?;
+    let mut effects = Vec::new();
+    for instance in child_nodes(node).filter(|child| child.kind == NodeKind::EffectInstance) {
+        effects.push(project_effect_instance(source, instance, tokens)?);
+    }
+    let tail = direct_tokens(node, tokens)
+        .filter(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+        .last()
+        .map(surface_name)
+        .transpose()?;
+    Ok(SurfaceEffectRow {
+        effects,
+        tail,
+        span: node_span(source, node, tokens)?,
+    })
+}
+
+fn project_effect_instance(
+    source: &SourceFile,
+    instance: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<SurfaceEffectInstance, ProjectionError> {
+    require_kind(instance, NodeKind::EffectInstance)?;
+    let qualified = optional_child_of_kind(instance, NodeKind::QualifiedName)?
+        .map(|name| project_qualified_name(source, name, tokens))
+        .transpose()?;
+    let effect = if let Some(name) = qualified {
+        SurfaceReference::Qualified(name)
+    } else {
+        let token = direct_tokens(instance, tokens)
+            .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+            .ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
+        SurfaceReference::Unqualified(surface_name(token)?)
+    };
+    let arguments = child_nodes(instance)
+        .filter(|child| child.kind == NodeKind::Type)
+        .map(|argument| project_type(source, argument, tokens))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(SurfaceEffectInstance {
+        effect,
+        arguments,
+        span: node_span(source, instance, tokens)?,
+    })
+}
+
+fn project_operation_reference(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<(SurfaceReference, Vec<SurfaceType>, SurfaceName), ProjectionError> {
+    require_kind(node, NodeKind::OperationReference)?;
+    let effect = if let Some(qualified) = optional_child_of_kind(node, NodeKind::QualifiedName)? {
+        SurfaceReference::Qualified(project_qualified_name(source, qualified, tokens)?)
+    } else {
+        let token = direct_tokens(node, tokens)
+            .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+            .ok_or(ProjectionError::MalformedTree(
+                InternalReason::UnexpectedShape,
+            ))?;
+        SurfaceReference::Unqualified(surface_name(token)?)
+    };
+    let arguments = child_nodes(node)
+        .filter(|child| child.kind == NodeKind::Type)
+        .map(|argument| project_type(source, argument, tokens))
+        .collect::<Result<Vec<_>, _>>()?;
+    let operation = direct_tokens(node, tokens)
+        .find(|token| matches!(token.kind, TokenKind::Identifier(_)))
+        .ok_or(ProjectionError::MalformedTree(
+            InternalReason::UnexpectedShape,
+        ))?;
+    Ok((effect, arguments, surface_name(operation)?))
+}
+
 enum TypeTask<'a> {
     VisitType(&'a ConcreteNode),
     VisitAtomic(&'a ConcreteNode),
-    FinishFunction(Span),
+    FinishFunction {
+        span: Span,
+        effects: Option<SurfaceEffectRow>,
+    },
     FinishTuple {
         count: usize,
         span: Span,
@@ -2455,6 +2867,9 @@ const fn is_expression_kind(kind: NodeKind) -> bool {
         NodeKind::Block
             | NodeKind::FunctionExpression
             | NodeKind::MatchExpression
+            | NodeKind::HandlerExpression
+            | NodeKind::ResumeExpression
+            | NodeKind::PerformExpression
             | NodeKind::TupleExpression
             | NodeKind::EqualityExpression
             | NodeKind::AdditiveExpression

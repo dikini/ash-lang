@@ -54,6 +54,18 @@ const MODULE_NEWTYPE_MODULE: &str = concat!(
     "main () = increment(UserId(41))\n",
 );
 
+const EFFECT_MODULE: &str = concat!(
+    "effect Cell {\n",
+    "    read : Unit -> Int\n",
+    "    write : Int -> Unit\n",
+    "}\n\n",
+    "main : Unit -> Int\n",
+    "main () = handle (perform Cell.read ()) with Cell {\n",
+    "    read ignored => resume 42\n",
+    "    write value => resume ()\n",
+    "}\n",
+);
+
 const MAIN_MODULE: &str = "main : Unit -> Int\nmain () = 42\n";
 const SIBLING_ENTRY_MODULE: &str =
     "import arithmetic as Arithmetic\n\nmain : Unit -> Int\nmain () = Arithmetic.answer(())\n";
@@ -337,7 +349,16 @@ const CORE_KIND_MODULE: &str = concat!(
     "main () = keep(Some(42))\n",
 );
 
-const PHASE_DEPENDENT_NO_KIND_INFERENCE: &str = "Every omitted declaration kind annotation, and every binder introduced by an omitted global or implementation binder list, is fixed to `Type`. Ash does not infer a kind for those binders. This is the current phase-dependent language constraint, not a commitment against a later bounded declaration-local inference rule.";
+const PHASE_DEPENDENT_NO_KIND_INFERENCE: &str = concat!(
+    "Every omitted declaration kind annotation and every binder introduced by an\n",
+    "omitted implementation binder list is fixed to `Type`. An omitted global list\n",
+    "discovers ordinary free type variables and effect-row-tail variables in their\n",
+    "shared first-occurrence order. A name occurring only in ordinary type positions\n",
+    "has kind `Type`; one occurring only as an effect-row tail has kind `EffectRow`;\n",
+    "using the same name in both roles is invalid. Ash does not infer a function\n",
+    "kind from use. This is the current phase-dependent language constraint, not a\n",
+    "commitment against a later bounded declaration-local inference rule.",
+);
 
 const EXPLICIT_KIND_RULE_FRAGMENTS: &[(&str, &str)] = &[
     (
@@ -660,6 +681,33 @@ fn exact_last_range(source: &str, needle: &str) -> (u32, u32) {
 fn overview_main_application_example_is_executable() {
     assert_observation("main.ash", MAIN_MODULE, "42", "Int");
     assert_documented("README.md", MAIN_MODULE);
+}
+
+#[test]
+fn effect_examples_have_exact_observations_and_reasons() {
+    assert_observation("effect-positive.ash", EFFECT_MODULE, "42", "Int");
+    assert_documented("spec/static-semantics.md", EFFECT_MODULE);
+
+    let nonempty_entry = concat!(
+        "effect Choice {\nchoose : Unit -> Int\n}\n",
+        "main : Unit -> Int ! {Choice}\n",
+        "main () = perform Choice.choose ()\n",
+    );
+    assert_eq!(
+        run("effect-entry-row.ash", nonempty_entry)
+            .expect_err("an entry effect must be handled")
+            .reason_code(),
+        "entry.main-effects",
+    );
+
+    let unconsumed_resume =
+        EFFECT_MODULE.replace("read ignored => resume 42", "read ignored => 42");
+    assert_eq!(
+        run("effect-resume-required.ash", &unconsumed_resume)
+            .expect_err("a handler clause must consume its resume capability")
+            .reason_code(),
+        "effect.resume-not-consumed",
+    );
 }
 
 #[test]

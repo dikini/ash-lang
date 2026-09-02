@@ -292,6 +292,45 @@ fn module_newtype_cycle_primary_is_the_first_closing_representation_occurrence()
 }
 
 #[test]
+fn module_newtype_cycle_through_effect_argument_retains_the_closing_occurrence() {
+    let text = concat!(
+        "effect Alpha<A> {\n",
+        "    alpha : Unit -> Unit\n",
+        "}\n",
+        "effect Zeta<A> {\n",
+        "    zeta : Unit -> Unit\n",
+        "}\n",
+        "newtype Left = Left(Unit -> Unit ! {Zeta<Right>, Alpha<Int>})\n",
+        "newtype Right = Right(Unit -> Unit ! {Zeta<Int>, Alpha<Left>})\n",
+    );
+    let tree = ModuleTree::create();
+    let entry = tree.write("entry.ash", text);
+    let graph =
+        load_module_graph(&entry, &ModuleRoots::empty()).expect("fixture module graph should load");
+    let resolved = resolve_module(module_named(&graph, "entry.ash"), &[])
+        .expect("effect-argument representations should resolve");
+
+    let TypeError::Source(error) = check_module(resolved)
+        .expect_err("a cycle through effect arguments should be rejected by checking")
+    else {
+        panic!("the effect-argument cycle should retain a source diagnostic");
+    };
+    assert_eq!(error.reason, TypeReason::NewtypeRecursiveRepresentation);
+    let closing = text
+        .rfind("Left>})")
+        .expect("the closing effect argument should remain present");
+    assert_eq!(
+        error.primary.span().range().start(),
+        u32::try_from(closing).expect("fixture offset should fit")
+    );
+    assert_eq!(
+        error.primary.span().range().end(),
+        u32::try_from(closing + "Left".len()).expect("fixture offset should fit")
+    );
+    assert_eq!(error.related.len(), 2);
+}
+
+#[test]
 fn module_newtype_representation_kind_failure_precedes_cycle_checking() {
     let tree = ModuleTree::create();
     let entry = tree.write("entry.ash", "newtype UserId = UserId(UserId<Int>)\n");

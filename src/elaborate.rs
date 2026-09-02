@@ -1,6 +1,7 @@
 //! Bidirectional typed elaboration from resolved surface syntax to pure Core.
 
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     error::Error,
     fmt,
@@ -10,13 +11,15 @@ use std::{
 
 use crate::{
     core::dialect::{
-        MethodEvidenceAnchorRole, MethodEvidenceOwner,
-        MethodEvidenceProducer as CoreMethodEvidenceProducer,
+        CoreOperationFamily, MethodEvidenceAnchorRole, MethodEvidenceOwner,
+        MethodEvidenceProducer as CoreMethodEvidenceProducer, PureOperationFamily,
     },
+    core::effect::{EffectOperationFamily, clone_effect_instance_with_budget},
     core::{
         BuildError, CORE_PAYLOAD_DEPTH_LIMIT, CoreBuilder, CoreMatchArm, CorePattern,
-        CorePatternKind, NewtypeConversionDirection, NodeId, Primitive, TypedBinder,
-        UnvalidatedProgram,
+        CorePatternKind, EffectClause, EffectExprKind, EffectOperation, HandlerId, HandlerNode,
+        NewtypeConversionDirection, NodeId, Primitive, RequestNode, ResumeNode, ResumeUse,
+        TypedBinder, function::ApplicationNode,
     },
     diagnostic::{Diagnostic, SourceLabel},
     evidence::{
@@ -49,15 +52,19 @@ use crate::{
         ResolvedExprKind, ResolvedLocalDeclaration, ResolvedModule, ResolvedModuleGroup,
         ResolvedModuleProgram, ResolvedNominalDeclarationKind, ResolvedPattern,
         ResolvedPatternKind, ResolvedRecursiveGroup, ResolvedRegistry, ResolvedType,
-        ResolvedTypeProvenance, ResolvedTypeProvenanceNode,
+        ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResumeId,
         clone_resolved_type_variable_with_budget,
     },
     source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
     types::{
+        ComputationType, EffectInstance, EffectRow, EffectRowError, EffectRowVariable,
         InferenceVariableId, IterativeTypeOwner, Kind, Type, TypeVariableId, TypeWorkBudget,
-        charge_type_cells, clone_kind_with_budget, clone_kinded_type_parameters_with_budget,
-        discard_type_iteratively, replace_type_iteratively, same_kind_with_budget,
-        same_kinded_type_parameters_with_budget, same_type, same_type_with_budget,
+        charge_type_cells, clone_effect_row_with_budget, clone_kind_with_budget,
+        clone_kinded_type_parameters_with_budget, compare_effect_instances_with_budget,
+        discard_type_iteratively, effect_row_from_owned_parts_with_budget,
+        rebuild_effect_row_with_budget, replace_type_iteratively, same_effect_rows_with_budget,
+        same_kind_with_budget, same_kinded_type_parameters_with_budget, same_type,
+        same_type_with_budget, substitute_type_and_row_variables_with,
         substitute_type_variables_with,
     },
 };
@@ -109,6 +116,195 @@ pub enum TypeReason {
     PolymorphicRecursion,
     /// A module newtype representation reaches itself through newtype declarations.
     NewtypeRecursiveRepresentation,
+    /// An effect-row union has no unqualified principal result.
+    AmbiguousEffectRow,
+    /// A handler body does not request the exact handled instance.
+    MissingHandledEffect,
+    /// Handler clauses do not cover each operation exactly once.
+    HandlerCoverage,
+    /// A handler operation pattern can fail.
+    RefutableHandlerPattern,
+    /// A resume form occurs outside an operation clause.
+    ResumeOutsideClause,
+    /// A clause can complete without consuming its resume capability.
+    ResumeNotConsumed,
+    /// One control-flow path consumes a resume capability more than once.
+    ResumeAlreadyConsumed,
+    /// A nested scope attempts to capture a resume capability.
+    ResumeCapture,
+}
+
+/// Projects source computation arrows onto the predecessor pure-Core type
+/// grammar used while this checkpoint checks bodies but does not retain Core.
+/// Source schemes and expression rows remain unchanged; effect Core lowering
+/// owns the corresponding computation nodes in the next checkpoint.
+fn pure_core_type_with_budget(ty: &Type, budget: &mut TypeWorkBudget) -> Result<Type, ()> {
+    charge_type_cells(ty, budget)?;
+    pure_core_type_from_precharged(ty)
+}
+
+fn pure_core_type_from_precharged(ty: &Type) -> Result<Type, ()> {
+    enum Task<'a> {
+        Visit(&'a Type),
+        Sequence(std::slice::Iter<'a, Type>),
+        Tuple(usize),
+        Application,
+        Function,
+        Forall(Box<[(TypeVariableId, Kind)]>),
+    }
+
+    let mut work = vec![Task::Visit(ty)];
+    let mut rebuilt = OwnedTypeBuffer(Vec::new());
+    while let Some(task) = work.pop() {
+        match task {
+            Task::Visit(Type::Int) => rebuilt.push(Type::Int),
+            Task::Visit(Type::Bool) => rebuilt.push(Type::Bool),
+            Task::Visit(Type::Unit) => rebuilt.push(Type::Unit),
+            Task::Visit(Type::Nominal(identity)) => rebuilt.push(Type::Nominal(*identity)),
+            Task::Visit(Type::Variable(identity)) => rebuilt.push(Type::Variable(*identity)),
+            Task::Visit(Type::Inference(identity)) => rebuilt.push(Type::Inference(*identity)),
+            Task::Visit(Type::Tuple(elements)) => {
+                work.push(Task::Tuple(elements.len()));
+                work.push(Task::Sequence(elements.iter()));
+            }
+            Task::Visit(Type::Application(function, argument)) => {
+                work.push(Task::Application);
+                work.push(Task::Visit(argument));
+                work.push(Task::Visit(function));
+            }
+            Task::Visit(Type::Function(domain, codomain)) => {
+                work.push(Task::Function);
+                work.push(Task::Visit(codomain));
+                work.push(Task::Visit(domain));
+            }
+            Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
+                work.push(Task::Function);
+                work.push(Task::Visit(codomain.value()));
+                work.push(Task::Visit(domain));
+            }
+            Task::Visit(Type::Forall(parameters, body)) => {
+                work.push(Task::Forall(parameters.clone()));
+                work.push(Task::Visit(body));
+            }
+            Task::Sequence(mut remaining) => {
+                if let Some(next) = remaining.next() {
+                    work.push(Task::Sequence(remaining));
+                    work.push(Task::Visit(next));
+                }
+            }
+            Task::Tuple(count) => {
+                let elements = rebuilt.split_off(rebuilt.len() - count);
+                rebuilt.push(Type::Tuple(elements.into_boxed_slice()));
+            }
+            Task::Application => {
+                let argument = IterativeTypeOwner::new(rebuilt.pop().ok_or(())?);
+                let function = IterativeTypeOwner::new(rebuilt.pop().ok_or(())?);
+                rebuilt.push(Type::Application(
+                    Box::new(function.into_inner()),
+                    Box::new(argument.into_inner()),
+                ));
+            }
+            Task::Function => {
+                let codomain = IterativeTypeOwner::new(rebuilt.pop().ok_or(())?);
+                let domain = IterativeTypeOwner::new(rebuilt.pop().ok_or(())?);
+                rebuilt.push(Type::Function(
+                    Box::new(domain.into_inner()),
+                    Box::new(codomain.into_inner()),
+                ));
+            }
+            Task::Forall(parameters) => {
+                let body = IterativeTypeOwner::new(rebuilt.pop().ok_or(())?);
+                rebuilt.push(Type::Forall(parameters, Box::new(body.into_inner())));
+            }
+        }
+    }
+    if rebuilt.len() == 1 {
+        rebuilt.pop().ok_or(())
+    } else {
+        Err(())
+    }
+}
+
+fn project_type_from_precharged<F: CoreLoweringFamily>(
+    ty: &Type,
+    budget: &mut TypeWorkBudget,
+) -> Result<Type, ()> {
+    if F::ALLOWS_EFFECTFUL_TYPES {
+        clone_type_with_budget(ty, budget)
+    } else {
+        pure_core_type_from_precharged(ty)
+    }
+}
+
+fn pure_core_type_parameters_with_budget(
+    parameters: &[(TypeVariableId, Kind)],
+    budget: &mut TypeWorkBudget,
+) -> Result<Vec<(TypeVariableId, Kind)>, ()> {
+    let retained = parameters
+        .iter()
+        .filter(|(_, kind)| !matches!(kind, Kind::EffectRow))
+        .count();
+    budget.charge(retained)?;
+    let mut core = Vec::new();
+    core.try_reserve_exact(retained).map_err(|_| ())?;
+    for (identity, kind) in parameters {
+        if matches!(kind, Kind::EffectRow) {
+            continue;
+        }
+        core.push((*identity, clone_kind_with_budget(kind, budget)?));
+    }
+    Ok(core)
+}
+
+fn requires_pure_core_projection(
+    ty: &Type,
+    mut budget: Option<&mut TypeWorkBudget>,
+) -> Result<bool, ()> {
+    fn schedule<'a>(
+        work: &mut Vec<&'a Type>,
+        ty: &'a Type,
+        budget: &mut Option<&mut TypeWorkBudget>,
+    ) -> Result<(), ()> {
+        if let Some(budget) = budget.as_deref_mut() {
+            budget.charge(1)?;
+        }
+        work.try_reserve(1).map_err(|_| ())?;
+        work.push(ty);
+        Ok(())
+    }
+
+    let mut work = Vec::new();
+    schedule(&mut work, ty, &mut budget)?;
+    while let Some(current) = work.pop() {
+        match current {
+            Type::EffectfulFunction(_, _) => return Ok(true),
+            Type::Tuple(elements) => {
+                for element in elements {
+                    schedule(&mut work, element, &mut budget)?;
+                }
+            }
+            Type::Application(function, argument) | Type::Function(function, argument) => {
+                schedule(&mut work, argument, &mut budget)?;
+                schedule(&mut work, function, &mut budget)?;
+            }
+            Type::Forall(parameters, body) => {
+                if parameters
+                    .iter()
+                    .any(|(_, kind)| matches!(kind, Kind::EffectRow))
+                {
+                    return Ok(true);
+                }
+                schedule(&mut work, body, &mut budget)?;
+            }
+            Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Nominal(_)
+            | Type::Variable(_)
+            | Type::Inference(_) => {}
+        }
+    }
+    Ok(false)
 }
 
 impl fmt::Display for TypeReason {
@@ -142,6 +338,16 @@ impl fmt::Display for TypeReason {
             Self::NewtypeRecursiveRepresentation => {
                 formatter.write_str("newtype.recursive-representation")
             }
+            Self::AmbiguousEffectRow => formatter.write_str("effect.row-union-ambiguous"),
+            Self::MissingHandledEffect => formatter.write_str("effect.handler-missing-input"),
+            Self::HandlerCoverage => formatter.write_str("effect.handler-coverage"),
+            Self::RefutableHandlerPattern => {
+                formatter.write_str("effect.handler-refutable-pattern")
+            }
+            Self::ResumeOutsideClause => formatter.write_str("effect.resume-outside-clause"),
+            Self::ResumeNotConsumed => formatter.write_str("effect.resume-not-consumed"),
+            Self::ResumeAlreadyConsumed => formatter.write_str("effect.resume-already-consumed"),
+            Self::ResumeCapture => formatter.write_str("effect.resume-capture"),
         }
     }
 }
@@ -190,6 +396,8 @@ pub enum ElaborationFailure {
     Core(BuildError),
     /// The explicit elaboration work stack lost an invariant.
     InvalidState,
+    /// Effect syntax reached a checkpoint that still retains only pure Core.
+    EffectCoreUnavailable,
     /// Pattern coverage exceeded its deterministic compiler resource budget.
     CoverageResourceExhausted,
     /// Cumulative inference and type construction exceeded its work budget.
@@ -205,6 +413,7 @@ impl ElaborationFailure {
         match self {
             Self::Core(_) => "internal.core-build",
             Self::InvalidState => "type.internal",
+            Self::EffectCoreUnavailable => "effect.core-unavailable",
             Self::CoverageResourceExhausted => "internal.resource.coverage",
             Self::TypeResourceExhausted => "internal.resource.type-work",
             Self::ConstraintResourceExhausted => "internal.resource.constraint-work",
@@ -217,6 +426,9 @@ impl fmt::Display for ElaborationFailure {
         match self {
             Self::Core(error) => write!(formatter, "typed Core construction failed: {error}"),
             Self::InvalidState => formatter.write_str("typed elaboration state is inconsistent"),
+            Self::EffectCoreUnavailable => {
+                formatter.write_str("effect syntax requires the effect Core checkpoint")
+            }
             Self::CoverageResourceExhausted => {
                 formatter.write_str("pattern coverage resource limit exceeded")
             }
@@ -529,6 +741,21 @@ impl TypeProvenance {
                     });
                     roots.push(nodes.len() - 1);
                 }
+                Type::EffectfulFunction(domain, codomain) if !visited => {
+                    tasks.push((current, true));
+                    tasks.push((codomain.value(), false));
+                    tasks.push((domain, false));
+                }
+                Type::EffectfulFunction(_, _) => {
+                    let codomain = roots.pop().unwrap_or(0);
+                    let domain = roots.pop().unwrap_or(0);
+                    nodes.push(TypeProvenanceNode::Function {
+                        span,
+                        domain,
+                        codomain,
+                    });
+                    roots.push(nodes.len() - 1);
+                }
                 Type::Application(function, argument) if !visited => {
                     tasks.push((current, true));
                     tasks.push((argument, false));
@@ -595,11 +822,11 @@ impl TypeProvenance {
                     Cursor::Resolved(resolved, resolved.root())
                 }
                 Cursor::Provenance(provenance @ Self::Function { .. }) => {
-                    if let (Type::Function(domain, codomain), Self::Function { parts, .. }) =
-                        (current, provenance)
+                    if let (Some(function), Self::Function { parts, .. }) =
+                        (current.function_view(), provenance)
                     {
-                        work.push((codomain, Cursor::Provenance(&parts.1)));
-                        work.push((domain, Cursor::Provenance(&parts.0)));
+                        work.push((function.value(), Cursor::Provenance(&parts.1)));
+                        work.push((function.domain(), Cursor::Provenance(&parts.0)));
                         continue;
                     }
                     return false;
@@ -631,28 +858,57 @@ impl TypeProvenance {
                         work.push((function, Cursor::Built(nodes, *function_node)));
                     }
                     (
-                        Type::Function(domain, codomain),
+                        Type::Function(_, _) | Type::EffectfulFunction(_, _),
                         Some(TypeProvenanceNode::Function {
                             domain: domain_node,
                             codomain: codomain_node,
                             ..
                         }),
                     ) => {
-                        work.push((codomain, Cursor::Built(nodes, *codomain_node)));
-                        work.push((domain, Cursor::Built(nodes, *domain_node)));
+                        let function = current
+                            .function_view()
+                            .expect("a physical function has a semantic function view");
+                        work.push((function.value(), Cursor::Built(nodes, *codomain_node)));
+                        work.push((function.domain(), Cursor::Built(nodes, *domain_node)));
                     }
                     _ => return false,
                 },
                 Cursor::Resolved(resolved, node) => match (current, resolved.nodes().get(node)) {
                     (
-                        Type::Function(domain, codomain),
+                        Type::Function(_, _),
                         Some(ResolvedTypeProvenanceNode::Function {
                             domain: domain_node,
                             codomain: codomain_node,
+                            effect_arguments,
                             ..
                         }),
-                    ) => {
-                        work.push((codomain, Cursor::Resolved(resolved, *codomain_node)));
+                    ) if effect_arguments.is_empty() => {
+                        let function = current
+                            .function_view()
+                            .expect("a physical function has a semantic function view");
+                        work.push((function.value(), Cursor::Resolved(resolved, *codomain_node)));
+                        work.push((function.domain(), Cursor::Resolved(resolved, *domain_node)));
+                    }
+                    (
+                        Type::EffectfulFunction(domain, codomain),
+                        Some(ResolvedTypeProvenanceNode::Function {
+                            domain: domain_node,
+                            codomain: codomain_node,
+                            effect_arguments,
+                            ..
+                        }),
+                    ) if codomain.effect_argument_count() == effect_arguments.len() => {
+                        let argument_start = work.len();
+                        work.extend(
+                            codomain
+                                .effect_arguments()
+                                .zip(effect_arguments.iter().copied())
+                                .map(|(argument, root)| {
+                                    (argument, Cursor::Resolved(resolved, root))
+                                }),
+                        );
+                        work[argument_start..].reverse();
+                        work.push((codomain.value(), Cursor::Resolved(resolved, *codomain_node)));
                         work.push((domain, Cursor::Resolved(resolved, *domain_node)));
                     }
                     (
@@ -698,9 +954,9 @@ impl TypeProvenance {
     }
 
     fn function_parts(&self, ty: &Type) -> Result<(Self, Self), TypeError> {
-        let Type::Function(_, _) = ty else {
+        if ty.function_view().is_none() {
             return Err(invalid_state());
-        };
+        }
         match self {
             Self::Built { nodes, root } => {
                 let Some(TypeProvenanceNode::Function {
@@ -767,14 +1023,37 @@ impl ProvenancedType {
         })
     }
 
+    fn function_computation_with_budget(
+        domain: Self,
+        codomain: Self,
+        effects: EffectRow,
+        span: Option<Span>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, TypeError> {
+        let mut function = Self::function_with_budget(domain, codomain, span, budget)?;
+        let Type::Function(domain, value) = function.ty else {
+            return Err(invalid_state());
+        };
+        function.ty = Type::function_computation(*domain, ComputationType::new(*value, effects));
+        Ok(function)
+    }
+
     fn into_function_parts(self) -> Result<(Self, Self), TypeError> {
         let value = ProvenancedTypeOwner::new(self);
         let (domain_provenance, codomain_provenance) =
             value.provenance.function_parts(&value.ty)?;
         let value = value.into_inner();
-        let Type::Function(domain, codomain) = value.ty else {
-            discard_type_iteratively(value.ty);
-            return Err(invalid_state());
+        let (domain, codomain) = match value.ty {
+            Type::Function(domain, codomain) => (domain, codomain),
+            Type::EffectfulFunction(domain, computation) => {
+                let crate::types::ComputationType { value, effects } = *computation;
+                drop(effects);
+                (domain, Box::new(value))
+            }
+            ty => {
+                discard_type_iteratively(ty);
+                return Err(invalid_state());
+            }
         };
         Ok((
             Self {
@@ -876,6 +1155,8 @@ pub struct TypedNode {
     pub node: NodeId,
     /// Structural result type.
     pub ty: Type,
+    /// Least effect row requested while evaluating this expression.
+    pub effects: EffectRow,
     provenance: TypeProvenance,
 }
 
@@ -965,6 +1246,10 @@ impl TypedNodeOwner {
     fn set_provenance(&mut self, provenance: TypeProvenance) {
         self.0.as_mut().expect("typed node remains live").provenance = provenance;
     }
+
+    fn replace_effects(&mut self, effects: EffectRow) {
+        self.0.as_mut().expect("typed node remains live").effects = effects;
+    }
 }
 
 impl Deref for TypedNodeOwner {
@@ -1016,6 +1301,10 @@ struct OriginOwner(Option<Origin>);
 impl OriginOwner {
     fn new(origin: Origin) -> Self {
         Self(Some(origin))
+    }
+
+    fn as_ref(&self) -> &Origin {
+        self.0.as_ref().expect("origin remains live")
     }
 
     fn into_inner(mut self) -> Origin {
@@ -1153,7 +1442,7 @@ impl Drop for TypeReplacementBuffer {
 
 fn substitute_fresh_type_variables_in_order(
     ty: &Type,
-    replacements: &[(TypeVariableId, TypeVariableId)],
+    replacements: &[(TypeVariableId, TypeVariableId, bool)],
     type_work: &mut TypeWorkBudget,
 ) -> Result<Type, ()> {
     if replacements.is_empty() {
@@ -1161,18 +1450,33 @@ fn substitute_fresh_type_variables_in_order(
     }
     type_work.charge(replacements.len())?;
     let mut replacement = TypeReplacementBuffer::new();
+    let mut row_replacement = HashMap::new();
+    let row_count = replacements.iter().filter(|(_, _, is_row)| *is_row).count();
     replacement
-        .try_reserve(replacements.len())
+        .try_reserve(replacements.len().checked_sub(row_count).ok_or(())?)
         .map_err(|_| ())?;
-    for (source, fresh) in replacements {
-        replacement.try_insert_unique(*source, Type::Variable(*fresh))?;
+    row_replacement.try_reserve(row_count).map_err(|_| ())?;
+    for (source, fresh, is_row) in replacements {
+        if replacement.as_map().contains_key(source) || row_replacement.contains_key(source) {
+            return Err(());
+        }
+        if *is_row {
+            row_replacement.insert(
+                *source,
+                EffectRow::open(EffectRowVariable::rigid(*fresh), Box::new([])),
+            );
+        } else {
+            replacement.try_insert_unique(*source, Type::Variable(*fresh))?;
+        }
     }
-    substitute_type_variables_with(
+    substitute_type_and_row_variables_with(
         ty,
         replacement.as_map(),
+        &row_replacement,
         |cells| type_work.charge(cells),
         || (),
     )
+    .map(|result| result.expect("fresh rigid row renaming preserves row constraints"))
 }
 
 #[derive(Debug, Default, Eq, PartialEq)]
@@ -1219,6 +1523,41 @@ impl Drop for InferenceSolutionMap {
         for (_, ty) in self.0.drain() {
             discard_type_iteratively(ty);
         }
+    }
+}
+
+#[derive(Debug, Default, Eq, PartialEq)]
+struct RowInferenceSolutionMap(HashMap<InferenceVariableId, EffectRow>);
+
+impl Deref for RowInferenceSolutionMap {
+    type Target = HashMap<InferenceVariableId, EffectRow>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl RowInferenceSolutionMap {
+    fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
+        self.0.try_reserve(additional)
+    }
+
+    fn insert_unique(
+        &mut self,
+        variable: InferenceVariableId,
+        row: EffectRow,
+    ) -> Result<(), EffectRow> {
+        match self.0.entry(variable) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(row);
+                Ok(())
+            }
+            std::collections::hash_map::Entry::Occupied(_) => Err(row),
+        }
+    }
+
+    fn remove(&mut self, variable: InferenceVariableId) {
+        drop(self.0.remove(&variable));
     }
 }
 
@@ -1421,8 +1760,8 @@ impl DefinitionView for CheckedDefinition {
 /// The one bidirectional typed elaborator for resolved Ash syntax.
 #[derive(Debug)]
 #[must_use]
-pub struct Elaborator {
-    builder: CoreBuilder,
+pub struct CoreElaborator<F: CoreLoweringFamily> {
+    builder: CoreBuilder<F>,
     registry: Arc<ResolvedRegistry>,
     purpose: ElaborationPurpose,
     state: ElaboratorState,
@@ -1432,6 +1771,7 @@ pub struct Elaborator {
     next_generated_type_variable: u32,
     generated_type_variables: GeneratedTypeVariableRegistry,
     inference_solutions: InferenceSolutionMap,
+    row_inference_solutions: RowInferenceSolutionMap,
     authenticated_inference_solutions: HashSet<InferenceVariableId>,
     monomorphic_recursive: HashSet<BinderId>,
     current_implementation_method: Option<CurrentImplementationMethod>,
@@ -1442,6 +1782,160 @@ pub struct Elaborator {
     constraint_work: InterfaceConstraintBudget,
     coverage_work: UsefulnessBudget,
     base_context: TypeContext,
+    active_resumes: Vec<ActiveResume>,
+    expected_effect_rows: Vec<EffectRow>,
+    next_handler: u32,
+}
+
+/// Pure Core elaboration with its uninhabited operation family.
+pub type Elaborator = CoreElaborator<PureOperationFamily>;
+/// Effect Core elaboration through the same lowering machine.
+pub type EffectElaborator = CoreElaborator<EffectOperationFamily>;
+
+#[allow(
+    private_interfaces,
+    reason = "the public elaborator aliases hide this compiler-owned budgeted family seam"
+)]
+pub trait CoreLoweringFamily: CoreOperationFamily {
+    const EFFECTS: bool;
+    #[allow(
+        clippy::result_unit_err,
+        reason = "the unit error preserves the shared type-work budget boundary"
+    )]
+    fn project_type(ty: &Type, budget: &mut TypeWorkBudget) -> Result<Type, ()>;
+    #[allow(
+        clippy::result_unit_err,
+        reason = "the unit error preserves the shared type-work budget boundary"
+    )]
+    fn project_parameters(
+        parameters: &[(TypeVariableId, Kind)],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<(TypeVariableId, Kind)>, ()>;
+    fn push_effect(
+        _builder: &mut CoreBuilder<Self>,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+        operation: EffectOperation,
+    ) -> Result<NodeId, BuildError>;
+    fn push_application(
+        builder: &mut CoreBuilder<Self>,
+        application: ApplicationNode,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        builder.application_with_effects(application, ty, effects, origin)
+    }
+    fn recompute_clause_effect_rows(
+        builder: &mut CoreBuilder<Self>,
+        range: std::ops::Range<usize>,
+        output: &EffectRow,
+        handler: HandlerId,
+        owner: ResumeId,
+    ) -> Result<(), BuildError>;
+}
+
+#[allow(
+    private_interfaces,
+    reason = "the public elaborator alias hides this compiler-owned budgeted family seam"
+)]
+impl CoreLoweringFamily for PureOperationFamily {
+    const EFFECTS: bool = false;
+    fn project_type(ty: &Type, budget: &mut TypeWorkBudget) -> Result<Type, ()> {
+        pure_core_type_with_budget(ty, budget)
+    }
+    fn project_parameters(
+        parameters: &[(TypeVariableId, Kind)],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<(TypeVariableId, Kind)>, ()> {
+        pure_core_type_parameters_with_budget(parameters, budget)
+    }
+    fn push_effect(
+        _builder: &mut CoreBuilder<Self>,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+        operation: EffectOperation,
+    ) -> Result<NodeId, BuildError> {
+        discard_type_iteratively(ty);
+        drop(effects);
+        discard_origin_iteratively(origin);
+        EffectOperationFamily::discard_metadata(EffectExprKind::Operation(operation));
+        Err(BuildError::InvalidPayload)
+    }
+    fn recompute_clause_effect_rows(
+        _builder: &mut CoreBuilder<Self>,
+        _range: std::ops::Range<usize>,
+        _output: &EffectRow,
+        _handler: HandlerId,
+        _owner: ResumeId,
+    ) -> Result<(), BuildError> {
+        Ok(())
+    }
+}
+
+#[allow(
+    private_interfaces,
+    reason = "the public elaborator alias hides this compiler-owned budgeted family seam"
+)]
+impl CoreLoweringFamily for EffectOperationFamily {
+    const EFFECTS: bool = true;
+    fn project_type(ty: &Type, budget: &mut TypeWorkBudget) -> Result<Type, ()> {
+        clone_type_with_budget(ty, budget)
+    }
+    fn project_parameters(
+        parameters: &[(TypeVariableId, Kind)],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<(TypeVariableId, Kind)>, ()> {
+        clone_kinded_type_parameters_with_budget(parameters, budget)
+    }
+    fn push_effect(
+        builder: &mut CoreBuilder<Self>,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+        operation: EffectOperation,
+    ) -> Result<NodeId, BuildError> {
+        match operation {
+            EffectOperation::Request(request) => {
+                let (effect, operation, operand) = request.into_parts();
+                builder.request(effect, operation, operand, ty, effects, origin)
+            }
+            EffectOperation::Resume(resume) => {
+                let (handler, owner, use_state, value) = resume.into_parts();
+                builder.resume(handler, owner, use_state, value, ty, effects, origin)
+            }
+            EffectOperation::Handler(handler) => {
+                let (id, body, effect, clauses) = handler.into_parts();
+                builder.handler(id, body, effect, clauses, ty, effects, origin)
+            }
+        }
+    }
+    fn recompute_clause_effect_rows(
+        builder: &mut CoreBuilder<Self>,
+        range: std::ops::Range<usize>,
+        output: &EffectRow,
+        handler: HandlerId,
+        owner: ResumeId,
+    ) -> Result<(), BuildError> {
+        builder.recompute_effect_rows_in_range(range, output, handler, owner)
+    }
+}
+
+#[derive(Debug)]
+struct ActiveResume {
+    owner: ResumeId,
+    handler: HandlerId,
+    input: Type,
+    result: Type,
+}
+
+impl Drop for ActiveResume {
+    fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.input, Type::Unit));
+        discard_type_iteratively(std::mem::replace(&mut self.result, Type::Unit));
+    }
 }
 
 #[derive(Debug)]
@@ -1471,12 +1965,36 @@ enum ElaborationPurpose {
     FinalSynthesis,
 }
 
-impl Elaborator {
+impl<F: CoreLoweringFamily> CoreElaborator<F> {
+    fn core_effect_row(&mut self, row: &EffectRow) -> Result<EffectRow, TypeError> {
+        if !F::EFFECTS {
+            return Ok(EffectRow::empty());
+        }
+        clone_effect_row_with_budget(row, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+    }
+
+    fn push_effect_core(
+        &mut self,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+        operation: EffectOperation,
+    ) -> Result<NodeId, BuildError> {
+        if self.purpose == ElaborationPurpose::ModuleCheck {
+            drop(effects);
+            EffectOperationFamily::discard_metadata(EffectExprKind::Operation(operation));
+            self.builder.unit(ty, origin)
+        } else {
+            F::push_effect(&mut self.builder, ty, effects, origin, operation)
+        }
+    }
+
     /// Starts an elaborator for an expression with no resolved binder namespace.
     pub fn new() -> Self {
         let registry = Arc::new(ResolvedRegistry::default());
         Self {
-            builder: CoreBuilder::with_registry(Arc::clone(&registry)),
+            builder: CoreBuilder::<F>::with_registry_for_family(Arc::clone(&registry)),
             registry,
             purpose: ElaborationPurpose::Standalone,
             state: ElaboratorState::Ready,
@@ -1486,6 +2004,7 @@ impl Elaborator {
             next_generated_type_variable: u32::MAX,
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
             inference_solutions: InferenceSolutionMap::default(),
+            row_inference_solutions: RowInferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
@@ -1496,6 +2015,9 @@ impl Elaborator {
             constraint_work: InterfaceConstraintBudget::default(),
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
+            active_resumes: Vec::new(),
+            expected_effect_rows: Vec::new(),
+            next_handler: 0,
         }
     }
 
@@ -1531,7 +2053,7 @@ impl Elaborator {
         mut type_work: TypeWorkBudget,
         coverage_work: UsefulnessBudget,
     ) -> Result<Self, TypeError> {
-        let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
+        let mut builder = CoreBuilder::<F>::with_registry_for_family(Arc::clone(&registry));
         builder
             .reserve_resolved_binders(resolved_module_binders(module))
             .map_err(TypeError::from)?;
@@ -1573,6 +2095,7 @@ impl Elaborator {
             next_generated_type_variable: u32::MAX,
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
             inference_solutions: InferenceSolutionMap::default(),
+            row_inference_solutions: RowInferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
@@ -1583,6 +2106,9 @@ impl Elaborator {
             constraint_work: InterfaceConstraintBudget::default(),
             coverage_work,
             base_context,
+            active_resumes: Vec::new(),
+            expected_effect_rows: Vec::new(),
+            next_handler: 0,
         })
     }
 
@@ -1596,7 +2122,7 @@ impl Elaborator {
         program: &ValidatedInterfaceProgram,
     ) -> Result<Self, ElaborationFailure> {
         let registry = Arc::clone(program.registry());
-        let mut builder = CoreBuilder::with_registry_and_method_evidence(
+        let mut builder = CoreBuilder::<F>::with_registry_and_method_evidence(
             Arc::clone(&registry),
             Arc::clone(program.method_evidence()),
         )?;
@@ -1627,6 +2153,7 @@ impl Elaborator {
             next_generated_type_variable: u32::MAX,
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
             inference_solutions: InferenceSolutionMap::default(),
+            row_inference_solutions: RowInferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
@@ -1637,6 +2164,9 @@ impl Elaborator {
             constraint_work: InterfaceConstraintBudget::default(),
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
+            active_resumes: Vec::new(),
+            expected_effect_rows: Vec::new(),
+            next_handler: 0,
         };
         elaborator.evidence_lowering = Some(elaborator.build_evidence_lowering(program).map_err(
             |error| match error {
@@ -1880,7 +2410,10 @@ impl Elaborator {
                 type_parameters.into_boxed_slice(),
             )
         } else {
-            (None, original_type_parameters)
+            let type_parameters =
+                F::project_parameters(&original_type_parameters, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            (None, type_parameters.into_boxed_slice())
         };
         let mut requirements = Vec::new();
         requirements
@@ -1962,13 +2495,13 @@ impl Elaborator {
             });
         }
 
-        let mut core_body = IterativeTypeOwner::new(self.clone_type(&value_type)?);
+        let mut core_body = IterativeTypeOwner::new(self.pure_core_type(&value_type)?);
         for requirement in requirements.iter().rev() {
             for method in requirement.methods.iter().rev() {
                 self.type_work
                     .charge(1)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                let domain = self.clone_type(&method.ty)?;
+                let domain = self.pure_core_type(&method.ty)?;
                 core_body = IterativeTypeOwner::new(Type::Function(
                     Box::new(domain),
                     Box::new(core_body.into_inner()),
@@ -1991,12 +2524,18 @@ impl Elaborator {
                         .ok_or_else(invalid_state)?,
                 )
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            ordered_replacements.extend(
-                source_parameters
-                    .iter()
-                    .zip(&type_parameters)
-                    .map(|((source, _), (fresh, _))| (*source, *fresh)),
-            );
+            for ((source, source_kind), (fresh, fresh_kind)) in
+                source_parameters.iter().zip(&type_parameters)
+            {
+                if source_kind != fresh_kind {
+                    return Err(invalid_state());
+                }
+                ordered_replacements.push((
+                    *source,
+                    *fresh,
+                    matches!(source_kind, Kind::EffectRow),
+                ));
+            }
             let renamed = substitute_fresh_type_variables_in_order(
                 &core_body,
                 &ordered_replacements,
@@ -2037,7 +2576,7 @@ impl Elaborator {
         expression: &ResolvedExpr,
     ) -> Result<Self, ElaborationFailure> {
         let registry = Arc::clone(module.registry());
-        let mut builder = CoreBuilder::with_registry(Arc::clone(&registry));
+        let mut builder = CoreBuilder::<F>::with_registry_for_family(Arc::clone(&registry));
         let mut binders = Vec::new();
         collect_expression_binders(&mut binders, vec![expression]);
         builder.reserve_resolved_binders(binders)?;
@@ -2052,6 +2591,7 @@ impl Elaborator {
             next_generated_type_variable: u32::MAX,
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
             inference_solutions: InferenceSolutionMap::default(),
+            row_inference_solutions: RowInferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
@@ -2062,6 +2602,9 @@ impl Elaborator {
             constraint_work: InterfaceConstraintBudget::default(),
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
+            active_resumes: Vec::new(),
+            expected_effect_rows: Vec::new(),
+            next_handler: 0,
         })
     }
 
@@ -2168,6 +2711,53 @@ impl Elaborator {
         {
             return Err(invalid_state());
         }
+        if checked_program_contains_effect_syntax(program, &mut self.type_work)? {
+            self.state = ElaboratorState::Poisoned;
+            return Err(TypeError::Internal(
+                ElaborationFailure::EffectCoreUnavailable,
+            ));
+        }
+        self.synthesize_module_program_after_effect_scan(program)
+    }
+
+    pub(crate) fn synthesize_module_program_after_effect_scan(
+        &mut self,
+        program: &ValidatedInterfaceProgram,
+    ) -> Result<TypedNode, TypeError> {
+        if self.state == ElaboratorState::Poisoned
+            || self.purpose != ElaborationPurpose::FinalSynthesis
+            || self.final_root.is_some()
+        {
+            return Err(invalid_state());
+        }
+        let result = self.elaborate_module_program(program);
+        match result {
+            Ok(typed) => {
+                self.final_root = Some(typed.node);
+                Ok(typed)
+            }
+            Err(error) => {
+                self.state = ElaboratorState::Poisoned;
+                Err(error)
+            }
+        }
+    }
+
+    /// Lowers checked effect syntax through the same typed elaboration rules
+    /// while selecting the named effect Core dialect.
+    pub fn synthesize_effect_module_program(
+        &mut self,
+        program: &ValidatedInterfaceProgram,
+    ) -> Result<TypedNode, TypeError> {
+        if self.state == ElaboratorState::Poisoned
+            || self.purpose != ElaborationPurpose::FinalSynthesis
+            || self.final_root.is_some()
+        {
+            return Err(invalid_state());
+        }
+        if !F::EFFECTS {
+            return Err(invalid_state());
+        }
         let result = self.elaborate_module_program(program);
         match result {
             Ok(typed) => {
@@ -2263,7 +2853,9 @@ impl Elaborator {
                         .checked_add(1)
                         .ok_or_else(invalid_state)?;
                 }
-                ResolvedDeclarationIndex::Type(_) | ResolvedDeclarationIndex::Interface(_) => {}
+                ResolvedDeclarationIndex::Type(_)
+                | ResolvedDeclarationIndex::Interface(_)
+                | ResolvedDeclarationIndex::Effect(_) => {}
             }
         }
         if next_global != module.definitions().len()
@@ -2658,9 +3250,16 @@ impl Elaborator {
                             &operational.header.result_type,
                             &mut self.type_work,
                         )?);
-                    let function = ProvenancedType::function_with_budget(
+                    let function = ProvenancedType::function_computation_with_budget(
                         domain.into_inner(),
                         codomain.into_inner(),
+                        clone_effect_row_with_budget(
+                            &operational.header.result_effects,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?,
                         Some(operational.header.span),
                         &mut self.type_work,
                     )?;
@@ -2690,7 +3289,10 @@ impl Elaborator {
     /// elaborator and names one of its allocated nodes. Returns
     /// [`ElaborationFailure::InvalidState`] if an earlier public synthesis or
     /// checking call failed.
-    pub fn finish(mut self, root: NodeId) -> Result<UnvalidatedProgram, ElaborationFailure> {
+    pub fn finish(
+        mut self,
+        root: NodeId,
+    ) -> Result<crate::core::dialect::UnvalidatedCoreProgram<F>, ElaborationFailure> {
         let root_is_authorized = match self.purpose {
             ElaborationPurpose::Standalone => self.final_root.is_none(),
             ElaborationPurpose::FinalSynthesis => self.final_root == Some(root),
@@ -2703,42 +3305,48 @@ impl Elaborator {
             let solutions = &self.inference_solutions;
             let inference_variables = &self.inference_variables;
             let authenticated_solutions = &self.authenticated_inference_solutions;
-            let type_work = &mut self.type_work;
-            self.builder.rewrite_types(|ty| {
-                let (zonked, unresolved) =
-                    zonk_type_with_status_and_inference(ty, solutions, |work| match work {
-                        ZonkWork::TypeCells(cells) => type_work
-                            .charge(cells)
-                            .map_err(|()| BuildError::TypeWorkExceeded),
-                        ZonkWork::Inference(identity) => authenticate_zonk_inference_occurrence(
-                            identity,
-                            inference_variables,
-                            solutions,
-                            authenticated_solutions,
-                            type_work,
-                        )
-                        .map_err(|failure| match failure {
-                            UnificationFailure::Resource => BuildError::TypeWorkExceeded,
-                            UnificationFailure::Mismatch
-                            | UnificationFailure::Infinite
-                            | UnificationFailure::Invariant => BuildError::InvalidPayload,
-                        }),
-                    })?;
-                if unresolved {
-                    Err(BuildError::InvalidPayload)
-                } else {
-                    Ok(zonked)
-                }
-            })?;
+            let row_solutions = &self.row_inference_solutions;
+            let type_work = RefCell::new(&mut self.type_work);
+            self.builder.rewrite_types_and_rows(
+                None,
+                |ty| {
+                    zonk_core_type(
+                        ty,
+                        solutions,
+                        row_solutions,
+                        inference_variables,
+                        authenticated_solutions,
+                        &mut type_work.borrow_mut(),
+                        true,
+                    )
+                },
+                |row| {
+                    zonk_core_effect_row(
+                        row,
+                        solutions,
+                        row_solutions,
+                        inference_variables,
+                        authenticated_solutions,
+                        &mut type_work.borrow_mut(),
+                        true,
+                    )
+                },
+            )?;
         }
         self.builder.finish(root).map_err(Into::into)
     }
 
     fn fresh_inference(&mut self, kind: &Kind, origin: Span) -> Result<Type, TypeError> {
+        if kind_mentions_effect_row(kind) {
+            return Err(invalid_state());
+        }
         self.fresh_inference_reserved(kind, origin)
     }
 
     fn fresh_inference_reserved(&mut self, kind: &Kind, origin: Span) -> Result<Type, TypeError> {
+        if kind_mentions_effect_row(kind) {
+            return Err(invalid_state());
+        }
         allocate_inference_variable(
             &mut self.next_inference,
             &mut self.inference_variables,
@@ -2748,11 +3356,31 @@ impl Elaborator {
         )
     }
 
+    #[allow(
+        dead_code,
+        reason = "the next syntax step allocates row inference through this fixed-kind seam"
+    )]
+    fn fresh_effect_row(&mut self, origin: Span) -> Result<EffectRow, TypeError> {
+        let identity = allocate_row_inference_variable(
+            &mut self.next_inference,
+            &mut self.inference_variables,
+            &mut self.type_work,
+            origin,
+        )?;
+        Ok(EffectRow::open(
+            EffectRowVariable::inference(identity),
+            Box::new([]),
+        ))
+    }
+
     fn fresh_type_variable(
         &mut self,
         kind: &Kind,
         origin: Span,
     ) -> Result<TypeVariableId, TypeError> {
+        if matches!(kind, Kind::Arrow(_, _)) && kind_mentions_effect_row(kind) {
+            return Err(invalid_state());
+        }
         let identity = TypeVariableId::generated(self.next_generated_type_variable);
         let next = self
             .next_generated_type_variable
@@ -2896,6 +3524,9 @@ impl Elaborator {
         self.inference_solutions
             .try_reserve(variables.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        self.row_inference_solutions
+            .try_reserve(variables.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         self.authenticated_inference_solutions
             .try_reserve(variables.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
@@ -2911,7 +3542,15 @@ impl Elaborator {
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 let origin = fact.origin;
                 let binder = self.fresh_type_variable(&kind, origin)?;
-                if let Err(replacement) = self
+                if matches!(kind, Kind::EffectRow) {
+                    if let Err(replacement) = self.row_inference_solutions.insert_unique(
+                        *variable,
+                        EffectRow::open(EffectRowVariable::rigid(binder), Box::new([])),
+                    ) {
+                        drop(replacement);
+                        return Err(invalid_state());
+                    }
+                } else if let Err(replacement) = self
                     .inference_solutions
                     .insert_unique(*variable, Type::Variable(binder))
                 {
@@ -2920,6 +3559,7 @@ impl Elaborator {
                 }
                 if !self.authenticated_inference_solutions.insert(*variable) {
                     self.inference_solutions.remove_and_discard(*variable);
+                    self.row_inference_solutions.remove(*variable);
                     return Err(invalid_state());
                 }
                 generalized.push((binder, kind));
@@ -2931,6 +3571,7 @@ impl Elaborator {
             Err(error) => {
                 for variable in variables.iter().take(generalized.len()) {
                     self.inference_solutions.remove_and_discard(*variable);
+                    self.row_inference_solutions.remove(*variable);
                     self.authenticated_inference_solutions.remove(variable);
                 }
                 self.generated_type_variables.truncate(generated_marker);
@@ -2945,11 +3586,12 @@ impl Elaborator {
         fact: &TypeFact,
         rigid: bool,
         origin: Span,
-    ) -> Result<(Type, Vec<Type>), TypeError> {
+    ) -> Result<(Type, Vec<Type>, Vec<EffectRow>), TypeError> {
         if fact.quantified.is_empty() {
             return Ok((
                 clone_type_with_budget(&fact.ty, &mut self.type_work)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+                Vec::new(),
                 Vec::new(),
             ));
         }
@@ -2965,10 +3607,33 @@ impl Elaborator {
         arguments
             .try_reserve(count)
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut row_replacements = HashMap::new();
+        row_replacements
+            .try_reserve(count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut row_arguments = Vec::new();
+        row_arguments
+            .try_reserve(count)
+            .map_err(|_| type_resource())?;
         let inference_marker = self.inference_variables.len();
         let next_inference = self.next_inference;
         let result = (|| {
             for (binder, kind) in &fact.quantified {
+                if matches!(kind, Kind::EffectRow) {
+                    let variable = if rigid {
+                        EffectRowVariable::rigid(*binder)
+                    } else {
+                        EffectRowVariable::inference(allocate_row_inference_variable(
+                            &mut self.next_inference,
+                            &mut self.inference_variables,
+                            &mut self.type_work,
+                            origin,
+                        )?)
+                    };
+                    row_replacements.insert(*binder, EffectRow::open(variable, Box::new([])));
+                    row_arguments.push(EffectRow::open(variable, Box::new([])));
+                    continue;
+                }
                 let argument = if rigid {
                     Type::Variable(*binder)
                 } else {
@@ -2977,14 +3642,16 @@ impl Elaborator {
                 replacements.insert(*binder, argument.clone());
                 arguments.push(argument);
             }
-            let instantiated = substitute_type_variables_with(
+            let instantiated = substitute_type_and_row_variables_with(
                 &fact.ty,
                 &replacements,
+                &row_replacements,
                 |cells| self.type_work.charge(cells),
                 || (),
             )
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            Ok((instantiated, arguments))
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+            .map_err(|_| invalid_state())?;
+            Ok((instantiated, arguments, row_arguments))
         })();
         if result.is_err() && !rigid {
             self.inference_variables.truncate(inference_marker);
@@ -3418,6 +4085,7 @@ impl Elaborator {
         binder: BinderId,
         occurrence: &crate::resolved::ResolvedOccurrence,
         arguments: &[Type],
+        row_arguments: &[EffectRow],
         span: Span,
     ) -> Result<(), TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck {
@@ -3436,8 +4104,7 @@ impl Elaborator {
         }
         let mut selector = self.selection.take().ok_or_else(invalid_state)?;
         let result = (|| {
-            let mut replacements = TypeReplacementBuffer::new();
-            let requirement_count = {
+            let (replacements, row_replacements, requirement_count) = {
                 let Some(scheme) = selector.scheme(binder) else {
                     return if occurrence.evidence.is_empty() {
                         Ok(())
@@ -3445,26 +4112,15 @@ impl Elaborator {
                         Err(invalid_state())
                     };
                 };
-                if scheme.type_parameters.len() != arguments.len()
-                    || scheme.requirements.len() != occurrence.evidence.len()
-                {
+                if scheme.requirements.len() != occurrence.evidence.len() {
                     return Err(invalid_state());
                 }
-                self.type_work
-                    .charge(scheme.type_parameters.len())
-                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                replacements
-                    .try_reserve(scheme.type_parameters.len())
-                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                for ((parameter, _), argument) in scheme.type_parameters.iter().zip(arguments) {
-                    if replacements
-                        .try_insert_unique(*parameter, self.clone_type(argument)?)
-                        .is_err()
-                    {
-                        return Err(invalid_state());
-                    }
-                }
-                scheme.requirements.len()
+                let (types, rows) = self.instantiation_replacements(
+                    &scheme.type_parameters,
+                    arguments,
+                    row_arguments,
+                )?;
+                (types, rows, scheme.requirements.len())
             };
             let declaration_span = selector
                 .scheme_declaration_span(binder)
@@ -3489,15 +4145,17 @@ impl Elaborator {
                         })?;
                     for argument in requirement.arguments() {
                         application_arguments.push(
-                            substitute_type_variables_with(
+                            substitute_type_and_row_variables_with(
                                 argument,
                                 replacements.as_map(),
+                                &row_replacements,
                                 |cells| self.type_work.charge(cells),
                                 || (),
                             )
                             .map_err(|()| {
                                 TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                            })?,
+                            })?
+                            .map_err(|_| invalid_state())?,
                         );
                     }
                     InterfaceApplication::new(
@@ -3551,7 +4209,10 @@ impl Elaborator {
                 ty: value_type.into_inner(),
                 quantified: fact_parameters,
             });
-            let (ty, arguments) = self.instantiate(&fact, false, span)?;
+            let (ty, arguments, row_arguments) = self.instantiate(&fact, false, span)?;
+            if !row_arguments.is_empty() {
+                return Err(invalid_state());
+            }
             let ty = IterativeTypeOwner::new(ty);
             let arguments = OwnedTypeBuffer(arguments);
             let interface_parameter_count = method_fact.interface_parameters().len();
@@ -3690,6 +4351,7 @@ impl Elaborator {
             Ok(TypedNode {
                 node,
                 ty: ty.into_inner(),
+                effects: EffectRow::empty(),
                 provenance,
             })
         })();
@@ -3798,6 +4460,7 @@ impl Elaborator {
             let provenance = self.at_span_provenance(&ty, declaration_span)?;
             Ok(TypedNode {
                 node: selected.node,
+                effects: EffectRow::empty(),
                 provenance,
                 ty: ty.into_inner(),
             })
@@ -4092,11 +4755,9 @@ impl Elaborator {
         &mut self,
         scheme: &LoweredScheme,
         arguments: &[Type],
+        row_arguments: &[EffectRow],
     ) -> Result<Type, TypeError> {
-        if scheme.binder_parameters().len() != arguments.len() {
-            return Err(invalid_state());
-        }
-        if arguments.is_empty() {
+        if arguments.is_empty() && row_arguments.is_empty() {
             return self.clone_type(&scheme.core_scheme);
         }
         let Type::Forall(parameters, body) = &scheme.core_scheme else {
@@ -4111,28 +4772,49 @@ impl Elaborator {
         {
             return Err(invalid_state());
         }
+        self.instantiate_lowered_source_type(parameters, body, arguments, row_arguments)
+    }
+
+    fn instantiation_replacements(
+        &mut self,
+        parameters: &[(TypeVariableId, Kind)],
+        arguments: &[Type],
+        row_arguments: &[EffectRow],
+    ) -> Result<(TypeReplacementBuffer, HashMap<TypeVariableId, EffectRow>), TypeError> {
+        if parameters.len() != arguments.len() + row_arguments.len() {
+            return Err(invalid_state());
+        }
         self.type_work
-            .charge(arguments.len())
+            .charge(parameters.len())
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let mut replacements = TypeReplacementBuffer::new();
+        let (mut replacements, mut rows) = (TypeReplacementBuffer::new(), HashMap::new());
         replacements
             .try_reserve(arguments.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        for ((parameter, _), argument) in parameters.iter().zip(arguments) {
-            if replacements
-                .try_insert_unique(*parameter, self.clone_type(argument)?)
+        rows.try_reserve(row_arguments.len())
+            .map_err(|_| type_resource())?;
+        let (mut arguments, mut row_arguments) = (arguments.iter(), row_arguments.iter());
+        for (parameter, kind) in parameters {
+            if matches!(kind, Kind::EffectRow) {
+                rows.insert(
+                    *parameter,
+                    clone_effect_row_with_budget(
+                        row_arguments.next().ok_or_else(invalid_state)?,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| type_resource())?,
+                );
+            } else if replacements
+                .try_insert_unique(
+                    *parameter,
+                    self.clone_type(arguments.next().ok_or_else(invalid_state)?)?,
+                )
                 .is_err()
             {
                 return Err(invalid_state());
             }
         }
-        substitute_type_variables_with(
-            body,
-            replacements.as_map(),
-            |cells| self.type_work.charge(cells),
-            || (),
-        )
-        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+        Ok((replacements, rows))
     }
 
     fn instantiate_lowered_source_type(
@@ -4140,32 +4822,19 @@ impl Elaborator {
         parameters: &[(TypeVariableId, Kind)],
         ty: &Type,
         arguments: &[Type],
+        row_arguments: &[EffectRow],
     ) -> Result<Type, TypeError> {
-        if parameters.len() != arguments.len() {
-            return Err(invalid_state());
-        }
-        self.type_work
-            .charge(parameters.len())
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let mut replacements = TypeReplacementBuffer::new();
-        replacements
-            .try_reserve(arguments.len())
-            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        for ((parameter, _), argument) in parameters.iter().zip(arguments) {
-            if replacements
-                .try_insert_unique(*parameter, self.clone_type(argument)?)
-                .is_err()
-            {
-                return Err(invalid_state());
-            }
-        }
-        substitute_type_variables_with(
+        let (replacements, row_replacements) =
+            self.instantiation_replacements(parameters, arguments, row_arguments)?;
+        substitute_type_and_row_variables_with(
             ty,
             replacements.as_map(),
+            &row_replacements,
             |cells| self.type_work.charge(cells),
             || (),
         )
-        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+        .map_err(|_| invalid_state())
     }
 
     fn instantiate_lowered_source_application(
@@ -4173,6 +4842,7 @@ impl Elaborator {
         parameters: &[(TypeVariableId, Kind)],
         application: &InterfaceApplication,
         arguments: &[Type],
+        row_arguments: &[EffectRow],
     ) -> Result<InterfaceApplication, TypeError> {
         self.type_work
             .charge(application.arguments().len())
@@ -4182,7 +4852,12 @@ impl Elaborator {
             .try_reserve(application.arguments().len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         for ty in application.arguments() {
-            instantiated.push(self.instantiate_lowered_source_type(parameters, ty, arguments)?);
+            instantiated.push(self.instantiate_lowered_source_type(
+                parameters,
+                ty,
+                arguments,
+                row_arguments,
+            )?);
         }
         Ok(InterfaceApplication::new(
             application.interface(),
@@ -4194,6 +4869,7 @@ impl Elaborator {
         &mut self,
         scheme: &LoweredScheme,
         arguments: &[Type],
+        row_arguments: &[EffectRow],
         occurrence: &crate::resolved::ResolvedOccurrence,
         lowering: &EvidenceLowering,
     ) -> Result<(), TypeError> {
@@ -4218,6 +4894,7 @@ impl Elaborator {
                 scheme.binder_parameters(),
                 source_application,
                 arguments,
+                row_arguments,
             )?;
             if checked_application.interface() != instantiated.interface()
                 || checked_application.arguments().len() != instantiated.arguments().len()
@@ -4464,6 +5141,7 @@ impl Elaborator {
         Ok(TypedNode {
             node,
             ty: ty.into_inner(),
+            effects: EffectRow::empty(),
             provenance,
         })
     }
@@ -4588,6 +5266,33 @@ impl Elaborator {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     })?;
                     pending.push(body);
+                }
+                Type::EffectfulFunction(domain, codomain) => {
+                    if codomain
+                        .tail_variable()
+                        .is_some_and(|variable| match variable {
+                            crate::types::EffectRowVariable::Rigid(variable) => {
+                                variables.contains(&variable)
+                            }
+                            crate::types::EffectRowVariable::Inference(_) => false,
+                        })
+                    {
+                        return Ok(true);
+                    }
+                    let argument_count = codomain.effect_argument_count();
+                    self.type_work
+                        .charge(argument_count.saturating_add(2))
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                    pending
+                        .try_reserve(argument_count.saturating_add(2))
+                        .map_err(|_| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                    codomain.extend_effect_arguments(&mut pending);
+                    pending.push(codomain.value());
+                    pending.push(domain);
                 }
                 Type::Int
                 | Type::Bool
@@ -4776,6 +5481,7 @@ impl Elaborator {
                                         origin.clone(),
                                     )?,
                                     ty: core_scheme.into_inner(),
+                                    effects: EffectRow::empty(),
                                     provenance,
                                 });
                                 let mut adapter_parameters = Vec::new();
@@ -4807,40 +5513,49 @@ impl Elaborator {
                                     ));
                                 }
                                 let mut current_arguments = OwnedTypeBuffer(Vec::new());
+                                let mut current_row_arguments = Vec::new();
                                 if !source_parameters.is_empty() {
                                     let mut arguments = OwnedTypeBuffer(Vec::new());
-                                    self.type_work.charge(source_parameters.len()).map_err(
-                                        |()| {
-                                            TypeError::Internal(
-                                                ElaborationFailure::TypeResourceExhausted,
-                                            )
-                                        },
-                                    )?;
-                                    arguments.try_reserve(source_parameters.len()).map_err(
-                                        |_| {
-                                            TypeError::Internal(
-                                                ElaborationFailure::TypeResourceExhausted,
-                                            )
-                                        },
-                                    )?;
+                                    let mut row_arguments = Vec::new();
+                                    let row_count = adapter_parameters
+                                        .iter()
+                                        .filter(|(_, kind)| matches!(kind, Kind::EffectRow))
+                                        .count();
+                                    self.type_work
+                                        .charge(source_parameters.len())
+                                        .map_err(|()| type_resource())?;
+                                    arguments
+                                        .try_reserve(source_parameters.len() - row_count)
+                                        .map_err(|_| type_resource())?;
                                     for substitution in substitution {
                                         arguments.push(self.clone_type(substitution.argument())?);
                                     }
-                                    for (parameter, _) in &adapter_parameters {
-                                        arguments.push(Type::Variable(*parameter));
+                                    row_arguments
+                                        .try_reserve(row_count)
+                                        .map_err(|_| type_resource())?;
+                                    current_row_arguments
+                                        .try_reserve(row_count)
+                                        .map_err(|_| type_resource())?;
+                                    for (parameter, kind) in &adapter_parameters {
+                                        if matches!(kind, Kind::EffectRow) {
+                                            row_arguments.push(EffectRow::open(
+                                                EffectRowVariable::rigid(*parameter),
+                                                Box::new([]),
+                                            ));
+                                            current_row_arguments.push(EffectRow::open(
+                                                EffectRowVariable::rigid(*parameter),
+                                                Box::new([]),
+                                            ));
+                                        } else {
+                                            arguments.push(Type::Variable(*parameter));
+                                        }
                                     }
-                                    self.type_work.charge(arguments.len()).map_err(|()| {
-                                        TypeError::Internal(
-                                            ElaborationFailure::TypeResourceExhausted,
-                                        )
-                                    })?;
-                                    current_arguments.try_reserve(arguments.len()).map_err(
-                                        |_| {
-                                            TypeError::Internal(
-                                                ElaborationFailure::TypeResourceExhausted,
-                                            )
-                                        },
-                                    )?;
+                                    self.type_work
+                                        .charge(source_parameters.len())
+                                        .map_err(|()| type_resource())?;
+                                    current_arguments
+                                        .try_reserve(arguments.len())
+                                        .map_err(|_| type_resource())?;
                                     for argument in arguments.iter() {
                                         current_arguments.push(self.clone_type(argument)?);
                                     }
@@ -4848,12 +5563,14 @@ impl Elaborator {
                                         self.instantiate_lowered_core_body(
                                             &lowered.scheme,
                                             &arguments,
+                                            &row_arguments,
                                         )?,
                                     );
                                     let core_ty = self.clone_type(&instantiated)?;
-                                    let node = self.builder.type_application(
+                                    let node = self.builder.type_application_with_row_arguments(
                                         current.node,
                                         arguments.into_vec(),
+                                        row_arguments,
                                         core_ty,
                                         origin.clone(),
                                     )?;
@@ -4882,6 +5599,7 @@ impl Elaborator {
                                                 source_parameters,
                                                 &target_method.application,
                                                 &current_arguments,
+                                                &current_row_arguments,
                                             )?;
                                         let canonical_method = lowering
                                             .interface_methods
@@ -4918,6 +5636,7 @@ impl Elaborator {
                                                 source_parameters,
                                                 &lowered.application,
                                                 &current_arguments,
+                                                &current_row_arguments,
                                             )
                                         })
                                         .transpose()?;
@@ -5016,26 +5735,121 @@ impl Elaborator {
         let inference_variables = &self.inference_variables;
         let authenticated_solutions = &self.authenticated_inference_solutions;
         let type_work = &mut self.type_work;
-        zonk_type_with_status_and_inference(ty, solutions, |work| match work {
-            ZonkWork::TypeCells(cells) => type_work
-                .charge(cells)
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted)),
-            ZonkWork::Inference(identity) => authenticate_zonk_inference_occurrence(
-                identity,
-                inference_variables,
-                solutions,
-                authenticated_solutions,
-                type_work,
+        let (ordinary, unresolved, has_effect_row) =
+            zonk_type_with_status_and_inference_and_rows(ty, solutions, |work| match work {
+                ZonkWork::TypeCells(cells) => type_work
+                    .charge(cells)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted)),
+                ZonkWork::Inference(identity) => authenticate_zonk_inference_occurrence(
+                    identity,
+                    inference_variables,
+                    solutions,
+                    authenticated_solutions,
+                    type_work,
+                )
+                .map_err(|failure| match failure {
+                    UnificationFailure::Resource => {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    }
+                    UnificationFailure::Mismatch
+                    | UnificationFailure::Infinite
+                    | UnificationFailure::Invariant => invalid_state(),
+                }),
+            })?;
+        if self.row_inference_solutions.is_empty() && !has_effect_row {
+            return Ok((ordinary, unresolved));
+        }
+        let zonked = if self.row_inference_solutions.is_empty() {
+            ordinary
+        } else {
+            zonk_owned_type_with_rows(
+                ordinary,
+                &HashMap::new(),
+                &self.row_inference_solutions,
+                &mut self.type_work,
             )
-            .map_err(|failure| match failure {
-                UnificationFailure::Resource => {
-                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                }
-                UnificationFailure::Mismatch
-                | UnificationFailure::Infinite
-                | UnificationFailure::Invariant => invalid_state(),
-            }),
-        })
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+        };
+        let row_unresolved = type_contains_unsolved_row_inference(
+            &zonked,
+            &self.row_inference_solutions,
+            &mut self.type_work,
+        )
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        Ok((zonked, unresolved || row_unresolved))
+    }
+
+    fn zonk_effect_row(&mut self, row: &EffectRow) -> Result<EffectRow, TypeError> {
+        let mut arguments: HashMap<*const Type, IterativeTypeOwner> = HashMap::new();
+        for member in row
+            .known()
+            .iter()
+            .chain(row.tail().into_iter().flat_map(|tail| tail.lacks().iter()))
+        {
+            for argument in member.arguments() {
+                let zonked = IterativeTypeOwner::new(self.zonk(argument)?);
+                self.type_work
+                    .charge(1)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                arguments
+                    .try_reserve(1)
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                arguments.insert(argument as *const Type, zonked);
+            }
+        }
+        let mut current = row
+            .map_type_arguments_with_budget(
+                |argument, _| {
+                    Ok::<Type, ()>(
+                        arguments
+                            .remove(&(argument as *const Type))
+                            .expect("each row argument was zonked once")
+                            .into_inner(),
+                    )
+                },
+                &mut self.type_work,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut visited = HashSet::new();
+        loop {
+            let Some(tail) = current.tail() else {
+                return Ok(current);
+            };
+            let EffectRowVariable::Inference(identity) = tail.variable() else {
+                return Ok(current);
+            };
+            let fact = self
+                .inference_variables
+                .fact(identity, &mut self.type_work)
+                .map_err(inference_registry_error)?;
+            if !same_kind_with_budget(&fact.kind, &Kind::EffectRow, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+            {
+                return Err(invalid_state());
+            }
+            let Some(solution) = self.row_inference_solutions.get(&identity) else {
+                return Ok(current);
+            };
+            self.type_work
+                .charge(1)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            visited
+                .try_reserve(1)
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            if !self.authenticated_inference_solutions.contains(&identity)
+                || !visited.insert(identity)
+            {
+                return Err(invalid_state());
+            }
+            current = current
+                .substitute_tail_once_with_budget(
+                    EffectRowVariable::inference(identity),
+                    solution,
+                    &mut self.type_work,
+                )
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+                .map_err(|_| invalid_state())?;
+        }
     }
 
     fn charge_type(&mut self, ty: &Type) -> Result<(), TypeError> {
@@ -5046,6 +5860,46 @@ impl Elaborator {
     fn clone_type(&mut self, ty: &Type) -> Result<Type, TypeError> {
         clone_type_with_budget(ty, &mut self.type_work)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+    }
+
+    fn pure_core_type(&mut self, ty: &Type) -> Result<Type, TypeError> {
+        F::project_type(ty, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+    }
+
+    fn pure_core_scheme(&mut self, fact: &TypeFact) -> Result<Type, TypeError> {
+        if F::ALLOWS_EFFECTFUL_TYPES
+            || (!fact
+                .quantified
+                .iter()
+                .any(|(_, kind)| matches!(kind, Kind::EffectRow))
+                && !requires_pure_core_projection(&fact.ty, None)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?)
+        {
+            let body = clone_type_with_budget(&fact.ty, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            if fact.quantified.is_empty() {
+                return Ok(body);
+            }
+            self.type_work
+                .charge(1)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let parameters =
+                clone_kinded_type_parameters_with_budget(&fact.quantified, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            return Ok(Type::Forall(parameters.into_boxed_slice(), Box::new(body)));
+        }
+        let zonked = IterativeTypeOwner::new(self.zonk(&fact.ty)?);
+        let body = self.pure_core_type(&zonked)?;
+        let parameters = F::project_parameters(&fact.quantified, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        if parameters.is_empty() {
+            return Ok(body);
+        }
+        self.type_work
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        Ok(Type::Forall(parameters.into_boxed_slice(), Box::new(body)))
     }
 
     fn clone_types(&mut self, types: &[Type]) -> Result<Box<[Type]>, TypeError> {
@@ -5060,6 +5914,424 @@ impl Elaborator {
             cloned.push(self.clone_type(ty)?);
         }
         Ok(cloned.into_boxed_slice())
+    }
+
+    fn solve_effect_row_variable(
+        &mut self,
+        variable: InferenceVariableId,
+        lacks: &[crate::types::EffectInstance],
+        candidate: EffectRow,
+        inserted: &mut Vec<InferenceVariableId>,
+    ) -> Result<(), UnificationFailure> {
+        let fact = self
+            .inference_variables
+            .fact(variable, &mut self.type_work)
+            .map_err(inference_registry_failure_for_unification)?;
+        if !same_kind_with_budget(&fact.kind, &Kind::EffectRow, &mut self.type_work)
+            .map_err(|()| UnificationFailure::Resource)?
+        {
+            return Err(UnificationFailure::Mismatch);
+        }
+        if self.inference_solutions.contains_key(&variable) {
+            return Err(UnificationFailure::Invariant);
+        }
+        let occurrence = rebuild_effect_row_with_budget(
+            std::iter::empty(),
+            Some(EffectRowVariable::inference(variable)),
+            lacks,
+            clone_type_with_budget,
+            &mut self.type_work,
+        )
+        .map_err(|()| UnificationFailure::Resource)?;
+        let candidate = occurrence
+            .substitute_tail_once_with_budget(
+                EffectRowVariable::inference(variable),
+                &candidate,
+                &mut self.type_work,
+            )
+            .map_err(|()| UnificationFailure::Resource)?
+            .map_err(|error| match error {
+                EffectRowError::Infinite => UnificationFailure::Infinite,
+                EffectRowError::Ambiguous | EffectRowError::Missing => UnificationFailure::Mismatch,
+            })?;
+        self.type_work
+            .charge(3)
+            .map_err(|()| UnificationFailure::Resource)?;
+        self.row_inference_solutions
+            .try_reserve(1)
+            .map_err(|_| UnificationFailure::Resource)?;
+        self.authenticated_inference_solutions
+            .try_reserve(1)
+            .map_err(|_| UnificationFailure::Resource)?;
+        inserted
+            .try_reserve(1)
+            .map_err(|_| UnificationFailure::Resource)?;
+        if let Err(candidate) = self
+            .row_inference_solutions
+            .insert_unique(variable, candidate)
+        {
+            drop(candidate);
+            return Err(UnificationFailure::Invariant);
+        }
+        if !self.authenticated_inference_solutions.insert(variable) {
+            self.row_inference_solutions.remove(variable);
+            return Err(UnificationFailure::Invariant);
+        }
+        inserted.push(variable);
+        Ok(())
+    }
+
+    #[allow(
+        dead_code,
+        reason = "the next expression-typing step routes latent rows through this transaction"
+    )]
+    fn unify_effect_rows(
+        &mut self,
+        left: &EffectRow,
+        right: &EffectRow,
+    ) -> Result<(), UnificationFailure> {
+        let mut inserted_types = Vec::new();
+        let mut inserted_rows = Vec::new();
+        let inference_marker = self.inference_variables.len();
+        let next_inference = self.next_inference;
+        let result =
+            self.unify_effect_rows_inner(left, right, &mut inserted_types, &mut inserted_rows);
+        if result.is_err() {
+            for variable in inserted_types.drain(..).rev() {
+                self.inference_solutions.remove_and_discard(variable);
+                self.authenticated_inference_solutions.remove(&variable);
+            }
+            for variable in inserted_rows.drain(..).rev() {
+                self.row_inference_solutions.remove(variable);
+                self.authenticated_inference_solutions.remove(&variable);
+            }
+            self.inference_variables.truncate(inference_marker);
+            self.next_inference = next_inference;
+        }
+        result
+    }
+
+    fn unify_effect_rows_inner(
+        &mut self,
+        left: &EffectRow,
+        right: &EffectRow,
+        inserted_types: &mut Vec<InferenceVariableId>,
+        inserted_rows: &mut Vec<InferenceVariableId>,
+    ) -> Result<(), UnificationFailure> {
+        fn map_type_error(error: TypeError) -> UnificationFailure {
+            match error {
+                TypeError::Internal(ElaborationFailure::TypeResourceExhausted) => {
+                    UnificationFailure::Resource
+                }
+                TypeError::Source(_)
+                | TypeError::Interface(_)
+                | TypeError::Mismatch(_)
+                | TypeError::Internal(_) => UnificationFailure::Invariant,
+            }
+        }
+
+        (|| {
+            let mut left = self.zonk_effect_row(left).map_err(map_type_error)?;
+            let mut right = self.zonk_effect_row(right).map_err(map_type_error)?;
+
+            // Solving an exact instance argument can collapse duplicate row
+            // members. Re-canonicalize after every such solution before
+            // deciding which members remain on either side.
+            loop {
+                self.type_work
+                    .charge(right.known().len().saturating_add(left.known().len()))
+                    .map_err(|()| UnificationFailure::Resource)?;
+                let mut exact_right = Vec::new();
+                exact_right
+                    .try_reserve(right.known().len())
+                    .map_err(|_| UnificationFailure::Resource)?;
+                exact_right.resize(right.known().len(), false);
+                let mut exact_left = Vec::new();
+                exact_left
+                    .try_reserve(left.known().len())
+                    .map_err(|_| UnificationFailure::Resource)?;
+                exact_left.resize(left.known().len(), false);
+                for (left_index, left_member) in left.known().iter().enumerate() {
+                    let mut matched = None;
+                    for (right_index, right_member) in right.known().iter().enumerate() {
+                        if exact_right[right_index] {
+                            continue;
+                        }
+                        if compare_effect_instances_with_budget(
+                            left_member,
+                            right_member,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| UnificationFailure::Resource)?
+                            == std::cmp::Ordering::Equal
+                        {
+                            matched = Some(right_index);
+                            break;
+                        }
+                    }
+                    if let Some(right_index) = matched {
+                        exact_left[left_index] = true;
+                        exact_right[right_index] = true;
+                    }
+                }
+
+                let mut progressed = false;
+                'candidate: for (left_index, left_member) in left.known().iter().enumerate() {
+                    if exact_left[left_index] {
+                        continue;
+                    }
+                    for right_member in right.known() {
+                        compare_effect_instances_with_budget(
+                            left_member,
+                            right_member,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| UnificationFailure::Resource)?;
+                        if left_member.effect() != right_member.effect()
+                            || left_member.arguments().len() != right_member.arguments().len()
+                        {
+                            continue;
+                        }
+                        let type_marker = inserted_types.len();
+                        let row_marker = inserted_rows.len();
+                        let inference_marker = self.inference_variables.len();
+                        let next_inference = self.next_inference;
+                        let result = left_member
+                            .arguments()
+                            .iter()
+                            .zip(right_member.arguments())
+                            .try_for_each(|(left_argument, right_argument)| {
+                                self.unify_recorded(
+                                    left_argument,
+                                    right_argument,
+                                    inserted_types,
+                                    inserted_rows,
+                                )
+                            });
+                        match result {
+                            Ok(())
+                                if inserted_types.len() > type_marker
+                                    || inserted_rows.len() > row_marker =>
+                            {
+                                left = self.zonk_effect_row(&left).map_err(map_type_error)?;
+                                right = self.zonk_effect_row(&right).map_err(map_type_error)?;
+                                progressed = true;
+                                break 'candidate;
+                            }
+                            Ok(())
+                            | Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
+                                self.rollback_unification_to(
+                                    inserted_types,
+                                    inserted_rows,
+                                    type_marker,
+                                    row_marker,
+                                    inference_marker,
+                                    next_inference,
+                                );
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    }
+                }
+                if !progressed {
+                    break;
+                }
+            }
+
+            self.type_work
+                .charge(left.known().len().saturating_add(right.known().len()))
+                .map_err(|()| UnificationFailure::Resource)?;
+            let mut left_matched = Vec::new();
+            left_matched
+                .try_reserve(left.known().len())
+                .map_err(|_| UnificationFailure::Resource)?;
+            left_matched.resize(left.known().len(), false);
+            let mut right_matched = Vec::new();
+            right_matched
+                .try_reserve(right.known().len())
+                .map_err(|_| UnificationFailure::Resource)?;
+            right_matched.resize(right.known().len(), false);
+            for (left_index, left_member) in left.known().iter().enumerate() {
+                let mut matched = None;
+                for (right_index, right_member) in right.known().iter().enumerate() {
+                    if right_matched[right_index] {
+                        continue;
+                    }
+                    compare_effect_instances_with_budget(
+                        left_member,
+                        right_member,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| UnificationFailure::Resource)?;
+                    if left_member.effect() == right_member.effect()
+                        && left_member.arguments().len() == right_member.arguments().len()
+                    {
+                        matched = Some((right_index, right_member));
+                        break;
+                    }
+                }
+                let Some((right_index, right_member)) = matched else {
+                    continue;
+                };
+                for (left_argument, right_argument) in
+                    left_member.arguments().iter().zip(right_member.arguments())
+                {
+                    self.unify_recorded(
+                        left_argument,
+                        right_argument,
+                        inserted_types,
+                        inserted_rows,
+                    )?;
+                }
+                left_matched[left_index] = true;
+                right_matched[right_index] = true;
+            }
+
+            let left_only_is_empty = left_matched.iter().all(|matched| *matched);
+            let right_only_is_empty = right_matched.iter().all(|matched| *matched);
+
+            match (left.tail(), right.tail()) {
+                (None, None) if left_only_is_empty && right_only_is_empty => Ok(()),
+                (Some(left_tail), Some(right_tail))
+                    if left_only_is_empty
+                        && right_only_is_empty
+                        && left_tail.variable() == right_tail.variable()
+                        && left_tail.lacks().len() == right_tail.lacks().len() =>
+                {
+                    for (left_member, right_member) in
+                        left_tail.lacks().iter().zip(right_tail.lacks())
+                    {
+                        if compare_effect_instances_with_budget(
+                            left_member,
+                            right_member,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| UnificationFailure::Resource)?
+                            != std::cmp::Ordering::Equal
+                        {
+                            return Err(UnificationFailure::Mismatch);
+                        }
+                    }
+                    Ok(())
+                }
+                (Some(left_tail), right_tail)
+                    if left_only_is_empty
+                        && matches!(left_tail.variable(), EffectRowVariable::Inference(_)) =>
+                {
+                    let EffectRowVariable::Inference(variable) = left_tail.variable() else {
+                        unreachable!()
+                    };
+                    let candidate = rebuild_effect_row_with_budget(
+                        right
+                            .known()
+                            .iter()
+                            .zip(&right_matched)
+                            .filter_map(|(member, matched)| (!matched).then_some(member)),
+                        right_tail.map(crate::types::EffectRowTail::variable),
+                        right_tail
+                            .into_iter()
+                            .flat_map(crate::types::EffectRowTail::lacks),
+                        clone_type_with_budget,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| UnificationFailure::Resource)?;
+                    self.solve_effect_row_variable(
+                        variable,
+                        left_tail.lacks(),
+                        candidate,
+                        inserted_rows,
+                    )
+                }
+                (left_tail, Some(right_tail))
+                    if right_only_is_empty
+                        && matches!(right_tail.variable(), EffectRowVariable::Inference(_)) =>
+                {
+                    let EffectRowVariable::Inference(variable) = right_tail.variable() else {
+                        unreachable!()
+                    };
+                    let candidate = rebuild_effect_row_with_budget(
+                        left.known()
+                            .iter()
+                            .zip(&left_matched)
+                            .filter_map(|(member, matched)| (!matched).then_some(member)),
+                        left_tail.map(crate::types::EffectRowTail::variable),
+                        left_tail
+                            .into_iter()
+                            .flat_map(crate::types::EffectRowTail::lacks),
+                        clone_type_with_budget,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| UnificationFailure::Resource)?;
+                    self.solve_effect_row_variable(
+                        variable,
+                        right_tail.lacks(),
+                        candidate,
+                        inserted_rows,
+                    )
+                }
+                (Some(left_tail), Some(right_tail))
+                    if matches!(left_tail.variable(), EffectRowVariable::Inference(_))
+                        && matches!(right_tail.variable(), EffectRowVariable::Inference(_))
+                        && left_tail.variable() != right_tail.variable() =>
+                {
+                    let EffectRowVariable::Inference(left_variable) = left_tail.variable() else {
+                        unreachable!()
+                    };
+                    let EffectRowVariable::Inference(right_variable) = right_tail.variable() else {
+                        unreachable!()
+                    };
+                    let origin = self
+                        .inference_variables
+                        .fact(left_variable, &mut self.type_work)
+                        .map_err(inference_registry_failure_for_unification)?
+                        .origin;
+                    let shared = allocate_row_inference_variable(
+                        &mut self.next_inference,
+                        &mut self.inference_variables,
+                        &mut self.type_work,
+                        origin,
+                    )
+                    .map_err(map_type_error)?;
+                    let shared = EffectRowVariable::inference(shared);
+                    let left_candidate = rebuild_effect_row_with_budget(
+                        right
+                            .known()
+                            .iter()
+                            .zip(&right_matched)
+                            .filter_map(|(member, matched)| (!matched).then_some(member)),
+                        Some(shared),
+                        left_tail.lacks().iter().chain(right_tail.lacks()),
+                        clone_type_with_budget,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| UnificationFailure::Resource)?;
+                    let right_candidate = rebuild_effect_row_with_budget(
+                        left.known()
+                            .iter()
+                            .zip(&left_matched)
+                            .filter_map(|(member, matched)| (!matched).then_some(member)),
+                        Some(shared),
+                        left_tail.lacks().iter().chain(right_tail.lacks()),
+                        clone_type_with_budget,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| UnificationFailure::Resource)?;
+                    self.solve_effect_row_variable(
+                        left_variable,
+                        left_tail.lacks(),
+                        left_candidate,
+                        inserted_rows,
+                    )?;
+                    self.solve_effect_row_variable(
+                        right_variable,
+                        right_tail.lacks(),
+                        right_candidate,
+                        inserted_rows,
+                    )
+                }
+                _ => Err(UnificationFailure::Mismatch),
+            }
+        })()
     }
 
     fn unknown_provenance(&mut self, ty: &Type) -> Result<TypeProvenance, TypeError> {
@@ -5111,6 +6383,54 @@ impl Elaborator {
     }
 
     fn unify(&mut self, left: &Type, right: &Type) -> Result<(), UnificationFailure> {
+        let mut inserted = Vec::new();
+        let mut inserted_rows = Vec::new();
+        let inference_marker = self.inference_variables.len();
+        let next_inference = self.next_inference;
+        let result = self.unify_recorded(left, right, &mut inserted, &mut inserted_rows);
+        if result.is_err() {
+            for variable in inserted.drain(..).rev() {
+                self.inference_solutions.remove_and_discard(variable);
+                self.authenticated_inference_solutions.remove(&variable);
+            }
+            for variable in inserted_rows.drain(..).rev() {
+                self.row_inference_solutions.remove(variable);
+                self.authenticated_inference_solutions.remove(&variable);
+            }
+            self.inference_variables.truncate(inference_marker);
+            self.next_inference = next_inference;
+        }
+        result
+    }
+
+    fn rollback_unification_to(
+        &mut self,
+        inserted_types: &mut Vec<InferenceVariableId>,
+        inserted_rows: &mut Vec<InferenceVariableId>,
+        type_marker: usize,
+        row_marker: usize,
+        inference_marker: usize,
+        next_inference: u32,
+    ) {
+        for variable in inserted_types.drain(type_marker..).rev() {
+            self.inference_solutions.remove_and_discard(variable);
+            self.authenticated_inference_solutions.remove(&variable);
+        }
+        for variable in inserted_rows.drain(row_marker..).rev() {
+            self.row_inference_solutions.remove(variable);
+            self.authenticated_inference_solutions.remove(&variable);
+        }
+        self.inference_variables.truncate(inference_marker);
+        self.next_inference = next_inference;
+    }
+
+    fn unify_recorded(
+        &mut self,
+        left: &Type,
+        right: &Type,
+        inserted: &mut Vec<InferenceVariableId>,
+        inserted_rows: &mut Vec<InferenceVariableId>,
+    ) -> Result<(), UnificationFailure> {
         if let Some(equal) = compare_concrete_types(left, right, &mut self.type_work)
             .map_err(|()| UnificationFailure::Resource)?
         {
@@ -5155,8 +6475,7 @@ impl Elaborator {
         );
         let right = clone_type_with_budget(right, &mut self.type_work)
             .map_err(|()| UnificationFailure::Resource)?;
-        let mut inserted = Vec::new();
-        let result = (|| {
+        (|| {
             let mut work = Work(vec![Task::Pair(left.into_inner(), right)]);
             while let Some(task) = work.0.pop() {
                 let (left, right) = match task {
@@ -5299,6 +6618,65 @@ impl Elaborator {
                         work.0.push(Task::Pair(*left_codomain, *right_codomain));
                         work.0.push(Task::Pair(*left_domain, *right_domain));
                     }
+                    (
+                        Type::EffectfulFunction(left_domain, left_codomain),
+                        Type::EffectfulFunction(right_domain, right_codomain),
+                    ) => {
+                        let crate::types::ComputationType {
+                            value: left_value,
+                            effects: left_effects,
+                        } = *left_codomain;
+                        let crate::types::ComputationType {
+                            value: right_value,
+                            effects: right_effects,
+                        } = *right_codomain;
+                        self.unify_effect_rows_inner(
+                            &left_effects,
+                            &right_effects,
+                            inserted,
+                            inserted_rows,
+                        )?;
+                        drop(left_effects);
+                        drop(right_effects);
+                        work.0.push(Task::Pair(left_value, right_value));
+                        work.0.push(Task::Pair(*left_domain, *right_domain));
+                    }
+                    (
+                        Type::Function(left_domain, left_value),
+                        Type::EffectfulFunction(right_domain, right_codomain),
+                    ) => {
+                        let crate::types::ComputationType {
+                            value: right_value,
+                            effects: right_effects,
+                        } = *right_codomain;
+                        self.unify_effect_rows_inner(
+                            &EffectRow::empty(),
+                            &right_effects,
+                            inserted,
+                            inserted_rows,
+                        )?;
+                        drop(right_effects);
+                        work.0.push(Task::Pair(*left_value, right_value));
+                        work.0.push(Task::Pair(*left_domain, *right_domain));
+                    }
+                    (
+                        Type::EffectfulFunction(left_domain, left_codomain),
+                        Type::Function(right_domain, right_value),
+                    ) => {
+                        let crate::types::ComputationType {
+                            value: left_value,
+                            effects: left_effects,
+                        } = *left_codomain;
+                        self.unify_effect_rows_inner(
+                            &left_effects,
+                            &EffectRow::empty(),
+                            inserted,
+                            inserted_rows,
+                        )?;
+                        drop(left_effects);
+                        work.0.push(Task::Pair(left_value, *right_value));
+                        work.0.push(Task::Pair(*left_domain, *right_domain));
+                    }
                     (left, right) => {
                         discard_type_iteratively(left);
                         discard_type_iteratively(right);
@@ -5307,14 +6685,7 @@ impl Elaborator {
                 }
             }
             Ok(())
-        })();
-        if result.is_err() {
-            for variable in inserted.drain(..).rev() {
-                self.inference_solutions.remove_and_discard(variable);
-                self.authenticated_inference_solutions.remove(&variable);
-            }
-        }
-        result
+        })()
     }
 
     fn expose_expected_function(
@@ -5323,10 +6694,10 @@ impl Elaborator {
         span: Span,
     ) -> Result<ProvenancedTypeOwner, TypeError> {
         match &expected.ty {
-            Type::Function(_, _) => Ok(expected),
+            ty if ty.function_view().is_some() => Ok(expected),
             Type::Inference(_) => {
                 let expected_ty = IterativeTypeOwner::new(self.zonk(&expected.ty)?);
-                if matches!(&*expected_ty, Type::Function(_, _)) {
+                if expected_ty.function_view().is_some() {
                     let provenance = if expected.provenance.aligns(&expected_ty) {
                         expected.provenance.clone()
                     } else {
@@ -5505,7 +6876,9 @@ impl Elaborator {
                         .checked_add(1)
                         .ok_or_else(invalid_state)?;
                 }
-                ResolvedDeclarationIndex::Type(_) | ResolvedDeclarationIndex::Interface(_) => {}
+                ResolvedDeclarationIndex::Type(_)
+                | ResolvedDeclarationIndex::Interface(_)
+                | ResolvedDeclarationIndex::Effect(_) => {}
                 ResolvedDeclarationIndex::Global(_)
                 | ResolvedDeclarationIndex::Implementation(_) => return Err(invalid_state()),
             }
@@ -5709,17 +7082,24 @@ impl Elaborator {
             core_type_replacements
                 .try_reserve_exact(lowered.scheme.binder_parameters().len())
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            for ((source, _), (core, _)) in source_type_parameters
+            for ((source, source_kind), (core, core_kind)) in source_type_parameters
                 .iter()
                 .zip(lowered.scheme.binder_parameters())
             {
+                if source_kind != core_kind {
+                    return Err(invalid_state());
+                }
                 if core_type_replacements
                     .iter()
-                    .any(|(retained, _)| retained == source)
+                    .any(|(retained, _, _)| retained == source)
                 {
                     return Err(invalid_state());
                 }
-                core_type_replacements.push((*source, *core));
+                core_type_replacements.push((
+                    *source,
+                    *core,
+                    matches!(source_kind, Kind::EffectRow),
+                ));
             }
         }
         let core_origin = implementation_method_core_origin(fact);
@@ -5762,39 +7142,58 @@ impl Elaborator {
             let inference_solutions = &self.inference_solutions;
             let inference_variables = &self.inference_variables;
             let authenticated_solutions = &self.authenticated_inference_solutions;
-            let type_work = &mut self.type_work;
-            self.builder.rewrite_types_since(rewrite_checkpoint, |ty| {
-                let (zonked, _) = zonk_type_with_status_and_inference(
-                    ty,
-                    inference_solutions,
-                    |work| match work {
-                        ZonkWork::TypeCells(cells) => type_work
-                            .charge(cells)
-                            .map_err(|()| BuildError::TypeWorkExceeded),
-                        ZonkWork::Inference(identity) => authenticate_zonk_inference_occurrence(
-                            identity,
-                            inference_variables,
-                            inference_solutions,
-                            authenticated_solutions,
-                            type_work,
-                        )
-                        .map_err(|failure| match failure {
-                            UnificationFailure::Resource => BuildError::TypeWorkExceeded,
-                            UnificationFailure::Mismatch
-                            | UnificationFailure::Infinite
-                            | UnificationFailure::Invariant => BuildError::InvalidPayload,
-                        }),
-                    },
-                )?;
-                let renamed = substitute_fresh_type_variables_in_order(
-                    &zonked,
-                    &core_type_replacements,
-                    type_work,
-                )
-                .map_err(|()| BuildError::TypeWorkExceeded);
-                discard_type_iteratively(zonked);
-                renamed
-            })?;
+            let row_solutions = &self.row_inference_solutions;
+            let type_work = RefCell::new(&mut self.type_work);
+            self.builder.rewrite_types_and_rows(
+                Some(rewrite_checkpoint),
+                |ty| {
+                    let mut work = type_work.borrow_mut();
+                    let zonked = zonk_core_type(
+                        ty,
+                        inference_solutions,
+                        row_solutions,
+                        inference_variables,
+                        authenticated_solutions,
+                        &mut work,
+                        false,
+                    )?;
+                    let renamed = substitute_fresh_type_variables_in_order(
+                        &zonked,
+                        &core_type_replacements,
+                        &mut work,
+                    )
+                    .map_err(|()| BuildError::TypeWorkExceeded);
+                    discard_type_iteratively(zonked);
+                    renamed
+                },
+                |row| {
+                    let mut work = type_work.borrow_mut();
+                    let row = zonk_core_effect_row(
+                        row,
+                        inference_solutions,
+                        row_solutions,
+                        inference_variables,
+                        authenticated_solutions,
+                        &mut work,
+                        false,
+                    )?;
+                    let wrapper = Type::function_computation(
+                        Type::Unit,
+                        ComputationType::new(Type::Unit, row),
+                    );
+                    let renamed = substitute_fresh_type_variables_in_order(
+                        &wrapper,
+                        &core_type_replacements,
+                        &mut work,
+                    )
+                    .map_err(|()| BuildError::TypeWorkExceeded)?;
+                    discard_type_iteratively(wrapper);
+                    let Type::EffectfulFunction(_, computation) = renamed else {
+                        unreachable!()
+                    };
+                    Ok(computation.effects)
+                },
+            )?;
             let zonked_function_type = IterativeTypeOwner::new(self.zonk(&function.ty)?);
             let renamed_function_type = IterativeTypeOwner::new(
                 substitute_fresh_type_variables_in_order(
@@ -5949,7 +7348,7 @@ impl Elaborator {
                             &equational.interface.annotation,
                             &mut self.type_work,
                         )?);
-                    if !matches!(function_type.ty, Type::Function(_, _)) {
+                    if function_type.ty.function_view().is_none() {
                         return Err(equation_interface_not_function(
                             &equational.interface.annotation,
                             &equational.equations.first().ok_or_else(invalid_state)?.name,
@@ -5976,9 +7375,16 @@ impl Elaborator {
                         )?);
                     (
                         &operational.header.name,
-                        ProvenancedType::function_with_budget(
+                        ProvenancedType::function_computation_with_budget(
                             domain.into_inner(),
                             codomain.into_inner(),
+                            clone_effect_row_with_budget(
+                                &operational.header.result_effects,
+                                &mut self.type_work,
+                            )
+                            .map_err(|()| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?,
                             Some(operational.header.span),
                             &mut self.type_work,
                         )?,
@@ -6004,21 +7410,17 @@ impl Elaborator {
                 ));
             }
             let quantified = quantified.into_boxed_slice();
-            let binder_body = IterativeTypeOwner::new(self.clone_type(&function_type.ty)?);
-            let binder_type = if quantified.is_empty() {
+            let binder_body = IterativeTypeOwner::new(self.pure_core_type(&function_type.ty)?);
+            let core_quantified = F::project_parameters(&quantified, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let binder_type = if core_quantified.is_empty() {
                 binder_body
             } else {
                 self.type_work
                     .charge(1)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                let binder_parameters =
-                    clone_kinded_type_parameters_with_budget(&quantified, &mut self.type_work)
-                        .map_err(|()| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?
-                        .into_boxed_slice();
                 IterativeTypeOwner::new(Type::Forall(
-                    binder_parameters,
+                    core_quantified.into_boxed_slice(),
                     Box::new(binder_body.into_inner()),
                 ))
             };
@@ -6060,9 +7462,13 @@ impl Elaborator {
                     .as_ref()
                     .and_then(|lowering| lowering.global_schemes.get(&name.id))
                     .ok_or_else(invalid_state)?;
+                let expected_core_quantified =
+                    F::project_parameters(&quantified, &mut self.type_work).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
                 if !same_kinded_type_parameters_with_budget(
                     &lowered.type_parameters,
-                    &quantified,
+                    &expected_core_quantified,
                     &mut self.type_work,
                 )
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
@@ -6150,7 +7556,7 @@ impl Elaborator {
                             &equational.interface.annotation,
                             &mut self.type_work,
                         )?);
-                    if !matches!(function_type.ty, Type::Function(_, _)) {
+                    if function_type.ty.function_view().is_none() {
                         return Err(equation_interface_not_function(
                             &equational.interface.annotation,
                             &equational.equations.first().ok_or_else(invalid_state)?.name,
@@ -6178,9 +7584,16 @@ impl Elaborator {
                             &operational.header.result_type,
                             &mut self.type_work,
                         )?);
-                    let function_type = ProvenancedType::function_with_budget(
+                    let function_type = ProvenancedType::function_computation_with_budget(
                         domain.into_inner(),
                         codomain.into_inner(),
+                        clone_effect_row_with_budget(
+                            &operational.header.result_effects,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?,
                         Some(operational.header.span),
                         &mut self.type_work,
                     )?;
@@ -6242,20 +7655,20 @@ impl Elaborator {
             .quantifiers
             .get(&name.id)
             .ok_or_else(invalid_state)?;
-        if !quantified.is_empty() {
+        let core_quantified = F::project_parameters(quantified, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        if !core_quantified.is_empty() {
             self.type_work
                 .charge(1)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let scheme_parameters =
-                clone_kinded_type_parameters_with_budget(quantified, &mut self.type_work)
-                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
-                    .into_boxed_slice();
-            let scheme_body = self.clone_type(&function.ty)?;
-            let scheme =
-                IterativeTypeOwner::new(Type::Forall(scheme_parameters, Box::new(scheme_body)));
+            let scheme_body = self.pure_core_type(&function.ty)?;
             let abstraction_parameters =
-                clone_kinded_type_parameters_with_budget(quantified, &mut self.type_work)
+                clone_kinded_type_parameters_with_budget(&core_quantified, &mut self.type_work)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let scheme = IterativeTypeOwner::new(Type::Forall(
+                core_quantified.into_boxed_slice(),
+                Box::new(scheme_body),
+            ));
             let node = self.builder.type_abstraction(
                 abstraction_parameters,
                 function.node,
@@ -6318,9 +7731,9 @@ impl Elaborator {
             result.set_provenance(provenance);
         }
         let ambiguous = (0..self.next_inference).find(|identity| {
-            !self
-                .inference_solutions
-                .contains_key(&InferenceVariableId::new(*identity))
+            let identity = InferenceVariableId::new(*identity);
+            !self.inference_solutions.contains_key(&identity)
+                && !self.row_inference_solutions.contains_key(&identity)
         });
         if let Some(identity) = ambiguous {
             let origin = self
@@ -6335,6 +7748,434 @@ impl Elaborator {
             ));
         }
         Ok(result.into_inner())
+    }
+
+    fn union_effects(
+        &mut self,
+        left: &EffectRow,
+        right: &EffectRow,
+        span: Span,
+    ) -> Result<EffectRow, TypeError> {
+        if left.is_empty() && right.is_empty() {
+            return Ok(EffectRow::empty());
+        }
+        let left = self.qualify_effect_row(left)?;
+        let right = self.qualify_effect_row(right)?;
+        left.union_with_budget(&right, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+            .map_err(|_| {
+                inference_failure(
+                    TypeReason::AmbiguousEffectRow,
+                    span,
+                    "this strict expression has no principal effect-row union",
+                )
+            })
+    }
+
+    fn same_effect_rows(&mut self, left: &EffectRow, right: &EffectRow) -> Result<bool, TypeError> {
+        same_effect_rows_with_budget(left, right, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+    }
+
+    fn qualify_effect_row(&mut self, row: &EffectRow) -> Result<EffectRow, TypeError> {
+        let qualified = match (
+            row.tail(),
+            self.expected_effect_rows.last().and_then(EffectRow::tail),
+        ) {
+            (Some(tail), Some(expected)) if tail.variable() == expected.variable() => {
+                rebuild_effect_row_with_budget(
+                    row.known().iter(),
+                    Some(tail.variable()),
+                    tail.lacks().iter().chain(expected.lacks()).chain(
+                        self.expected_effect_rows
+                            .last()
+                            .into_iter()
+                            .flat_map(|row| row.known()),
+                    ),
+                    clone_type_with_budget,
+                    &mut self.type_work,
+                )
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+            }
+            _ => clone_effect_row_with_budget(row, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+        };
+        self.zonk_effect_row(&qualified)
+    }
+
+    fn operation_signature(
+        &mut self,
+        instance: &EffectInstance,
+        operation: crate::types::OperationId,
+        span: Span,
+    ) -> Result<(Type, Type), TypeError> {
+        let declaration = self
+            .registry
+            .effect(instance.effect())
+            .ok_or_else(invalid_state)?;
+        if declaration.parameters.len() != instance.arguments().len()
+            || operation.owner() != declaration.id
+        {
+            return Err(inference_failure(
+                TypeReason::HandlerCoverage,
+                span,
+                "this effect instance does not match its declaration",
+            ));
+        }
+        let operation_index =
+            usize::try_from(operation.operation()).map_err(|_| invalid_state())?;
+        let operation = declaration
+            .operations
+            .get(operation_index)
+            .filter(|candidate| candidate.id == operation)
+            .ok_or_else(invalid_state)?;
+        let annotation = clone_type_with_budget(&operation.annotation.ty, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut replacements = HashMap::new();
+        replacements
+            .try_reserve(declaration.parameters.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for (parameter, argument) in declaration.parameters.iter().zip(instance.arguments()) {
+            let argument = clone_type_with_budget(argument, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            replacements.insert(parameter.id, argument);
+        }
+        let instantiated = IterativeTypeOwner::new(
+            substitute_type_variables_with(
+                &annotation,
+                &replacements,
+                |cells| self.type_work.charge(cells),
+                || (),
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+        );
+        let function = instantiated.function_view().ok_or_else(invalid_state)?;
+        Ok((
+            self.clone_type(function.domain())?,
+            self.clone_type(function.value())?,
+        ))
+    }
+
+    fn synthesize_perform(
+        &mut self,
+        request: &crate::resolved::ResolvedPerformExpr,
+        span: Span,
+        context: &mut TypeContext,
+    ) -> Result<TypedNode, TypeError> {
+        let (domain, result) = self.operation_signature(
+            &request.effect.instance,
+            request.operation,
+            request.effect.span,
+        )?;
+        let domain = IterativeTypeOwner::new(domain);
+        let result = IterativeTypeOwner::new(result);
+        let expected_domain = self.clone_type(&domain)?;
+        let expected_provenance = self.at_span_provenance(&domain, request.effect.span)?;
+        let operand = TypedNodeOwner::new(self.elaborate_expression_with_context(
+            ElaborationTask::Check {
+                expression: &request.operand,
+                expected: ProvenancedType {
+                    ty: expected_domain,
+                    provenance: expected_provenance,
+                },
+                kind: CheckKind::General,
+            },
+            context,
+        )?);
+        let requested = EffectRow::singleton(
+            clone_effect_instance_with_budget(&request.effect.instance, &mut self.type_work)
+                .map_err(|error| TypeError::Internal(error.into()))?,
+        );
+        let effects = self.union_effects(&operand.effects, &requested, span)?;
+        let ty = result.into_inner();
+        let core_ty = self.pure_core_type(&ty)?;
+        let request_node = RequestNode::new(
+            clone_effect_instance_with_budget(&request.effect.instance, &mut self.type_work)
+                .map_err(|error| TypeError::Internal(error.into()))?,
+            request.operation,
+            operand.node,
+        );
+        let core_effects = self.core_effect_row(&effects)?;
+        let node = self.push_effect_core(
+            core_ty,
+            core_effects,
+            Origin::Source(span),
+            EffectOperation::Request(request_node),
+        )?;
+        let provenance = self.at_span_provenance(&ty, span)?;
+        Ok(TypedNode {
+            node,
+            ty,
+            effects,
+            provenance,
+        })
+    }
+
+    fn synthesize_resume(
+        &mut self,
+        resume: &crate::resolved::ResolvedResumeExpr,
+        span: Span,
+        context: &mut TypeContext,
+    ) -> Result<TypedNode, TypeError> {
+        let owner = resume.owner.ok_or_else(|| {
+            inference_failure(
+                TypeReason::ResumeOutsideClause,
+                span,
+                "resume is available only inside an operation clause",
+            )
+        })?;
+        let active_position = self
+            .active_resumes
+            .iter()
+            .rev()
+            .position(|active| active.owner == owner)
+            .map(|offset| self.active_resumes.len() - offset - 1)
+            .ok_or_else(|| {
+                inference_failure(
+                    TypeReason::ResumeCapture,
+                    span,
+                    "this nested scope cannot capture the clause resume capability",
+                )
+            })?;
+        let input = IterativeTypeOwner::new(
+            clone_type_with_budget(
+                &self.active_resumes[active_position].input,
+                &mut self.type_work,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+        );
+        let result = IterativeTypeOwner::new(
+            clone_type_with_budget(
+                &self.active_resumes[active_position].result,
+                &mut self.type_work,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+        );
+        let expected_input = self.clone_type(&input)?;
+        let expected_provenance = self.at_span_provenance(&input, span)?;
+        let value = TypedNodeOwner::new(self.elaborate_expression_with_context(
+            ElaborationTask::Check {
+                expression: &resume.value,
+                expected: ProvenancedType {
+                    ty: expected_input,
+                    provenance: expected_provenance,
+                },
+                kind: CheckKind::General,
+            },
+            context,
+        )?);
+        let ty = result.into_inner();
+        let effects = clone_effect_row_with_budget(&value.effects, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let core_ty = self.pure_core_type(&ty)?;
+        let active_handler = self.active_resumes[active_position].handler;
+        let resume_node = ResumeNode::new(active_handler, owner, ResumeUse::Consumed, value.node);
+        let core_effects = self.core_effect_row(&effects)?;
+        let node = self.push_effect_core(
+            core_ty,
+            core_effects,
+            Origin::Source(span),
+            EffectOperation::Resume(resume_node),
+        )?;
+        let provenance = self.at_span_provenance(&ty, span)?;
+        Ok(TypedNode {
+            node,
+            ty,
+            effects,
+            provenance,
+        })
+    }
+
+    fn synthesize_handler(
+        &mut self,
+        handler: &crate::resolved::ResolvedHandleExpr,
+        span: Span,
+        context: &mut TypeContext,
+    ) -> Result<TypedNode, TypeError> {
+        let body = TypedNodeOwner::new(self.elaborate_expression_with_context(
+            ElaborationTask::Synthesize {
+                expression: &handler.body,
+                cause: None,
+            },
+            context,
+        )?);
+        let mut output = body
+            .effects
+            .remove_exact_with_budget(&handler.effect.instance, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+            .map_err(|_| {
+                inference_failure(
+                    TypeReason::MissingHandledEffect,
+                    handler.effect.span,
+                    "the handled computation does not request this exact effect instance",
+                )
+            })?;
+        let result_type = IterativeTypeOwner::new(self.clone_type(&body.ty)?);
+        let declaration = self
+            .registry
+            .effect(handler.effect.instance.effect())
+            .ok_or_else(invalid_state)?;
+        if handler.clauses.len() != declaration.operations.len() {
+            return Err(inference_failure(
+                TypeReason::HandlerCoverage,
+                span,
+                "a handler must contain one clause for every operation",
+            ));
+        }
+        let invalid_clause = first_invalid_handler_operation_with_budget(
+            declaration.id,
+            declaration.operations.len(),
+            handler.clauses.iter().map(|clause| clause.operation),
+            &mut self.type_work,
+        )
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        if let Some(index) = invalid_clause {
+            let diagnostic_span = handler
+                .clauses
+                .get(index)
+                .map_or(span, |clause| clause.span);
+            return Err(inference_failure(
+                TypeReason::HandlerCoverage,
+                diagnostic_span,
+                "a handler operation clause is duplicate or does not belong to this effect",
+            ));
+        }
+
+        let handler_id = HandlerId::new(self.next_handler);
+        self.next_handler = self.next_handler.checked_add(1).ok_or_else(invalid_state)?;
+        self.type_work
+            .charge(handler.clauses.len())
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut core_clauses = Vec::new();
+        core_clauses
+            .try_reserve_exact(handler.clauses.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+
+        for clause in &handler.clauses {
+            check_clause_resume_usage(&clause.body, clause.resume, &mut self.type_work)?;
+            let (domain, resume_result) =
+                self.operation_signature(&handler.effect.instance, clause.operation, clause.span)?;
+            let domain = IterativeTypeOwner::new(domain);
+            let resume_result = IterativeTypeOwner::new(resume_result);
+            let mut binders = Vec::new();
+            let checked = self.check_core_pattern(
+                &clause.pattern,
+                &domain,
+                context,
+                &mut binders,
+                GeneratedReason::BindingLowering,
+            )?;
+            let contains_newtype = checked.contains_newtype;
+            let pattern_count = checked.pattern_count;
+            let matrix = vec![vec![checked.pattern.clone()]];
+            if let Some(witness) = missing_witness_for_types_with_budget(
+                &matrix,
+                std::slice::from_ref(&*domain),
+                &self.registry,
+                &mut self.coverage_work,
+            )? {
+                self.remove_pattern_binders(context, &binders)?;
+                return Err(case_error(
+                    TypeReason::RefutableHandlerPattern,
+                    clause.pattern.span,
+                    "this handler operation pattern can fail",
+                    Some(display_witness(&witness, &self.registry)),
+                ));
+            }
+            let active_result = self.clone_type(&result_type)?;
+            self.type_work
+                .charge(1)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            self.active_resumes
+                .try_reserve(1)
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            self.active_resumes.push(ActiveResume {
+                owner: clause.resume,
+                handler: handler_id,
+                input: resume_result.into_inner(),
+                result: active_result,
+            });
+            let expected_result = self.clone_type(&result_type)?;
+            let expected_provenance = self.at_span_provenance(&result_type, clause.span)?;
+            let clause_start = self.builder.node_checkpoint();
+            let checked_body = self.elaborate_expression_with_context(
+                ElaborationTask::Check {
+                    expression: &clause.body,
+                    expected: ProvenancedType {
+                        ty: expected_result,
+                        provenance: expected_provenance,
+                    },
+                    kind: CheckKind::General,
+                },
+                context,
+            );
+            let _active = self.active_resumes.pop().ok_or_else(invalid_state)?;
+            let cleanup = self.remove_pattern_binders(context, &binders);
+            let checked_body = TypedNodeOwner::new(checked_body?);
+            cleanup?;
+            output = self.union_effects(&output, &checked_body.effects, clause.span)?;
+            let origin = Origin::Source(clause.span);
+            let (pattern, body_node) = if contains_newtype {
+                let result_type = self.pure_core_type(&result_type)?;
+                self.lower_effect_clause_newtype_pattern(
+                    checked.pattern,
+                    checked_body.node,
+                    &result_type,
+                    pattern_count,
+                )?
+            } else {
+                (checked.pattern, checked_body.node)
+            };
+            let clause_end = self.builder.node_checkpoint();
+            core_clauses.push((
+                clause.operation,
+                clause.resume,
+                pattern,
+                body_node,
+                origin,
+                clause_start..clause_end,
+            ));
+        }
+
+        let ty = result_type.into_inner();
+        let core_ty = self.pure_core_type(&ty)?;
+        self.type_work
+            .charge(core_clauses.len())
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut clauses = Vec::new();
+        clauses
+            .try_reserve_exact(core_clauses.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for (operation, resume, pattern, body_node, origin, range) in core_clauses {
+            F::recompute_clause_effect_rows(&mut self.builder, range, &output, handler_id, resume)?;
+            clauses.push(EffectClause::new(
+                operation,
+                resume,
+                CoreMatchArm::new(pattern, body_node, origin),
+            ));
+        }
+        let core_effects = self.core_effect_row(&output)?;
+        let core_handler_effect =
+            clone_effect_instance_with_budget(&handler.effect.instance, &mut self.type_work)
+                .map_err(|error| TypeError::Internal(error.into()))?;
+        let node = self.push_effect_core(
+            core_ty,
+            core_effects,
+            Origin::Source(span),
+            EffectOperation::Handler(HandlerNode::new(
+                handler_id,
+                body.node,
+                core_handler_effect,
+                clauses,
+            )),
+        )?;
+        let provenance = self.at_span_provenance(&ty, span)?;
+        Ok(TypedNode {
+            node,
+            ty,
+            effects: output,
+            provenance,
+        })
     }
 
     fn elaborate_expression_with_context<'a>(
@@ -6362,12 +8203,13 @@ impl Elaborator {
                         let ty = Type::Int;
                         let node = self.builder.integer(
                             value.clone(),
-                            ty.clone(),
+                            Type::Int,
                             Origin::Source(current.span),
                         )?;
                         values.push(TypedNode {
                             node,
                             ty,
+                            effects: EffectRow::empty(),
                             provenance: TypeProvenance::atom(Some(current.span)),
                         });
                     }
@@ -6375,12 +8217,13 @@ impl Elaborator {
                         let ty = Type::Bool;
                         let node = self.builder.boolean(
                             *value,
-                            ty.clone(),
+                            Type::Bool,
                             Origin::Source(current.span),
                         )?;
                         values.push(TypedNode {
                             node,
                             ty,
+                            effects: EffectRow::empty(),
                             provenance: TypeProvenance::atom(Some(current.span)),
                         });
                     }
@@ -6388,10 +8231,11 @@ impl Elaborator {
                         let ty = Type::Unit;
                         let node = self
                             .builder
-                            .unit(ty.clone(), Origin::Source(current.span))?;
+                            .unit(Type::Unit, Origin::Source(current.span))?;
                         values.push(TypedNode {
                             node,
                             ty,
+                            effects: EffectRow::empty(),
                             provenance: TypeProvenance::atom(Some(current.span)),
                         });
                     }
@@ -6408,7 +8252,8 @@ impl Elaborator {
                         crate::resolved::ResolvedTermName::Global(binder) => {
                             let fact = context.fact(binder).ok_or_else(invalid_state)?;
                             let rigid = self.monomorphic_recursive.contains(&binder);
-                            let (ty, arguments) = self.instantiate(fact, rigid, current.span)?;
+                            let (ty, arguments, row_arguments) =
+                                self.instantiate(fact, rigid, current.span)?;
                             let ty = IterativeTypeOwner::new(ty);
                             let arguments = OwnedTypeBuffer(arguments);
                             let provenance = fact.provenance.clone();
@@ -6437,6 +8282,7 @@ impl Elaborator {
                                             occurrence.origin.clone(),
                                         )?,
                                         ty: core_scheme.into_inner(),
+                                        effects: EffectRow::empty(),
                                         provenance: provenance.clone(),
                                     });
                                     let mut current_arguments = OwnedTypeBuffer(Vec::new());
@@ -6455,23 +8301,43 @@ impl Elaborator {
                                     for argument in arguments.iter() {
                                         current_arguments.push(self.clone_type(argument)?);
                                     }
+                                    let mut current_row_arguments = Vec::new();
+                                    self.type_work
+                                        .charge(row_arguments.len())
+                                        .map_err(|()| type_resource())?;
+                                    current_row_arguments
+                                        .try_reserve(row_arguments.len())
+                                        .map_err(|_| type_resource())?;
+                                    for row in &row_arguments {
+                                        current_row_arguments.push(
+                                            clone_effect_row_with_budget(row, &mut self.type_work)
+                                                .map_err(|()| type_resource())?,
+                                        );
+                                    }
                                     self.replay_lowered_global_determination(
                                         scheme,
                                         &current_arguments,
+                                        &current_row_arguments,
                                         occurrence,
                                         &lowering,
                                     )?;
-                                    if !arguments.is_empty() {
+                                    if !arguments.is_empty() || !row_arguments.is_empty() {
                                         let core_ty = IterativeTypeOwner::new(
-                                            self.instantiate_lowered_core_body(scheme, &arguments)?,
+                                            self.instantiate_lowered_core_body(
+                                                scheme,
+                                                &arguments,
+                                                &row_arguments,
+                                            )?,
                                         );
                                         let application_ty = self.clone_type(&core_ty)?;
-                                        let node = self.builder.type_application(
-                                            current.node,
-                                            arguments.into_vec(),
-                                            application_ty,
-                                            occurrence.origin.clone(),
-                                        )?;
+                                        let node =
+                                            self.builder.type_application_with_row_arguments(
+                                                current.node,
+                                                arguments.into_vec(),
+                                                row_arguments,
+                                                application_ty,
+                                                occurrence.origin.clone(),
+                                            )?;
                                         current.set_node(node);
                                         current.replace_type(core_ty.into_inner());
                                     }
@@ -6518,6 +8384,7 @@ impl Elaborator {
                                                         .binder_parameters(),
                                                     &target_method.application,
                                                     &current_arguments,
+                                                    &current_row_arguments,
                                                 )?;
                                             let canonical_method = lowering
                                                 .interface_methods
@@ -6551,36 +8418,39 @@ impl Elaborator {
                                     binder,
                                     occurrence,
                                     &arguments,
+                                    &row_arguments,
                                     current.span,
                                 )?;
-                                let scheme = clone_scheme_with_budget(fact, &mut self.type_work)
-                                    .map_err(|()| {
-                                        TypeError::Internal(
-                                            ElaborationFailure::TypeResourceExhausted,
-                                        )
-                                    })?;
+                                let scheme = self.pure_core_scheme(fact)?;
                                 let mut node = self.builder.variable(
                                     binder,
                                     scheme,
                                     occurrence.origin.clone(),
                                 )?;
-                                if !arguments.is_empty() {
-                                    let core_ty = clone_type_with_budget(&ty, &mut self.type_work)
-                                        .map_err(|()| {
-                                            TypeError::Internal(
-                                                ElaborationFailure::TypeResourceExhausted,
-                                            )
-                                        })?;
-                                    node = self.builder.type_application(
-                                        node,
-                                        arguments.into_vec(),
-                                        core_ty,
-                                        occurrence.origin.clone(),
-                                    )?;
+                                if !arguments.is_empty() || F::EFFECTS && !row_arguments.is_empty()
+                                {
+                                    let core_ty = self.pure_core_type(&ty)?;
+                                    node = if F::EFFECTS {
+                                        self.builder.type_application_with_row_arguments(
+                                            node,
+                                            arguments.into_vec(),
+                                            row_arguments,
+                                            core_ty,
+                                            occurrence.origin.clone(),
+                                        )
+                                    } else {
+                                        self.builder.type_application(
+                                            node,
+                                            arguments.into_vec(),
+                                            core_ty,
+                                            occurrence.origin.clone(),
+                                        )
+                                    }?;
                                 }
                                 values.push(TypedNode {
                                     node,
                                     ty: ty.into_inner(),
+                                    effects: EffectRow::empty(),
                                     provenance,
                                 });
                             }
@@ -6690,7 +8560,11 @@ impl Elaborator {
                             provenance: scheme_provenance,
                             quantified: quantified.into_boxed_slice(),
                         });
-                        let (ty, arguments) = self.instantiate(&fact, false, current.span)?;
+                        let (ty, arguments, row_arguments) =
+                            self.instantiate(&fact, false, current.span)?;
+                        if !row_arguments.is_empty() {
+                            return Err(invalid_state());
+                        }
                         let ty = IterativeTypeOwner::new(ty);
                         let arguments = OwnedTypeBuffer(arguments);
                         let TypeFact {
@@ -6736,6 +8610,7 @@ impl Elaborator {
                         let provenance = self.at_span_provenance(&ty, declaration_span)?;
                         values.push(TypedNode {
                             node,
+                            effects: EffectRow::empty(),
                             provenance,
                             ty: ty.into_inner(),
                         });
@@ -6786,25 +8661,23 @@ impl Elaborator {
                             &mut self.type_work,
                         )?;
                     }
-                    ResolvedExprKind::Function(_) => {
+                    ResolvedExprKind::Perform(request) => {
+                        let typed = self.synthesize_perform(request, current.span, context)?;
+                        values.push(typed);
+                    }
+                    ResolvedExprKind::Handle(handler) => {
+                        let typed = self.synthesize_handler(handler, current.span, context)?;
+                        values.push(typed);
+                    }
+                    ResolvedExprKind::Resume(resume) => {
+                        let typed = self.synthesize_resume(resume, current.span, context)?;
+                        values.push(typed);
+                    }
+                    ResolvedExprKind::Function(function) => {
                         if !matches!(cause, Some(SynthesisCause::Binding(_))) {
                             return Err(function_needs_context(current.span, cause));
                         }
-                        self.type_work.charge(3).map_err(|()| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
-                        let domain = self.fresh_inference(&Kind::Type, current.span)?;
-                        let codomain = self.fresh_inference(&Kind::Type, current.span)?;
-                        let expected_ty = Type::Function(Box::new(domain), Box::new(codomain));
-                        let expected = ProvenancedType {
-                            provenance: self.unknown_provenance(&expected_ty)?,
-                            ty: expected_ty,
-                        };
-                        tasks.push(ElaborationTask::Check {
-                            expression: current,
-                            expected,
-                            kind: CheckKind::General,
-                        });
+                        self.schedule_inferred_function(function, current.span, &mut tasks)?;
                     }
                 },
                 ElaborationTask::Check {
@@ -6840,6 +8713,7 @@ impl Elaborator {
                             presentation: anonymous_function_origin(expression.span, function),
                             function_type: expected.into_inner(),
                             body_check: kind,
+                            infer_effects: false,
                         });
                     }
                     ResolvedExprKind::Block(block) => {
@@ -6931,6 +8805,7 @@ impl Elaborator {
                     let TypedNode {
                         node,
                         ty: synthesized_ty,
+                        effects,
                         provenance,
                     } = synthesized.into_inner();
                     let ty = IterativeTypeOwner::new(self.zonk_owned(synthesized_ty)?);
@@ -6939,6 +8814,7 @@ impl Elaborator {
                     values.push(TypedNode {
                         node,
                         ty: ty.into_inner(),
+                        effects,
                         provenance,
                     });
                 }
@@ -6950,6 +8826,7 @@ impl Elaborator {
                     presentation,
                     function_type,
                     body_check,
+                    infer_effects,
                 } => {
                     self.schedule_function_check(
                         context,
@@ -6963,6 +8840,7 @@ impl Elaborator {
                             presentation,
                             function_type,
                             body_check,
+                            infer_effects,
                         },
                     )?;
                 }
@@ -6977,11 +8855,13 @@ impl Elaborator {
                     provenance,
                     contains_newtype,
                     pattern_count,
+                    infer_effects,
                 } => {
+                    let effect_span = origin.primary_span();
                     let origin = OriginOwner::new(origin);
                     let mut pattern = CorePatternOwner::new(pattern);
                     let domain = domain.map(IterativeTypeOwner::new);
-                    let ty = IterativeTypeOwner::new(ty);
+                    let mut ty = IterativeTypeOwner::new(ty);
                     let mut body = values.pop().ok_or_else(invalid_state)?;
                     if let Some(binder) = direct_binder
                         && !context.remove_and_discard(binder)
@@ -6989,6 +8869,66 @@ impl Elaborator {
                         return Err(invalid_state());
                     }
                     self.remove_pattern_binders(context, &pattern_binders)?;
+                    if infer_effects && !body.effects.is_empty() {
+                        let effects = self.zonk_effect_row(&body.effects)?;
+                        let zonked = IterativeTypeOwner::new(self.zonk(&ty)?);
+                        let source = zonked.into_inner();
+                        let Type::Function(domain, codomain) = source else {
+                            discard_type_iteratively(source);
+                            return Err(invalid_state());
+                        };
+                        ty.replace(Type::function_computation(
+                            *domain,
+                            ComputationType::new(*codomain, effects),
+                        ));
+                    } else if !infer_effects {
+                        let expected_effects =
+                            match ty.function_view().and_then(|function| function.effects()) {
+                                Some(effects) => {
+                                    clone_effect_row_with_budget(effects, &mut self.type_work)
+                                        .map_err(|()| {
+                                            TypeError::Internal(
+                                                ElaborationFailure::TypeResourceExhausted,
+                                            )
+                                        })?
+                                }
+                                None => EffectRow::empty(),
+                            };
+                        let expected_is_inference = expected_effects.tail().is_some_and(|tail| {
+                            matches!(tail.variable(), EffectRowVariable::Inference(_))
+                        });
+                        if expected_is_inference {
+                            self.unify_effect_rows(&expected_effects, &body.effects)
+                                .map_err(|failure| match failure {
+                                    UnificationFailure::Resource => TypeError::Internal(
+                                        ElaborationFailure::TypeResourceExhausted,
+                                    ),
+                                    UnificationFailure::Infinite => inference_failure(
+                                        TypeReason::AmbiguousEffectRow,
+                                        effect_span,
+                                        "this function would require an infinite latent effect row",
+                                    ),
+                                    UnificationFailure::Mismatch
+                                    | UnificationFailure::Invariant => inference_failure(
+                                        TypeReason::AmbiguousEffectRow,
+                                        effect_span,
+                                        "this function body does not match its latent effect row",
+                                    ),
+                                })?;
+                            let zonked = self.zonk(&ty)?;
+                            ty.replace(zonked);
+                        } else {
+                            let weakened =
+                                self.union_effects(&body.effects, &expected_effects, effect_span)?;
+                            if !self.same_effect_rows(&weakened, &expected_effects)? {
+                                return Err(inference_failure(
+                                    TypeReason::AmbiguousEffectRow,
+                                    effect_span,
+                                    "this function body requests effects outside its declared row",
+                                ));
+                            }
+                        }
+                    }
                     if pattern.0.is_some() {
                         let domain = domain.ok_or_else(invalid_state)?;
                         let pattern_span = pattern.origin.primary_span();
@@ -7036,13 +8976,14 @@ impl Elaborator {
                         )?;
                         body.set_node(match_node);
                     }
-                    let core_ty = self.clone_type(&ty)?;
+                    let core_ty = self.pure_core_type(&ty)?;
                     let node =
                         self.builder
                             .function(binder, body.node, core_ty, origin.into_inner())?;
                     values.push(TypedNode {
                         node,
                         ty: ty.into_inner(),
+                        effects: EffectRow::empty(),
                         provenance,
                     });
                 }
@@ -7052,83 +8993,15 @@ impl Elaborator {
                     argument,
                     recursive_call,
                 } => {
-                    let mut function = values.pop().ok_or_else(invalid_state)?;
-                    let source_function_ty = function.take_type();
-                    let mut function_ty =
-                        IterativeTypeOwner::new(self.zonk_owned(source_function_ty.into_inner())?);
-                    if matches!(&*function_ty, Type::Inference(_)) {
-                        self.type_work.charge(3).map_err(|()| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
-                        let domain = self.fresh_inference(&Kind::Type, function_span)?;
-                        let codomain = self.fresh_inference(&Kind::Type, function_span)?;
-                        let exposed = Type::Function(Box::new(domain), Box::new(codomain));
-                        self.unify(&function_ty, &exposed)
-                            .map_err(|failure| match failure {
-                                UnificationFailure::Infinite => inference_failure(
-                                    TypeReason::InfiniteType,
-                                    function_span,
-                                    "this application would require an infinite type",
-                                ),
-                                UnificationFailure::Mismatch => not_applicable(
-                                    function_span,
-                                    whole_span,
-                                    &function_ty,
-                                    &self.registry,
-                                ),
-                                UnificationFailure::Resource => {
-                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                                }
-                                UnificationFailure::Invariant => invalid_state(),
-                            })?;
-                        let zonked = self.zonk(&exposed)?;
-                        function_ty.replace(zonked);
-                    }
-                    let Type::Function(_, _) = &*function_ty else {
-                        return Err(not_applicable(
-                            function_span,
-                            whole_span,
-                            &function_ty,
-                            &self.registry,
-                        ));
-                    };
-                    let provenance = if function.provenance.aligns(&function_ty) {
-                        function.provenance.clone()
-                    } else {
-                        self.unknown_provenance(&function_ty)?
-                    };
-                    let (domain_provenance, codomain_provenance) =
-                        provenance.function_parts(&function_ty)?;
-                    let (domain_ty, codomain_ty) =
-                        clone_function_parts_with_budget(&function_ty, &mut self.type_work)
-                            .map_err(|()| {
-                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                            })?;
-                    function.replace_type(function_ty.into_inner());
-                    let domain = ProvenancedTypeOwner::new(ProvenancedType {
-                        ty: domain_ty,
-                        provenance: domain_provenance,
-                    });
-                    let codomain = ProvenancedTypeOwner::new(ProvenancedType {
-                        ty: codomain_ty,
-                        provenance: codomain_provenance,
-                    });
-                    tasks.push(ElaborationTask::FinishApplication {
+                    let function = values.pop().ok_or_else(invalid_state)?;
+                    self.schedule_application_argument(
                         whole_span,
                         function_span,
-                        argument_span: argument.span,
-                        function: function.into_inner(),
-                        codomain: codomain.into_inner(),
-                    });
-                    tasks.push(ElaborationTask::Check {
-                        expression: argument,
-                        expected: domain.into_inner(),
-                        kind: CheckKind::Argument {
-                            function_span,
-                            whole_span,
-                            recursive_call,
-                        },
-                    });
+                        argument,
+                        recursive_call,
+                        function.into_inner(),
+                        &mut tasks,
+                    )?;
                 }
                 ElaborationTask::FinishApplication {
                     whole_span,
@@ -7136,36 +9009,18 @@ impl Elaborator {
                     argument_span,
                     function,
                     codomain,
+                    latent_effects,
                 } => {
-                    let function = TypedNodeOwner::new(function);
-                    let codomain = ProvenancedTypeOwner::new(codomain);
                     let argument = values.pop().ok_or_else(invalid_state)?;
-                    let core_codomain = IterativeTypeOwner::new(self.clone_type(&codomain.ty)?);
-                    let ProvenancedType {
-                        ty: codomain_ty,
-                        provenance: codomain_provenance,
-                    } = codomain.into_inner();
-                    let ty = IterativeTypeOwner::new(self.zonk_owned(codomain_ty)?);
-                    let provenance = if codomain_provenance.aligns(&ty) {
-                        codomain_provenance
-                    } else {
-                        self.unknown_provenance(&ty)?
-                    };
-                    let origin = Origin::Related {
-                        primary: Box::new(Origin::Source(whole_span)),
-                        related: vec![function_span, argument_span],
-                    };
-                    let node = self.builder.application(
-                        function.node,
-                        argument.node,
-                        core_codomain.into_inner(),
-                        origin,
-                    )?;
-                    values.push(TypedNode {
-                        node,
-                        ty: ty.into_inner(),
-                        provenance,
-                    });
+                    values.push(self.finish_application(
+                        whole_span,
+                        function_span,
+                        argument_span,
+                        function,
+                        codomain,
+                        latent_effects,
+                        argument.into_inner(),
+                    )?);
                 }
                 ElaborationTask::AfterLeft {
                     primitive,
@@ -7213,9 +9068,11 @@ impl Elaborator {
                         ty.clone(),
                         origin,
                     )?;
+                    let effects = self.union_effects(&left.effects, &right.effects, whole_span)?;
                     values.push(TypedNode {
                         node,
                         ty,
+                        effects,
                         provenance: TypeProvenance::atom(Some(operator_span)),
                     });
                 }
@@ -7266,6 +9123,11 @@ impl Elaborator {
                 } => {
                     let expected = expected.map(ProvenancedTypeOwner::new);
                     let mut initializer = values.pop().ok_or_else(invalid_state)?;
+                    let initializer_effects =
+                        clone_effect_row_with_budget(&initializer.effects, &mut self.type_work)
+                            .map_err(|()| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?;
                     if let Some(marker) = evidence_marker {
                         self.close_evidence_obligations(marker)?;
                     }
@@ -7312,11 +9174,13 @@ impl Elaborator {
                             let TypedNode {
                                 node,
                                 ty,
+                                effects,
                                 provenance,
                             } = initializer.into_inner();
                             initializer = TypedNodeOwner::new(TypedNode {
                                 node,
                                 ty: Type::Unit,
+                                effects,
                                 provenance: TypeProvenance::atom(None),
                             });
                             ProvenancedType { ty, provenance }
@@ -7382,15 +9246,22 @@ impl Elaborator {
                                 TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                             })?
                             .into_boxed_slice();
-                            let abstraction = if quantified.is_empty() {
+                            let core_quantified = F::project_parameters(
+                                &quantified,
+                                &mut self.type_work,
+                            )
+                            .map_err(|()| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?;
+                            let abstraction = if core_quantified.is_empty() {
                                 None
                             } else {
                                 self.type_work.charge(1).map_err(|()| {
                                     TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                                 })?;
-                                let scheme_body = self.clone_type(&binding_type.ty)?;
+                                let scheme_body = self.pure_core_type(&binding_type.ty)?;
                                 let scheme = IterativeTypeOwner::new(Type::Forall(
-                                    quantified,
+                                    core_quantified.into_boxed_slice(),
                                     Box::new(scheme_body),
                                 ));
                                 let binder_scheme =
@@ -7431,6 +9302,7 @@ impl Elaborator {
                             declarations.push(ElaboratedDeclaration::Binding {
                                 binder,
                                 initializer: initializer.node,
+                                effects: initializer_effects,
                                 origin,
                             });
                         }
@@ -7439,6 +9311,7 @@ impl Elaborator {
                             declarations.push(ElaboratedDeclaration::PatternBinding {
                                 pattern,
                                 initializer: initializer.node,
+                                effects: initializer_effects,
                                 origin,
                                 contains_newtype,
                                 pattern_count,
@@ -7499,12 +9372,15 @@ impl Elaborator {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     })?;
                     initializers.reverse();
+                    let mut effects = EffectRow::empty();
                     for member in &group.members {
                         let initializer = initializers.pop().ok_or_else(invalid_state)?;
+                        effects =
+                            self.union_effects(&effects, &initializer.effects, member.span)?;
                         let TypedNode {
                             node: initializer_node,
                             ty: initializer_ty,
-                            provenance: _,
+                            ..
                         } = initializer.into_inner();
                         let binder = self.builder.resolved_binder(
                             member.binder.id,
@@ -7518,6 +9394,7 @@ impl Elaborator {
                     }
                     declarations.push(ElaboratedDeclaration::Recursive {
                         members,
+                        effects,
                         origin: recursive_group_origin(group),
                     });
                 }
@@ -7578,6 +9455,10 @@ impl Elaborator {
                     let body = values.pop().ok_or_else(invalid_state)?;
                     self.remove_pattern_binders(context, &binders)?;
                     let body_node = body.node;
+                    let body_effects =
+                        clone_effect_row_with_budget(&body.effects, &mut self.type_work).map_err(
+                            |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
+                        )?;
                     if progress.result_type.is_none() {
                         let TypedNode { ty, provenance, .. } = body.into_inner();
                         progress.set_result_type(
@@ -7586,7 +9467,7 @@ impl Elaborator {
                         )?;
                     }
                     progress.push_row(row.into_vec());
-                    progress.push_arm_body((body_node, arm_span));
+                    progress.push_arm_body((body_node, arm_span, body_effects));
                     self.schedule_match_arm(progress.into_inner(), context, &mut tasks)?;
                 }
                 ElaborationTask::FinishMatch(progress) => {
@@ -7608,7 +9489,15 @@ impl Elaborator {
                     })?;
                     let matrix = progress.take_matrix();
                     let arm_bodies = progress.take_arm_bodies();
-                    for (row, (body, arm_span)) in matrix.into_sequence().zip(arm_bodies) {
+                    let mut effects = clone_effect_row_with_budget(
+                        &progress.scrutinee.effects,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                    for (row, (body, arm_span, arm_effects)) in
+                        matrix.into_sequence().zip(arm_bodies)
+                    {
+                        effects = self.union_effects(&effects, &arm_effects, arm_span)?;
                         let mut row = CorePatternBuffer(row);
                         let mut pattern = row.pop().ok_or_else(invalid_state)?;
                         if !row.is_empty() {
@@ -7633,6 +9522,7 @@ impl Elaborator {
                     values.push(TypedNode {
                         node,
                         ty,
+                        effects,
                         provenance,
                     });
                 }
@@ -7650,37 +9540,72 @@ impl Elaborator {
                     while !retained_declarations.is_empty() {
                         let core_body_type = self.clone_type(&body.ty)?;
                         let declaration = retained_declarations.pop().ok_or_else(invalid_state)?;
-                        let node = match declaration.into_inner() {
+                        let (node, initializer_effects, effect_span) = match declaration
+                            .into_inner()
+                        {
                             ElaboratedDeclaration::Binding {
                                 binder,
                                 initializer,
+                                effects,
                                 origin,
-                            } => self.builder.binding(
-                                binder,
-                                initializer,
-                                body.node,
-                                core_body_type,
-                                origin,
-                            )?,
+                            } => {
+                                let effect_span = origin.primary_span();
+                                (
+                                    self.builder.binding(
+                                        binder,
+                                        initializer,
+                                        body.node,
+                                        core_body_type,
+                                        origin,
+                                    )?,
+                                    effects,
+                                    effect_span,
+                                )
+                            }
                             ElaboratedDeclaration::PatternBinding {
                                 pattern,
                                 initializer,
+                                effects,
                                 origin,
                                 contains_newtype,
                                 pattern_count,
-                            } => self.lower_match_expression(
-                                initializer,
-                                vec![CoreMatchArm::new(pattern, body.node, origin.clone())],
-                                core_body_type,
+                            } => {
+                                let effect_span = origin.primary_span();
+                                (
+                                    self.lower_match_expression(
+                                        initializer,
+                                        vec![CoreMatchArm::new(pattern, body.node, origin.clone())],
+                                        core_body_type,
+                                        origin,
+                                        contains_newtype,
+                                        pattern_count,
+                                    )?,
+                                    effects,
+                                    effect_span,
+                                )
+                            }
+                            ElaboratedDeclaration::Recursive {
+                                members,
+                                effects,
                                 origin,
-                                contains_newtype,
-                                pattern_count,
-                            )?,
-                            ElaboratedDeclaration::Recursive { members, origin } => self
-                                .builder
-                                .recursive_binding(members, body.node, core_body_type, origin)?,
+                            } => {
+                                let effect_span = origin.primary_span();
+                                (
+                                    self.builder.recursive_binding(
+                                        members,
+                                        body.node,
+                                        core_body_type,
+                                        origin,
+                                    )?,
+                                    effects,
+                                    effect_span,
+                                )
+                            }
                         };
+                        let effects =
+                            self.union_effects(&initializer_effects, &body.effects, effect_span)?;
                         body.set_node(node);
+                        body.replace_effects(effects);
                     }
                     for declaration in source_declarations {
                         match declaration {
@@ -7714,6 +9639,146 @@ impl Elaborator {
         }
     }
 
+    fn schedule_application_argument<'a>(
+        &mut self,
+        whole_span: Span,
+        function_span: Span,
+        argument: &'a ResolvedExpr,
+        recursive_call: bool,
+        function: TypedNode,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+    ) -> Result<(), TypeError> {
+        let mut function = TypedNodeOwner::new(function);
+        let source_function_ty = function.take_type();
+        let mut function_ty =
+            IterativeTypeOwner::new(self.zonk_owned(source_function_ty.into_inner())?);
+        if matches!(&*function_ty, Type::Inference(_)) {
+            self.type_work
+                .charge(3)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let domain = self.fresh_inference(&Kind::Type, function_span)?;
+            let codomain = self.fresh_inference(&Kind::Type, function_span)?;
+            let effects = self.fresh_effect_row(function_span)?;
+            let exposed =
+                Type::function_computation(domain, ComputationType::new(codomain, effects));
+            self.unify(&function_ty, &exposed)
+                .map_err(|failure| match failure {
+                    UnificationFailure::Infinite => inference_failure(
+                        TypeReason::InfiniteType,
+                        function_span,
+                        "this application would require an infinite type",
+                    ),
+                    UnificationFailure::Mismatch => {
+                        not_applicable(function_span, whole_span, &function_ty, &self.registry)
+                    }
+                    UnificationFailure::Resource => {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    }
+                    UnificationFailure::Invariant => invalid_state(),
+                })?;
+            let zonked = self.zonk(&exposed)?;
+            function_ty.replace(zonked);
+        }
+        if function_ty.function_view().is_none() {
+            return Err(not_applicable(
+                function_span,
+                whole_span,
+                &function_ty,
+                &self.registry,
+            ));
+        }
+        let provenance = if function.provenance.aligns(&function_ty) {
+            function.provenance.clone()
+        } else {
+            self.unknown_provenance(&function_ty)?
+        };
+        let (domain_provenance, codomain_provenance) = provenance.function_parts(&function_ty)?;
+        let (domain_ty, codomain_ty) =
+            clone_function_parts_with_budget(&function_ty, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let latent_effects = match function_ty
+            .function_view()
+            .and_then(|function| function.effects())
+        {
+            Some(effects) => clone_effect_row_with_budget(effects, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+            None => EffectRow::empty(),
+        };
+        function.replace_type(function_ty.into_inner());
+        let domain = ProvenancedTypeOwner::new(ProvenancedType {
+            ty: domain_ty,
+            provenance: domain_provenance,
+        });
+        let codomain = ProvenancedTypeOwner::new(ProvenancedType {
+            ty: codomain_ty,
+            provenance: codomain_provenance,
+        });
+        tasks.push(ElaborationTask::FinishApplication {
+            whole_span,
+            function_span,
+            argument_span: argument.span,
+            function: function.into_inner(),
+            codomain: codomain.into_inner(),
+            latent_effects,
+        });
+        tasks.push(ElaborationTask::Check {
+            expression: argument,
+            expected: domain.into_inner(),
+            kind: CheckKind::Argument {
+                function_span,
+                whole_span,
+                recursive_call,
+            },
+        });
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finish_application(
+        &mut self,
+        whole_span: Span,
+        function_span: Span,
+        argument_span: Span,
+        function: TypedNode,
+        codomain: ProvenancedType,
+        latent_effects: EffectRow,
+        argument: TypedNode,
+    ) -> Result<TypedNode, TypeError> {
+        let function = TypedNodeOwner::new(function);
+        let codomain = ProvenancedTypeOwner::new(codomain);
+        let ProvenancedType {
+            ty: codomain_ty,
+            provenance: codomain_provenance,
+        } = codomain.into_inner();
+        let ty = IterativeTypeOwner::new(self.zonk_owned(codomain_ty)?);
+        let provenance = if codomain_provenance.aligns(&ty) {
+            codomain_provenance
+        } else {
+            self.unknown_provenance(&ty)?
+        };
+        let effects = self.union_effects(&function.effects, &argument.effects, whole_span)?;
+        let effects = self.union_effects(&effects, &latent_effects, whole_span)?;
+        let core_codomain = IterativeTypeOwner::new(self.pure_core_type(&ty)?);
+        let core_effects = self.core_effect_row(&effects)?;
+        let origin = Origin::Related {
+            primary: Box::new(Origin::Source(whole_span)),
+            related: vec![function_span, argument_span],
+        };
+        let node = F::push_application(
+            &mut self.builder,
+            ApplicationNode::new(function.node, argument.node),
+            core_codomain.into_inner(),
+            core_effects,
+            origin,
+        )?;
+        Ok(TypedNode {
+            node,
+            ty: ty.into_inner(),
+            effects,
+            provenance,
+        })
+    }
+
     fn elaborate_tuple(
         &mut self,
         elements: &[ResolvedExpr],
@@ -7725,6 +9790,7 @@ impl Elaborator {
         }
         let mut nodes = Vec::with_capacity(elements.len());
         let mut types = OwnedTypeBuffer(Vec::with_capacity(elements.len()));
+        let mut effects = EffectRow::empty();
         for element in elements {
             let typed = self.elaborate_expression_with_context(
                 ElaborationTask::Synthesize {
@@ -7733,6 +9799,7 @@ impl Elaborator {
                 },
                 context,
             )?;
+            effects = self.union_effects(&effects, &typed.effects, element.span)?;
             nodes.push(typed.node);
             types.push(typed.ty);
         }
@@ -7744,6 +9811,7 @@ impl Elaborator {
         let node = self.builder.tuple(nodes, core_ty, Origin::Source(span))?;
         Ok(TypedNode {
             node,
+            effects,
             provenance: TypeProvenance::atom(Some(span)),
             ty: ty.into_inner(),
         })
@@ -7862,17 +9930,138 @@ impl Elaborator {
         self.lower_newtype_pattern_decision(scrutinee, arms, result_type, origin, pattern_count)
     }
 
+    fn lower_effect_clause_newtype_pattern(
+        &mut self,
+        pattern: CorePattern,
+        mut body: NodeId,
+        result_type: &Type,
+        pattern_count: usize,
+    ) -> Result<(CorePattern, NodeId), TypeError> {
+        self.type_work
+            .charge(
+                pattern_count.checked_mul(3).ok_or_else(|| {
+                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                })?,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut patterns = PatternDecisionPatternArena(Vec::new());
+        patterns
+            .0
+            .try_reserve(pattern_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut scratch =
+            PatternDecisionFlattenScratch::try_new(pattern_count, &mut self.type_work)?;
+        let mut binders = PatternDecisionBinderBuffer(Vec::new());
+        binders
+            .0
+            .try_reserve(pattern_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let (root, binders) =
+            self.flatten_pattern_decision(pattern, &mut patterns, &mut scratch, binders)?;
+        if root.checked_add(1) != Some(patterns.0.len()) {
+            return Err(invalid_state());
+        }
+
+        let mut patterns = patterns.into_sequence();
+        let mut binders = binders.into_sequence();
+        let mut rebuilt = CorePatternBuffer(Vec::new());
+        rebuilt
+            .try_reserve(pattern_count)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        while let Some(pattern) = patterns.next() {
+            let PatternDecisionPattern { ty, origin, kind } = pattern;
+            let ty = IterativeTypeOwner::new(ty);
+            let origin = OriginOwner::new(origin);
+            let kind = match kind {
+                PatternDecisionKind::Binder(slot) => {
+                    if slot != binders.consumed() {
+                        return Err(invalid_state());
+                    }
+                    CorePatternKind::Binder(binders.next().ok_or_else(invalid_state)?)
+                }
+                PatternDecisionKind::Wildcard => CorePatternKind::Wildcard,
+                PatternDecisionKind::Boolean(value) => CorePatternKind::Boolean(value),
+                PatternDecisionKind::Unit => CorePatternKind::Unit,
+                PatternDecisionKind::Tuple(elements) => {
+                    if rebuilt.len() < elements.len() {
+                        return Err(invalid_state());
+                    }
+                    let start = rebuilt.len() - elements.len();
+                    CorePatternKind::Tuple(rebuilt.split_off(start).into_boxed_slice())
+                }
+                PatternDecisionKind::Constructor {
+                    constructor,
+                    payload,
+                } => {
+                    let payload = if payload.is_some() {
+                        Some(Box::new(
+                            rebuilt.pop().ok_or_else(invalid_state)?.into_inner(),
+                        ))
+                    } else {
+                        None
+                    };
+                    let owner = self
+                        .registry
+                        .constructor(constructor)
+                        .ok_or_else(invalid_state)?
+                        .owner;
+                    let is_newtype = self.registry.nominal(owner).is_some_and(|nominal| {
+                        nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+                    });
+                    if !is_newtype {
+                        CorePatternKind::Constructor {
+                            constructor,
+                            payload,
+                        }
+                    } else {
+                        let payload = payload.ok_or_else(invalid_state)?;
+                        let conversion_type = self.clone_type(&payload.ty)?;
+                        let binder_type = self.clone_type(&ty)?;
+                        let binder = self.builder.binder(binder_type, origin.as_ref().clone())?;
+                        let variable_type = self.clone_type(&ty)?;
+                        let variable = self.builder.variable(
+                            binder.id(),
+                            variable_type,
+                            origin.as_ref().clone(),
+                        )?;
+                        let unwrapped = self.builder.newtype_conversion(
+                            owner,
+                            NewtypeConversionDirection::Unwrap,
+                            variable,
+                            conversion_type,
+                            origin.as_ref().clone(),
+                        )?;
+                        let match_type = self.clone_type(result_type)?;
+                        body = self.builder.match_expression(
+                            unwrapped,
+                            vec![CoreMatchArm::new(*payload, body, origin.as_ref().clone())],
+                            match_type,
+                            origin.as_ref().clone(),
+                        )?;
+                        CorePatternKind::Binder(binder)
+                    }
+                }
+            };
+            rebuilt.push(CorePattern::new(ty.into_inner(), origin.into_inner(), kind));
+        }
+        if binders.remaining() != 0 || rebuilt.len() != 1 {
+            return Err(invalid_state());
+        }
+        let pattern = rebuilt.pop().ok_or_else(invalid_state)?.into_inner();
+        Ok((pattern, body))
+    }
+
     fn flatten_pattern_decision(
         &mut self,
         pattern: CorePattern,
         arena: &mut PatternDecisionPatternArena,
         scratch: &mut PatternDecisionFlattenScratch,
+        mut binders: PatternDecisionBinderBuffer,
     ) -> Result<(usize, PatternDecisionBinderBuffer), TypeError> {
         if !scratch.work.0.is_empty() || !scratch.roots.is_empty() {
             pattern.discard_iteratively();
             return Err(invalid_state());
         }
-        let mut binders = PatternDecisionBinderBuffer(Vec::new());
         scratch
             .work
             .0
@@ -8223,8 +10412,12 @@ impl Elaborator {
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         for arm in arms {
             let (pattern, body, arm_origin) = arm.into_parts();
-            let (root, binders) =
-                self.flatten_pattern_decision(pattern, &mut patterns, &mut flatten_scratch)?;
+            let (root, binders) = self.flatten_pattern_decision(
+                pattern,
+                &mut patterns,
+                &mut flatten_scratch,
+                PatternDecisionBinderBuffer(Vec::new()),
+            )?;
             let argument_count = binders.0.len();
             let continuation =
                 self.build_pattern_decision_continuation(body, binders, &result_type, &arm_origin)?;
@@ -9271,9 +11464,13 @@ impl Elaborator {
                     .binders
                     .try_reserve(1)
                     .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let core_expected =
+                    project_type_from_precharged::<F>(&expected, &mut self.type_work).map_err(
+                        |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
+                    )?;
                 let typed = self.builder.resolved_binder(
                     binder.id,
-                    (*expected).clone(),
+                    core_expected,
                     Origin::Generated {
                         cause: Box::new(binder.origin.clone()),
                         reason: binder_reason,
@@ -9382,8 +11579,10 @@ impl Elaborator {
             }
         };
         debug_assert!(!rebuild_expected);
+        let core_expected = project_type_from_precharged::<F>(&expected, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         Ok(CheckedPattern {
-            pattern: CorePattern::new(expected.into_inner(), Origin::Source(pattern.span), kind),
+            pattern: CorePattern::new(core_expected, Origin::Source(pattern.span), kind),
             inference_changed,
             contains_newtype,
             pattern_count,
@@ -9564,9 +11763,11 @@ impl Elaborator {
             }
             _ => return Err(constructor_mismatch(whole_pattern.span)),
         };
+        let core_expected = project_type_from_precharged::<F>(&expected, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         Ok(CheckedPattern {
             pattern: CorePattern::new(
-                expected.into_inner(),
+                core_expected,
                 Origin::Source(whole_pattern.span),
                 CorePatternKind::Constructor {
                     constructor,
@@ -9594,6 +11795,48 @@ impl Elaborator {
         Ok(())
     }
 
+    fn schedule_inferred_function<'a>(
+        &mut self,
+        function: &'a crate::resolved::ResolvedFunctionExpr,
+        span: Span,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+    ) -> Result<(), TypeError> {
+        self.type_work
+            .charge(3)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let domain = self.fresh_inference(&Kind::Type, span)?;
+        let codomain = self.fresh_inference(&Kind::Type, span)?;
+        let expected_ty = Type::Function(Box::new(domain), Box::new(codomain));
+        let expected = ProvenancedTypeOwner::new(ProvenancedType {
+            provenance: self.unknown_provenance(&expected_ty)?,
+            ty: expected_ty,
+        });
+        let (domain_ty, codomain_ty) =
+            clone_function_parts_with_budget(&expected.ty, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let domain_ty = IterativeTypeOwner::new(domain_ty);
+        let codomain_ty = IterativeTypeOwner::new(codomain_ty);
+        let (domain_provenance, codomain_provenance) =
+            expected.provenance.function_parts(&expected.ty)?;
+        tasks.push(ElaborationTask::CheckFunction {
+            parameter: &function.pattern,
+            domain: ProvenancedType {
+                ty: domain_ty.into_inner(),
+                provenance: domain_provenance,
+            },
+            codomain: ProvenancedType {
+                ty: codomain_ty.into_inner(),
+                provenance: codomain_provenance,
+            },
+            body: FunctionBody::Block(&function.body),
+            presentation: anonymous_function_origin(span, function),
+            function_type: expected.into_inner(),
+            body_check: CheckKind::General,
+            infer_effects: true,
+        });
+        Ok(())
+    }
+
     fn schedule_function_check<'a>(
         &mut self,
         context: &mut TypeContext,
@@ -9609,6 +11852,7 @@ impl Elaborator {
             presentation,
             function_type,
             body_check,
+            infer_effects,
         } = check;
         let presentation = OriginOwner::new(presentation);
         let mut domain = ProvenancedTypeOwner::new(domain);
@@ -9653,12 +11897,10 @@ impl Elaborator {
                 function_type.set_provenance(provenance);
             }
         }
-        let function_parts_align = matches!(
-            &function_type.ty,
-            Type::Function(expected_domain, expected_codomain)
-                if structurally_equal(expected_domain, &domain.ty)
-                    && structurally_equal(expected_codomain, &codomain.ty)
-        );
+        let function_parts_align = function_type.ty.function_view().is_some_and(|function| {
+            structurally_equal(function.domain(), &domain.ty)
+                && structurally_equal(function.value(), &codomain.ty)
+        });
         if !function_parts_align || !function_type.provenance.aligns(&function_type.ty) {
             return Err(invalid_state());
         }
@@ -9668,9 +11910,14 @@ impl Elaborator {
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
                 let context_type = IterativeTypeOwner::new(self.clone_type(&domain.ty)?);
                 let ProvenancedType {
-                    ty: binder_type,
+                    ty: source_binder_type,
                     provenance: domain_provenance,
                 } = domain.into_inner();
+                let binder_type =
+                    project_type_from_precharged::<F>(&source_binder_type, &mut self.type_work)
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
                 let binder = self.builder.resolved_binder(
                     source_binder.id,
                     binder_type,
@@ -9688,7 +11935,7 @@ impl Elaborator {
                 }
                 (binder, None, None, Some(source_binder.id))
             } else {
-                let binder_type = self.clone_type(&domain.ty)?;
+                let binder_type = self.pure_core_type(&domain.ty)?;
                 let binder = self.builder.binder(
                     binder_type,
                     Origin::Generated {
@@ -9719,6 +11966,7 @@ impl Elaborator {
             provenance: function_type.provenance,
             contains_newtype,
             pattern_count,
+            infer_effects,
         });
         match body {
             FunctionBody::Block(block) => schedule_block(
@@ -9786,8 +12034,9 @@ impl Elaborator {
         domains
             .try_reserve(arity)
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut expected_body_effects = EffectRow::empty();
         for _ in 0..arity {
-            if !matches!(remainder.ty, Type::Function(_, _)) {
+            if remainder.ty.function_view().is_none() {
                 return Err(case_error(
                     TypeReason::EquationArity,
                     definition_span,
@@ -9795,6 +12044,15 @@ impl Elaborator {
                     None,
                 ));
             }
+            expected_body_effects = match remainder
+                .ty
+                .function_view()
+                .and_then(|function| function.effects())
+            {
+                Some(effects) => clone_effect_row_with_budget(effects, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+                None => EffectRow::empty(),
+            };
             let (domain, codomain) = remainder.into_inner().into_function_parts()?;
             domains.push(domain);
             remainder = ProvenancedTypeOwner::new(codomain);
@@ -9805,7 +12063,7 @@ impl Elaborator {
             .try_reserve(arity)
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         for domain in domains.iter() {
-            let parameter_type = self.clone_type(&domain.ty)?;
+            let parameter_type = self.pure_core_type(&domain.ty)?;
             parameters.push(self.builder.binder(
                 parameter_type,
                 Origin::Generated {
@@ -9882,6 +12140,21 @@ impl Elaborator {
                 ));
             }
             let expected_type = self.clone_type(&remainder.ty)?;
+            let has_effect_scope = !expected_body_effects.is_empty();
+            if has_effect_scope {
+                self.type_work
+                    .charge(1)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                self.expected_effect_rows
+                    .try_reserve(1)
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let expected_effects =
+                    clone_effect_row_with_budget(&expected_body_effects, &mut self.type_work)
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                self.expected_effect_rows.push(expected_effects);
+            }
             let body_result = self
                 .elaborate_expression_with_context(
                     ElaborationTask::Check {
@@ -9898,7 +12171,23 @@ impl Elaborator {
                 )
                 .map(TypedNodeOwner::new);
             self.remove_pattern_binders(context, &binder_ids)?;
-            let body = body_result?;
+            let checked_body = body_result.and_then(|body| {
+                let expected_effects = self.qualify_effect_row(&expected_body_effects)?;
+                let weakened =
+                    self.union_effects(&body.effects, &expected_effects, clause.body.span)?;
+                if !self.same_effect_rows(&weakened, &expected_effects)? {
+                    return Err(inference_failure(
+                        TypeReason::AmbiguousEffectRow,
+                        clause.body.span,
+                        "this function body requests effects outside its declared row",
+                    ));
+                }
+                Ok(body)
+            });
+            if has_effect_scope && self.expected_effect_rows.pop().is_none() {
+                return Err(invalid_state());
+            }
+            let body = checked_body?;
             coverage_matrix.push(patterns.into_vec());
             clause_bodies.push((body.node, clause.span));
         }
@@ -9987,7 +12276,7 @@ impl Elaborator {
                 .try_reserve(parameters.len())
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             for (parameter, domain) in parameters.iter().zip(domains.iter()) {
-                let variable_type = self.clone_type(&domain.ty)?;
+                let variable_type = self.pure_core_type(&domain.ty)?;
                 arguments.push(self.builder.variable(
                     parameter.id(),
                     variable_type,
@@ -10011,7 +12300,7 @@ impl Elaborator {
                 self.builder
                     .tuple(arguments, ty, Origin::Source(definition_span))?
             };
-            let core_remainder = self.clone_type(&remainder.ty)?;
+            let core_remainder = self.pure_core_type(&remainder.ty)?;
             if arity > 1 {
                 pattern_count = pattern_count.checked_add(arms.len()).ok_or_else(|| {
                     TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
@@ -10026,15 +12315,20 @@ impl Elaborator {
                 pattern_count,
             )?
         };
-        let mut body_type = IterativeTypeOwner::new(self.clone_type(&remainder.ty)?);
+        let mut body_type = IterativeTypeOwner::new(self.pure_core_type(&remainder.ty)?);
         for (parameter, domain) in parameters.into_iter().zip(domains.iter()).rev() {
             self.type_work
                 .charge(1)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let domain_type = self.clone_type(&domain.ty)?;
-            let ty = IterativeTypeOwner::new(Type::Function(
-                Box::new(domain_type),
-                Box::new(body_type.into_inner()),
+            let domain_type = self.pure_core_type(&domain.ty)?;
+            let effects = if F::ALLOWS_EFFECTFUL_TYPES {
+                std::mem::replace(&mut expected_body_effects, EffectRow::empty())
+            } else {
+                EffectRow::empty()
+            };
+            let ty = IterativeTypeOwner::new(Type::function_computation(
+                domain_type,
+                ComputationType::new(body_type.into_inner(), effects),
             ));
             let core_ty = self.clone_type(&ty)?;
             body_node = self.builder.function(
@@ -10048,17 +12342,19 @@ impl Elaborator {
             )?;
             body_type = ty;
         }
-        if !same_type(&body_type, &function_type.ty) {
+        let projected_function_type =
+            IterativeTypeOwner::new(self.pure_core_type(&function_type.ty)?);
+        if !same_type(&body_type, &projected_function_type) {
             return Err(invalid_state());
         }
         let ProvenancedType {
             ty: original_function_type,
             provenance,
         } = function_type.into_inner();
-        discard_type_iteratively(original_function_type);
         Ok(TypedNode {
             node: body_node,
-            ty: body_type.into_inner(),
+            ty: original_function_type,
+            effects: EffectRow::empty(),
             provenance,
         })
     }
@@ -10218,7 +12514,7 @@ impl Elaborator {
             )?;
             body.set_node(node);
         }
-        let core_function_type = self.clone_type(&function_type.ty)?;
+        let core_function_type = self.pure_core_type(&function_type.ty)?;
         let node = self.builder.function(
             parameter,
             body.node,
@@ -10232,6 +12528,7 @@ impl Elaborator {
         Ok(TypedNode {
             node,
             ty: function_type.ty,
+            effects: EffectRow::empty(),
             provenance: function_type.provenance,
         })
     }
@@ -10320,7 +12617,7 @@ fn check_interface_declarations(
                 ));
                 return Err(TypeError::Interface(Box::new(diagnostic)));
             }
-            if !matches!(&method.annotation.ty, Type::Function(_, _)) {
+            if method.annotation.ty.function_view().is_none() {
                 let mut diagnostic = Diagnostic::new(
                     InterfaceReason::MethodNotFunction,
                     SourceLabel::new(
@@ -10395,7 +12692,9 @@ fn preflight_application_arities(
     for declaration in module.declaration_order() {
         budget.charge(1).map_err(|()| constraint_resource())?;
         match *declaration {
-            ResolvedDeclarationIndex::Type(_) | ResolvedDeclarationIndex::Interface(_) => {}
+            ResolvedDeclarationIndex::Type(_)
+            | ResolvedDeclarationIndex::Interface(_)
+            | ResolvedDeclarationIndex::Effect(_) => {}
             ResolvedDeclarationIndex::Global(index) => {
                 let definition = module.definitions().get(index).ok_or_else(invalid_state)?;
                 let requirements = match &definition.kind {
@@ -12241,6 +14540,22 @@ where
                 pending.push(codomain);
                 pending.push(domain);
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                if let Some(crate::types::EffectRowVariable::Rigid(variable)) =
+                    codomain.tail_variable()
+                    && visit(variable, budget)?
+                {
+                    return Ok(true);
+                }
+                let argument_count = codomain.effect_argument_count();
+                budget.charge(argument_count.saturating_add(2))?;
+                pending
+                    .try_reserve(argument_count.saturating_add(2))
+                    .map_err(|_| ())?;
+                codomain.extend_effect_arguments(&mut pending);
+                pending.push(codomain.value());
+                pending.push(domain);
+            }
             Type::Forall(parameters, body) => {
                 budget.charge(parameters.len().saturating_add(1))?;
                 pending.try_reserve(1).map_err(|_| ())?;
@@ -12384,6 +14699,39 @@ fn check_newtype_representation_cycles(
                     };
                     pending.push((argument, argument_provenance));
                     pending.push((function, function_provenance));
+                }
+                Type::EffectfulFunction(domain, codomain) => {
+                    let argument_count = codomain.effect_argument_count();
+                    let child_count = argument_count.checked_add(2).ok_or_else(|| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    type_work.charge(child_count).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    pending.try_reserve(child_count).map_err(|_| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    let (domain_provenance, codomain_provenance, argument_provenance) =
+                        match provenance {
+                            ResolvedTypeProvenanceNode::Function {
+                                domain,
+                                codomain,
+                                effect_arguments,
+                                ..
+                            } if effect_arguments.len() == argument_count => {
+                                (*domain, *codomain, effect_arguments)
+                            }
+                            _ => return Err(TypeError::Internal(ElaborationFailure::InvalidState)),
+                        };
+                    let argument_start = pending.len();
+                    pending.extend(
+                        codomain
+                            .effect_arguments()
+                            .zip(argument_provenance.iter().copied()),
+                    );
+                    pending[argument_start..].reverse();
+                    pending.push((codomain.value(), codomain_provenance));
+                    pending.push((domain, domain_provenance));
                 }
                 Type::Tuple(elements) => {
                     type_work.charge(elements.len()).map_err(|()| {
@@ -13008,7 +15356,7 @@ pub(crate) fn link_modules_with_budgets(
     ))
 }
 
-impl Default for Elaborator {
+impl Default for CoreElaborator<PureOperationFamily> {
     fn default() -> Self {
         Self::new()
     }
@@ -13042,6 +15390,7 @@ enum ElaborationTask<'a> {
         presentation: Origin,
         function_type: ProvenancedType,
         body_check: CheckKind,
+        infer_effects: bool,
     },
     FinishFunction {
         direct_binder: Option<BinderId>,
@@ -13054,6 +15403,7 @@ enum ElaborationTask<'a> {
         provenance: TypeProvenance,
         contains_newtype: bool,
         pattern_count: usize,
+        infer_effects: bool,
     },
     AfterApplicationFunction {
         whole_span: Span,
@@ -13067,6 +15417,7 @@ enum ElaborationTask<'a> {
         argument_span: Span,
         function: TypedNode,
         codomain: ProvenancedType,
+        latent_effects: EffectRow,
     },
     AfterMatchScrutinee {
         expression: &'a crate::resolved::ResolvedMatchExpr,
@@ -13121,7 +15472,7 @@ struct MatchProgress<'a> {
     scrutinee: TypedNode,
     next_arm: usize,
     matrix: Vec<Vec<CorePattern>>,
-    arm_bodies: Vec<(NodeId, Span)>,
+    arm_bodies: Vec<(NodeId, Span, EffectRow)>,
     contains_newtype: bool,
     pattern_count: usize,
     result_type: Option<(Type, TypeProvenance, CheckKind)>,
@@ -13188,7 +15539,7 @@ impl<'a> MatchProgressOwner<'a> {
             .push(row);
     }
 
-    fn push_arm_body(&mut self, body: (NodeId, Span)) {
+    fn push_arm_body(&mut self, body: (NodeId, Span, EffectRow)) {
         self.0
             .as_deref_mut()
             .expect("match progress remains live")
@@ -13206,7 +15557,7 @@ impl<'a> MatchProgressOwner<'a> {
         ))
     }
 
-    fn take_arm_bodies(&mut self) -> Vec<(NodeId, Span)> {
+    fn take_arm_bodies(&mut self) -> Vec<(NodeId, Span, EffectRow)> {
         std::mem::take(
             &mut self
                 .0
@@ -13303,6 +15654,7 @@ struct FunctionCheck<'a> {
     presentation: Origin,
     function_type: ProvenancedType,
     body_check: CheckKind,
+    infer_effects: bool,
 }
 
 struct CheckedPattern {
@@ -13361,17 +15713,20 @@ enum ElaboratedDeclaration {
     Binding {
         binder: TypedBinder,
         initializer: NodeId,
+        effects: EffectRow,
         origin: Origin,
     },
     PatternBinding {
         pattern: CorePattern,
         initializer: NodeId,
+        effects: EffectRow,
         origin: Origin,
         contains_newtype: bool,
         pattern_count: usize,
     },
     Recursive {
         members: Vec<(TypedBinder, NodeId)>,
+        effects: EffectRow,
         origin: Origin,
     },
 }
@@ -13513,6 +15868,22 @@ impl OwnedTypeBuffer {
         self.0.try_reserve(additional)
     }
 
+    fn pop(&mut self) -> Option<Type> {
+        self.0.pop()
+    }
+
+    fn split_off(&mut self, at: usize) -> Self {
+        Self(self.0.split_off(at))
+    }
+
+    fn reverse(&mut self) {
+        self.0.reverse();
+    }
+
+    fn extend(&mut self, types: impl IntoIterator<Item = Type>) {
+        self.0.extend(types);
+    }
+
     fn into_vec(mut self) -> Vec<Type> {
         std::mem::take(&mut self.0)
     }
@@ -13585,6 +15956,10 @@ impl CorePatternBuffer {
 
     fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
         self.0.try_reserve(additional)
+    }
+
+    fn split_off(&mut self, at: usize) -> Self {
+        Self(self.0.split_off(at))
     }
 
     fn into_vec(mut self) -> Vec<CorePattern> {
@@ -13718,6 +16093,12 @@ struct PatternDecisionPattern {
 
 struct PatternDecisionPatternArena(Vec<PatternDecisionPattern>);
 
+impl PatternDecisionPatternArena {
+    fn into_sequence(mut self) -> PatternDecisionPatternSequence {
+        PatternDecisionPatternSequence(std::mem::take(&mut self.0).into_iter())
+    }
+}
+
 impl Drop for PatternDecisionPatternArena {
     fn drop(&mut self) {
         for pattern in self.0.drain(..) {
@@ -13727,11 +16108,66 @@ impl Drop for PatternDecisionPatternArena {
     }
 }
 
+struct PatternDecisionPatternSequence(std::vec::IntoIter<PatternDecisionPattern>);
+
+impl PatternDecisionPatternSequence {
+    fn next(&mut self) -> Option<PatternDecisionPattern> {
+        self.0.next()
+    }
+}
+
+impl Drop for PatternDecisionPatternSequence {
+    fn drop(&mut self) {
+        for pattern in self.0.by_ref() {
+            discard_type_iteratively(pattern.ty);
+            discard_origin_iteratively(pattern.origin);
+        }
+    }
+}
+
 struct PatternDecisionBinderBuffer(Vec<TypedBinder>);
+
+impl PatternDecisionBinderBuffer {
+    fn into_sequence(mut self) -> PatternDecisionBinderSequence {
+        PatternDecisionBinderSequence {
+            remaining: std::mem::take(&mut self.0).into_iter(),
+            consumed: 0,
+        }
+    }
+}
 
 impl Drop for PatternDecisionBinderBuffer {
     fn drop(&mut self) {
         for binder in self.0.drain(..) {
+            binder.discard_metadata();
+        }
+    }
+}
+
+struct PatternDecisionBinderSequence {
+    remaining: std::vec::IntoIter<TypedBinder>,
+    consumed: usize,
+}
+
+impl PatternDecisionBinderSequence {
+    fn next(&mut self) -> Option<TypedBinder> {
+        let binder = self.remaining.next()?;
+        self.consumed += 1;
+        Some(binder)
+    }
+
+    const fn consumed(&self) -> usize {
+        self.consumed
+    }
+
+    fn remaining(&self) -> usize {
+        self.remaining.len()
+    }
+}
+
+impl Drop for PatternDecisionBinderSequence {
+    fn drop(&mut self) {
+        for binder in self.remaining.by_ref() {
             binder.discard_metadata();
         }
     }
@@ -14210,6 +16646,7 @@ fn discard_provenanced_type(provenanced: ProvenancedType) {
 
 fn discard_typed_node(node: TypedNode) {
     discard_type_iteratively(node.ty);
+    drop(node.effects);
     drop(node.provenance);
 }
 
@@ -14327,7 +16764,9 @@ fn discard_elaborated_declaration(declaration: ElaboratedDeclaration) {
             pattern.discard_iteratively();
             discard_origin_iteratively(origin);
         }
-        ElaboratedDeclaration::Recursive { members, origin } => {
+        ElaboratedDeclaration::Recursive {
+            members, origin, ..
+        } => {
             for (binder, _) in members {
                 binder.discard_metadata();
             }
@@ -14632,6 +17071,10 @@ fn invalid_state() -> TypeError {
     TypeError::Internal(ElaborationFailure::InvalidState)
 }
 
+fn type_resource() -> TypeError {
+    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+}
+
 fn inference_registry_error(error: InferenceRegistryFailure) -> TypeError {
     match error {
         InferenceRegistryFailure::Resource => {
@@ -14663,6 +17106,9 @@ fn allocate_inference_variable(
     kind: &Kind,
     origin: Span,
 ) -> Result<Type, TypeError> {
+    if kind_mentions_effect_row(kind) {
+        return Err(invalid_state());
+    }
     let identity = InferenceVariableId::new(*next_inference);
     let next = next_inference.checked_add(1).ok_or_else(invalid_state)?;
     variables
@@ -14670,6 +17116,36 @@ fn allocate_inference_variable(
         .map_err(inference_registry_error)?;
     *next_inference = next;
     Ok(Type::Inference(identity))
+}
+
+fn kind_mentions_effect_row(root: &Kind) -> bool {
+    let mut work = vec![root];
+    while let Some(kind) = work.pop() {
+        match kind {
+            Kind::Type => {}
+            Kind::EffectRow => return true,
+            Kind::Arrow(domain, codomain) => {
+                work.push(codomain);
+                work.push(domain);
+            }
+        }
+    }
+    false
+}
+
+fn allocate_row_inference_variable(
+    next_inference: &mut u32,
+    variables: &mut InferenceVariableRegistry,
+    budget: &mut TypeWorkBudget,
+    origin: Span,
+) -> Result<InferenceVariableId, TypeError> {
+    let identity = InferenceVariableId::new(*next_inference);
+    let next = next_inference.checked_add(1).ok_or_else(invalid_state)?;
+    variables
+        .insert(identity, &Kind::EffectRow, origin, budget)
+        .map_err(inference_registry_error)?;
+    *next_inference = next;
+    Ok(identity)
 }
 
 fn kind_failure_for_unification(failure: KindFailure) -> UnificationFailure {
@@ -14808,6 +17284,49 @@ fn candidate_kind_environment<'a>(
                 schedule!(argument);
                 schedule!(function);
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                if let Some(variable) = codomain.tail_variable() {
+                    match variable {
+                        EffectRowVariable::Rigid(variable)
+                            if !environments.contains_declared(variable) =>
+                        {
+                            let parameter = registry
+                                .type_variable(variable)
+                                .ok_or(UnificationFailure::Invariant)?;
+                            environments
+                                .insert_declared(
+                                    variable,
+                                    &parameter.kind,
+                                    parameter.origin.primary_span(),
+                                    budget,
+                                )
+                                .map_err(kind_failure_for_unification)?;
+                        }
+                        EffectRowVariable::Inference(variable)
+                            if !environments.contains_inference(variable) =>
+                        {
+                            let fact = inference_variables
+                                .fact(variable, budget)
+                                .map_err(inference_registry_failure_for_unification)?;
+                            environments
+                                .insert_inference(
+                                    variable,
+                                    &fact.kind,
+                                    Some(fact.origin),
+                                    budget,
+                                    fact.origin,
+                                )
+                                .map_err(kind_failure_for_unification)?;
+                        }
+                        EffectRowVariable::Rigid(_) | EffectRowVariable::Inference(_) => {}
+                    }
+                }
+                for argument in codomain.effect_arguments() {
+                    schedule!(argument);
+                }
+                schedule!(codomain.value());
+                schedule!(domain);
+            }
             Type::Forall(_, _) => return Err(UnificationFailure::Invariant),
         }
     }
@@ -14866,6 +17385,74 @@ fn authenticate_zonk_inference_occurrence(
         }
     }
     Ok(())
+}
+
+fn zonk_core_type(
+    ty: &Type,
+    solutions: &HashMap<InferenceVariableId, Type>,
+    row_solutions: &HashMap<InferenceVariableId, EffectRow>,
+    inference_variables: &InferenceVariableRegistry,
+    authenticated_solutions: &HashSet<InferenceVariableId>,
+    type_work: &mut TypeWorkBudget,
+    strict: bool,
+) -> Result<Type, BuildError> {
+    let (zonked, unresolved) =
+        zonk_type_with_status_and_inference(ty, solutions, |work| match work {
+            ZonkWork::TypeCells(cells) => type_work
+                .charge(cells)
+                .map_err(|()| BuildError::TypeWorkExceeded),
+            ZonkWork::Inference(identity) => authenticate_zonk_inference_occurrence(
+                identity,
+                inference_variables,
+                solutions,
+                authenticated_solutions,
+                type_work,
+            )
+            .map_err(|failure| match failure {
+                UnificationFailure::Resource => BuildError::TypeWorkExceeded,
+                _ => BuildError::InvalidPayload,
+            }),
+        })?;
+    let zonked = zonk_owned_type_with_rows(zonked, &HashMap::new(), row_solutions, type_work)
+        .map_err(|()| BuildError::TypeWorkExceeded)?;
+    if strict
+        && (unresolved
+            || type_contains_unsolved_row_inference(&zonked, row_solutions, type_work)
+                .map_err(|()| BuildError::TypeWorkExceeded)?)
+    {
+        discard_type_iteratively(zonked);
+        Err(BuildError::InvalidPayload)
+    } else {
+        Ok(zonked)
+    }
+}
+
+fn zonk_core_effect_row(
+    row: &EffectRow,
+    solutions: &HashMap<InferenceVariableId, Type>,
+    row_solutions: &HashMap<InferenceVariableId, EffectRow>,
+    inference_variables: &InferenceVariableRegistry,
+    authenticated_solutions: &HashSet<InferenceVariableId>,
+    type_work: &mut TypeWorkBudget,
+    strict: bool,
+) -> Result<EffectRow, BuildError> {
+    let row =
+        clone_effect_row_with_budget(row, type_work).map_err(|()| BuildError::TypeWorkExceeded)?;
+    let wrapper = Type::function_computation(Type::Unit, ComputationType::new(Type::Unit, row));
+    let zonked = zonk_core_type(
+        &wrapper,
+        solutions,
+        row_solutions,
+        inference_variables,
+        authenticated_solutions,
+        type_work,
+        strict,
+    )?;
+    discard_type_iteratively(wrapper);
+    let Type::EffectfulFunction(_, computation) = zonked else {
+        unreachable!()
+    };
+    Ok(computation.effects)
 }
 
 fn resolved_build_error(error: ResolvedBuildFailure) -> TypeError {
@@ -14940,12 +17527,14 @@ fn validate_recursive_member(
     registry: &ResolvedRegistry,
 ) -> Result<(), TypeError> {
     match &member.annotation.ty {
-        Type::Function(_, _)
+        Type::Function(_, _) | Type::EffectfulFunction(_, _)
             if matches!(member.initializer.kind, ResolvedExprKind::Function(_)) =>
         {
             Ok(())
         }
-        Type::Function(_, _) => Err(unsafe_recursive_initializer(group, member)),
+        Type::Function(_, _) | Type::EffectfulFunction(_, _) => {
+            Err(unsafe_recursive_initializer(group, member))
+        }
         ty if ty.outer_nominal().is_some() => {
             let owner = ty.outer_nominal().ok_or_else(invalid_state)?;
             let payload = match &member.initializer.kind {
@@ -15085,6 +17674,12 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
                 work.push(&match_expression.scrutinee);
                 work.extend(match_expression.arms.iter().map(|arm| &arm.body));
             }
+            ResolvedExprKind::Perform(request) => work.push(&request.operand),
+            ResolvedExprKind::Handle(handler) => {
+                work.push(&handler.body);
+                work.extend(handler.clauses.iter().map(|clause| &clause.body));
+            }
+            ResolvedExprKind::Resume(resume) => work.push(&resume.value),
             ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
@@ -15297,7 +17892,21 @@ fn validate_and_charge_public_monotype(
                 work.push(Task::Visit(codomain, child_depth, 0));
                 work.push(Task::Visit(domain, child_depth, 0));
             }
-            Type::Function(_, _) | Type::Inference(_) | Type::Forall(_, _) => {
+            Type::EffectfulFunction(domain, codomain) if applied_arguments == 0 => {
+                let child_depth = depth.saturating_add(1);
+                if child_depth > CORE_PAYLOAD_DEPTH_LIMIT {
+                    return Err(PublicTypeAdmissionError::Invalid);
+                }
+                for argument in codomain.effect_arguments() {
+                    work.push(Task::Visit(argument, child_depth, 0));
+                }
+                work.push(Task::Visit(codomain.value(), child_depth, 0));
+                work.push(Task::Visit(domain, child_depth, 0));
+            }
+            Type::Function(_, _)
+            | Type::EffectfulFunction(_, _)
+            | Type::Inference(_)
+            | Type::Forall(_, _) => {
                 return Err(PublicTypeAdmissionError::Invalid);
             }
             Type::Int | Type::Bool | Type::Unit if applied_arguments != 0 => {
@@ -15321,7 +17930,7 @@ fn validate_and_charge_public_monotype(
 
 fn clone_type_with_budget(ty: &Type, budget: &mut TypeWorkBudget) -> Result<Type, ()> {
     charge_type_cells(ty, budget)?;
-    Ok(zonk_type(ty, &HashMap::new()))
+    Ok(ty.clone())
 }
 
 fn retain_method_occurrence_parameters(
@@ -15381,19 +17990,6 @@ fn same_interface_application_with_budget(
         }
     }
     Ok(true)
-}
-
-fn clone_scheme_with_budget(fact: &TypeFact, budget: &mut TypeWorkBudget) -> Result<Type, ()> {
-    charge_type_cells(&fact.ty, budget)?;
-    if fact.quantified.is_empty() {
-        return Ok(zonk_type(&fact.ty, &HashMap::new()));
-    }
-    budget.charge(1)?;
-    let quantified = clone_kinded_type_parameters_with_budget(&fact.quantified, budget)?;
-    Ok(Type::Forall(
-        quantified.into_boxed_slice(),
-        Box::new(zonk_type(&fact.ty, &HashMap::new())),
-    ))
 }
 
 fn charge_pattern_binder_storage(ty: &Type, budget: &mut TypeWorkBudget) -> Result<(), ()> {
@@ -15491,6 +18087,9 @@ fn compare_concrete_types(
         match (left, right) {
             (Type::Inference(_) | Type::Forall(_, _), _)
             | (_, Type::Inference(_) | Type::Forall(_, _)) => return Ok(None),
+            (Type::EffectfulFunction(_, _), _) | (_, Type::EffectfulFunction(_, _)) => {
+                return Ok(None);
+            }
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
             (Type::Variable(left), Type::Variable(right)) if left == right => {}
@@ -15521,9 +18120,9 @@ fn clone_function_parts_with_budget(
     ty: &Type,
     budget: &mut TypeWorkBudget,
 ) -> Result<(Type, Type), ()> {
-    let Type::Function(domain, codomain) = ty else {
-        return Err(());
-    };
+    let function = ty.function_view().ok_or(())?;
+    let domain = function.domain();
+    let codomain = function.value();
     charge_type_cells(domain, budget)?;
     charge_type_cells(codomain, budget)?;
     let solutions = HashMap::new();
@@ -15581,8 +18180,18 @@ fn zonk_type_with_status<E>(
 fn zonk_type_with_status_and_inference<E>(
     ty: &Type,
     solutions: &HashMap<InferenceVariableId, Type>,
-    mut work_charge: impl FnMut(ZonkWork) -> Result<(), E>,
+    work_charge: impl FnMut(ZonkWork) -> Result<(), E>,
 ) -> Result<(Type, bool), E> {
+    let (ty, unresolved, _) =
+        zonk_type_with_status_and_inference_and_rows(ty, solutions, work_charge)?;
+    Ok((ty, unresolved))
+}
+
+fn zonk_type_with_status_and_inference_and_rows<E>(
+    ty: &Type,
+    solutions: &HashMap<InferenceVariableId, Type>,
+    mut work_charge: impl FnMut(ZonkWork) -> Result<(), E>,
+) -> Result<(Type, bool, bool), E> {
     enum ChargeTask<'a> {
         Visit(&'a Type),
         Slice(std::slice::Iter<'a, Type>),
@@ -15590,6 +18199,7 @@ fn zonk_type_with_status_and_inference<E>(
 
     let mut work = vec![ChargeTask::Visit(ty)];
     let mut unresolved = false;
+    let mut has_effect_row = false;
     while let Some(task) = work.pop() {
         match task {
             ChargeTask::Visit(Type::Inference(identity)) => {
@@ -15613,6 +18223,24 @@ fn zonk_type_with_status_and_inference<E>(
             ChargeTask::Visit(Type::Function(domain, codomain)) => {
                 work_charge(ZonkWork::TypeCells(1))?;
                 work.push(ChargeTask::Visit(codomain));
+                work.push(ChargeTask::Visit(domain));
+            }
+            ChargeTask::Visit(Type::EffectfulFunction(domain, codomain)) => {
+                has_effect_row = true;
+                let row_cells = 2_usize
+                    .saturating_add(codomain.effects().known().len())
+                    .saturating_add(usize::from(codomain.effects().tail().is_some()))
+                    .saturating_add(
+                        codomain
+                            .effects()
+                            .tail()
+                            .map_or(0, |tail| tail.lacks().len()),
+                    );
+                work_charge(ZonkWork::TypeCells(row_cells))?;
+                for argument in codomain.effect_arguments() {
+                    work.push(ChargeTask::Visit(argument));
+                }
+                work.push(ChargeTask::Visit(codomain.value()));
                 work.push(ChargeTask::Visit(domain));
             }
             ChargeTask::Visit(Type::Forall(parameters, body)) => {
@@ -15642,79 +18270,346 @@ fn zonk_type_with_status_and_inference<E>(
         }
     }
 
-    Ok((zonk_type(ty, solutions), unresolved))
+    Ok((zonk_type(ty, solutions), unresolved, has_effect_row))
 }
 
 fn zonk_type(ty: &Type, solutions: &HashMap<InferenceVariableId, Type>) -> Type {
-    enum Task<'a> {
-        Visit(&'a Type),
-        VisitSequence(std::slice::Iter<'a, Type>),
+    let mut budget = TypeWorkBudget::unbounded();
+    let owned = clone_type_with_budget(ty, &mut budget)
+        .expect("an in-memory type can be cloned under an unbounded ledger");
+    zonk_owned_type_with_rows(owned, solutions, &HashMap::new(), &mut budget)
+        .expect("an in-memory type can be zonked under an unbounded ledger")
+}
+
+#[allow(
+    clippy::type_complexity,
+    reason = "the local traversal shape mirrors the effect-row carrier without a public alias"
+)]
+fn zonk_owned_type_with_rows(
+    ty: Type,
+    solutions: &HashMap<InferenceVariableId, Type>,
+    row_solutions: &HashMap<InferenceVariableId, EffectRow>,
+    budget: &mut TypeWorkBudget,
+) -> Result<Type, ()> {
+    struct RowShape {
+        known: Box<[(crate::types::EffectId, usize)]>,
+        tail: Option<(EffectRowVariable, Box<[(crate::types::EffectId, usize)]>)>,
+        argument_count: usize,
+    }
+
+    enum Task {
+        Visit(Type),
+        VisitSequence(std::vec::IntoIter<Type>),
         FinishTuple(usize),
         FinishApplication,
         FinishFunction,
+        FinishEffectfulFunction(RowShape),
         FinishForall(Box<[(TypeVariableId, Kind)]>),
     }
 
-    let mut work = vec![Task::Visit(ty)];
-    let mut rebuilt = Vec::new();
+    struct Work(Vec<Task>);
+
+    impl Work {
+        #[cfg(test)]
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+
+        fn pop(&mut self) -> Option<Task> {
+            self.0.pop()
+        }
+
+        fn try_reserve(
+            &mut self,
+            additional: usize,
+        ) -> Result<(), std::collections::TryReserveError> {
+            self.0.try_reserve(additional)
+        }
+
+        fn push(&mut self, task: Task) {
+            self.0.push(task);
+        }
+    }
+
+    impl Drop for Work {
+        fn drop(&mut self) {
+            while let Some(task) = self.0.pop() {
+                match task {
+                    Task::Visit(ty) => discard_type_iteratively(ty),
+                    Task::VisitSequence(remaining) => {
+                        for ty in remaining {
+                            discard_type_iteratively(ty);
+                        }
+                    }
+                    Task::FinishTuple(_)
+                    | Task::FinishApplication
+                    | Task::FinishFunction
+                    | Task::FinishEffectfulFunction(_)
+                    | Task::FinishForall(_) => {}
+                }
+            }
+        }
+    }
+
+    fn schedule(work: &mut Work, task: Task, budget: &mut TypeWorkBudget) -> Result<(), ()> {
+        budget.charge(1)?;
+        work.try_reserve(1).map_err(|_| ())?;
+        work.push(task);
+        Ok(())
+    }
+
+    fn retain(
+        rebuilt: &mut OwnedTypeBuffer,
+        ty: Type,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        let ty = IterativeTypeOwner::new(ty);
+        budget.charge(1)?;
+        rebuilt.try_reserve(1).map_err(|_| ())?;
+        rebuilt.push(ty.into_inner());
+        Ok(())
+    }
+
+    fn take_suffix(
+        rebuilt: &mut OwnedTypeBuffer,
+        count: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<OwnedTypeBuffer, ()> {
+        if count > rebuilt.len() {
+            return Err(());
+        }
+        budget.charge(count)?;
+        let mut suffix = OwnedTypeBuffer(Vec::new());
+        suffix.try_reserve(count).map_err(|_| ())?;
+        for _ in 0..count {
+            suffix.push(
+                rebuilt
+                    .pop()
+                    .expect("the checked suffix length is available"),
+            );
+        }
+        suffix.reverse();
+        Ok(suffix)
+    }
+
+    let mut work = Work(Vec::new());
+    schedule(&mut work, Task::Visit(ty), budget)?;
+    let mut rebuilt = OwnedTypeBuffer(Vec::new());
     while let Some(task) = work.pop() {
         #[cfg(test)]
         record_zonk_rebuild_pending(work.len().saturating_add(1));
         match task {
-            Task::Visit(Type::Inference(identity)) if solutions.contains_key(identity) => {
-                work.push(Task::Visit(&solutions[identity]));
+            Task::Visit(Type::Inference(identity)) if solutions.contains_key(&identity) => {
+                schedule(
+                    &mut work,
+                    Task::Visit(clone_type_with_budget(&solutions[&identity], budget)?),
+                    budget,
+                )?;
             }
-            Task::Visit(Type::Int) => rebuilt.push(Type::Int),
-            Task::Visit(Type::Bool) => rebuilt.push(Type::Bool),
-            Task::Visit(Type::Unit) => rebuilt.push(Type::Unit),
-            Task::Visit(Type::Nominal(owner)) => rebuilt.push(Type::Nominal(*owner)),
-            Task::Visit(Type::Variable(identity)) => rebuilt.push(Type::Variable(*identity)),
-            Task::Visit(Type::Inference(identity)) => rebuilt.push(Type::Inference(*identity)),
+            Task::Visit(Type::Int) => retain(&mut rebuilt, Type::Int, budget)?,
+            Task::Visit(Type::Bool) => retain(&mut rebuilt, Type::Bool, budget)?,
+            Task::Visit(Type::Unit) => retain(&mut rebuilt, Type::Unit, budget)?,
+            Task::Visit(Type::Nominal(owner)) => {
+                retain(&mut rebuilt, Type::Nominal(owner), budget)?
+            }
+            Task::Visit(Type::Variable(identity)) => {
+                retain(&mut rebuilt, Type::Variable(identity), budget)?
+            }
+            Task::Visit(Type::Inference(identity)) => {
+                retain(&mut rebuilt, Type::Inference(identity), budget)?
+            }
             Task::Visit(Type::Tuple(elements)) => {
-                work.push(Task::FinishTuple(elements.len()));
-                work.push(Task::VisitSequence(elements.iter()));
+                schedule(&mut work, Task::FinishTuple(elements.len()), budget)?;
+                schedule(
+                    &mut work,
+                    Task::VisitSequence(elements.into_vec().into_iter()),
+                    budget,
+                )?;
             }
             Task::Visit(Type::Application(function, argument)) => {
-                work.push(Task::FinishApplication);
-                work.push(Task::Visit(argument));
-                work.push(Task::Visit(function));
+                schedule(&mut work, Task::FinishApplication, budget)?;
+                schedule(&mut work, Task::Visit(*argument), budget)?;
+                schedule(&mut work, Task::Visit(*function), budget)?;
             }
             Task::Visit(Type::Function(domain, codomain)) => {
-                work.push(Task::FinishFunction);
-                work.push(Task::Visit(codomain));
-                work.push(Task::Visit(domain));
+                schedule(&mut work, Task::FinishFunction, budget)?;
+                schedule(&mut work, Task::Visit(*codomain), budget)?;
+                schedule(&mut work, Task::Visit(*domain), budget)?;
+            }
+            Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
+                let crate::types::ComputationType { value, mut effects } = *codomain;
+                let mut visited = HashSet::new();
+                while let Some(tail) = effects.tail() {
+                    let EffectRowVariable::Inference(identity) = tail.variable() else {
+                        break;
+                    };
+                    let Some(solution) = row_solutions.get(&identity) else {
+                        break;
+                    };
+                    budget.charge(1)?;
+                    visited.try_reserve(1).map_err(|_| ())?;
+                    if !visited.insert(identity) {
+                        break;
+                    }
+                    effects = effects
+                        .substitute_tail_once_with_budget(
+                            EffectRowVariable::inference(identity),
+                            solution,
+                            budget,
+                        )?
+                        .expect("authenticated row solutions preserve lacks and occurs");
+                }
+                let (known, tail) = effects.into_parts();
+                let mut arguments = OwnedTypeBuffer(Vec::new());
+                let mut known_shape = Vec::new();
+                for instance in known {
+                    let (effect, instance_arguments) = instance.into_parts();
+                    budget.charge(1)?;
+                    known_shape.try_reserve(1).map_err(|_| ())?;
+                    known_shape.push((effect, instance_arguments.len()));
+                    budget.charge(instance_arguments.len())?;
+                    arguments
+                        .try_reserve(instance_arguments.len())
+                        .map_err(|_| ())?;
+                    arguments.extend(instance_arguments.into_vec());
+                }
+                let tail = if let Some((variable, lacks)) = tail {
+                    let mut lacks_shape = Vec::new();
+                    for instance in lacks {
+                        let (effect, instance_arguments) = instance.into_parts();
+                        budget.charge(1)?;
+                        lacks_shape.try_reserve(1).map_err(|_| ())?;
+                        lacks_shape.push((effect, instance_arguments.len()));
+                        budget.charge(instance_arguments.len())?;
+                        arguments
+                            .try_reserve(instance_arguments.len())
+                            .map_err(|_| ())?;
+                        arguments.extend(instance_arguments.into_vec());
+                    }
+                    Some((variable, lacks_shape.into_boxed_slice()))
+                } else {
+                    None
+                };
+                let argument_count = arguments.len();
+                schedule(
+                    &mut work,
+                    Task::FinishEffectfulFunction(RowShape {
+                        known: known_shape.into_boxed_slice(),
+                        tail,
+                        argument_count,
+                    }),
+                    budget,
+                )?;
+                schedule(
+                    &mut work,
+                    Task::VisitSequence(arguments.into_vec().into_iter()),
+                    budget,
+                )?;
+                schedule(&mut work, Task::Visit(value), budget)?;
+                schedule(&mut work, Task::Visit(*domain), budget)?;
             }
             Task::Visit(Type::Forall(parameters, body)) => {
-                work.push(Task::FinishForall(parameters.clone()));
-                work.push(Task::Visit(body));
+                schedule(&mut work, Task::FinishForall(parameters), budget)?;
+                schedule(&mut work, Task::Visit(*body), budget)?;
             }
             Task::VisitSequence(mut remaining) => {
                 if let Some(element) = remaining.next() {
-                    work.push(Task::VisitSequence(remaining));
-                    work.push(Task::Visit(element));
+                    schedule(&mut work, Task::VisitSequence(remaining), budget)?;
+                    schedule(&mut work, Task::Visit(element), budget)?;
                 }
             }
             Task::FinishTuple(count) => {
-                let elements = rebuilt.split_off(rebuilt.len() - count);
-                rebuilt.push(Type::Tuple(elements.into_boxed_slice()));
+                let elements = take_suffix(&mut rebuilt, count, budget)?;
+                retain(
+                    &mut rebuilt,
+                    Type::Tuple(elements.into_boxed_slice()),
+                    budget,
+                )?;
             }
             Task::FinishApplication => {
                 let argument = rebuilt.pop().expect("zonked application argument");
                 let function = rebuilt.pop().expect("zonked application function");
-                rebuilt.push(Type::Application(Box::new(function), Box::new(argument)));
+                retain(
+                    &mut rebuilt,
+                    Type::Application(Box::new(function), Box::new(argument)),
+                    budget,
+                )?;
             }
             Task::FinishFunction => {
                 let codomain = rebuilt.pop().expect("zonked codomain");
                 let domain = rebuilt.pop().expect("zonked domain");
-                rebuilt.push(Type::Function(Box::new(domain), Box::new(codomain)));
+                retain(
+                    &mut rebuilt,
+                    Type::Function(Box::new(domain), Box::new(codomain)),
+                    budget,
+                )?;
+            }
+            Task::FinishEffectfulFunction(shape) => {
+                fn rebuild_instances(
+                    shapes: Box<[(crate::types::EffectId, usize)]>,
+                    arguments: &mut OwnedTypeBuffer,
+                    budget: &mut TypeWorkBudget,
+                ) -> Result<Vec<crate::types::EffectInstance>, ()> {
+                    let mut instances = Vec::new();
+                    budget.charge(shapes.len())?;
+                    instances.try_reserve(shapes.len()).map_err(|_| ())?;
+                    for (effect, count) in shapes.into_vec().into_iter().rev() {
+                        if count > arguments.len() {
+                            return Err(());
+                        }
+                        budget.charge(count)?;
+                        let mut instance_arguments = OwnedTypeBuffer(Vec::new());
+                        instance_arguments.try_reserve(count).map_err(|_| ())?;
+                        for _ in 0..count {
+                            instance_arguments.push(
+                                arguments
+                                    .pop()
+                                    .expect("the row shape counted its zonked arguments"),
+                            );
+                        }
+                        instance_arguments.reverse();
+                        instances.push(crate::types::EffectInstance::new(
+                            effect,
+                            instance_arguments.into_boxed_slice(),
+                        ));
+                    }
+                    instances.reverse();
+                    Ok(instances)
+                }
+
+                let mut arguments = take_suffix(&mut rebuilt, shape.argument_count, budget)?;
+                let tail = if let Some((variable, lacks)) = shape.tail {
+                    Some((variable, rebuild_instances(lacks, &mut arguments, budget)?))
+                } else {
+                    None
+                };
+                let known = rebuild_instances(shape.known, &mut arguments, budget)?;
+                if !arguments.is_empty() {
+                    return Err(());
+                }
+                let effects = effect_row_from_owned_parts_with_budget(known, tail, budget)?;
+                let codomain = rebuilt.pop().expect("zonked effectful codomain");
+                let domain = rebuilt.pop().expect("zonked effectful domain");
+                retain(
+                    &mut rebuilt,
+                    Type::function_computation(
+                        domain,
+                        crate::types::ComputationType::new(codomain, effects),
+                    ),
+                    budget,
+                )?;
             }
             Task::FinishForall(parameters) => {
                 let body = rebuilt.pop().expect("zonked scheme body");
-                rebuilt.push(Type::Forall(parameters, Box::new(body)));
+                retain(
+                    &mut rebuilt,
+                    Type::Forall(parameters, Box::new(body)),
+                    budget,
+                )?;
             }
         }
     }
-    rebuilt.pop().expect("one zonked type")
+    Ok(rebuilt.pop().expect("one zonked type"))
 }
 
 fn type_contains_inference(
@@ -15799,6 +18694,13 @@ fn type_contains_inference(
                 schedule!(Task::Visit(codomain));
                 schedule!(Task::Visit(domain));
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                for argument in codomain.effect_arguments() {
+                    schedule!(Task::Visit(argument));
+                }
+                schedule!(Task::Visit(codomain.value()));
+                schedule!(Task::Visit(domain));
+            }
             Type::Forall(_, _) => return Err(UnificationFailure::Invariant),
             Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_) => {}
         }
@@ -15849,6 +18751,22 @@ fn collect_unsolved_inference(
                 work.push(Task::Visit(codomain));
                 work.push(Task::Visit(domain));
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                if let Some(EffectRowVariable::Inference(identity)) = codomain.tail_variable()
+                    && !seen.contains(&identity)
+                {
+                    budget.charge(2)?;
+                    seen.try_reserve(1).map_err(|_| ())?;
+                    found.try_reserve(1).map_err(|_| ())?;
+                    seen.insert(identity);
+                    found.push(identity);
+                }
+                for argument in codomain.effect_arguments() {
+                    work.push(Task::Visit(argument));
+                }
+                work.push(Task::Visit(codomain.value()));
+                work.push(Task::Visit(domain));
+            }
             Type::Forall(_, body) => work.push(Task::Visit(body)),
             Type::Int
             | Type::Bool
@@ -15861,11 +18779,666 @@ fn collect_unsolved_inference(
     Ok(found)
 }
 
+fn type_contains_unsolved_row_inference(
+    ty: &Type,
+    solutions: &HashMap<InferenceVariableId, EffectRow>,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    fn schedule<'a>(
+        work: &mut Vec<&'a Type>,
+        ty: &'a Type,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        budget.charge(1)?;
+        work.try_reserve(1).map_err(|_| ())?;
+        work.push(ty);
+        Ok(())
+    }
+
+    let mut work = Vec::new();
+    schedule(&mut work, ty, budget)?;
+    let mut visited = HashSet::new();
+    while let Some(ty) = work.pop() {
+        match ty {
+            Type::Tuple(elements) => {
+                for element in elements {
+                    schedule(&mut work, element, budget)?;
+                }
+            }
+            Type::Application(function, argument) | Type::Function(function, argument) => {
+                schedule(&mut work, argument, budget)?;
+                schedule(&mut work, function, budget)?;
+            }
+            Type::EffectfulFunction(domain, codomain) => {
+                if let Some(EffectRowVariable::Inference(identity)) = codomain.tail_variable() {
+                    if !solutions.contains_key(&identity) {
+                        return Ok(true);
+                    }
+                    if !visited.contains(&identity) {
+                        budget.charge(1)?;
+                        visited.try_reserve(1).map_err(|_| ())?;
+                        visited.insert(identity);
+                        if let Some(solution) = solutions.get(&identity) {
+                            for argument in solution.known().iter().chain(
+                                solution
+                                    .tail()
+                                    .into_iter()
+                                    .flat_map(|tail| tail.lacks().iter()),
+                            ) {
+                                budget.charge(1)?;
+                                for argument in argument.arguments() {
+                                    schedule(&mut work, argument, budget)?;
+                                }
+                            }
+                        }
+                    }
+                }
+                for member in codomain.effects().known().iter().chain(
+                    codomain
+                        .effects()
+                        .tail()
+                        .into_iter()
+                        .flat_map(|tail| tail.lacks().iter()),
+                ) {
+                    budget.charge(1)?;
+                    for argument in member.arguments() {
+                        schedule(&mut work, argument, budget)?;
+                    }
+                }
+                schedule(&mut work, codomain.value(), budget)?;
+                schedule(&mut work, domain, budget)?;
+            }
+            Type::Forall(_, body) => schedule(&mut work, body, budget)?,
+            Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Nominal(_)
+            | Type::Variable(_)
+            | Type::Inference(_) => {}
+        }
+    }
+    Ok(false)
+}
+
 fn inference_failure(reason: TypeReason, span: Span, message: &str) -> TypeError {
     TypeError::Source(Box::new(Diagnostic::new(
         reason,
         SourceLabel::new(span, message),
     )))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResumeUsage {
+    Available,
+    Consumed,
+}
+
+fn check_clause_resume_usage(
+    expression: &ResolvedExpr,
+    owner: ResumeId,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), TypeError> {
+    match resume_usage_with_budget(expression, owner, ResumeUsage::Available, budget)? {
+        ResumeUsage::Consumed => Ok(()),
+        ResumeUsage::Available => Err(inference_failure(
+            TypeReason::ResumeNotConsumed,
+            expression.span,
+            "this operation clause can complete without resuming",
+        )),
+    }
+}
+
+fn resume_usage_with_budget(
+    expression: &ResolvedExpr,
+    owner: ResumeId,
+    mut state: ResumeUsage,
+    budget: &mut TypeWorkBudget,
+) -> Result<ResumeUsage, TypeError> {
+    enum Task<'a> {
+        Visit(&'a ResolvedExpr),
+        Consume(Option<ResumeId>, Span),
+        BeginMatch(&'a [crate::resolved::ResolvedMatchArm]),
+        FinishMatchArm {
+            arms: &'a [crate::resolved::ResolvedMatchArm],
+            next: usize,
+            incoming: ResumeUsage,
+            outgoing: Option<ResumeUsage>,
+        },
+        CheckRecursive(&'a ResolvedRecursiveGroup),
+        CheckFunction(&'a crate::resolved::ResolvedFunctionExpr, Span),
+        CheckHandlerClauses(&'a [crate::resolved::ResolvedHandlerClause], Span),
+    }
+
+    fn push<'a>(
+        tasks: &mut Vec<Task<'a>>,
+        task: Task<'a>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), TypeError> {
+        budget
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        tasks
+            .try_reserve(1)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        tasks.push(task);
+        Ok(())
+    }
+
+    let mut tasks = Vec::new();
+    push(&mut tasks, Task::Visit(expression), budget)?;
+    while let Some(task) = tasks.pop() {
+        match task {
+            Task::Visit(expression) => match &expression.kind {
+                ResolvedExprKind::Integer(_)
+                | ResolvedExprKind::Boolean(_)
+                | ResolvedExprKind::Unit
+                | ResolvedExprKind::Occurrence(_)
+                | ResolvedExprKind::Constructor(_) => {}
+                ResolvedExprKind::Tuple(elements) => {
+                    for element in elements.iter().rev() {
+                        push(&mut tasks, Task::Visit(element), budget)?;
+                    }
+                }
+                ResolvedExprKind::Apply(application) => {
+                    push(&mut tasks, Task::Visit(&application.argument), budget)?;
+                    push(&mut tasks, Task::Visit(&application.function), budget)?;
+                }
+                ResolvedExprKind::Add(binary)
+                | ResolvedExprKind::Multiply(binary)
+                | ResolvedExprKind::Equal(binary) => {
+                    push(&mut tasks, Task::Visit(&binary.right), budget)?;
+                    push(&mut tasks, Task::Visit(&binary.left), budget)?;
+                }
+                ResolvedExprKind::Block(block) => {
+                    push(&mut tasks, Task::Visit(&block.result), budget)?;
+                    for declaration in block.declarations.iter().rev() {
+                        match declaration {
+                            ResolvedLocalDeclaration::Binding(binding) => {
+                                push(&mut tasks, Task::Visit(&binding.initializer), budget)?
+                            }
+                            ResolvedLocalDeclaration::Recursive(group) => {
+                                push(&mut tasks, Task::CheckRecursive(group), budget)?;
+                            }
+                        }
+                    }
+                }
+                ResolvedExprKind::Function(function) => {
+                    push(
+                        &mut tasks,
+                        Task::CheckFunction(function, expression.span),
+                        budget,
+                    )?;
+                }
+                ResolvedExprKind::Match(matched) => {
+                    push(&mut tasks, Task::BeginMatch(&matched.arms), budget)?;
+                    push(&mut tasks, Task::Visit(&matched.scrutinee), budget)?;
+                }
+                ResolvedExprKind::Perform(request) => {
+                    push(&mut tasks, Task::Visit(&request.operand), budget)?;
+                }
+                ResolvedExprKind::Handle(handler) => {
+                    push(&mut tasks, Task::Visit(&handler.body), budget)?;
+                    push(
+                        &mut tasks,
+                        Task::CheckHandlerClauses(&handler.clauses, expression.span),
+                        budget,
+                    )?;
+                }
+                ResolvedExprKind::Resume(resume) => {
+                    push(
+                        &mut tasks,
+                        Task::Consume(resume.owner, expression.span),
+                        budget,
+                    )?;
+                    push(&mut tasks, Task::Visit(&resume.value), budget)?;
+                }
+            },
+            Task::Consume(resume_owner, span) => {
+                if resume_owner == Some(owner) {
+                    state = match state {
+                        ResumeUsage::Available => ResumeUsage::Consumed,
+                        ResumeUsage::Consumed => {
+                            return Err(inference_failure(
+                                TypeReason::ResumeAlreadyConsumed,
+                                span,
+                                "this control-flow path already consumed the resume capability",
+                            ));
+                        }
+                    };
+                }
+            }
+            Task::BeginMatch(arms) => {
+                if let Some(first) = arms.first() {
+                    let incoming = state;
+                    push(
+                        &mut tasks,
+                        Task::FinishMatchArm {
+                            arms,
+                            next: 1,
+                            incoming,
+                            outgoing: None,
+                        },
+                        budget,
+                    )?;
+                    push(&mut tasks, Task::Visit(&first.body), budget)?;
+                }
+            }
+            Task::FinishMatchArm {
+                arms,
+                next,
+                incoming,
+                outgoing,
+            } => {
+                if outgoing.is_some_and(|previous| previous != state) {
+                    let span = arms.get(next - 1).ok_or_else(invalid_state)?.span;
+                    return Err(inference_failure(
+                        TypeReason::ResumeNotConsumed,
+                        span,
+                        "every match branch must leave the same resume usage state",
+                    ));
+                }
+                let outgoing = Some(state);
+                if let Some(arm) = arms.get(next) {
+                    state = incoming;
+                    push(
+                        &mut tasks,
+                        Task::FinishMatchArm {
+                            arms,
+                            next: next + 1,
+                            incoming,
+                            outgoing,
+                        },
+                        budget,
+                    )?;
+                    push(&mut tasks, Task::Visit(&arm.body), budget)?;
+                }
+            }
+            Task::CheckRecursive(group) => {
+                for member in &group.members {
+                    if contains_resume_owner_with_budget(&member.initializer, owner, budget)? {
+                        return Err(inference_failure(
+                            TypeReason::ResumeCapture,
+                            group.span,
+                            "a recursive member cannot capture the clause resume capability",
+                        ));
+                    }
+                }
+            }
+            Task::CheckFunction(function, span) => {
+                if block_contains_resume_owner_with_budget(&function.body, owner, budget)? {
+                    return Err(inference_failure(
+                        TypeReason::ResumeCapture,
+                        span,
+                        "a nested function cannot capture the clause resume capability",
+                    ));
+                }
+            }
+            Task::CheckHandlerClauses(clauses, span) => {
+                for clause in clauses {
+                    if contains_resume_owner_with_budget(&clause.body, owner, budget)? {
+                        return Err(inference_failure(
+                            TypeReason::ResumeCapture,
+                            span,
+                            "a nested handler clause cannot capture the outer resume capability",
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Ok(state)
+}
+
+fn block_contains_resume_owner_with_budget(
+    block: &ResolvedBlock,
+    owner: ResumeId,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, TypeError> {
+    if contains_resume_owner_with_budget(&block.result, owner, budget)? {
+        return Ok(true);
+    }
+    for declaration in &block.declarations {
+        match declaration {
+            ResolvedLocalDeclaration::Binding(binding) => {
+                if contains_resume_owner_with_budget(&binding.initializer, owner, budget)? {
+                    return Ok(true);
+                }
+            }
+            ResolvedLocalDeclaration::Recursive(group) => {
+                for member in &group.members {
+                    if contains_resume_owner_with_budget(&member.initializer, owner, budget)? {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn contains_resume_owner_with_budget(
+    expression: &ResolvedExpr,
+    owner: ResumeId,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, TypeError> {
+    fn schedule<'a>(
+        pending: &mut Vec<&'a ResolvedExpr>,
+        expression: &'a ResolvedExpr,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), TypeError> {
+        budget
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        pending
+            .try_reserve(1)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        pending.push(expression);
+        Ok(())
+    }
+
+    let mut pending = Vec::new();
+    schedule(&mut pending, expression, budget)?;
+    while let Some(expression) = pending.pop() {
+        match &expression.kind {
+            ResolvedExprKind::Resume(resume) => {
+                if resume.owner == Some(owner) {
+                    return Ok(true);
+                }
+                schedule(&mut pending, &resume.value, budget)?;
+            }
+            ResolvedExprKind::Tuple(elements) => {
+                for element in elements {
+                    schedule(&mut pending, element, budget)?;
+                }
+            }
+            ResolvedExprKind::Apply(application) => {
+                schedule(&mut pending, &application.argument, budget)?;
+                schedule(&mut pending, &application.function, budget)?;
+            }
+            ResolvedExprKind::Add(binary)
+            | ResolvedExprKind::Multiply(binary)
+            | ResolvedExprKind::Equal(binary) => {
+                schedule(&mut pending, &binary.right, budget)?;
+                schedule(&mut pending, &binary.left, budget)?;
+            }
+            ResolvedExprKind::Block(block) => {
+                schedule(&mut pending, &block.result, budget)?;
+                for declaration in &block.declarations {
+                    match declaration {
+                        ResolvedLocalDeclaration::Binding(binding) => {
+                            schedule(&mut pending, &binding.initializer, budget)?;
+                        }
+                        ResolvedLocalDeclaration::Recursive(group) => {
+                            for member in &group.members {
+                                schedule(&mut pending, &member.initializer, budget)?;
+                            }
+                        }
+                    }
+                }
+            }
+            ResolvedExprKind::Function(function) => {
+                schedule(&mut pending, &function.body.result, budget)?;
+                for declaration in &function.body.declarations {
+                    match declaration {
+                        ResolvedLocalDeclaration::Binding(binding) => {
+                            schedule(&mut pending, &binding.initializer, budget)?;
+                        }
+                        ResolvedLocalDeclaration::Recursive(group) => {
+                            for member in &group.members {
+                                schedule(&mut pending, &member.initializer, budget)?;
+                            }
+                        }
+                    }
+                }
+            }
+            ResolvedExprKind::Match(matched) => {
+                schedule(&mut pending, &matched.scrutinee, budget)?;
+                for arm in &matched.arms {
+                    schedule(&mut pending, &arm.body, budget)?;
+                }
+            }
+            ResolvedExprKind::Perform(request) => {
+                schedule(&mut pending, &request.operand, budget)?;
+            }
+            ResolvedExprKind::Handle(handler) => {
+                schedule(&mut pending, &handler.body, budget)?;
+                for clause in &handler.clauses {
+                    schedule(&mut pending, &clause.body, budget)?;
+                }
+            }
+            ResolvedExprKind::Integer(_)
+            | ResolvedExprKind::Boolean(_)
+            | ResolvedExprKind::Unit
+            | ResolvedExprKind::Occurrence(_)
+            | ResolvedExprKind::Constructor(_) => {}
+        }
+    }
+    Ok(false)
+}
+
+pub(crate) fn checked_program_contains_effect_syntax(
+    program: &ValidatedInterfaceProgram,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, TypeError> {
+    fn resource() -> TypeError {
+        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+    }
+
+    fn schedule<'a>(
+        work: &mut Vec<&'a ResolvedExpr>,
+        expression: &'a ResolvedExpr,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), TypeError> {
+        budget.charge(1).map_err(|()| resource())?;
+        work.try_reserve(1).map_err(|_| resource())?;
+        work.push(expression);
+        Ok(())
+    }
+
+    fn schedule_declaration<'a>(
+        work: &mut Vec<&'a ResolvedExpr>,
+        declaration: &'a ResolvedLocalDeclaration,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), TypeError> {
+        match declaration {
+            ResolvedLocalDeclaration::Binding(binding) => {
+                schedule(work, &binding.initializer, budget)
+            }
+            ResolvedLocalDeclaration::Recursive(group) => {
+                for member in &group.members {
+                    schedule(work, &member.initializer, budget)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn schedule_block<'a>(
+        work: &mut Vec<&'a ResolvedExpr>,
+        block: &'a ResolvedBlock,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), TypeError> {
+        schedule(work, &block.result, budget)?;
+        for declaration in &block.declarations {
+            schedule_declaration(work, declaration, budget)?;
+        }
+        Ok(())
+    }
+
+    fn type_requires_effect_core<'a>(
+        parameter_count: usize,
+        mut parameters: impl Iterator<Item = &'a Kind>,
+        value_type: &Type,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, TypeError> {
+        budget.charge(parameter_count).map_err(|()| resource())?;
+        if parameters.any(|kind| matches!(kind, Kind::EffectRow)) {
+            return Ok(true);
+        }
+        requires_pure_core_projection(value_type, Some(budget)).map_err(|()| resource())
+    }
+
+    let registry = program.registry();
+    for nominal in registry.nominals() {
+        let parameters = registry
+            .nominal_parameters(nominal.id)
+            .ok_or_else(resource)?;
+        if let Some(representation) = &nominal.representation
+            && type_requires_effect_core(
+                parameters.len(),
+                parameters.iter().map(|parameter| &parameter.kind),
+                representation,
+                budget,
+            )?
+        {
+            return Ok(true);
+        }
+        for constructor in &nominal.constructors {
+            let constructor = registry.constructor(*constructor).ok_or_else(resource)?;
+            if let Some(payload) = &constructor.payload
+                && type_requires_effect_core(
+                    parameters.len(),
+                    parameters.iter().map(|parameter| &parameter.kind),
+                    payload,
+                    budget,
+                )?
+            {
+                return Ok(true);
+            }
+        }
+    }
+
+    let mut work = Vec::new();
+    for group in program.groups() {
+        for scheme in group.schemes() {
+            if type_requires_effect_core(
+                scheme.scheme.type_parameters.len(),
+                scheme.scheme.type_parameters.iter().map(|(_, kind)| kind),
+                scheme.scheme.value_type(),
+                budget,
+            )? {
+                return Ok(true);
+            }
+        }
+        for interface in group.interface_facts() {
+            for method in &interface.methods {
+                let parameters = interface
+                    .parameters
+                    .iter()
+                    .chain(method.type_parameters.iter())
+                    .map(|parameter| &parameter.kind);
+                let parameter_count = interface
+                    .parameters
+                    .len()
+                    .checked_add(method.type_parameters.len())
+                    .ok_or_else(resource)?;
+                if type_requires_effect_core(
+                    parameter_count,
+                    parameters,
+                    &method.value_type,
+                    budget,
+                )? {
+                    return Ok(true);
+                }
+            }
+        }
+        for implementation in group.implementation_facts() {
+            for method in &implementation.methods {
+                if type_requires_effect_core(
+                    method.scheme.type_parameters.len(),
+                    method.scheme.type_parameters.iter().map(|(_, kind)| kind),
+                    method.scheme.value_type(),
+                    budget,
+                )? {
+                    return Ok(true);
+                }
+            }
+        }
+        for definition in group.definitions() {
+            match definition.kind() {
+                ResolvedDefinitionKind::Equational(global) => {
+                    for equation in &global.equations {
+                        schedule(&mut work, &equation.body, budget)?;
+                    }
+                }
+                ResolvedDefinitionKind::InlineOperational(global) => {
+                    schedule_block(&mut work, &global.body, budget)?;
+                }
+            }
+        }
+        for implementation in group.implementations() {
+            for method_group in implementation.method_groups() {
+                for equation in &method_group.equations {
+                    schedule(&mut work, &equation.body, budget)?;
+                }
+            }
+        }
+    }
+
+    while let Some(expression) = work.pop() {
+        match &expression.kind {
+            ResolvedExprKind::Perform(_)
+            | ResolvedExprKind::Handle(_)
+            | ResolvedExprKind::Resume(_) => return Ok(true),
+            ResolvedExprKind::Tuple(elements) => {
+                for element in elements {
+                    schedule(&mut work, element, budget)?;
+                }
+            }
+            ResolvedExprKind::Apply(application) => {
+                schedule(&mut work, &application.argument, budget)?;
+                schedule(&mut work, &application.function, budget)?;
+            }
+            ResolvedExprKind::Add(binary)
+            | ResolvedExprKind::Multiply(binary)
+            | ResolvedExprKind::Equal(binary) => {
+                schedule(&mut work, &binary.right, budget)?;
+                schedule(&mut work, &binary.left, budget)?;
+            }
+            ResolvedExprKind::Block(block) => schedule_block(&mut work, block, budget)?,
+            ResolvedExprKind::Function(function) => {
+                schedule_block(&mut work, &function.body, budget)?;
+            }
+            ResolvedExprKind::Match(matched) => {
+                for arm in &matched.arms {
+                    schedule(&mut work, &arm.body, budget)?;
+                }
+                schedule(&mut work, &matched.scrutinee, budget)?;
+            }
+            ResolvedExprKind::Integer(_)
+            | ResolvedExprKind::Boolean(_)
+            | ResolvedExprKind::Unit
+            | ResolvedExprKind::Occurrence(_)
+            | ResolvedExprKind::Constructor(_) => {}
+        }
+    }
+    Ok(false)
+}
+
+fn first_invalid_handler_operation_with_budget(
+    owner: crate::types::EffectId,
+    operation_count: usize,
+    operations: impl ExactSizeIterator<Item = crate::types::OperationId>,
+    budget: &mut TypeWorkBudget,
+) -> Result<Option<usize>, ()> {
+    budget.charge(operation_count)?;
+    let mut seen = Vec::new();
+    seen.try_reserve(operation_count).map_err(|_| ())?;
+    seen.resize(operation_count, false);
+
+    budget.charge(operations.len())?;
+    for (clause_index, operation) in operations.enumerate() {
+        let Ok(index) = usize::try_from(operation.operation()) else {
+            return Ok(Some(clause_index));
+        };
+        let Some(slot) = seen.get_mut(index) else {
+            return Ok(Some(clause_index));
+        };
+        if operation.owner() != owner || std::mem::replace(slot, true) {
+            return Ok(Some(clause_index));
+        }
+    }
+    Ok(None)
 }
 
 fn resolved_module_binders(module: &ResolvedModule) -> Vec<BinderId> {
@@ -15967,6 +19540,15 @@ fn collect_expression_binders(binders: &mut Vec<BinderId>, mut expressions: Vec<
                     expressions.push(&arm.body);
                 }
             }
+            ResolvedExprKind::Perform(request) => expressions.push(&request.operand),
+            ResolvedExprKind::Handle(handler) => {
+                expressions.push(&handler.body);
+                for clause in &handler.clauses {
+                    collect_pattern_binders(&clause.pattern, binders);
+                    expressions.push(&clause.body);
+                }
+            }
+            ResolvedExprKind::Resume(resume) => expressions.push(&resume.value),
             ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
@@ -16039,6 +19621,232 @@ mod tests {
     };
 
     static MODULE_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn wide_handler_coverage_is_exact_atomic_and_retryable() {
+        const OPERATIONS: usize = 4_096;
+        const EXACT_WORK: usize = 2 * OPERATIONS;
+
+        let owner = crate::types::EffectId::new(ModuleId::new(7), 3);
+        let operations = (0..OPERATIONS)
+            .map(|ordinal| crate::types::OperationId::new(owner, ordinal as u32))
+            .collect::<Vec<_>>();
+
+        let mut one_short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            first_invalid_handler_operation_with_budget(
+                owner,
+                OPERATIONS,
+                operations.iter().copied(),
+                &mut one_short,
+            ),
+            Err(())
+        );
+        assert_eq!(one_short.used(), OPERATIONS);
+
+        let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
+        assert_eq!(
+            first_invalid_handler_operation_with_budget(
+                owner,
+                OPERATIONS,
+                operations.iter().copied(),
+                &mut exact,
+            ),
+            Ok(None)
+        );
+        assert_eq!(exact.used(), EXACT_WORK);
+    }
+
+    #[test]
+    fn deep_resume_usage_is_iterative_exact_and_retryable() {
+        const DEPTH: usize = 16_384;
+        const EXACT_WORK: usize = DEPTH + 3;
+
+        std::thread::Builder::new()
+            .name("deep-resume-usage".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let owner = ResumeId::new(7);
+                let source = SourceFile::new("resume-usage.ash", "resume")
+                    .expect("the resume fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 6).expect("the resume range is ordered"))
+                    .expect("the resume span should fit");
+                let mut expression = ResolvedExpr {
+                    kind: ResolvedExprKind::Resume(crate::resolved::ResolvedResumeExpr {
+                        owner: Some(owner),
+                        value: Box::new(ResolvedExpr {
+                            kind: ResolvedExprKind::Unit,
+                            span,
+                        }),
+                    }),
+                    span,
+                };
+                for _ in 0..DEPTH {
+                    expression = ResolvedExpr {
+                        kind: ResolvedExprKind::Tuple(vec![expression]),
+                        span,
+                    };
+                }
+
+                let mut one_short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+                assert!(matches!(
+                    resume_usage_with_budget(
+                        &expression,
+                        owner,
+                        ResumeUsage::Available,
+                        &mut one_short,
+                    ),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                ));
+                assert_eq!(one_short.used(), EXACT_WORK - 1);
+
+                let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
+                assert_eq!(
+                    resume_usage_with_budget(
+                        &expression,
+                        owner,
+                        ResumeUsage::Available,
+                        &mut exact,
+                    ),
+                    Ok(ResumeUsage::Consumed)
+                );
+                assert_eq!(exact.used(), EXACT_WORK);
+                crate::resolved::discard_resolved_expression_iteratively(expression);
+            })
+            .expect("the small-stack resume witness should spawn")
+            .join()
+            .expect("the small-stack resume witness should complete");
+    }
+
+    #[test]
+    fn family_core_scheme_projection_preserves_pure_erasure_and_effect_rows() {
+        const PURE_WORK: usize = 11;
+        const EFFECT_WORK: usize = 17;
+
+        let pure = TypeFact {
+            ty: Type::Tuple(vec![Type::Int, Type::Bool, Type::Unit].into_boxed_slice()),
+            provenance: TypeProvenance::unknown(&Type::Unit),
+            quantified: vec![
+                (TypeVariableId::new(0), Kind::Type),
+                (TypeVariableId::new(1), Kind::Type),
+                (TypeVariableId::new(2), Kind::Type),
+            ]
+            .into_boxed_slice(),
+        };
+        let mut pure_short = Elaborator::new();
+        pure_short.type_work = TypeWorkBudget::with_limit(PURE_WORK - 1);
+        assert_eq!(
+            pure_short.pure_core_scheme(&pure),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        );
+        assert_eq!(pure_short.type_work.used(), PURE_WORK - 1);
+        let mut pure_exact = Elaborator::new();
+        pure_exact.type_work = TypeWorkBudget::with_limit(PURE_WORK);
+        assert!(matches!(
+            pure_exact.pure_core_scheme(&pure),
+            Ok(Type::Forall(_, _))
+        ));
+        assert_eq!(pure_exact.type_work.used(), PURE_WORK);
+
+        let row = TypeVariableId::new(9);
+        let source_effects = EffectRow::open(
+            EffectRowVariable::rigid(row),
+            Box::new([row_test_effect("pure-core-scheme-effect.ash")]),
+        );
+        let effectful = TypeFact {
+            ty: Type::function_computation(
+                Type::Unit,
+                ComputationType::new(Type::Int, source_effects),
+            ),
+            provenance: TypeProvenance::unknown(&Type::Unit),
+            quantified: vec![(row, Kind::EffectRow)].into_boxed_slice(),
+        };
+        let mut effect_short = Elaborator::new();
+        effect_short.type_work = TypeWorkBudget::with_limit(EFFECT_WORK - 1);
+        assert_eq!(
+            effect_short.pure_core_scheme(&effectful),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        );
+        assert_eq!(effect_short.type_work.used(), EFFECT_WORK - 1);
+        assert!(matches!(effectful.ty, Type::EffectfulFunction(_, _)));
+        assert_eq!(effectful.quantified.as_ref(), [(row, Kind::EffectRow)]);
+
+        let mut effect_exact = Elaborator::new();
+        effect_exact.type_work = TypeWorkBudget::with_limit(EFFECT_WORK);
+        let projected = effect_exact
+            .pure_core_scheme(&effectful)
+            .expect("a fresh exact retry should project the complete scheme");
+        assert_eq!(projected, Type::function(Type::Unit, Type::Int));
+        assert_eq!(effect_exact.type_work.used(), EFFECT_WORK);
+        assert!(matches!(effectful.ty, Type::EffectfulFunction(_, _)));
+        assert_eq!(effectful.quantified.as_ref(), [(row, Kind::EffectRow)]);
+
+        let retained = EffectElaborator::new()
+            .pure_core_scheme(&effectful)
+            .expect("Effect Core should retain the checked computation scheme");
+        let Type::Forall(parameters, body) = retained else {
+            panic!("Effect Core should retain the row binder");
+        };
+        assert_eq!(parameters.as_ref(), [(row, Kind::EffectRow)]);
+        assert!(matches!(*body, Type::EffectfulFunction(_, _)));
+    }
+
+    #[test]
+    fn effect_core_selection_scan_is_exact_retryable_and_stack_safe() {
+        const DEPTH: usize = 96;
+
+        let mut body = "{\n".repeat(DEPTH);
+        body.push_str("()");
+        body.push_str(&"\n}".repeat(DEPTH));
+        let resolved = resolved_module_fixture("deep-effect-selection.ash", "", "Unit", &body);
+        let module = resolved.module();
+        let checked = check_module(resolved).expect("the deep selection fixture should check");
+        let linked =
+            link_modules(vec![checked], module).expect("the deep selection fixture should link");
+        let program = crate::evidence_validation::validate_interface_evidence(linked)
+            .expect("the deep selection fixture evidence should validate");
+
+        std::thread::Builder::new()
+            .name("effect-core-selection-budget".to_owned())
+            .stack_size(64 * 1024)
+            .spawn(move || {
+                let mut calibration = TypeWorkBudget::unbounded();
+                assert_eq!(
+                    checked_program_contains_effect_syntax(&program, &mut calibration),
+                    Ok(false)
+                );
+                let exact_work = calibration.used();
+                assert!(exact_work > DEPTH);
+
+                let mut one_short = TypeWorkBudget::with_limit(exact_work - 1);
+                assert_eq!(
+                    checked_program_contains_effect_syntax(&program, &mut one_short),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                );
+                assert_eq!(one_short.used(), exact_work - 1);
+
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(exact_work);
+                    assert_eq!(
+                        checked_program_contains_effect_syntax(&program, &mut exact),
+                        Ok(false)
+                    );
+                    assert_eq!(exact.used(), exact_work);
+                }
+            })
+            .expect("the small-stack selection worker should start")
+            .join()
+            .expect("the selection scan and fixture disposal should remain stack safe");
+    }
 
     #[test]
     fn resolved_application_clone_discards_a_deep_first_argument_when_the_second_is_one_short() {
@@ -17822,6 +21630,7 @@ mod tests {
                         origin: Origin::Source(span),
                         span,
                     }],
+                    effects: Vec::new(),
                     implementations: Vec::new(),
                     definitions: Vec::new(),
                     export_candidate: ResolvedExportCandidate::default(),
@@ -18674,7 +22483,7 @@ mod tests {
         let mut short = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         short
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 13)
+            .charge(crate::types::TYPE_WORK_LIMIT - 16)
             .expect("the fixture leaves one fewer unit than complete match storage requires");
 
         assert_eq!(
@@ -18693,7 +22502,7 @@ mod tests {
         let mut exact = Elaborator::for_module(&resolved).expect("the binder namespace should fit");
         exact
             .type_work
-            .charge(crate::types::TYPE_WORK_LIMIT - 14)
+            .charge(crate::types::TYPE_WORK_LIMIT - 17)
             .expect("the fixture leaves type copies plus both progress and Core arm storage");
         let typed = exact
             .elaborate_expression_with_context(
@@ -18706,39 +22515,6 @@ mod tests {
             .expect("the exact retained match cost should fit");
         assert_eq!(typed.ty, Type::Int);
         assert_eq!(exact.type_work.charge(1), Err(()));
-    }
-
-    #[test]
-    fn retained_scheme_clones_precharge_body_quantifiers_and_wrapper() {
-        let fact = TypeFact {
-            ty: Type::Tuple(vec![Type::Int, Type::Bool, Type::Unit].into_boxed_slice()),
-            provenance: TypeProvenance::atom(None),
-            quantified: vec![
-                (TypeVariableId::new(0), Kind::Type),
-                (TypeVariableId::new(1), Kind::Type),
-                (TypeVariableId::new(2), Kind::Type),
-            ]
-            .into_boxed_slice(),
-        };
-
-        let mut short = TypeWorkBudget::default();
-        short
-            .charge(crate::types::TYPE_WORK_LIMIT - 10)
-            .expect("the fixture leaves one fewer unit than the complete scheme copy");
-        assert_eq!(clone_scheme_with_budget(&fact, &mut short), Err(()));
-
-        let mut exact = TypeWorkBudget::default();
-        exact
-            .charge(crate::types::TYPE_WORK_LIMIT - 11)
-            .expect("the fixture leaves the body, quantifiers, and wrapper");
-        assert_eq!(
-            clone_scheme_with_budget(&fact, &mut exact),
-            Ok(Type::Forall(
-                fact.quantified.clone(),
-                Box::new(fact.ty.clone())
-            ))
-        );
-        assert_eq!(exact.charge(1), Err(()));
     }
 
     #[test]
@@ -19051,11 +22827,12 @@ mod tests {
             .type_work
             .charge(crate::types::TYPE_WORK_LIMIT - 16)
             .expect("the fixture leaves metadata plus the substituted result");
-        let (instantiated, arguments) = exact
+        let (instantiated, arguments, row_arguments) = exact
             .instantiate(&fact, false, span)
             .expect("the exact retained allocation cost should fit");
         assert_eq!(instantiated, Type::Unit);
         assert_eq!(arguments.len(), 3);
+        assert!(row_arguments.is_empty());
         assert_eq!(exact.inference_variables.len(), 3);
         assert_eq!(exact.type_work.charge(1), Err(()));
     }
@@ -19097,9 +22874,10 @@ mod tests {
 
         let mut exact = Elaborator::new();
         exact.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
-        let (_, arguments) = exact
+        let (_, arguments, row_arguments) = exact
             .instantiate(&fact, false, span)
             .expect("the exact kinded instantiation budget should fit");
+        assert!(row_arguments.is_empty());
         let [
             Type::Inference(function_inference),
             Type::Inference(argument_inference),
@@ -19695,12 +23473,13 @@ mod tests {
                     (
                         TypeVariableId::resolved(module, index),
                         TypeVariableId::generated(u32::MAX - index),
+                        false,
                     )
                 })
                 .collect::<Vec<_>>();
             let source_arguments = replacements
                 .iter()
-                .map(|(source, _)| Type::Variable(*source))
+                .map(|(source, _, _)| Type::Variable(*source))
                 .collect::<Vec<_>>();
             let body = Type::Function(
                 Box::new(Type::Tuple(source_arguments.clone().into_boxed_slice())),
@@ -20964,6 +24743,54 @@ mod tests {
     }
 
     #[test]
+    fn effect_clause_pattern_carriers_are_exact_and_retryable() {
+        const EXACT_WORK: usize = 5;
+        let source = SourceFile::new("effect-clause-pattern-budget.ash", "_")
+            .expect("the effect-clause pattern source should fit");
+        let span = source
+            .span(ByteRange::new(0, 1).expect("ordered effect-clause pattern range"))
+            .expect("the effect-clause pattern span should fit");
+        let lower = |limit| {
+            let mut elaborator = Elaborator::new();
+            let body = elaborator
+                .builder
+                .unit(Type::Unit, Origin::Source(span))
+                .expect("the effect-clause body should fit");
+            let binder = elaborator
+                .builder
+                .binder(Type::Unit, Origin::Source(span))
+                .expect("the effect-clause binder should fit");
+            elaborator.type_work = TypeWorkBudget::with_limit(limit);
+            let result = elaborator.lower_effect_clause_newtype_pattern(
+                CorePattern::new(
+                    Type::Unit,
+                    Origin::Source(span),
+                    CorePatternKind::Binder(binder),
+                ),
+                body,
+                &Type::Unit,
+                1,
+            );
+            (elaborator, result)
+        };
+
+        let (short, result) = lower(EXACT_WORK - 1);
+        assert!(matches!(
+            result,
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        ));
+        assert_eq!(short.type_work.used(), 3);
+
+        for _ in 0..2 {
+            let (exact, result) = lower(EXACT_WORK);
+            result.expect("the exact effect-clause pattern carrier budget should fit");
+            assert_eq!(exact.type_work.used(), EXACT_WORK);
+        }
+    }
+
+    #[test]
     fn multi_arm_pattern_decision_flattening_uses_one_additive_scratch_boundary() {
         const ARM_COUNT: usize = 2;
         const PATTERN_COUNT: usize = ARM_COUNT;
@@ -20995,6 +24822,7 @@ mod tests {
                             ),
                             &mut arena,
                             &mut scratch,
+                            PatternDecisionBinderBuffer(Vec::new()),
                         )?;
                         elaborator.flatten_pattern_decision(
                             CorePattern::new(
@@ -21004,6 +24832,7 @@ mod tests {
                             ),
                             &mut arena,
                             &mut scratch,
+                            PatternDecisionBinderBuffer(Vec::new()),
                         )?;
                         Ok(())
                     });
@@ -22893,6 +26722,7 @@ mod tests {
                             provenance: TypeProvenance::atom(Some(span)),
                             contains_newtype: false,
                             pattern_count: 0,
+                            infer_effects: false,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -23071,6 +26901,7 @@ mod tests {
                                 ty: function_ty,
                             },
                             body_check: CheckKind::General,
+                            infer_effects: false,
                         },
                     ),
                     Err(TypeError::Internal(
@@ -23114,6 +26945,7 @@ mod tests {
                             provenance: TypeProvenance::atom(Some(span)),
                             contains_newtype: false,
                             pattern_count: 0,
+                            infer_effects: false,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -23150,6 +26982,7 @@ mod tests {
                     initial.borrow_mut().push(TypedNode {
                         node: body,
                         ty: Type::Unit,
+                        effects: EffectRow::empty(),
                         provenance: TypeProvenance::atom(Some(span)),
                     });
                 });
@@ -23172,6 +27005,7 @@ mod tests {
                             provenance: TypeProvenance::atom(Some(span)),
                             contains_newtype: false,
                             pattern_count: 1,
+                            infer_effects: false,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -23210,6 +27044,7 @@ mod tests {
                     initial.borrow_mut().push(TypedNode {
                         node: body,
                         ty: deep_application_type(DEPTH),
+                        effects: EffectRow::empty(),
                         provenance: TypeProvenance::atom(Some(span)),
                     });
                 });
@@ -23233,6 +27068,7 @@ mod tests {
                             provenance: TypeProvenance::atom(Some(span)),
                             contains_newtype: false,
                             pattern_count: 1,
+                            infer_effects: false,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -23272,6 +27108,7 @@ mod tests {
                     initial.borrow_mut().push(TypedNode {
                         node: argument_node,
                         ty: Type::Unit,
+                        effects: EffectRow::empty(),
                         provenance: TypeProvenance::atom(Some(span)),
                     });
                 });
@@ -23295,9 +27132,11 @@ mod tests {
                             function: TypedNode {
                                 node: function_node,
                                 ty: Type::Unit,
+                                effects: EffectRow::empty(),
                                 provenance: TypeProvenance::atom(Some(span)),
                             },
                             codomain,
+                            latent_effects: EffectRow::empty(),
                         },
                         &mut TypeContext::new(),
                     ),
@@ -23787,6 +27626,7 @@ mod tests {
                                 ty: function_ty,
                             },
                             body_check: CheckKind::General,
+                            infer_effects: false,
                         },
                     ),
                     Err(TypeError::Internal(
@@ -24128,6 +27968,21 @@ mod tests {
     }
 
     #[test]
+    fn unknown_provenance_aligns_with_an_effectful_function_context_value() {
+        let ty = Type::function_computation(
+            Type::Int,
+            crate::types::ComputationType::new(
+                Type::Bool,
+                EffectRow::singleton(row_test_effect("provenance-effect.ash")),
+            ),
+        );
+        let value = ProvenancedType::unknown(ty);
+
+        assert!(value.provenance.aligns(&value.ty));
+        assert!(value.into_function_parts().is_ok());
+    }
+
+    #[test]
     fn a_shape_mismatch_poisoning_prevents_later_elaboration() {
         let program = resolved_module_fixture(
             "mismatched-provenance.ash",
@@ -24271,5 +28126,625 @@ mod tests {
             .expect("the boundary thread should start")
             .join()
             .expect("provenance construction and cursor movement should not overflow");
+    }
+
+    fn row_test_span(label: &'static str) -> Span {
+        let source = Box::leak(Box::new(
+            SourceFile::new(label, "x").expect("the row inference fixture should fit"),
+        ));
+        source
+            .span(ByteRange::new(0, 1).expect("the fixture range is ordered"))
+            .expect("the fixture span should fit")
+    }
+
+    fn row_test_effect(label: &'static str) -> crate::types::EffectInstance {
+        let source = Box::leak(Box::new(
+            SourceFile::new(label, "").expect("the row identity fixture should fit"),
+        ));
+        crate::types::EffectInstance::new(
+            crate::types::EffectId::new(ModuleId::from(source.id()), 0),
+            Box::new([]),
+        )
+    }
+
+    #[test]
+    fn row_inference_unifies_exact_members_and_rejects_occurs() {
+        let span = row_test_span("row-unification.ash");
+        let mut elaborator = Elaborator::new();
+        let open = elaborator
+            .fresh_effect_row(span)
+            .expect("a row inference variable should fit");
+        let variable = open.tail().expect("the row should be open").variable();
+        let member = row_test_effect("row-unification-effect.ash");
+        let closed = crate::types::EffectRow::singleton(member.clone());
+
+        elaborator
+            .unify_effect_rows(&open, &closed)
+            .expect("an unconstrained row variable should solve to the closed row");
+        assert_eq!(
+            elaborator
+                .zonk_effect_row(&open)
+                .expect("the solved row should zonk"),
+            closed,
+        );
+
+        let mut open_tails = Elaborator::new();
+        let left_tail = open_tails
+            .fresh_effect_row(span)
+            .expect("the left row variable should fit")
+            .tail()
+            .expect("the left row should be open")
+            .variable();
+        let right_tail = open_tails
+            .fresh_effect_row(span)
+            .expect("the right row variable should fit")
+            .tail()
+            .expect("the right row should be open")
+            .variable();
+        let left = EffectRow::with_tail(
+            Box::new([row_test_effect("left-open-member.ash")]),
+            left_tail,
+            Box::new([row_test_effect("left-open-lacks.ash")]),
+        );
+        let right = EffectRow::with_tail(
+            Box::new([row_test_effect("right-open-member.ash")]),
+            right_tail,
+            Box::new([row_test_effect("right-open-lacks.ash")]),
+        );
+        open_tails
+            .unify_effect_rows(&left, &right)
+            .expect("two inference tails should share a fresh residual tail");
+        assert_eq!(
+            open_tails
+                .zonk_effect_row(&left)
+                .expect("the left row should zonk"),
+            open_tails
+                .zonk_effect_row(&right)
+                .expect("the right row should zonk"),
+        );
+        open_tails
+            .unify_effect_rows(&left, &right)
+            .expect("the shared residual row should unify again");
+
+        let recursive = crate::types::EffectRow::with_tail(
+            Box::new([member.clone()]),
+            variable,
+            Box::new([member]),
+        );
+        let mut occurs = Elaborator::new();
+        let occurs_open = occurs
+            .fresh_effect_row(span)
+            .expect("an occurs row variable should fit");
+        let occurs_variable = occurs_open
+            .tail()
+            .expect("the occurs row should be open")
+            .variable();
+        let recursive = crate::types::EffectRow::with_tail(
+            recursive.known().to_vec().into_boxed_slice(),
+            occurs_variable,
+            recursive.known().to_vec().into_boxed_slice(),
+        );
+        assert_eq!(
+            occurs.unify_effect_rows(&occurs_open, &recursive),
+            Err(UnificationFailure::Infinite),
+        );
+    }
+
+    #[test]
+    fn row_inference_has_a_fixed_effect_row_kind() {
+        let span = row_test_span("row-kind.ash");
+        let mut elaborator = Elaborator::new();
+
+        assert!(elaborator.fresh_effect_row(span).is_ok());
+        assert_eq!(
+            elaborator.fresh_inference(&Kind::EffectRow, span),
+            Err(invalid_state()),
+        );
+        assert_eq!(
+            elaborator.fresh_inference(
+                &Kind::Arrow(Box::new(Kind::EffectRow), Box::new(Kind::Type)),
+                span,
+            ),
+            Err(invalid_state()),
+        );
+    }
+
+    #[test]
+    fn row_argument_unification_rolls_back_before_retry() {
+        let span = row_test_span("row-argument-transaction.ash");
+        let mut elaborator = Elaborator::new();
+        let inference = elaborator
+            .fresh_inference(&Kind::Type, span)
+            .expect("the exact effect argument inference should fit");
+        let Type::Inference(variable) = inference else {
+            panic!("fresh ordinary inference should retain its identity");
+        };
+        let owner = crate::types::EffectId::new(ModuleId::new(0), 0);
+        let left = EffectRow::singleton(crate::types::EffectInstance::new(
+            owner,
+            Box::new([Type::Inference(variable), Type::Int]),
+        ));
+        let mismatch = EffectRow::singleton(crate::types::EffectInstance::new(
+            owner,
+            Box::new([Type::Bool, Type::Bool]),
+        ));
+
+        assert_eq!(
+            elaborator.unify_effect_rows(&left, &mismatch),
+            Err(UnificationFailure::Mismatch),
+        );
+        assert!(!elaborator.inference_solutions.contains_key(&variable));
+
+        let retry = EffectRow::singleton(crate::types::EffectInstance::new(
+            owner,
+            Box::new([Type::Bool, Type::Int]),
+        ));
+        elaborator
+            .unify_effect_rows(&left, &retry)
+            .expect("the rolled-back row argument should solve on retry");
+        assert_eq!(
+            elaborator.inference_solutions.get(&variable),
+            Some(&Type::Bool)
+        );
+    }
+
+    #[test]
+    fn row_solution_publication_is_exact_atomic_and_retryable() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const WIDTH: u32 = 256;
+                let span = row_test_span("row-solution-budget.ash");
+                let wide_row = |module| {
+                    EffectRow::closed(
+                        (0..WIDTH)
+                            .map(|declaration| {
+                                crate::types::EffectInstance::new(
+                                    crate::types::EffectId::new(module, declaration),
+                                    Box::new([]),
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
+                    )
+                };
+                let mut calibration = Elaborator::new();
+                let calibration_open = calibration
+                    .fresh_effect_row(span)
+                    .expect("the calibration row variable registration should fit");
+                let calibration_closed = wide_row(ModuleId::new(90));
+                calibration.type_work = TypeWorkBudget::unbounded();
+                calibration
+                    .unify_effect_rows(&calibration_open, &calibration_closed)
+                    .expect("the measured wide row solution should publish");
+                let solution_work = calibration.type_work.used();
+
+                let mut elaborator = Elaborator::new();
+                let open = elaborator
+                    .fresh_effect_row(span)
+                    .expect("the row variable registration should fit");
+                let closed = wide_row(ModuleId::new(91));
+
+                elaborator.type_work = TypeWorkBudget::with_limit(solution_work - 1);
+                assert_eq!(
+                    elaborator.unify_effect_rows(&open, &closed),
+                    Err(UnificationFailure::Resource),
+                );
+                assert!(elaborator.row_inference_solutions.is_empty());
+                assert!(elaborator.authenticated_inference_solutions.is_empty());
+
+                elaborator.type_work = TypeWorkBudget::with_limit(solution_work);
+                assert_eq!(elaborator.unify_effect_rows(&open, &closed), Ok(()));
+                assert_eq!(elaborator.type_work.used(), solution_work);
+                elaborator.type_work = TypeWorkBudget::default();
+                assert_eq!(
+                    elaborator
+                        .zonk_effect_row(&open)
+                        .expect("the retried wide row solution should remain valid"),
+                    closed,
+                );
+            })
+            .expect("the wide row owner thread should start")
+            .join()
+            .expect("wide row success and failure teardown should fit the small stack");
+    }
+
+    #[test]
+    fn row_unification_comparisons_are_charged_exactly_and_retry_disjoint_width() {
+        const WIDTH: u32 = 16;
+        const DEPTH: usize = 128;
+        let span = row_test_span("row-comparison-budget.ash");
+        let effect = |declaration| crate::types::EffectId::new(ModuleId::new(92), declaration);
+        let deep_argument = || {
+            (0..DEPTH).fold(Type::Int, |value, _| {
+                Type::Application(Box::new(Type::Unit), Box::new(value))
+            })
+        };
+        let equal = EffectRow::singleton(crate::types::EffectInstance::new(
+            effect(WIDTH * 2),
+            Box::new([deep_argument()]),
+        ));
+        let mut zonk_only = Elaborator::new();
+        zonk_only.type_work = TypeWorkBudget::unbounded();
+        zonk_only
+            .zonk_effect_row(&equal)
+            .expect("the first comparison operand should zonk");
+        zonk_only
+            .zonk_effect_row(&equal)
+            .expect("the second comparison operand should zonk");
+        let zonk_work = zonk_only.type_work.used();
+        let mut equality = Elaborator::new();
+        equality.type_work = TypeWorkBudget::unbounded();
+        equality
+            .unify_effect_rows(&equal, &equal)
+            .expect("equal deep row arguments should unify");
+        assert!(
+            equality.type_work.used() > zonk_work,
+            "semantic row comparison work is owned after both operand zonks",
+        );
+
+        let rows = |elaborator: &mut Elaborator| {
+            let left_tail = elaborator
+                .fresh_effect_row(span)
+                .expect("the left comparison tail should fit")
+                .tail()
+                .expect("the left comparison row should be open")
+                .variable();
+            let right_tail = elaborator
+                .fresh_effect_row(span)
+                .expect("the right comparison tail should fit")
+                .tail()
+                .expect("the right comparison row should be open")
+                .variable();
+            let row = |start, tail| {
+                let mut members = (start..start + WIDTH)
+                    .map(|declaration| {
+                        crate::types::EffectInstance::new(effect(declaration), Box::new([]))
+                    })
+                    .collect::<Vec<_>>();
+                members.push(crate::types::EffectInstance::new(
+                    effect(WIDTH * 2),
+                    Box::new([deep_argument()]),
+                ));
+                EffectRow::with_tail(members.into_boxed_slice(), tail, Box::new([]))
+            };
+            (row(0, left_tail), row(WIDTH, right_tail))
+        };
+        let mut calibration = Elaborator::new();
+        let (calibration_left, calibration_right) = rows(&mut calibration);
+        calibration.type_work = TypeWorkBudget::unbounded();
+        calibration
+            .unify_effect_rows(&calibration_left, &calibration_right)
+            .expect("the measured disjoint rows should unify through a shared tail");
+        let exact_work = calibration.type_work.used();
+
+        let mut retry = Elaborator::new();
+        let (left, right) = rows(&mut retry);
+        retry.type_work = TypeWorkBudget::with_limit(exact_work - 1);
+        assert_eq!(
+            retry.unify_effect_rows(&left, &right),
+            Err(UnificationFailure::Resource),
+        );
+        assert!(retry.row_inference_solutions.is_empty());
+        retry.type_work = TypeWorkBudget::with_limit(exact_work);
+        assert_eq!(retry.unify_effect_rows(&left, &right), Ok(()));
+        assert_eq!(retry.type_work.used(), exact_work);
+    }
+
+    #[test]
+    fn row_zonking_is_exact_atomic_and_retryable() {
+        let span = row_test_span("row-zonk-budget.ash");
+        let mut elaborator = Elaborator::new();
+        let open = elaborator
+            .fresh_effect_row(span)
+            .expect("the row variable registration should fit");
+        let closed = EffectRow::singleton(row_test_effect("row-zonk-effect.ash"));
+        elaborator
+            .unify_effect_rows(&open, &closed)
+            .expect("the row solution should publish");
+
+        elaborator.type_work = TypeWorkBudget::unbounded();
+        assert_eq!(elaborator.zonk_effect_row(&open), Ok(closed.clone()));
+        let zonk_work = elaborator.type_work.used();
+
+        elaborator.type_work = TypeWorkBudget::with_limit(zonk_work - 1);
+        assert_eq!(
+            elaborator.zonk_effect_row(&open),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            )),
+        );
+        assert_eq!(elaborator.row_inference_solutions.len(), 1);
+
+        elaborator.type_work = TypeWorkBudget::with_limit(zonk_work);
+        assert_eq!(elaborator.zonk_effect_row(&open), Ok(closed));
+        assert_eq!(elaborator.type_work.used(), zonk_work);
+    }
+
+    #[test]
+    fn complete_row_aware_zonk_owner_is_exact_and_retries_after_deep_failure() {
+        const DEPTH: u32 = 1_024;
+        let effect = crate::types::EffectId::new(ModuleId::new(0), 0);
+        let first = InferenceVariableId::new(0);
+        let mut solutions = HashMap::new();
+        for current in 0..DEPTH {
+            let identity = InferenceVariableId::new(current);
+            let solution = if current + 1 == DEPTH {
+                EffectRow::singleton(crate::types::EffectInstance::new(effect, Box::new([])))
+            } else {
+                EffectRow::open(
+                    EffectRowVariable::inference(InferenceVariableId::new(current + 1)),
+                    Box::new([]),
+                )
+            };
+            solutions.insert(identity, solution);
+        }
+        let source = move || {
+            Type::function_computation(
+                Type::Unit,
+                crate::types::ComputationType::new(
+                    Type::Bool,
+                    EffectRow::open(EffectRowVariable::inference(first), Box::new([])),
+                ),
+            )
+        };
+
+        std::thread::Builder::new()
+            .name("deep-row-solution-zonk-owner".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let mut component_work = TypeWorkBudget::unbounded();
+                let (ordinary, unresolved) =
+                    zonk_type_with_status_and_inference(&source(), &HashMap::new(), |work| {
+                        match work {
+                            ZonkWork::TypeCells(cells) => component_work.charge(cells),
+                            ZonkWork::Inference(_) => Ok(()),
+                        }
+                    })
+                    .expect("the ordinary zonk component should fit");
+                assert!(!unresolved);
+                zonk_owned_type_with_rows(
+                    ordinary,
+                    &HashMap::new(),
+                    &solutions,
+                    &mut component_work,
+                )
+                .expect("the row rebuild component should fit");
+
+                let mut measured = Elaborator::new();
+                measured.row_inference_solutions = RowInferenceSolutionMap(solutions.clone());
+                measured.type_work = TypeWorkBudget::unbounded();
+                let zonked = measured
+                    .zonk_with_status(&source())
+                    .expect("the complete measured deep solution chain should zonk");
+                let exact = measured.type_work.used();
+                assert!(
+                    exact > component_work.used(),
+                    "the complete owner must include its final unresolved-row scan"
+                );
+                assert!(!zonked.1);
+
+                let mut retry = Elaborator::new();
+                retry.row_inference_solutions = RowInferenceSolutionMap(solutions);
+                retry.type_work = TypeWorkBudget::with_limit(exact - 1);
+                assert_eq!(
+                    retry.zonk_with_status(&source()),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                );
+
+                retry.type_work = TypeWorkBudget::with_limit(exact);
+                assert_eq!(retry.zonk_with_status(&source()), Ok(zonked));
+                assert_eq!(retry.type_work.used(), exact);
+            })
+            .expect("the complete deep row-solution zonk owner should start")
+            .join()
+            .expect("failure and success teardown must fit a small host stack");
+
+        const NARROW: u32 = 1;
+        const WIDE: u32 = 8;
+        let closed = |width| {
+            let members = (0..width)
+                .map(|declaration| {
+                    crate::types::EffectInstance::new(
+                        crate::types::EffectId::new(ModuleId::new(1), declaration),
+                        Box::new([]),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            Type::function_computation(
+                Type::Unit,
+                crate::types::ComputationType::new(Type::Bool, EffectRow::closed(members)),
+            )
+        };
+        let measure = |ty: &Type| {
+            let mut elaborator = Elaborator::new();
+            elaborator.type_work = TypeWorkBudget::unbounded();
+            let zonked = elaborator
+                .zonk_with_status(ty)
+                .expect("the measured closed row should zonk");
+            (zonked, elaborator.type_work.used())
+        };
+        let (_, narrow_work) = measure(&closed(NARROW));
+        let wide = closed(WIDE);
+        let (zonked, exact) = measure(&wide);
+        assert_eq!(
+            exact - narrow_work,
+            2 * (WIDE - NARROW) as usize,
+            "the fused traversal and final scanner each own every nullary member"
+        );
+
+        let mut retry = Elaborator::new();
+        retry.type_work = TypeWorkBudget::with_limit(exact - 1);
+        assert_eq!(
+            retry.zonk_with_status(&wide),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        );
+        retry.type_work = TypeWorkBudget::with_limit(exact);
+        assert_eq!(retry.zonk_with_status(&wide), Ok(zonked));
+        assert_eq!(retry.type_work.used(), exact);
+    }
+
+    #[test]
+    fn nested_row_argument_zonking_is_stack_safe() {
+        const DEPTH: usize = 4_096;
+
+        std::thread::Builder::new()
+            .name("nested-row-zonk".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let effect = crate::types::EffectId::new(ModuleId::new(0), 0);
+                let mut nested = Type::Unit;
+                for _ in 0..DEPTH {
+                    nested = Type::function_computation(
+                        Type::Unit,
+                        crate::types::ComputationType::new(
+                            Type::Unit,
+                            EffectRow::singleton(crate::types::EffectInstance::new(
+                                effect,
+                                Box::new([nested]),
+                            )),
+                        ),
+                    );
+                }
+                let mut deep_argument = Type::Unit;
+                for _ in 0..DEPTH {
+                    deep_argument =
+                        Type::Application(Box::new(Type::Unit), Box::new(deep_argument));
+                }
+                let row = EffectRow::singleton(crate::types::EffectInstance::new(
+                    effect,
+                    Box::new([deep_argument]),
+                ));
+                let mut short = Elaborator::new();
+                short.type_work = TypeWorkBudget::with_limit(2 * DEPTH + 2);
+                assert_eq!(
+                    short.zonk_effect_row(&row),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    )),
+                );
+                let mut elaborator = Elaborator::new();
+                let zonked = elaborator
+                    .zonk(&nested)
+                    .expect("the nested row should zonk");
+                assert_eq!(zonked, nested);
+                discard_type_iteratively(zonked);
+                discard_type_iteratively(nested);
+                drop(row);
+            })
+            .expect("the row-zonk thread should start")
+            .join()
+            .expect("row zonking should fit a small stack");
+    }
+
+    #[test]
+    fn expected_function_exposure_accepts_a_closed_effectful_function() {
+        let span = row_test_span("expected-effectful-function.ash");
+        let expected = Type::function_computation(
+            Type::Int,
+            crate::types::ComputationType::new(
+                Type::Bool,
+                EffectRow::singleton(row_test_effect("expected-effectful-row.ash")),
+            ),
+        );
+        let mut elaborator = Elaborator::new();
+        let exposed = elaborator
+            .expose_expected_function(
+                ProvenancedTypeOwner::new(ProvenancedType::unknown(expected.clone())),
+                span,
+            )
+            .expect("a closed latent row remains a function context");
+
+        assert_eq!(exposed.ty, expected);
+        assert_eq!(
+            clone_function_parts_with_budget(&exposed.ty, &mut TypeWorkBudget::unbounded()),
+            Ok((Type::Int, Type::Bool)),
+        );
+        assert!(exposed.provenance.function_parts(&exposed.ty).is_ok());
+    }
+
+    #[test]
+    fn row_inference_generalizes_and_instantiates_without_entering_value_positions() {
+        let span = row_test_span("row-polymorphism.ash");
+        let mut elaborator = Elaborator::new();
+        let inferred = elaborator
+            .fresh_effect_row(span)
+            .expect("a generalized row should fit");
+        let crate::types::EffectRowVariable::Inference(identity) = inferred
+            .tail()
+            .expect("the fresh row should be open")
+            .variable()
+        else {
+            panic!("a fresh row tail must be inferential");
+        };
+        let lacks = row_test_effect("row-polymorphism-lacks.ash");
+        let inferred = EffectRow::open(
+            EffectRowVariable::inference(identity),
+            Box::new([lacks.clone()]),
+        );
+        let initializer = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(Type::Int, inferred),
+        );
+        let (quantified, generalized) = elaborator
+            .generalize_inference_variables(&[identity], &initializer)
+            .expect("an eligible row inference variable should generalize");
+        let [(binder, Kind::EffectRow)] = quantified.as_slice() else {
+            panic!("generalization should retain one row-kind binder");
+        };
+        let Type::EffectfulFunction(_, generalized_codomain) = &generalized else {
+            panic!("the generalized function should retain its latent row");
+        };
+        assert_eq!(
+            generalized_codomain
+                .effects()
+                .tail()
+                .expect("the generalized row remains open")
+                .variable(),
+            crate::types::EffectRowVariable::rigid(*binder),
+        );
+        assert_eq!(
+            generalized_codomain
+                .effects()
+                .tail()
+                .expect("the generalized row remains open")
+                .lacks(),
+            std::slice::from_ref(&lacks),
+        );
+
+        let fact = TypeFact {
+            ty: generalized,
+            provenance: TypeProvenance::unknown(&initializer),
+            quantified: quantified.into_boxed_slice(),
+        };
+        let (instantiated, ordinary_arguments, row_arguments) = Elaborator::new()
+            .instantiate(&fact, false, span)
+            .expect("a row-kind binder should instantiate freshly");
+        assert!(ordinary_arguments.is_empty());
+        assert_eq!(row_arguments.len(), 1);
+        let Type::EffectfulFunction(_, instantiated_codomain) = instantiated else {
+            panic!("instantiation should retain the latent row");
+        };
+        assert!(matches!(
+            instantiated_codomain
+                .effects()
+                .tail()
+                .expect("the instantiated row remains open")
+                .variable(),
+            crate::types::EffectRowVariable::Inference(_),
+        ));
+        assert_eq!(
+            instantiated_codomain
+                .effects()
+                .tail()
+                .expect("the instantiated row remains open")
+                .lacks(),
+            &[lacks],
+        );
     }
 }

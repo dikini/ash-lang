@@ -23,4 +23,4 @@ No proposed change is currently awaiting a decision.
 
 ## Accepted changes
 
-No accepted change is currently awaiting implementation.
+No accepted change is awaiting implementation.

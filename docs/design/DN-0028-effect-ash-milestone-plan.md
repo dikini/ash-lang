@@ -716,7 +716,10 @@ known.
 
 The module-`newtype` decision matrix and independently validated zero-cost
 conversion were the immediate open questions when this plan was written.
-Accepted CP-0012 and the product-branch specification resolve them for module
-scope. After separately authorized integration, local `newtype` identity and
-escape are the next programme question; resource-scope composition remains a
-later proposal-owned question. This informative plan authorizes neither.
+The completed module-`newtype` checkpoint resolves them for module scope. The
+completed resume-required effect-kernel checkpoint also resolves the initial
+row, handler, and one-shot control questions. This integration branch combines
+those results without making them current on `main`. Local `newtype`, scoped
+exact evidence, capture and checked discard, and resource-scope composition
+remain later proposal-owned questions. This informative plan authorizes none
+of them.

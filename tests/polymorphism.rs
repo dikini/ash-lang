@@ -20,10 +20,30 @@ use ash::{
     module::{ModuleId, ModuleRoots, load_module_graph},
     resolve::resolve_module,
     source::SourceFile,
+    types::{ComputationType, EffectRow, EffectRowVariable, Kind, Type, TypeVariableId},
 };
 use support::run_module;
 
 static CORE_TEMP_IDS: AtomicU64 = AtomicU64::new(0);
+
+#[test]
+fn rank_one_schemes_retain_row_kind_binders_in_latent_computations() {
+    let binder = TypeVariableId::new(77);
+    let scheme = Type::Forall(
+        Box::new([(binder, Kind::EffectRow)]),
+        Box::new(Type::function_computation(
+            Type::Unit,
+            ComputationType::new(
+                Type::Int,
+                EffectRow::open(EffectRowVariable::rigid(binder), Box::new([])),
+            ),
+        )),
+    );
+
+    assert_eq!(scheme, scheme.clone());
+    assert!(scheme.to_string().contains("EffectRow"));
+    assert!(scheme.to_string().contains("<row-variable:generated:77>"));
+}
 
 fn run(text: &str) -> ash::driver::Observation {
     run_module("polymorphism.ash", text).expect("fixture should run")
@@ -134,6 +154,7 @@ const fn runtime_failure_class(failure: RuntimeFailure) -> &'static str {
         RuntimeFailure::EnvironmentCapacity => "runtime.environment-capacity",
         RuntimeFailure::InvalidControlState => "runtime.invalid-control-state",
         RuntimeFailure::HeapCapacity => "runtime.heap-capacity",
+        RuntimeFailure::CapturedControlCapacity => "runtime.captured-control-capacity",
         RuntimeFailure::InvalidLocation => "runtime.invalid-location",
         RuntimeFailure::UninitializedLocation => "runtime.uninitialized-location",
         RuntimeFailure::AliasLoop => "runtime.alias-loop",
@@ -655,6 +676,7 @@ fn polymorphic_method_evidence_uses_only_the_existing_runtime_inventory() {
         RuntimeFailure::EnvironmentCapacity,
         RuntimeFailure::InvalidControlState,
         RuntimeFailure::HeapCapacity,
+        RuntimeFailure::CapturedControlCapacity,
         RuntimeFailure::InvalidLocation,
         RuntimeFailure::UninitializedLocation,
         RuntimeFailure::AliasLoop,
@@ -702,6 +724,24 @@ fn eligible_local_relay_generalizes_higher_kinded_parameters() {
                 ash::types::Type::Function(domain, codomain) => {
                     work.push((codomain, true));
                     work.push((domain, true));
+                }
+                ash::types::Type::EffectfulFunction(domain, codomain) => {
+                    work.push((codomain.value(), true));
+                    work.push((domain, true));
+                    for member in codomain.effects().known().iter().chain(
+                        codomain
+                            .effects()
+                            .tail()
+                            .into_iter()
+                            .flat_map(|tail| tail.lacks().iter()),
+                    ) {
+                        work.extend(
+                            member
+                                .arguments()
+                                .iter()
+                                .map(|argument| (argument, below_function)),
+                        );
+                    }
                 }
                 ash::types::Type::Application(function, argument) => {
                     work.push((argument, below_function));
@@ -833,7 +873,7 @@ fn wide_nominal_application_remains_width_through_elaboration_and_core() {
 
     std::thread::Builder::new()
         .name("wide-canonical-application-pipeline".to_owned())
-        .stack_size(256 * 1024)
+        .stack_size(320 * 1024)
         .spawn(|| {
             let parameters = (0..WIDTH)
                 .map(|index| format!("A{index}"))

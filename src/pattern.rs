@@ -616,6 +616,13 @@ fn charge_types(types: &[Type], budget: &mut UsefulnessBudget) -> Result<(), Use
                         work.push(Task::Type(codomain));
                         work.push(Task::Type(domain));
                     }
+                    Type::EffectfulFunction(domain, codomain) => {
+                        for argument in codomain.effect_arguments() {
+                            work.push(Task::Type(argument));
+                        }
+                        work.push(Task::Type(&codomain.value));
+                        work.push(Task::Type(domain));
+                    }
                     Type::Application(function, argument) => {
                         work.push(Task::Type(argument));
                         work.push(Task::Type(function));
@@ -695,6 +702,7 @@ fn heads_for_type<'a>(ty: &Type, registry: &'a ResolvedRegistry) -> Option<Heads
         )),
         Type::Int
         | Type::Function(_, _)
+        | Type::EffectfulFunction(_, _)
         | Type::Variable(_)
         | Type::Inference(_)
         | Type::Forall(_, _) => None,

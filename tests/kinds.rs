@@ -103,6 +103,19 @@ fn arrow(domain: Kind, codomain: Kind) -> Kind {
     Kind::Arrow(Box::new(domain), Box::new(codomain))
 }
 
+#[test]
+fn effect_row_is_an_atomic_fixed_kind_not_a_value_kind_alias() {
+    let row = Kind::EffectRow;
+
+    assert_eq!(row.to_string(), "EffectRow");
+    assert_eq!(row, row.clone());
+    assert_ne!(row, Kind::Type);
+    assert_eq!(
+        arrow(Kind::EffectRow, Kind::Type).to_string(),
+        "EffectRow -> Type",
+    );
+}
+
 fn assert_primary(error: &KindError, span: Span) {
     assert_eq!(error.primary.span().range(), span.range());
 }

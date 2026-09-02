@@ -103,6 +103,7 @@ fn parse_primary(parser: &mut Parser<'_>, forms: &[PrimaryForm]) -> CompletedExp
         }
         Some(PrimaryForm::Qualified) => grammar::qualified_name(parser, false),
         Some(PrimaryForm::Parenthesized) => parse_parenthesized(parser),
+        Some(PrimaryForm::Perform) => grammar::perform_expression(parser),
         _ => parser.report(ParseReason::ExpectedOperand, ExpectedForm::Operand),
     }
     parser.finish();
@@ -199,11 +200,16 @@ fn primary_form(parser: &Parser<'_>, forms: &[PrimaryForm]) -> Option<PrimaryFor
             | (PrimaryForm::Identifier, Some(TokenKind::Identifier(_)))
             | (PrimaryForm::UpperIdentifier, Some(TokenKind::UpperIdentifier(_)))
             | (PrimaryForm::Parenthesized, Some(TokenKind::LeftParen)) => true,
+            (PrimaryForm::Perform, Some(TokenKind::Perform)) => true,
             (PrimaryForm::Qualified, Some(TokenKind::UpperIdentifier(_))) => parser
                 .nth(1)
                 .is_some_and(|kind| matches!(kind, TokenKind::Dot)),
             _ => false,
         })
+}
+
+pub(super) fn primary_expression(parser: &mut Parser<'_>) {
+    let _ = parse_primary(parser, grammar::selected_dialect().expression.primary_forms);
 }
 
 fn consume_repeated_non_associative(

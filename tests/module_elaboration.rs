@@ -114,6 +114,25 @@ fn contains_inference(root: &Type) -> bool {
                 pending.push(codomain);
                 pending.push(domain);
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                if matches!(
+                    codomain.effects().tail().map(|tail| tail.variable()),
+                    Some(ash::types::EffectRowVariable::Inference(_))
+                ) {
+                    return true;
+                }
+                for member in codomain.effects().known().iter().chain(
+                    codomain
+                        .effects()
+                        .tail()
+                        .into_iter()
+                        .flat_map(|tail| tail.lacks().iter()),
+                ) {
+                    pending.extend(member.arguments());
+                }
+                pending.push(codomain.value());
+                pending.push(domain);
+            }
             Type::Forall(_, body) => pending.push(body),
             Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_) => {}
         }

@@ -90,6 +90,9 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 ### Effects and dynamic composition
 
+- [Resume-required effect kernel evidence](effect-ash/resume-required-effect-kernel-evidence.md)
+  — retained source, Core, runtime, diagnostic, resource, and predecessor
+  observations for the first effect kernel.
 - [DN-0026: Effect Ash Resource-First Milestones](DN-0026-effect-ash-resource-first-milestones.md)
   — a partial-order decomposition through shared generative identity, scoped
   evidence, resources, synchronous hooks, foreign providers, suspension, and

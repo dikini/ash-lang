@@ -5,11 +5,127 @@ use std::{error::Error, fmt, sync::Arc};
 use super::{
     BuildError, CoreBuilder, CoreMatchArm, CorePattern, CorePatternKind, NodeId, Primitive,
     PureComputation, PureExprKind, PureValue, UnvalidatedProgram, ValidatedProgram,
+    dialect::{
+        CoreOperationFamily, CoreTypedExpr, PureOperationFamily, UnvalidatedCoreProgram,
+        ValidatedCoreProgram,
+    },
+    effect::{EffectClause, EffectExprKind, EffectOperation, EffectOperationFamily},
 };
 use crate::{
     source::{GeneratedReason, Origin},
     types::{IterativeTypeOwner, Type, discard_type_iteratively},
 };
+
+trait TransformFamily: CoreOperationFamily {
+    fn collect_operation_binders(kind: &Self::Kind, binders: &mut Vec<crate::resolved::BinderId>);
+    fn rebuild_operation(
+        builder: &mut CoreBuilder<Self>,
+        remapped: &[Option<NodeId>],
+        expression: &CoreTypedExpr<Self>,
+    ) -> Result<NodeId, TransformError>;
+}
+
+impl TransformFamily for PureOperationFamily {
+    fn collect_operation_binders(_: &Self::Kind, _: &mut Vec<crate::resolved::BinderId>) {}
+    fn rebuild_operation(
+        _: &mut CoreBuilder<Self>,
+        _: &[Option<NodeId>],
+        _: &CoreTypedExpr<Self>,
+    ) -> Result<NodeId, TransformError> {
+        Err(TransformError::InvalidValidatedInput)
+    }
+}
+
+impl TransformFamily for EffectOperationFamily {
+    fn collect_operation_binders(kind: &Self::Kind, binders: &mut Vec<crate::resolved::BinderId>) {
+        if let EffectExprKind::Operation(EffectOperation::Handler(handler)) = kind {
+            for clause in handler.clauses() {
+                binders.extend(clause.pattern().binder_iter().map(|binder| binder.id()));
+            }
+        }
+    }
+
+    fn rebuild_operation(
+        builder: &mut CoreBuilder<Self>,
+        remapped: &[Option<NodeId>],
+        expression: &CoreTypedExpr<Self>,
+    ) -> Result<NodeId, TransformError> {
+        let EffectExprKind::Operation(operation) = &expression.kind else {
+            return Err(TransformError::InvalidValidatedInput);
+        };
+        let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+        let effects = builder.clone_effect_row_for_rebuild(expression.effects())?;
+        match operation {
+            EffectOperation::Request(node) => {
+                let effect = clone_effect_instance(builder, node.effect())?;
+                builder.request(
+                    effect,
+                    node.operation(),
+                    remap(remapped, node.operand())?,
+                    ty.into_inner(),
+                    effects,
+                    expression.origin.clone(),
+                )
+            }
+            EffectOperation::Resume(node) => builder.resume(
+                node.handler(),
+                node.owner(),
+                node.use_state(),
+                remap(remapped, node.value())?,
+                ty.into_inner(),
+                effects,
+                expression.origin.clone(),
+            ),
+            EffectOperation::Handler(node) => {
+                let mut clauses = Vec::new();
+                builder.charge_effect_metadata(node.clauses().len())?;
+                clauses
+                    .try_reserve_exact(node.clauses().len())
+                    .map_err(|_| TransformError::Build(BuildError::TypeWorkExceeded))?;
+                for clause in node.clauses() {
+                    clauses.push(EffectClause::new(
+                        clause.operation(),
+                        clause.resume(),
+                        CoreMatchArm::new(
+                            rebuild_pattern(builder, clause.pattern())?,
+                            remap(remapped, clause.body())?,
+                            clause.origin().clone(),
+                        ),
+                    ));
+                }
+                let effect = clone_effect_instance(builder, node.effect())?;
+                builder.handler(
+                    node.id(),
+                    remap(remapped, node.body())?,
+                    effect,
+                    clauses,
+                    ty.into_inner(),
+                    effects,
+                    expression.origin.clone(),
+                )
+            }
+        }
+        .map_err(TransformError::from)
+    }
+}
+
+fn clone_effect_instance<F: CoreOperationFamily>(
+    builder: &mut CoreBuilder<F>,
+    instance: &crate::types::EffectInstance,
+) -> Result<crate::types::EffectInstance, TransformError> {
+    builder.charge_effect_metadata(instance.arguments().len())?;
+    let mut arguments = IterativeTypeBuffer(Vec::new());
+    arguments
+        .try_reserve(instance.arguments().len())
+        .map_err(|_| TransformError::Build(BuildError::TypeWorkExceeded))?;
+    for argument in instance.arguments() {
+        arguments.push(builder.clone_type_for_rebuild(argument)?);
+    }
+    Ok(crate::types::EffectInstance::new(
+        instance.effect(),
+        arguments.into_vec().into_boxed_slice(),
+    ))
+}
 
 struct IterativeTypeBuffer(Vec<Type>);
 
@@ -157,20 +273,33 @@ pub fn fold_literal_primitives(
     rebuild(program, true)
 }
 
-fn rebuild(
-    program: &ValidatedProgram,
+/// Rebuilds every family in validated effect Core.
+pub fn identity_effect_traversal(
+    program: &super::ValidatedEffectProgram,
+) -> Result<super::UnvalidatedEffectProgram, TransformError> {
+    rebuild(program, false)
+}
+
+/// Folds pure literal primitives inside validated effect Core.
+pub fn fold_effect_literal_primitives(
+    program: &super::ValidatedEffectProgram,
+) -> Result<super::UnvalidatedEffectProgram, TransformError> {
+    rebuild(program, true)
+}
+
+fn rebuild<F: TransformFamily>(
+    program: &ValidatedCoreProgram<F>,
     fold_literal_primitives: bool,
-) -> Result<UnvalidatedProgram, TransformError> {
+) -> Result<UnvalidatedCoreProgram<F>, TransformError> {
     rebuild_with_initial_type_work(program, fold_literal_primitives, 0)
 }
 
-fn rebuild_with_initial_type_work(
-    program: &ValidatedProgram,
+fn rebuild_with_initial_type_work<F: TransformFamily>(
+    program: &ValidatedCoreProgram<F>,
     fold_literal_primitives: bool,
     initial_type_work: usize,
-) -> Result<UnvalidatedProgram, TransformError> {
-    let order = postorder(program, fold_literal_primitives)?;
-    let mut builder = CoreBuilder::with_registry_and_method_evidence(
+) -> Result<UnvalidatedCoreProgram<F>, TransformError> {
+    let mut builder = CoreBuilder::<F>::with_registry_and_method_evidence(
         Arc::clone(program.registry()),
         Arc::clone(program.method_evidence()),
     )?;
@@ -178,43 +307,48 @@ fn rebuild_with_initial_type_work(
     builder.charge_type_work_for_test(initial_type_work)?;
     #[cfg(not(test))]
     debug_assert_eq!(initial_type_work, 0);
+    let order = postorder(program, fold_literal_primitives, &mut builder)?;
     let mut binders = Vec::new();
     for id in &order {
         let expression = program
             .node(*id)
             .ok_or(TransformError::InvalidValidatedInput)?;
-        match &expression.kind {
-            PureExprKind::Value(PureValue::Function(function)) => {
+        builder.charge_effect_metadata(F::operation_extra_edge_count(&expression.kind))?;
+        match F::pure(&expression.kind) {
+            Some(PureExprKind::Value(PureValue::Function(function))) => {
                 binders.push(function.parameter().id());
             }
-            PureExprKind::Computation(PureComputation::Bind(binding)) => {
+            Some(PureExprKind::Computation(PureComputation::Bind(binding))) => {
                 binders.push(binding.binder().id());
             }
-            PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+            Some(PureExprKind::Computation(PureComputation::RecursiveBind(group))) => {
                 binders.extend(group.members().iter().map(|member| member.binder().id()));
             }
-            PureExprKind::Computation(PureComputation::Match(match_node)) => {
+            Some(PureExprKind::Computation(PureComputation::Match(match_node))) => {
                 for arm in match_node.arms() {
                     let mut pattern_binders = Vec::new();
                     arm.pattern().binders(&mut pattern_binders);
                     binders.extend(pattern_binders.into_iter().map(|binder| binder.id()));
                 }
             }
-            PureExprKind::Value(
-                PureValue::Integer(_)
-                | PureValue::Boolean(_)
-                | PureValue::Unit(_)
-                | PureValue::Constructor(_),
-            )
-            | PureExprKind::Variable(_)
-            | PureExprKind::Computation(
-                PureComputation::Apply(_)
-                | PureComputation::Primitive(_)
-                | PureComputation::Tuple(_)
-                | PureComputation::NewtypeConversion(_)
-                | PureComputation::TypeAbstraction(_)
-                | PureComputation::TypeApplication(_),
+            Some(
+                PureExprKind::Value(
+                    PureValue::Integer(_)
+                    | PureValue::Boolean(_)
+                    | PureValue::Unit(_)
+                    | PureValue::Constructor(_),
+                )
+                | PureExprKind::Variable(_)
+                | PureExprKind::Computation(
+                    PureComputation::Apply(_)
+                    | PureComputation::Primitive(_)
+                    | PureComputation::Tuple(_)
+                    | PureComputation::NewtypeConversion(_)
+                    | PureComputation::TypeAbstraction(_)
+                    | PureComputation::TypeApplication(_),
+                ),
             ) => {}
+            None => F::collect_operation_binders(&expression.kind, &mut binders),
         }
     }
     builder.reserve_resolved_binders(binders)?;
@@ -282,15 +416,16 @@ fn rebuild_with_initial_type_work(
     builder.finish(root).map_err(TransformError::from)
 }
 
-fn rebuild_node(
-    builder: &mut CoreBuilder,
-    program: &ValidatedProgram,
+fn rebuild_node<F: TransformFamily>(
+    builder: &mut CoreBuilder<F>,
+    program: &ValidatedCoreProgram<F>,
     remapped: &[Option<NodeId>],
-    expression: &super::TypedExpr,
+    expression: &CoreTypedExpr<F>,
     fold_literal_primitives: bool,
 ) -> Result<NodeId, TransformError> {
     if fold_literal_primitives
-        && let PureExprKind::Computation(PureComputation::Primitive(operation)) = &expression.kind
+        && let Some(PureExprKind::Computation(PureComputation::Primitive(operation))) =
+            F::pure(&expression.kind)
         && let Some(value) = folded_literal(program, *operation)
     {
         let ty = builder.clone_type_for_rebuild(&expression.ty)?;
@@ -306,7 +441,10 @@ fn rebuild_node(
             .map_err(TransformError::from);
     }
 
-    match &expression.kind {
+    let Some(kind) = F::pure(&expression.kind) else {
+        return F::rebuild_operation(builder, remapped, expression);
+    };
+    match kind {
         PureExprKind::Value(PureValue::Integer(node)) => {
             let ty = builder.clone_type_for_rebuild(&expression.ty)?;
             builder
@@ -465,18 +603,32 @@ fn rebuild_node(
             for argument in node.arguments() {
                 arguments.push(builder.clone_type_for_rebuild(argument)?);
             }
+            builder.charge_effect_metadata(node.row_arguments().len())?;
+            let mut row_arguments = Vec::new();
+            row_arguments
+                .try_reserve_exact(node.row_arguments().len())
+                .map_err(|_| TransformError::Build(BuildError::TypeWorkExceeded))?;
+            for row in node.row_arguments() {
+                row_arguments.push(builder.clone_effect_row_for_rebuild(row)?);
+            }
             let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
             let function = remap(remapped, node.function())?;
             let origin = expression.origin.clone();
             builder
-                .type_application(function, arguments.into_vec(), ty.into_inner(), origin)
+                .type_application_with_row_arguments(
+                    function,
+                    arguments.into_vec(),
+                    row_arguments,
+                    ty.into_inner(),
+                    origin,
+                )
                 .map_err(TransformError::from)
         }
     }
 }
 
-fn rebuild_pattern(
-    builder: &mut CoreBuilder,
+fn rebuild_pattern<F: CoreOperationFamily>(
+    builder: &mut CoreBuilder<F>,
     pattern: &CorePattern,
 ) -> Result<CorePattern, TransformError> {
     enum Task<'a> {
@@ -584,9 +736,10 @@ fn rebuild_pattern(
     }
 }
 
-fn postorder(
-    program: &ValidatedProgram,
+fn postorder<F: TransformFamily>(
+    program: &ValidatedCoreProgram<F>,
     fold_literal_primitives: bool,
+    builder: &mut CoreBuilder<F>,
 ) -> Result<Vec<NodeId>, TransformError> {
     enum Task {
         Enter(NodeId),
@@ -607,24 +760,29 @@ fn postorder(
                     continue;
                 }
                 *was_scheduled = true;
-                work.push(Task::Exit(id));
                 let expression = program
                     .node(id)
                     .ok_or(TransformError::InvalidValidatedInput)?;
                 let child_count = if fold_literal_primitives
                     && matches!(
-                            &expression.kind,
-                            PureExprKind::Computation(PureComputation::Primitive(operation))
+                            F::pure(&expression.kind),
+                            Some(PureExprKind::Computation(PureComputation::Primitive(operation)))
                                 if is_foldable_literal(program, *operation)
                     ) {
                     0
                 } else {
-                    expression.kind.child_count()
+                    F::child_count(&expression.kind)
                 };
+                builder.charge_effect_metadata(F::operation_extra_edge_count(&expression.kind))?;
+                work.try_reserve(
+                    child_count
+                        .checked_add(1)
+                        .ok_or(BuildError::TypeWorkExceeded)?,
+                )
+                .map_err(|_| BuildError::TypeWorkExceeded)?;
+                work.push(Task::Exit(id));
                 for child_index in (0..child_count).rev() {
-                    let child = expression
-                        .kind
-                        .child_at(child_index)
+                    let child = F::child_at(&expression.kind, child_index)
                         .ok_or(TransformError::InvalidValidatedInput)?;
                     work.push(Task::Enter(child));
                 }
@@ -635,15 +793,17 @@ fn postorder(
     Ok(order)
 }
 
-fn folded_literal(
-    program: &ValidatedProgram,
+fn folded_literal<F: TransformFamily>(
+    program: &ValidatedCoreProgram<F>,
     operation: super::primitive::PrimitiveNode,
 ) -> Option<crate::integer::Integer> {
-    let PureExprKind::Value(PureValue::Integer(left)) = &program.node(operation.left())?.kind
+    let Some(PureExprKind::Value(PureValue::Integer(left))) =
+        F::pure(&program.node(operation.left())?.kind)
     else {
         return None;
     };
-    let PureExprKind::Value(PureValue::Integer(right)) = &program.node(operation.right())?.kind
+    let Some(PureExprKind::Value(PureValue::Integer(right))) =
+        F::pure(&program.node(operation.right())?.kind)
     else {
         return None;
     };
@@ -654,17 +814,21 @@ fn folded_literal(
     }
 }
 
-fn is_foldable_literal(
-    program: &ValidatedProgram,
+fn is_foldable_literal<F: TransformFamily>(
+    program: &ValidatedCoreProgram<F>,
     operation: super::primitive::PrimitiveNode,
 ) -> bool {
     matches!(operation.primitive(), Primitive::Add | Primitive::Multiply)
         && matches!(
-            program.node(operation.left()).map(|node| &node.kind),
+            program
+                .node(operation.left())
+                .and_then(|node| F::pure(&node.kind)),
             Some(PureExprKind::Value(PureValue::Integer(_)))
         )
         && matches!(
-            program.node(operation.right()).map(|node| &node.kind),
+            program
+                .node(operation.right())
+                .and_then(|node| F::pure(&node.kind)),
             Some(PureExprKind::Value(PureValue::Integer(_)))
         )
 }
@@ -1101,7 +1265,7 @@ mod tests {
                     depth += 1;
                     current = codomain;
                 }
-                Kind::Type => return depth,
+                Kind::Type | Kind::EffectRow => return depth,
             }
         }
     }
@@ -1423,6 +1587,105 @@ mod tests {
     }
 
     #[test]
+    fn effect_handler_rebuild_is_exact_retryable_and_deep_drop_safe() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                use crate::{
+                    core::effect::{HandlerId, HandlerNode},
+                    resolved::ResumeId,
+                    types::{EffectId, EffectInstance, EffectRow, OperationId},
+                };
+                let source = SourceFile::new("effect-transform.ash", "handler").unwrap();
+                let origin = Origin::Source(source.span(ByteRange::new(0, 7).unwrap()).unwrap());
+                let effect = EffectId::new(crate::module::ModuleId::new(0), 0);
+                let prepare = |deep| {
+                    let mut builder = CoreBuilder::<EffectOperationFamily>::with_effect_registry(
+                        Arc::new(ResolvedRegistry::default()),
+                    );
+                    let body = builder.unit(Type::Unit, origin.clone()).unwrap();
+                    let clauses = (0..4)
+                        .map(|ordinal| {
+                            EffectClause::new(
+                                OperationId::new(effect, ordinal),
+                                ResumeId::new(ordinal),
+                                CoreMatchArm::new(
+                                    CorePattern::new(
+                                        Type::Unit,
+                                        origin.clone(),
+                                        CorePatternKind::Wildcard,
+                                    ),
+                                    body,
+                                    origin.clone(),
+                                ),
+                            )
+                        })
+                        .collect();
+                    let expression = CoreTypedExpr {
+                        ty: Type::Unit,
+                        effects: EffectRow::empty(),
+                        origin: origin.clone(),
+                        kind: EffectExprKind::Operation(EffectOperation::Handler(
+                            HandlerNode::new(
+                                HandlerId::new(0),
+                                body,
+                                EffectInstance::new(
+                                    effect,
+                                    vec![deep, Type::Unit].into_boxed_slice(),
+                                ),
+                                clauses,
+                            ),
+                        )),
+                    };
+                    (builder, vec![Some(body)], expression)
+                };
+                let admitted = || application_type(super::super::CORE_PAYLOAD_DEPTH_LIMIT - 2);
+                let (mut measured, remapped, expression) = prepare(admitted());
+                let before = measured.type_work.used();
+                EffectOperationFamily::rebuild_operation(&mut measured, &remapped, &expression)
+                    .unwrap();
+                let work = measured.type_work.used() - before;
+
+                let (mut short, remapped, expression) = prepare(admitted());
+                let retained = short.nodes.len();
+                short
+                    .charge_type_work_for_test(
+                        TYPE_WORK_LIMIT - short.type_work.used() - (work - 1),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    EffectOperationFamily::rebuild_operation(&mut short, &remapped, &expression),
+                    Err(TransformError::Build(BuildError::TypeWorkExceeded)),
+                );
+                assert_eq!(short.nodes.len(), retained);
+                for _ in 0..2 {
+                    let (mut retry, remapped, expression) = prepare(admitted());
+                    retry
+                        .charge_type_work_for_test(TYPE_WORK_LIMIT - retry.type_work.used() - work)
+                        .unwrap();
+                    EffectOperationFamily::rebuild_operation(&mut retry, &remapped, &expression)
+                        .expect("fresh exact retry");
+                }
+                let rejected_type = (0..32_768).fold(Type::Unit, |ty, _| {
+                    Type::Function(Box::new(Type::Unit), Box::new(ty))
+                });
+                let (mut rejected, remapped, expression) = prepare(rejected_type);
+                assert_eq!(
+                    EffectOperationFamily::rebuild_operation(
+                        &mut rejected,
+                        &remapped,
+                        &expression,
+                    ),
+                    Err(TransformError::Build(BuildError::TypeDepthExceeded)),
+                );
+                expression.discard_iteratively();
+            })
+            .unwrap()
+            .join()
+            .expect("deep effect metadata teardown stays on the small stack");
+    }
+
+    #[test]
     fn row_bearing_deep_abstraction_failure_dismantles_integrated_transform_state() {
         std::thread::Builder::new()
             .name("integrated-row-bearing-transform-owner".into())
@@ -1470,6 +1733,7 @@ mod tests {
                 let generated_parameter = TypeVariableId::generated(90_001);
                 let parameter_kind = deep_arrow_kind(KIND_DEPTH);
                 let expression = super::super::TypedExpr {
+                    effects: (),
                     ty: Type::Forall(
                         Box::new([(generated_parameter, parameter_kind.clone())]),
                         Box::new(application_type(TYPE_DEPTH)),
@@ -1633,6 +1897,7 @@ mod tests {
                 )
                 .expect("input validates");
                 let expression = super::super::TypedExpr {
+                    effects: (),
                     ty: Type::Unit,
                     origin: origin.clone(),
                     kind: PureExprKind::Computation(PureComputation::TypeApplication(
@@ -1679,6 +1944,7 @@ mod tests {
                 )
                 .expect("input validates");
                 let expression = super::super::TypedExpr {
+                    effects: (),
                     ty: Type::Unit,
                     origin,
                     kind: PureExprKind::Computation(PureComputation::TypeApplication(
@@ -1797,6 +2063,7 @@ mod tests {
                     CorePatternKind::Wildcard,
                 );
                 let expression = super::super::TypedExpr {
+                    effects: (),
                     ty: Type::Unit,
                     origin: origin.clone(),
                     kind: PureExprKind::Computation(PureComputation::Match(

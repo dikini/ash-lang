@@ -16,9 +16,9 @@ use crate::{
     },
     module::{LoadedModule, ModuleDependency, ModuleId},
     resolved::{
-        AuthorizedImplementationFact, Binder, BinderId, CandidateConstructor, CandidateFactSource,
-        CandidateGlobal, CandidateHiddenNominal, CandidateInterface, CandidateMethod,
-        CandidateNominal, CheckedImplementationFact, CheckedInterfaceFact,
+        AuthorizedImplementationFact, Binder, BinderId, CandidateConstructor, CandidateEffect,
+        CandidateFactSource, CandidateGlobal, CandidateHiddenNominal, CandidateInterface,
+        CandidateMethod, CandidateNominal, CheckedImplementationFact, CheckedInterfaceFact,
         CheckedInterfaceMethodFact, DirectDependencyRoute, ExportSummary, ExportedConstructor,
         ExportedGlobal, ExportedType, ExportedTypeAccess, ImplementationAuthorization,
         ImplementationRouteRank, ImportedConstructorFact, ImportedFacts, ImportedGlobalScheme,
@@ -26,19 +26,22 @@ use crate::{
         ResolvedBinaryExpr, ResolvedBinding, ResolvedBlock, ResolvedBuildFailure,
         ResolvedConstructor, ResolvedConstructorOccurrence, ResolvedDefinition,
         ResolvedDefinitionKind, ResolvedDeterminationParameter, ResolvedDeterminationSide,
+        ResolvedEffectDeclaration, ResolvedEffectInstance, ResolvedEffectOperation,
         ResolvedEquation, ResolvedEquationalGlobal, ResolvedExportCandidate, ResolvedExpr,
-        ResolvedExprKind, ResolvedExternalInterface, ResolvedFunctionExpr, ResolvedImplementation,
-        ResolvedImplementationMethodGroup, ResolvedInlineOperationalGlobal,
-        ResolvedInlineOperationalHeader, ResolvedInterfaceApplication,
-        ResolvedInterfaceDeclaration, ResolvedInterfaceDetermination, ResolvedInterfaceMethod,
-        ResolvedInterfaceOccurrence, ResolvedLocalDeclaration, ResolvedMatchArm, ResolvedMatchExpr,
-        ResolvedModule, ResolvedModuleParts, ResolvedNominalDeclarationKind, ResolvedNominalType,
-        ResolvedOccurrence, ResolvedPattern, ResolvedPatternKind, ResolvedRecursiveGroup,
-        ResolvedRecursiveMember, ResolvedRegistry, ResolvedRequirement, ResolvedTermName,
-        ResolvedType, ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResolvedTypeVariable,
-        ResolvedTypedPattern, ValidatedImportedNominalMerge, WithheldExport, WithheldExportKind,
-        WithheldNamespace, clone_resolved_type_variable_with_budget,
-        clone_resolved_type_variables_with_budget, discard_resolved_definition_iteratively,
+        ResolvedExprKind, ResolvedExternalInterface, ResolvedFunctionExpr, ResolvedHandleExpr,
+        ResolvedHandlerClause, ResolvedImplementation, ResolvedImplementationMethodGroup,
+        ResolvedInlineOperationalGlobal, ResolvedInlineOperationalHeader,
+        ResolvedInterfaceApplication, ResolvedInterfaceDeclaration, ResolvedInterfaceDetermination,
+        ResolvedInterfaceMethod, ResolvedInterfaceOccurrence, ResolvedLocalDeclaration,
+        ResolvedMatchArm, ResolvedMatchExpr, ResolvedModule, ResolvedModuleParts,
+        ResolvedNominalDeclarationKind, ResolvedNominalType, ResolvedOccurrence, ResolvedPattern,
+        ResolvedPatternKind, ResolvedPerformExpr, ResolvedRecursiveGroup, ResolvedRecursiveMember,
+        ResolvedRegistry, ResolvedRequirement, ResolvedResumeExpr, ResolvedTermName, ResolvedType,
+        ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResolvedTypeVariable,
+        ResolvedTypedPattern, ResumeId, ValidatedImportedNominalMerge, WithheldExport,
+        WithheldExportKind, WithheldNamespace, clone_resolved_effect_with_budget,
+        clone_resolved_type_variable_with_budget, clone_resolved_type_variables_with_budget,
+        discard_resolved_definition_iteratively, discard_resolved_effect_iteratively,
         discard_resolved_equation_iteratively, discard_resolved_expression_iteratively,
         discard_resolved_implementation_iteratively, discard_resolved_interface_iteratively,
         discard_resolved_local_declaration_iteratively, discard_resolved_pattern_iteratively,
@@ -52,18 +55,20 @@ use crate::{
     source::{Origin, discard_origin_iteratively},
     surface::{
         BinaryExpr, SurfaceBinding, SurfaceBlock, SurfaceDeclarationIndex, SurfaceDefinition,
-        SurfaceDefinitionKind, SurfaceExpr, SurfaceExprKind, SurfaceImplementation,
-        SurfaceImportItem, SurfaceImportSelection, SurfaceInterfaceApplication,
-        SurfaceInterfaceDeclaration, SurfaceInterfaceDetermination, SurfaceKind, SurfaceKindKind,
-        SurfaceLocalDeclaration, SurfaceModule, SurfaceName, SurfaceNominalDeclarationKind,
-        SurfacePattern, SurfacePatternKind, SurfaceRecursiveGroup, SurfaceReference,
-        SurfaceRequirement, SurfaceType, SurfaceTypeDeclaration, SurfaceTypeKind,
+        SurfaceDefinitionKind, SurfaceEffectDeclaration, SurfaceExpr, SurfaceExprKind,
+        SurfaceImplementation, SurfaceImportItem, SurfaceImportSelection,
+        SurfaceInterfaceApplication, SurfaceInterfaceDeclaration, SurfaceInterfaceDetermination,
+        SurfaceKind, SurfaceKindKind, SurfaceLocalDeclaration, SurfaceModule, SurfaceName,
+        SurfaceNominalDeclarationKind, SurfacePattern, SurfacePatternKind, SurfaceRecursiveGroup,
+        SurfaceReference, SurfaceRequirement, SurfaceType, SurfaceTypeDeclaration, SurfaceTypeKind,
         SurfaceTypeParameter, SurfaceTypeVisibility,
     },
     types::{
-        ConstructorId, IterativeTypeOwner, Kind, NominalTypeId, Type, TypeVariableId,
-        TypeWorkBudget, charge_kind_nodes, charge_type_cells, clone_type_with_budget,
-        discard_type_iteratively, same_kind_with_charge,
+        ComputationType, ConstructorId, EffectId, EffectInstance, EffectRow, EffectRowVariable,
+        IterativeTypeOwner, Kind, NominalTypeId, OperationId, Type, TypeVariableId, TypeWorkBudget,
+        charge_kind_nodes, charge_type_cells, clone_type_with_budget,
+        compare_effect_instances_with_budget, discard_type_iteratively,
+        effect_row_from_canonical_source_parts_with_budget, same_kind_with_charge,
     },
 };
 
@@ -74,6 +79,122 @@ struct ImportedTypeCloneBuffer(Vec<Type>);
 struct ImportedTypeVariableBuffer(Vec<ResolvedTypeVariable>);
 
 struct ImportedConstructorFactBuffer(Vec<ImportedConstructorFact>);
+
+fn build_source_effect_row_with_provenance(
+    written: Vec<(EffectInstance, crate::source::Span, Box<[usize]>)>,
+    tail: Option<EffectRowVariable>,
+    span: crate::source::Span,
+    budget: &mut TypeWorkBudget,
+) -> Result<(EffectRow, Box<[usize]>), ResolveError> {
+    for index in 0..written.len() {
+        for earlier in 0..index {
+            if compare_effect_instances_with_budget(&written[earlier].0, &written[index].0, budget)
+                .map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        written[index].1,
+                        "effect-row duplicate comparison exceeded its type-work budget",
+                    )
+                })?
+                == std::cmp::Ordering::Equal
+            {
+                return Err(error(
+                    ResolveReason::DuplicateEffect,
+                    written[index].1,
+                    "this exact effect instance is already present in the written row",
+                ));
+            }
+        }
+    }
+
+    let mut canonical: Vec<(EffectInstance, Box<[usize]>)> = Vec::new();
+    for (instance, instance_span, roots) in written {
+        let mut position = 0;
+        while position < canonical.len()
+            && compare_effect_instances_with_budget(&canonical[position].0, &instance, budget)
+                .map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        instance_span,
+                        "effect-row canonicalization exceeded its type-work budget",
+                    )
+                })?
+                == std::cmp::Ordering::Less
+        {
+            position += 1;
+        }
+        budget.charge(1).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                instance_span,
+                "effect-row retention exceeded its type-work budget",
+            )
+        })?;
+        canonical.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                instance_span,
+                "effect-row retention could not reserve storage",
+            )
+        })?;
+        canonical.insert(position, (instance, roots));
+    }
+
+    let root_count = canonical
+        .iter()
+        .try_fold(0usize, |count, (_, roots)| count.checked_add(roots.len()));
+    let root_count = root_count.ok_or_else(|| {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            span,
+            "effect-argument provenance exceeded its type-work budget",
+        )
+    })?;
+    budget.charge(root_count).map_err(|()| {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            span,
+            "effect-argument provenance exceeded its type-work budget",
+        )
+    })?;
+    let mut roots = Vec::new();
+    roots.try_reserve_exact(root_count).map_err(|_| {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            span,
+            "effect-argument provenance could not reserve storage",
+        )
+    })?;
+    budget.charge(canonical.len()).map_err(|()| {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            span,
+            "effect-row retention exceeded its type-work budget",
+        )
+    })?;
+    let mut instances = Vec::new();
+    instances.try_reserve_exact(canonical.len()).map_err(|_| {
+        error(
+            ResolveReason::TypeResourceExhausted,
+            span,
+            "effect-row retention could not reserve storage",
+        )
+    })?;
+    for (instance, argument_roots) in canonical {
+        instances.push(instance);
+        roots.extend(argument_roots);
+    }
+    let row = effect_row_from_canonical_source_parts_with_budget(instances, tail, budget).map_err(
+        |()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "effect-row rebuild exceeded its type-work budget",
+            )
+        },
+    )?;
+    Ok((row, roots.into_boxed_slice()))
+}
 
 #[derive(Clone, Copy)]
 struct ValidatedImportedConstructorRoute<'summary> {
@@ -589,12 +710,22 @@ pub enum ResolveReason {
     UnusedTypeParameter,
     /// A source type occurrence names no declaration.
     UnknownType,
-    /// An interface identity was used where an ordinary value type is required.
+    /// An uppercase type name has the wrong sort or incompatible type roles.
     TypeKind,
     /// An interface position names no interface declaration.
     UnknownInterface,
     /// A nominal type or type parameter was used as an interface.
     InterfaceKind,
+    /// An effect operation did not have one pure outer function arrow.
+    EffectOperationShape,
+    /// A source row or request names no effect declaration.
+    UnknownEffect,
+    /// A non-effect uppercase name was used as an effect.
+    EffectKind,
+    /// A written row repeats one exact effect instance.
+    DuplicateEffect,
+    /// A resume form occurs outside an operation clause.
+    ResumeOutsideClause,
     /// An uppercase term or pattern names no constructor.
     UnknownConstructor,
     /// One pattern vector binds the same spelling more than once.
@@ -630,6 +761,11 @@ impl fmt::Display for ResolveReason {
             Self::TypeKind => "resolve.type-kind",
             Self::UnknownInterface => "resolve.unknown-interface",
             Self::InterfaceKind => "resolve.interface-kind",
+            Self::EffectOperationShape => "effect.operation-shape",
+            Self::UnknownEffect => "effect.unknown",
+            Self::EffectKind => "effect.kind",
+            Self::DuplicateEffect => "effect.duplicate",
+            Self::ResumeOutsideClause => "effect.resume-outside-clause",
             Self::UnknownConstructor => "resolve.unknown-constructor",
             Self::DuplicatePatternBinder => "pattern.duplicate-binder",
             Self::DuplicateRecursiveMember => "resolve.duplicate-recursive-member",
@@ -866,6 +1002,7 @@ fn resolve_module_names_with_budget(
             surface,
             &declarations.registry,
             &declarations.interfaces,
+            &declarations.effects,
             &declarations.definitions,
             std::mem::take(&mut resolver.public_import_candidate),
             &mut resolver.type_work,
@@ -875,8 +1012,14 @@ fn resolve_module_names_with_budget(
             surface.span,
             &mut resolver.type_work,
         )?;
-        let (registry, constructor_payload_provenance, interfaces, implementations, definitions) =
-            declarations.into_parts();
+        let (
+            registry,
+            constructor_payload_provenance,
+            interfaces,
+            effects,
+            implementations,
+            definitions,
+        ) = declarations.into_parts();
         Ok(ResolvedModuleAdmission {
             parts: ResolvedModuleParts {
                 module,
@@ -885,6 +1028,7 @@ fn resolve_module_names_with_budget(
                 direct_dependencies,
                 declaration_order,
                 interfaces,
+                effects,
                 implementations,
                 definitions,
                 export_candidate,
@@ -925,6 +1069,9 @@ fn retain_declaration_order(
         SurfaceDeclarationIndex::Interface(index) => {
             crate::resolved::ResolvedDeclarationIndex::Interface(index)
         }
+        SurfaceDeclarationIndex::Effect(index) => {
+            crate::resolved::ResolvedDeclarationIndex::Effect(index)
+        }
         SurfaceDeclarationIndex::Global(index) => {
             crate::resolved::ResolvedDeclarationIndex::Global(index)
         }
@@ -960,6 +1107,7 @@ fn build_export_candidate(
     surface: &SurfaceModule,
     registry: &ResolvedRegistry,
     interfaces: &[ResolvedInterfaceDeclaration],
+    effects: &[ResolvedEffectDeclaration],
     definitions: &[ResolvedDefinition],
     mut candidate: ResolvedExportCandidate,
     type_work: &mut TypeWorkBudget,
@@ -1225,6 +1373,43 @@ fn build_export_candidate(
                 })?;
         }
     }
+    for effect in effects {
+        if !effect.public {
+            candidate
+                .try_insert_withheld(
+                    WithheldNamespace::Nominal,
+                    effect.spelling.clone(),
+                    WithheldExport {
+                        kind: WithheldExportKind::Private,
+                        owner: None,
+                        origin: Some(effect.origin.clone()),
+                    },
+                    type_work,
+                )
+                .map_err(|()| {
+                    export_candidate_resource_error(
+                        effect.span,
+                        "local export candidate retention exceeded its type-work budget",
+                    )
+                })?;
+            continue;
+        }
+        candidate
+            .try_insert_effect(
+                effect.spelling.clone(),
+                CandidateEffect {
+                    id: effect.id,
+                    source: CandidateFactSource::Local,
+                },
+                type_work,
+            )
+            .map_err(|()| {
+                export_candidate_resource_error(
+                    effect.span,
+                    "local export candidate retention exceeded its type-work budget",
+                )
+            })?;
+    }
     Ok(candidate)
 }
 
@@ -1254,6 +1439,7 @@ struct Resolver {
     globals: HashMap<String, GlobalFact>,
     type_names: HashMap<String, NominalTypeId>,
     interface_names: HashMap<String, InterfaceId>,
+    effect_names: HashMap<String, EffectId>,
     method_names: HashMap<String, ResolvedTermBinding>,
     global_requirement_counts: HashMap<BinderId, usize>,
     constructor_names: HashMap<String, ConstructorId>,
@@ -1265,6 +1451,9 @@ struct Resolver {
     public_implementation_route_ranks: HashMap<ImplId, ImplementationRouteRank>,
     type_scopes: Vec<HashMap<String, TypeVariableId>>,
     nominal_parameter_counts: HashMap<NominalTypeId, usize>,
+    expression_registry: Option<Arc<ResolvedRegistry>>,
+    active_resumes: Vec<ResumeId>,
+    next_resume: u32,
     type_work: TypeWorkBudget,
     constraint_work: InterfaceConstraintBudget,
     #[cfg(test)]
@@ -1315,6 +1504,11 @@ struct InterfaceDeclarationIdentity {
     methods: Vec<MethodId>,
 }
 
+struct EffectDeclarationIdentity {
+    id: EffectId,
+    operations: Vec<OperationId>,
+}
+
 struct PendingInterfaceTypeParameters {
     parameters: Vec<ResolvedTypeVariable>,
     methods: Vec<Vec<ResolvedTypeVariable>>,
@@ -1329,6 +1523,7 @@ struct ResolvedDeclarations {
     registry: Arc<ResolvedRegistry>,
     constructor_payload_provenance: Vec<Vec<ConstructorPayloadProvenance>>,
     interfaces: Vec<ResolvedInterfaceDeclaration>,
+    effects: Vec<ResolvedEffectDeclaration>,
     implementations: Vec<ResolvedImplementation>,
     definitions: Vec<ResolvedDefinition>,
 }
@@ -1337,6 +1532,7 @@ type ResolvedDeclarationParts = (
     Arc<ResolvedRegistry>,
     Vec<Vec<ConstructorPayloadProvenance>>,
     Vec<ResolvedInterfaceDeclaration>,
+    Vec<ResolvedEffectDeclaration>,
     Vec<ResolvedImplementation>,
     Vec<ResolvedDefinition>,
 );
@@ -1347,6 +1543,7 @@ impl ResolvedDeclarations {
             std::mem::take(&mut self.registry),
             std::mem::take(&mut self.constructor_payload_provenance),
             std::mem::take(&mut self.interfaces),
+            std::mem::take(&mut self.effects),
             std::mem::take(&mut self.implementations),
             std::mem::take(&mut self.definitions),
         )
@@ -1364,6 +1561,9 @@ impl Drop for ResolvedDeclarations {
         for interface in self.interfaces.drain(..) {
             discard_resolved_interface_iteratively(interface);
         }
+        for effect in self.effects.drain(..) {
+            discard_resolved_effect_iteratively(effect);
+        }
         for implementation in self.implementations.drain(..) {
             discard_resolved_implementation_iteratively(implementation);
         }
@@ -1377,6 +1577,7 @@ impl Drop for ResolvedDeclarations {
 enum LocalTypeDeclarationKind {
     Nominal,
     Interface,
+    Effect,
 }
 
 #[derive(Debug, Default)]
@@ -1384,6 +1585,7 @@ struct ImportedNamespaces {
     terms: HashMap<String, ResolvedTermBinding>,
     nominals: HashMap<String, ImportedNominalName>,
     interfaces: HashMap<String, InterfaceId>,
+    effects: HashMap<String, EffectId>,
     constructors: HashMap<String, ConstructorId>,
     withheld: HashMap<(String, WithheldNamespace), WithheldImport>,
 }
@@ -1480,6 +1682,7 @@ impl Resolver {
             globals: HashMap::new(),
             type_names: HashMap::new(),
             interface_names: HashMap::new(),
+            effect_names: HashMap::new(),
             method_names: HashMap::new(),
             global_requirement_counts: HashMap::new(),
             constructor_names: HashMap::new(),
@@ -1491,6 +1694,9 @@ impl Resolver {
             public_implementation_route_ranks: HashMap::new(),
             type_scopes: Vec::new(),
             nominal_parameter_counts: HashMap::new(),
+            expression_registry: None,
+            active_resumes: Vec::new(),
+            next_resume: 0,
             type_work,
             constraint_work,
             #[cfg(test)]
@@ -1537,6 +1743,38 @@ impl Resolver {
                         self.validate_local_term_name(&method.name, None, &mut term_names)?;
                     }
                 }
+                SurfaceDeclarationIndex::Effect(index) => {
+                    let declaration = surface.effects.get(index).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            surface.span,
+                            "the surface declaration order contains an invalid effect index",
+                        )
+                    })?;
+                    self.validate_local_type_name(
+                        &declaration.name,
+                        LocalTypeDeclarationKind::Effect,
+                        &mut type_names,
+                    )?;
+                    let mut operations = HashMap::new();
+                    for operation in &declaration.operations {
+                        if let Some(first) =
+                            operations.insert(&operation.name.text, operation.name.span)
+                        {
+                            let mut diagnostic = Diagnostic::new(
+                                ResolveReason::DuplicateGlobal,
+                                SourceLabel::new(
+                                    operation.name.span,
+                                    "this effect operation is already declared",
+                                ),
+                            );
+                            diagnostic
+                                .related
+                                .push(SourceLabel::new(first, "the first operation is here"));
+                            return Err(diagnostic.into());
+                        }
+                    }
+                }
                 SurfaceDeclarationIndex::Global(index) => {
                     let definition = surface.definitions.get(index).ok_or_else(|| {
                         error(
@@ -1571,6 +1809,7 @@ impl Resolver {
         if self.module_aliases.contains_key(&name.text)
             || self.type_names.contains_key(&name.text)
             || self.interface_names.contains_key(&name.text)
+            || self.effect_names.contains_key(&name.text)
         {
             return Err(import_conflict(name.span, &name.text));
         }
@@ -1689,6 +1928,185 @@ impl Resolver {
         Ok(identities)
     }
 
+    fn install_effect_identities(
+        &mut self,
+        declarations: &[SurfaceEffectDeclaration],
+    ) -> Result<Vec<EffectDeclarationIdentity>, ResolveError> {
+        let mut identities = Vec::new();
+        identities
+            .try_reserve_exact(declarations.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    declarations
+                        .last()
+                        .expect("nonempty effect storage can fail to reserve")
+                        .span,
+                    "effect identity storage could not be reserved",
+                )
+            })?;
+        for (declaration_index, declaration) in declarations.iter().enumerate() {
+            let declaration_index = u32::try_from(declaration_index).map_err(|_| {
+                error(
+                    ResolveReason::InternalState,
+                    declaration.span,
+                    "the file contains too many effect declarations",
+                )
+            })?;
+            let id = EffectId::new(self.module, declaration_index);
+            self.effect_names.insert(declaration.name.text.clone(), id);
+            let mut operations = Vec::new();
+            operations
+                .try_reserve_exact(declaration.operations.len())
+                .map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        declaration.span,
+                        "effect operation identity storage could not be reserved",
+                    )
+                })?;
+            for (operation_index, operation) in declaration.operations.iter().enumerate() {
+                let operation_index = u32::try_from(operation_index).map_err(|_| {
+                    error(
+                        ResolveReason::InternalState,
+                        operation.span,
+                        "the effect contains too many operations",
+                    )
+                })?;
+                operations.push(OperationId::new(id, operation_index));
+            }
+            identities.push(EffectDeclarationIdentity { id, operations });
+        }
+        Ok(identities)
+    }
+
+    fn allocate_effect_type_parameters(
+        &mut self,
+        declaration: &SurfaceEffectDeclaration,
+    ) -> Result<Vec<ResolvedTypeVariable>, ResolveError> {
+        validate_explicit_type_parameters(Some(&declaration.parameters))?;
+        let mut parameters = Vec::new();
+        parameters
+            .try_reserve_exact(declaration.parameters.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    declaration.span,
+                    "effect parameter storage could not be reserved",
+                )
+            })?;
+        for parameter in &declaration.parameters {
+            let resolved =
+                self.allocate_type_variable(&parameter.name, parameter.kind.as_ref(), Kind::Type)?;
+            parameters.push(resolved);
+        }
+        Ok(parameters)
+    }
+
+    fn resolve_effect_declarations(
+        &mut self,
+        declarations: &[SurfaceEffectDeclaration],
+        identities: Vec<EffectDeclarationIdentity>,
+        parameters: Vec<Vec<ResolvedTypeVariable>>,
+        module_span: crate::source::Span,
+    ) -> Result<(Vec<ResolvedEffectDeclaration>, Vec<ResolvedTypeVariable>), ResolveError> {
+        if declarations.len() != identities.len() || declarations.len() != parameters.len() {
+            return Err(error(
+                ResolveReason::InternalState,
+                module_span,
+                "the resolver retained mismatched effect preparation records",
+            ));
+        }
+        let mut resolved_effects = Vec::new();
+        let mut registry_parameters = Vec::new();
+        resolved_effects
+            .try_reserve_exact(declarations.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    module_span,
+                    "effect storage could not be reserved",
+                )
+            })?;
+        for ((declaration, identity), parameters) in
+            declarations.iter().zip(identities).zip(parameters)
+        {
+            if declaration.operations.len() != identity.operations.len() {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    declaration.span,
+                    "the resolver retained mismatched operation identities",
+                ));
+            }
+            for parameter in &parameters {
+                registry_parameters.push(self.clone_type_variable_for_retention(
+                    parameter,
+                    declaration.span,
+                    "effect parameter registry retention exceeded its type-work budget",
+                )?);
+            }
+            let checkpoint = self.type_scopes.len();
+            self.type_scopes.push(
+                parameters
+                    .iter()
+                    .map(|parameter| (parameter.spelling.clone(), parameter.id))
+                    .collect(),
+            );
+            let operations = (|| {
+                let mut resolved = Vec::new();
+                resolved
+                    .try_reserve_exact(declaration.operations.len())
+                    .map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            declaration.span,
+                            "effect operation storage could not be reserved",
+                        )
+                    })?;
+                for (operation, id) in declaration.operations.iter().zip(identity.operations) {
+                    if !matches!(
+                        &operation.annotation.kind,
+                        SurfaceTypeKind::Function(function) if function.effects.is_none()
+                    ) {
+                        return Err(error(
+                            ResolveReason::EffectOperationShape,
+                            operation.annotation.span,
+                            "an effect operation must have one outer function arrow with a pure result",
+                        ));
+                    }
+                    let annotation = self.resolve_type(&operation.annotation)?;
+                    let shape = annotation.ty.function_view();
+                    if shape.is_none_or(|view| view.effects().is_some()) {
+                        return Err(error(
+                            ResolveReason::EffectOperationShape,
+                            operation.annotation.span,
+                            "an effect operation must have one outer function arrow with a pure result",
+                        ));
+                    }
+                    resolved.push(ResolvedEffectOperation {
+                        id,
+                        spelling: operation.name.text.clone(),
+                        annotation,
+                        origin: Origin::Source(operation.name.span),
+                        span: operation.span,
+                    });
+                }
+                Ok::<_, ResolveError>(resolved)
+            })();
+            self.type_scopes.truncate(checkpoint);
+            resolved_effects.push(ResolvedEffectDeclaration {
+                id: identity.id,
+                public: declaration.public,
+                spelling: declaration.name.text.clone(),
+                parameters: parameters.into_boxed_slice(),
+                operations: operations?.into_boxed_slice(),
+                origin: Origin::Source(declaration.name.span),
+                span: declaration.span,
+            });
+        }
+        Ok((resolved_effects, registry_parameters))
+    }
+
     fn prepare_interface_type_parameters(
         &mut self,
         declaration: &SurfaceInterfaceDeclaration,
@@ -1716,7 +2134,11 @@ impl Resolver {
                 )
             })?;
         for parameter in &declaration.parameters {
-            parameters.push(self.allocate_type_variable(&parameter.name, parameter.kind.as_ref())?);
+            parameters.push(self.allocate_type_variable(
+                &parameter.name,
+                parameter.kind.as_ref(),
+                Kind::Type,
+            )?);
         }
         let first_parameter = declaration.parameters.first().ok_or_else(|| {
             error(
@@ -1738,7 +2160,7 @@ impl Resolver {
         for method in &declaration.methods {
             let explicit = method.type_parameters.as_deref();
             let mut names = Vec::new();
-            let mut seen = HashSet::new();
+            let mut seen = HashMap::new();
             self.type_work
                 .charge(declaration.parameters.len())
                 .map_err(|()| {
@@ -1757,7 +2179,7 @@ impl Resolver {
                     )
                 })?;
             for parameter in &declaration.parameters {
-                seen.insert(parameter.name.text.as_str());
+                seen.insert(parameter.name.text.as_str(), None);
             }
             let declared = validate_method_type_parameters(
                 &declaration.parameters,
@@ -1772,9 +2194,11 @@ impl Resolver {
                 &declared,
                 &mut seen,
                 &mut names,
+                false,
                 &mut self.type_work,
             )?;
-            let type_parameters = self.allocate_declaration_type_parameters(explicit, &names)?;
+            let type_parameters =
+                self.allocate_declaration_type_parameters(explicit, &names, false)?;
             methods.push(type_parameters);
         }
         Ok(PendingInterfaceTypeParameters {
@@ -1953,7 +2377,7 @@ impl Resolver {
 
         let declared =
             validate_explicit_type_parameters(implementation.type_parameters.as_deref())?;
-        let mut seen = HashSet::new();
+        let mut seen = HashMap::new();
         let mut head_names = Vec::new();
         if implementation.head.arguments.is_empty() {
             return Err(error(
@@ -1970,12 +2394,14 @@ impl Resolver {
                 &declared,
                 &mut seen,
                 &mut head_names,
+                false,
                 &mut self.type_work,
             )?;
         }
         let head_parameters = self.allocate_declaration_type_parameters(
             implementation.type_parameters.as_deref(),
             &head_names,
+            false,
         )?;
 
         let mut prerequisite_only_names = Vec::new();
@@ -1988,13 +2414,14 @@ impl Resolver {
                     &declared,
                     &mut seen,
                     &mut prerequisite_only_names,
+                    false,
                     &mut self.type_work,
                 )?;
             }
         }
         let prerequisite_only_parameters = prerequisite_only_names
             .into_iter()
-            .map(|name| self.allocate_type_variable(&name, None))
+            .map(|free| self.allocate_type_variable(&free.name, None, Kind::Type))
             .collect::<Result<Vec<_>, _>>()?;
 
         let mut method_groups = Vec::new();
@@ -2151,6 +2578,7 @@ impl Resolver {
                             selected = true;
                             if self.type_names.contains_key(&local.text)
                                 || self.interface_names.contains_key(&local.text)
+                                || self.effect_names.contains_key(&local.text)
                             {
                                 return Err(import_conflict(local.span, &local.text));
                             }
@@ -2212,6 +2640,7 @@ impl Resolver {
                             selected = true;
                             if self.type_names.contains_key(&local.text)
                                 || self.interface_names.contains_key(&local.text)
+                                || self.effect_names.contains_key(&local.text)
                             {
                                 return Err(import_conflict(local.span, &local.text));
                             }
@@ -2228,6 +2657,34 @@ impl Resolver {
                                     *span,
                                     "public import candidate retention exceeded its type-work budget",
                                 ))?;
+                            }
+                        }
+                        if let Some(effect) = dependency.summary.effect(&name.text) {
+                            selected = true;
+                            if self.type_names.contains_key(&local.text)
+                                || self.interface_names.contains_key(&local.text)
+                                || self.effect_names.contains_key(&local.text)
+                            {
+                                return Err(import_conflict(local.span, &local.text));
+                            }
+                            self.effect_names.insert(local.text.clone(), effect.id);
+                            self.retain_imported_effect(effect, *span)?;
+                            if import.public {
+                                self.public_import_candidate
+                                    .try_insert_effect(
+                                        local.text.clone(),
+                                        CandidateEffect {
+                                            id: effect.id,
+                                            source: CandidateFactSource::Imported,
+                                        },
+                                        &mut self.type_work,
+                                    )
+                                    .map_err(|()| {
+                                        export_candidate_resource_error(
+                                            *span,
+                                            "public import candidate retention exceeded its type-work budget",
+                                        )
+                                    })?;
                             }
                         }
                         if let Some(exported) = dependency.summary.constructor(&name.text) {
@@ -2432,14 +2889,20 @@ impl Resolver {
                 "imported namespace retention exceeded its work budget",
             )
         })?;
-        let (term_count, nominal_count, interface_count, constructor_count, withheld_count) =
-            summary.namespace_capacities().ok_or_else(|| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    import_span,
-                    "imported namespace capacity exceeded its work budget",
-                )
-            })?;
+        let (
+            term_count,
+            nominal_count,
+            interface_count,
+            effect_count,
+            constructor_count,
+            withheld_count,
+        ) = summary.namespace_capacities().ok_or_else(|| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                import_span,
+                "imported namespace capacity exceeded its work budget",
+            )
+        })?;
         namespaces.terms.try_reserve(term_count).map_err(|_| {
             error(
                 ResolveReason::TypeResourceExhausted,
@@ -2467,6 +2930,13 @@ impl Resolver {
                     "imported interface namespace storage exceeded its work budget",
                 )
             })?;
+        namespaces.effects.try_reserve(effect_count).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                import_span,
+                "imported effect namespace storage exceeded its work budget",
+            )
+        })?;
         namespaces
             .constructors
             .try_reserve(constructor_count)
@@ -2543,6 +3013,28 @@ impl Resolver {
             }
         }
 
+        for (spelling, effect) in summary.effect_names() {
+            if namespaces
+                .effects
+                .insert(spelling.to_owned(), effect)
+                .is_some()
+            {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    import_span,
+                    "an export summary contains duplicate effect spellings",
+                ));
+            }
+            let fact = summary.effect(spelling).ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    import_span,
+                    "an export summary lost an effect fact",
+                )
+            })?;
+            self.retain_imported_effect(fact, import_span)?;
+        }
+
         for (spelling, exported) in summary.constructors() {
             namespaces
                 .constructors
@@ -2567,6 +3059,42 @@ impl Resolver {
                 });
         }
         Ok(namespaces)
+    }
+
+    fn retain_imported_effect(
+        &mut self,
+        exported: &ResolvedEffectDeclaration,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        let retained =
+            clone_resolved_effect_with_budget(exported, &mut self.type_work).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported effect retention exceeded its type-work budget",
+                )
+            })?;
+        if let Some(existing) = self.imported.effect(exported.id) {
+            let matches = existing == &retained;
+            discard_resolved_effect_iteratively(retained);
+            if !matches {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "alternate effect routes disagree on the canonical fact",
+                ));
+            }
+            return Ok(());
+        }
+        self.imported
+            .insert_effect(retained, &mut self.type_work)
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported effect storage exceeded its type-work budget",
+                )
+            })
     }
 
     fn retain_dependency_interface_facts(
@@ -3567,6 +4095,7 @@ impl Resolver {
             Tuple(usize),
             Application,
             Function,
+            EffectfulFunction(EffectRow),
         }
 
         const MESSAGE: &str =
@@ -3610,6 +4139,11 @@ impl Resolver {
                     work.push(Task::Visit(codomain));
                     work.push(Task::Visit(domain));
                 }
+                Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
+                    work.push(Task::EffectfulFunction(codomain.effects().clone()));
+                    work.push(Task::Visit(codomain.value()));
+                    work.push(Task::Visit(domain));
+                }
                 Task::Visit(Type::Forall(_, _)) => {
                     return Err(error(ResolveReason::InternalState, span, MESSAGE));
                 }
@@ -3645,6 +4179,18 @@ impl Resolver {
                     rebuilt.push(Type::Function(
                         Box::new(domain.into_inner()),
                         Box::new(codomain.into_inner()),
+                    ));
+                }
+                Task::EffectfulFunction(effects) => {
+                    let codomain = rebuilt
+                        .pop_owned()
+                        .expect("an authenticated effectful function retains its codomain");
+                    let domain = rebuilt
+                        .pop_owned()
+                        .expect("an authenticated effectful function retains its domain");
+                    rebuilt.push(Type::function_computation(
+                        domain.into_inner(),
+                        ComputationType::new(codomain.into_inner(), effects),
                     ));
                 }
             }
@@ -3695,6 +4241,14 @@ impl Resolver {
                 "imported nominal ordering could not reserve storage",
             )
         })?;
+        let mut seen_effects = Vec::new();
+        seen_effects.try_reserve(type_cells).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "imported effect ordering could not reserve storage",
+            )
+        })?;
         while let Some(task) = pending.pop() {
             let Task::Type(ty) = task else {
                 let Task::Sequence(mut remaining) = task else {
@@ -3742,6 +4296,40 @@ impl Resolver {
                     pending.push(Task::Type(codomain));
                     pending.push(Task::Type(domain));
                 }
+                Type::EffectfulFunction(domain, codomain) => {
+                    for instance in codomain.effects().known() {
+                        let identity = instance.effect();
+                        let mut already_seen = false;
+                        for retained in &seen_effects {
+                            self.type_work.charge(1).map_err(|()| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    span,
+                                    "imported effect membership exceeded its type-work budget",
+                                )
+                            })?;
+                            if retained == &identity {
+                                already_seen = true;
+                                break;
+                            }
+                        }
+                        if !already_seen {
+                            self.type_work.charge(1).map_err(|()| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    span,
+                                    "imported effect ordering exceeded its type-work budget",
+                                )
+                            })?;
+                            seen_effects.push(identity);
+                        }
+                    }
+                    for argument in codomain.effect_arguments() {
+                        pending.push(Task::Type(argument));
+                    }
+                    pending.push(Task::Type(codomain.value()));
+                    pending.push(Task::Type(domain));
+                }
                 Type::Forall(_, body) => pending.push(Task::Type(body)),
                 Type::Int | Type::Bool | Type::Unit | Type::Variable(_) | Type::Inference(_) => {}
             }
@@ -3749,6 +4337,16 @@ impl Resolver {
         for id in seen {
             let exported = Self::scheme_nominal_fact(summary, id, span)?;
             self.retain_scheme_nominal_fact(exported, span)?;
+        }
+        for id in seen_effects {
+            let exported = summary.effect_by_id(id).ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "an exported scheme references missing effect metadata",
+                )
+            })?;
+            self.retain_imported_effect(exported, span)?;
         }
         Ok(())
     }
@@ -4200,7 +4798,7 @@ impl Resolver {
                     "constructor transaction staging could not reserve storage",
                 )
             })?;
-        for route in constructor_routes {
+        for route in &constructor_routes {
             if !route.requires_commit {
                 continue;
             }
@@ -4248,6 +4846,15 @@ impl Resolver {
             .commit_prepared_nominal_merges(&mut prepared_nominals);
         self.imported
             .commit_constructor_inserts(staged_constructors.into_vec());
+        if summary.has_effect_facts() {
+            for route in &constructor_routes {
+                let exported = route.exported;
+                if let Some(payload) = &exported.payload {
+                    self.retain_type_nominals(payload, summary, span)?;
+                }
+                self.retain_scheme_nominals(&exported.scheme, summary, span)?;
+            }
+        }
         Ok(())
     }
 
@@ -4468,6 +5075,227 @@ impl Resolver {
             ));
         }
         Err(unknown_interface_error(member.span, &member.text))
+    }
+
+    fn effect_reference(&self, reference: &SurfaceReference) -> Result<EffectId, ResolveError> {
+        let member = reference.member();
+        if let Some(namespace) = self.imported_namespace(reference)? {
+            if let Some(id) = namespace.effects.get(&member.text).copied() {
+                return Ok(id);
+            }
+            if namespace.nominals.contains_key(&member.text)
+                || namespace.interfaces.contains_key(&member.text)
+            {
+                return Err(error(
+                    ResolveReason::EffectKind,
+                    member.span,
+                    "this uppercase name does not denote an effect",
+                ));
+            }
+            return Err(error(
+                ResolveReason::UnknownEffect,
+                member.span,
+                "this effect is not exported by the selected module",
+            ));
+        }
+        if let Some(id) = self.effect_names.get(&member.text).copied() {
+            return Ok(id);
+        }
+        if self.type_names.contains_key(&member.text)
+            || self.interface_names.contains_key(&member.text)
+        {
+            return Err(error(
+                ResolveReason::EffectKind,
+                member.span,
+                "this uppercase name does not denote an effect",
+            ));
+        }
+        Err(error(
+            ResolveReason::UnknownEffect,
+            member.span,
+            "this effect is not declared",
+        ))
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn resolve_effect_row(
+        &mut self,
+        row: &crate::surface::SurfaceEffectRow,
+    ) -> Result<(EffectRow, Box<[ResolvedTypeProvenance]>, Box<[usize]>), ResolveError> {
+        let argument_count = row.effects.iter().try_fold(0usize, |count, instance| {
+            count.checked_add(instance.arguments.len())
+        });
+        let argument_count = argument_count.ok_or_else(|| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                row.span,
+                "effect-argument provenance exceeded its type-work budget",
+            )
+        })?;
+        self.type_work.charge(argument_count).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                row.span,
+                "effect-argument provenance exceeded its type-work budget",
+            )
+        })?;
+        let mut argument_provenance = Vec::new();
+        argument_provenance
+            .try_reserve_exact(argument_count)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    row.span,
+                    "effect-argument provenance could not reserve storage",
+                )
+            })?;
+        self.type_work.charge(row.effects.len()).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                row.span,
+                "effect-row storage exceeded its type-work budget",
+            )
+        })?;
+        let mut resolved_instances = Vec::new();
+        resolved_instances
+            .try_reserve_exact(row.effects.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    row.span,
+                    "effect-row storage exceeded its type-work budget",
+                )
+            })?;
+        for written in &row.effects {
+            let effect = self.effect_reference(&written.effect)?;
+            self.type_work
+                .charge(written.arguments.len().checked_mul(2).ok_or_else(|| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        written.span,
+                        "effect-argument storage exceeded its type-work budget",
+                    )
+                })?)
+                .map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        written.span,
+                        "effect-argument storage exceeded its type-work budget",
+                    )
+                })?;
+            let mut arguments = Vec::new();
+            let mut roots = Vec::new();
+            arguments
+                .try_reserve_exact(written.arguments.len())
+                .map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        written.span,
+                        "effect-argument storage exceeded its type-work budget",
+                    )
+                })?;
+            roots
+                .try_reserve_exact(written.arguments.len())
+                .map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        written.span,
+                        "effect-argument provenance could not reserve storage",
+                    )
+                })?;
+            for argument in &written.arguments {
+                let ResolvedType { ty, provenance, .. } = self.resolve_type(argument)?;
+                roots.push(argument_provenance.len());
+                argument_provenance.push(provenance);
+                arguments.push(ty);
+            }
+            let instance = EffectInstance::new(effect, arguments.into_boxed_slice());
+            resolved_instances.push((instance, written.span, roots.into_boxed_slice()));
+        }
+        let tail = row
+            .tail
+            .as_ref()
+            .map(|tail| {
+                self.type_scopes
+                    .iter()
+                    .rev()
+                    .find_map(|scope| scope.get(&tail.text))
+                    .copied()
+                    .map(EffectRowVariable::rigid)
+                    .ok_or_else(|| {
+                        error(
+                            ResolveReason::UnknownType,
+                            tail.span,
+                            "this effect-row tail parameter is not declared",
+                        )
+                    })
+            })
+            .transpose()?;
+        let (row, roots) = build_source_effect_row_with_provenance(
+            resolved_instances,
+            tail,
+            row.span,
+            &mut self.type_work,
+        )?;
+        Ok((row, argument_provenance.into_boxed_slice(), roots))
+    }
+
+    fn resolve_effect_instance_parts(
+        &mut self,
+        effect: &SurfaceReference,
+        arguments: &[SurfaceType],
+        span: crate::source::Span,
+    ) -> Result<ResolvedEffectInstance, ResolveError> {
+        let identity = self.effect_reference(effect)?;
+        self.type_work.charge(arguments.len()).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "effect-argument storage exceeded its type-work budget",
+            )
+        })?;
+        let mut resolved = Vec::new();
+        resolved.try_reserve_exact(arguments.len()).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "effect-argument storage exceeded its type-work budget",
+            )
+        })?;
+        for argument in arguments {
+            let ResolvedType { ty, .. } = self.resolve_type(argument)?;
+            resolved.push(ty);
+        }
+        Ok(ResolvedEffectInstance {
+            instance: EffectInstance::new(identity, resolved.into_boxed_slice()),
+            origin: Origin::Source(effect.span()),
+            span,
+        })
+    }
+
+    fn resolved_operation(
+        &self,
+        effect: EffectId,
+        operation: &SurfaceName,
+    ) -> Result<OperationId, ResolveError> {
+        self.expression_registry
+            .as_ref()
+            .and_then(|registry| registry.effect(effect))
+            .or_else(|| self.imported.effect(effect))
+            .and_then(|declaration| {
+                declaration
+                    .operations
+                    .iter()
+                    .find(|candidate| candidate.spelling == operation.text)
+            })
+            .map(|operation| operation.id)
+            .ok_or_else(|| {
+                error(
+                    ResolveReason::UnknownName,
+                    operation.span,
+                    "this operation is not declared by the selected effect",
+                )
+            })
     }
 
     fn resolve_requirements(
@@ -4769,6 +5597,7 @@ impl Resolver {
     ) -> Result<ResolvedDeclarations, ResolveError> {
         let nominal_identities = self.install_nominal_identities(&surface.type_declarations)?;
         let interface_identities = self.install_interface_identities(&surface.interfaces)?;
+        let effect_identities = self.install_effect_identities(&surface.effects)?;
 
         let mut nominal_type_parameters = Vec::new();
         nominal_type_parameters
@@ -4798,6 +5627,16 @@ impl Resolver {
                     ResolveReason::TypeResourceExhausted,
                     surface.span,
                     "global type-parameter preparation storage could not be reserved",
+                )
+            })?;
+        let mut effect_type_parameters = Vec::new();
+        effect_type_parameters
+            .try_reserve_exact(surface.effects.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "effect type-parameter preparation storage could not be reserved",
                 )
             })?;
         let mut pending_implementations = Vec::new();
@@ -4868,6 +5707,23 @@ impl Resolver {
                         ));
                     }
                     interface_type_parameters.push(self.prepare_interface_type_parameters(source)?);
+                }
+                SurfaceDeclarationIndex::Effect(index) => {
+                    let source = surface.effects.get(index).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            surface.span,
+                            "the surface declaration order contains an invalid effect index",
+                        )
+                    })?;
+                    if index != effect_type_parameters.len() {
+                        return Err(error(
+                            ResolveReason::InternalState,
+                            source.span,
+                            "the surface declaration order repeats, skips, or reorders an effect declaration",
+                        ));
+                    }
+                    effect_type_parameters.push(self.allocate_effect_type_parameters(source)?);
                 }
                 SurfaceDeclarationIndex::Global(index) => {
                     let source = surface.definitions.get(index).ok_or_else(|| {
@@ -4950,6 +5806,13 @@ impl Resolver {
                 "the surface declaration order omits a global declaration",
             ));
         }
+        if effect_type_parameters.len() != surface.effects.len() {
+            return Err(error(
+                ResolveReason::InternalState,
+                surface.span,
+                "the surface declaration order omits an effect declaration",
+            ));
+        }
         if pending_implementations.len() != surface.implementations.len() {
             return Err(error(
                 ResolveReason::InternalState,
@@ -4973,6 +5836,33 @@ impl Resolver {
             surface.span,
         )?;
         let interfaces = ResolvedInterfaceBuffer(interfaces);
+        let (effects, effect_registry_parameters) = self.resolve_effect_declarations(
+            &surface.effects,
+            effect_identities,
+            effect_type_parameters,
+            surface.span,
+        )?;
+        let mut registry_effects = Vec::new();
+        registry_effects
+            .try_reserve_exact(effects.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    surface.span,
+                    "effect registry storage could not be reserved",
+                )
+            })?;
+        for effect in &effects {
+            registry_effects.push(
+                clone_resolved_effect_with_budget(effect, &mut self.type_work).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        effect.span,
+                        "effect registry retention exceeded its type-work budget",
+                    )
+                })?,
+            );
+        }
         let surface_definitions = &surface.definitions;
         let mut implementation_type_parameters = Vec::new();
         for (implementation, pending) in
@@ -4993,13 +5883,17 @@ impl Resolver {
         let global_registry_type_parameters =
             self.clone_global_type_parameters_for_registry(&global_type_parameters, surface.span)?;
         let registry = Arc::new(
-            registry.with_additional_type_variables(
-                interface_type_parameters
-                    .into_iter()
-                    .chain(global_registry_type_parameters)
-                    .chain(implementation_type_parameters),
-            ),
+            registry
+                .with_additional_type_variables(
+                    interface_type_parameters
+                        .into_iter()
+                        .chain(effect_registry_parameters)
+                        .chain(global_registry_type_parameters)
+                        .chain(implementation_type_parameters),
+                )
+                .with_effects(registry_effects),
         );
+        self.expression_registry = Some(Arc::clone(&registry));
         let mut global_binders = vec![None; surface_definitions.len()];
         for declaration in &surface.declaration_order {
             match *declaration {
@@ -5051,7 +5945,9 @@ impl Resolver {
                             Some(self.allocate_binder(&first.name.text, first.name.span)?);
                     }
                 }
-                SurfaceDeclarationIndex::Type(_) | SurfaceDeclarationIndex::Interface(_) => {}
+                SurfaceDeclarationIndex::Type(_)
+                | SurfaceDeclarationIndex::Interface(_)
+                | SurfaceDeclarationIndex::Effect(_) => {}
             }
         }
 
@@ -5208,6 +6104,23 @@ impl Resolver {
                         let result_type = ResolvedTypeOccurrenceOwner::new(
                             self.resolve_type(&operational.header.result_type)?,
                         );
+                        let (
+                            result_effects,
+                            result_effect_argument_provenance,
+                            result_effect_argument_roots,
+                        ) = operational
+                            .header
+                            .result_effects
+                            .as_ref()
+                            .map(|effects| self.resolve_effect_row(effects))
+                            .transpose()?
+                            .unwrap_or_else(|| {
+                                (
+                                    EffectRow::empty(),
+                                    Vec::new().into_boxed_slice(),
+                                    Vec::new().into_boxed_slice(),
+                                )
+                            });
                         if !matches!(body.kind, ResolvedExprKind::Block(_)) {
                             return Err(error(
                                 ResolveReason::InternalState,
@@ -5223,6 +6136,9 @@ impl Resolver {
                                 name: global.clone(),
                                 parameters: parameters.into_vec(),
                                 result_type: result_type.into_inner(),
+                                result_effects,
+                                result_effect_argument_provenance,
+                                result_effect_argument_roots,
                                 requirements: requirements.into_boxed_slice(),
                                 type_parameters: type_parameters.into_boxed_slice(),
                                 span: operational.header.span,
@@ -5251,6 +6167,7 @@ impl Resolver {
             registry,
             constructor_payload_provenance,
             interfaces: interfaces.into_vec(),
+            effects,
             implementations: implementations.into_vec(),
             definitions: definitions.into_vec(),
         })
@@ -5528,7 +6445,11 @@ impl Resolver {
         validate_explicit_type_parameters(Some(&declaration.parameters))?;
         let mut parameters = Vec::with_capacity(declaration.parameters.len());
         for parameter in &declaration.parameters {
-            parameters.push(self.allocate_type_variable(&parameter.name, parameter.kind.as_ref())?);
+            parameters.push(self.allocate_type_variable(
+                &parameter.name,
+                parameter.kind.as_ref(),
+                Kind::Type,
+            )?);
         }
         Ok(parameters)
     }
@@ -5808,7 +6729,13 @@ impl Resolver {
             Visit(&'a SurfaceType),
             Sequence(std::slice::Iter<'a, SurfaceType>),
             Tuple(usize, crate::source::Span),
-            Function(crate::source::Span),
+            Function(
+                crate::source::Span,
+                Option<&'a crate::surface::SurfaceEffectRow>,
+                usize,
+            ),
+            EffectInstances(std::slice::Iter<'a, crate::surface::SurfaceEffectInstance>),
+            EffectArguments(std::slice::Iter<'a, SurfaceType>),
             Application(
                 ApplicationHead,
                 &'a [SurfaceType],
@@ -5891,7 +6818,28 @@ impl Resolver {
                             tasks.push(Task::Sequence(elements.iter()));
                         }
                         SurfaceTypeKind::Function(function) => {
-                            tasks.push(Task::Function(current.span));
+                            let effect_argument_count = function
+                                .effects
+                                .iter()
+                                .flat_map(|row| row.effects.iter())
+                                .try_fold(0usize, |count, instance| {
+                                    count.checked_add(instance.arguments.len())
+                                })
+                                .ok_or_else(|| {
+                                    error(
+                                        ResolveReason::TypeResourceExhausted,
+                                        current.span,
+                                        "effect-argument provenance exceeded its type-work budget",
+                                    )
+                                })?;
+                            tasks.push(Task::Function(
+                                current.span,
+                                function.effects.as_ref(),
+                                effect_argument_count,
+                            ));
+                            if let Some(effects) = &function.effects {
+                                tasks.push(Task::EffectInstances(effects.effects.iter()));
+                            }
                             tasks.push(Task::Visit(&function.codomain));
                             tasks.push(Task::Visit(&function.domain));
                         }
@@ -5900,6 +6848,18 @@ impl Resolver {
                 Task::Sequence(mut remaining) => {
                     if let Some(next) = remaining.next() {
                         tasks.push(Task::Sequence(remaining));
+                        tasks.push(Task::Visit(next));
+                    }
+                }
+                Task::EffectInstances(mut remaining) => {
+                    if let Some(next) = remaining.next() {
+                        tasks.push(Task::EffectInstances(remaining));
+                        tasks.push(Task::EffectArguments(next.arguments.iter()));
+                    }
+                }
+                Task::EffectArguments(mut remaining) => {
+                    if let Some(next) = remaining.next() {
+                        tasks.push(Task::EffectArguments(remaining));
                         tasks.push(Task::Visit(next));
                     }
                 }
@@ -5933,7 +6893,19 @@ impl Resolver {
                         provenance.len() - 1,
                     ));
                 }
-                Task::Function(span) => {
+                Task::Function(span, effects, effect_argument_count) => {
+                    let mut effect_arguments = completed.split_off(
+                        completed
+                            .len()
+                            .checked_sub(effect_argument_count)
+                            .ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    surface.span,
+                                    "the resolver lost an effect-row type argument",
+                                )
+                            })?,
+                    );
                     let (codomain, codomain_root) = completed.pop_owned().ok_or_else(|| {
                         error(
                             ResolveReason::InternalState,
@@ -5948,18 +6920,146 @@ impl Resolver {
                             "the resolver lost a function domain",
                         )
                     })?;
+                    let (ty, effect_argument_roots) =
+                        if let Some(effects) = effects {
+                            self.type_work.charge(effects.effects.len()).map_err(|()| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    effects.span,
+                                    "effect-row storage exceeded its type-work budget",
+                                )
+                            })?;
+                            let mut written = Vec::new();
+                            written
+                                .try_reserve_exact(effects.effects.len())
+                                .map_err(|_| {
+                                    error(
+                                        ResolveReason::TypeResourceExhausted,
+                                        effects.span,
+                                        "effect-row storage exceeded its type-work budget",
+                                    )
+                                })?;
+                            for source_instance in effects.effects.iter().rev() {
+                                let count = source_instance.arguments.len();
+                                self.type_work.charge(count.checked_mul(2).ok_or_else(|| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    source_instance.span,
+                                    "effect-argument provenance exceeded its type-work budget",
+                                )
+                            })?).map_err(|()| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    source_instance.span,
+                                    "effect-argument storage exceeded its type-work budget",
+                                )
+                            })?;
+                                let mut arguments = Vec::new();
+                                let mut roots = Vec::new();
+                                arguments.try_reserve_exact(count).map_err(|_| {
+                                    error(
+                                        ResolveReason::TypeResourceExhausted,
+                                        source_instance.span,
+                                        "effect-argument storage exceeded its type-work budget",
+                                    )
+                                })?;
+                                roots.try_reserve_exact(count).map_err(|_| {
+                                    error(
+                                        ResolveReason::TypeResourceExhausted,
+                                        source_instance.span,
+                                        "effect-argument provenance could not reserve storage",
+                                    )
+                                })?;
+                                for _ in source_instance.arguments.iter().rev() {
+                                    let (argument, root) =
+                                        effect_arguments.pop_owned().ok_or_else(|| {
+                                            error(
+                                                ResolveReason::InternalState,
+                                                source_instance.span,
+                                                "the resolver lost an effect-row type argument",
+                                            )
+                                        })?;
+                                    arguments.push(argument);
+                                    roots.push(root);
+                                }
+                                arguments.reverse();
+                                roots.reverse();
+                                written.push((
+                                    EffectInstance::new(
+                                        self.effect_reference(&source_instance.effect)?,
+                                        arguments
+                                            .into_iter()
+                                            .map(IterativeTypeOwner::into_inner)
+                                            .collect::<Vec<_>>()
+                                            .into_boxed_slice(),
+                                    ),
+                                    source_instance.span,
+                                    roots.into_boxed_slice(),
+                                ));
+                            }
+                            written.reverse();
+                            if !effect_arguments.is_empty() {
+                                return Err(error(
+                                    ResolveReason::InternalState,
+                                    effects.span,
+                                    "the resolver retained an extra effect-row type argument",
+                                ));
+                            }
+                            let tail = effects
+                                .tail
+                                .as_ref()
+                                .map(|tail| {
+                                    self.type_scopes
+                                        .iter()
+                                        .rev()
+                                        .find_map(|scope| scope.get(&tail.text))
+                                        .copied()
+                                        .map(EffectRowVariable::rigid)
+                                        .ok_or_else(|| {
+                                            error(
+                                                ResolveReason::UnknownType,
+                                                tail.span,
+                                                "this effect-row tail parameter is not declared",
+                                            )
+                                        })
+                                })
+                                .transpose()?;
+                            let (row, roots) = build_source_effect_row_with_provenance(
+                                written,
+                                tail,
+                                effects.span,
+                                &mut self.type_work,
+                            )?;
+                            (
+                                Type::function_computation(
+                                    domain.into_inner(),
+                                    ComputationType::new(codomain.into_inner(), row),
+                                ),
+                                roots,
+                            )
+                        } else {
+                            if effect_argument_count != 0 || !effect_arguments.is_empty() {
+                                return Err(error(
+                                    ResolveReason::InternalState,
+                                    span,
+                                    "a pure function retained effect-argument provenance",
+                                ));
+                            }
+                            (
+                                Type::Function(
+                                    Box::new(domain.into_inner()),
+                                    Box::new(codomain.into_inner()),
+                                ),
+                                Vec::<usize>::new().into_boxed_slice(),
+                            )
+                        };
                     provenance.push(ResolvedTypeProvenanceNode::Function {
                         span,
                         domain: domain_root,
                         codomain: codomain_root,
+                        effect_arguments: effect_argument_roots,
                     });
-                    completed.push((
-                        Type::Function(
-                            Box::new(domain.into_inner()),
-                            Box::new(codomain.into_inner()),
-                        ),
-                        provenance.len() - 1,
-                    ));
+                    completed.push((ty, provenance.len() - 1));
                 }
                 Task::Application(head, source_arguments, span, constructor_span) => {
                     let count = source_arguments.len();
@@ -6137,10 +7237,11 @@ impl Resolver {
         &mut self,
         name: &SurfaceName,
         surface_kind: Option<&SurfaceKind>,
+        implicit_kind: Kind,
     ) -> Result<ResolvedTypeVariable, ResolveError> {
         let kind = match surface_kind {
             Some(kind) => surface_kind_to_kind(kind, &mut self.type_work),
-            None => self.type_work.charge(1).map(|()| Kind::Type),
+            None => self.type_work.charge(1).map(|()| implicit_kind),
         }
         .map_err(|()| {
             error(
@@ -6180,18 +7281,27 @@ impl Resolver {
     fn allocate_declaration_type_parameters(
         &mut self,
         explicit: Option<&[SurfaceTypeParameter]>,
-        free_names: &[SurfaceName],
+        free_names: &[FreeTypeName],
+        infer_effect_row_tails: bool,
     ) -> Result<Vec<ResolvedTypeVariable>, ResolveError> {
         let Some(explicit) = explicit else {
             return free_names
                 .iter()
-                .map(|name| self.allocate_type_variable(name, None))
+                .map(|free| {
+                    let kind = if infer_effect_row_tails && free.role == FreeTypeNameRole::EffectRow
+                    {
+                        Kind::EffectRow
+                    } else {
+                        Kind::Type
+                    };
+                    self.allocate_type_variable(&free.name, None, kind)
+                })
                 .collect();
         };
 
         let free = free_names
             .iter()
-            .map(|name| name.text.as_str())
+            .map(|free| free.name.text.as_str())
             .collect::<HashSet<_>>();
         let mut parameters = Vec::with_capacity(explicit.len());
         for parameter in explicit {
@@ -6206,7 +7316,11 @@ impl Resolver {
                 diagnostic.found = Some(parameter.name.text.clone());
                 return Err(diagnostic.into());
             }
-            parameters.push(self.allocate_type_variable(&parameter.name, parameter.kind.as_ref())?);
+            parameters.push(self.allocate_type_variable(
+                &parameter.name,
+                parameter.kind.as_ref(),
+                Kind::Type,
+            )?);
         }
         Ok(parameters)
     }
@@ -6223,9 +7337,10 @@ impl Resolver {
                 operational.header.type_parameters.as_deref()
             }
         };
+        let infer_implicit_effect_rows = explicit.is_none();
         let declared = validate_explicit_type_parameters(explicit)?;
         let mut names = Vec::new();
-        let mut seen = HashSet::new();
+        let mut seen = HashMap::new();
         match &definition.kind {
             SurfaceDefinitionKind::Equational(equational) => {
                 collect_free_type_names(
@@ -6235,6 +7350,7 @@ impl Resolver {
                     &declared,
                     &mut seen,
                     &mut names,
+                    infer_implicit_effect_rows,
                     &mut self.type_work,
                 )?;
                 for requirement in &equational.interface.requirements {
@@ -6246,6 +7362,7 @@ impl Resolver {
                             &declared,
                             &mut seen,
                             &mut names,
+                            infer_implicit_effect_rows,
                             &mut self.type_work,
                         )?;
                     }
@@ -6260,6 +7377,7 @@ impl Resolver {
                         &declared,
                         &mut seen,
                         &mut names,
+                        infer_implicit_effect_rows,
                         &mut self.type_work,
                     )?;
                 }
@@ -6270,6 +7388,7 @@ impl Resolver {
                     &declared,
                     &mut seen,
                     &mut names,
+                    infer_implicit_effect_rows,
                     &mut self.type_work,
                 )?;
                 for requirement in &operational.header.requirements {
@@ -6281,13 +7400,14 @@ impl Resolver {
                             &declared,
                             &mut seen,
                             &mut names,
+                            infer_implicit_effect_rows,
                             &mut self.type_work,
                         )?;
                     }
                 }
             }
         }
-        self.allocate_declaration_type_parameters(explicit, &names)
+        self.allocate_declaration_type_parameters(explicit, &names, infer_implicit_effect_rows)
     }
 
     fn resolve_expr(&mut self, expression: &SurfaceExpr) -> Result<ResolvedExpr, ResolveError> {
@@ -6811,6 +7931,136 @@ impl Resolver {
                     kind: ResolvedExprKind::Match(ResolvedMatchExpr {
                         scrutinee: Box::new(scrutinee.into_inner()),
                         arms: arms.into_vec(),
+                    }),
+                    span: expression.span,
+                });
+            }
+            SurfaceExprKind::Perform(request) => {
+                let effect = self.resolve_effect_instance_parts(
+                    &request.effect,
+                    &request.arguments,
+                    request.effect.span(),
+                )?;
+                let operation =
+                    self.resolved_operation(effect.instance.effect(), &request.operation)?;
+                let operand = self.resolve_expr(&request.operand)?;
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Perform(ResolvedPerformExpr {
+                        effect,
+                        operation,
+                        spelling: request.operation.text.clone(),
+                        operand: Box::new(operand),
+                        origin: Origin::Source(request.operation.span),
+                    }),
+                    span: expression.span,
+                });
+            }
+            SurfaceExprKind::Handle(handler) => {
+                let effect = self.resolve_effect_instance_parts(
+                    &handler.effect.effect,
+                    &handler.effect.arguments,
+                    handler.effect.span,
+                )?;
+                let body = ResolvedExpressionOwner::new(self.resolve_expr(&handler.body)?);
+                self.type_work.charge(handler.clauses.len()).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "handler clause storage exceeded its type-work budget",
+                    )
+                })?;
+                let mut clauses = Vec::new();
+                clauses
+                    .try_reserve_exact(handler.clauses.len())
+                    .map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            expression.span,
+                            "handler clause storage exceeded its type-work budget",
+                        )
+                    })?;
+                self.type_work.charge(handler.clauses.len()).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "handler clause traversal exceeded its type-work budget",
+                    )
+                })?;
+                for clause in &handler.clauses {
+                    let operation =
+                        self.resolved_operation(effect.instance.effect(), &clause.operation)?;
+                    let resume = ResumeId::new(self.next_resume);
+                    self.next_resume = self.next_resume.checked_add(1).ok_or_else(|| {
+                        error(
+                            ResolveReason::BinderIdExhausted,
+                            clause.span,
+                            "handler resume identity space is exhausted",
+                        )
+                    })?;
+                    let (patterns, binders) =
+                        self.resolve_pattern_vector(std::slice::from_ref(&clause.pattern))?;
+                    let mut patterns = ResolvedPatternBuffer(patterns);
+                    let pattern = ResolvedPatternOwner::new(patterns.pop().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            clause.pattern.span,
+                            "the resolver produced no handler pattern",
+                        )
+                    })?);
+                    let scope_checkpoint = self.scopes.len();
+                    let resume_checkpoint = self.active_resumes.len();
+                    self.push_binder_scope_many(&binders);
+                    self.type_work.charge(1).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            clause.span,
+                            "handler resume scope exceeded its type-work budget",
+                        )
+                    })?;
+                    self.active_resumes.try_reserve(1).map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            clause.span,
+                            "handler resume scope exceeded its type-work budget",
+                        )
+                    })?;
+                    self.active_resumes.push(resume);
+                    let resolved_body = self
+                        .resolve_expr(&clause.body)
+                        .map(ResolvedExpressionOwner::new);
+                    self.active_resumes.truncate(resume_checkpoint);
+                    self.scopes.truncate(scope_checkpoint);
+                    clauses.push(ResolvedHandlerClause {
+                        operation,
+                        spelling: clause.operation.text.clone(),
+                        resume,
+                        pattern: pattern.into_inner(),
+                        body: resolved_body?.into_inner(),
+                        span: clause.span,
+                    });
+                }
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Handle(ResolvedHandleExpr {
+                        body: Box::new(body.into_inner()),
+                        effect,
+                        clauses,
+                    }),
+                    span: expression.span,
+                });
+            }
+            SurfaceExprKind::Resume(value) => {
+                let owner = self.active_resumes.last().copied().ok_or_else(|| {
+                    error(
+                        ResolveReason::ResumeOutsideClause,
+                        expression.span,
+                        "resume is available only inside an operation clause",
+                    )
+                })?;
+                let value = self.resolve_expr(value)?;
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Resume(ResolvedResumeExpr {
+                        owner: Some(owner),
+                        value: Box::new(value),
                     }),
                     span: expression.span,
                 });
@@ -7372,6 +8622,11 @@ fn surface_kind_to_kind(root: &SurfaceKind, budget: &mut TypeWorkBudget) -> Resu
                         #[cfg(test)]
                         SURFACE_KIND_REBUILT.set(SURFACE_KIND_REBUILT.get().saturating_add(1));
                     }
+                    SurfaceKindKind::EffectRow => {
+                        rebuilt.push(Kind::EffectRow);
+                        #[cfg(test)]
+                        SURFACE_KIND_REBUILT.set(SURFACE_KIND_REBUILT.get().saturating_add(1));
+                    }
                     SurfaceKindKind::Function { domain, codomain } => {
                         work.push(Task::Arrow);
                         work.push(Task::Visit(codomain));
@@ -7393,31 +8648,92 @@ fn surface_kind_to_kind(root: &SurfaceKind, budget: &mut TypeWorkBudget) -> Resu
     rebuilt.pop().ok_or(())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FreeTypeNameRole {
+    Type,
+    EffectRow,
+}
+
+struct FreeTypeName {
+    name: SurfaceName,
+    role: FreeTypeNameRole,
+}
+
+fn retain_free_type_name<'a>(
+    name: &'a SurfaceName,
+    role: FreeTypeNameRole,
+    seen: &mut HashMap<&'a str, Option<FreeTypeNameRole>>,
+    output: &mut Vec<FreeTypeName>,
+    reject_mixed_roles: bool,
+) -> Result<(), ResolveError> {
+    match seen.entry(name.text.as_str()) {
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            entry.insert(Some(role));
+            output.push(FreeTypeName {
+                name: name.clone(),
+                role,
+            });
+            Ok(())
+        }
+        std::collections::hash_map::Entry::Occupied(entry) => match entry.get() {
+            Some(existing) if reject_mixed_roles && *existing != role => Err(error(
+                ResolveReason::TypeKind,
+                name.span,
+                "this parameter name is used both as an ordinary type and as an effect-row tail",
+            )),
+            None | Some(_) => Ok(()),
+        },
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "free-name discovery keeps the reviewed omitted-global correction in one pass"
+)]
 fn collect_free_type_names<'a>(
     root: &'a SurfaceType,
     nominals: &HashMap<String, NominalTypeId>,
     interfaces: &HashMap<String, InterfaceId>,
     declared: &HashSet<&str>,
-    seen: &mut HashSet<&'a str>,
-    output: &mut Vec<crate::surface::SurfaceName>,
+    seen: &mut HashMap<&'a str, Option<FreeTypeNameRole>>,
+    output: &mut Vec<FreeTypeName>,
+    reject_mixed_roles: bool,
     budget: &mut TypeWorkBudget,
 ) -> Result<(), ResolveError> {
     enum Task<'a> {
         Visit(&'a SurfaceType),
         Slice(std::slice::Iter<'a, SurfaceType>),
+        RowTail(&'a SurfaceName),
     }
 
     let mut work = vec![Task::Visit(root)];
     while let Some(task) = work.pop() {
-        let Task::Visit(ty) = task else {
-            let Task::Slice(mut remaining) = task else {
-                unreachable!("free type discovery task is closed")
-            };
-            if let Some(next) = remaining.next() {
-                work.push(Task::Slice(remaining));
-                work.push(Task::Visit(next));
+        let ty = match task {
+            Task::Visit(ty) => ty,
+            Task::Slice(mut remaining) => {
+                if let Some(next) = remaining.next() {
+                    work.push(Task::Slice(remaining));
+                    work.push(Task::Visit(next));
+                }
+                continue;
             }
-            continue;
+            Task::RowTail(tail) => {
+                budget.charge(1).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        tail.span,
+                        "free type discovery exceeded its work budget",
+                    )
+                })?;
+                retain_free_type_name(
+                    tail,
+                    FreeTypeNameRole::EffectRow,
+                    seen,
+                    output,
+                    reject_mixed_roles,
+                )?;
+                continue;
+            }
         };
         budget.charge(1).map_err(|()| {
             error(
@@ -7431,11 +8747,16 @@ fn collect_free_type_names<'a>(
                 let SurfaceReference::Unqualified(name) = name else {
                     continue;
                 };
-                if (declared.contains(name.text.as_str())
-                    || (!nominals.contains_key(&name.text) && !interfaces.contains_key(&name.text)))
-                    && seen.insert(&name.text)
+                if declared.contains(name.text.as_str())
+                    || (!nominals.contains_key(&name.text) && !interfaces.contains_key(&name.text))
                 {
-                    output.push(name.clone());
+                    retain_free_type_name(
+                        name,
+                        FreeTypeNameRole::Type,
+                        seen,
+                        output,
+                        reject_mixed_roles,
+                    )?;
                 }
             }
             SurfaceTypeKind::Application {
@@ -7446,14 +8767,27 @@ fn collect_free_type_names<'a>(
                     && (declared.contains(constructor.text.as_str())
                         || (!nominals.contains_key(&constructor.text)
                             && !interfaces.contains_key(&constructor.text)))
-                    && seen.insert(&constructor.text)
                 {
-                    output.push(constructor.clone());
+                    retain_free_type_name(
+                        constructor,
+                        FreeTypeNameRole::Type,
+                        seen,
+                        output,
+                        reject_mixed_roles,
+                    )?;
                 }
                 work.push(Task::Slice(arguments.iter()));
             }
             SurfaceTypeKind::Tuple(elements) => work.push(Task::Slice(elements.iter())),
             SurfaceTypeKind::Function(function) => {
+                if let Some(effects) = &function.effects {
+                    if let Some(tail) = &effects.tail {
+                        work.push(Task::RowTail(tail));
+                    }
+                    for effect in effects.effects.iter().rev() {
+                        work.push(Task::Slice(effect.arguments.iter()));
+                    }
+                }
                 work.push(Task::Visit(&function.codomain));
                 work.push(Task::Visit(&function.domain));
             }
@@ -10229,7 +11563,7 @@ mod tests {
         let mut short =
             Resolver::with_type_work(ModuleId::new(0), TypeWorkBudget::with_limit(EXACT_WORK - 1));
         let error = short
-            .allocate_type_variable(&parameter.name, parameter.kind.as_ref())
+            .allocate_type_variable(&parameter.name, parameter.kind.as_ref(), Kind::Type)
             .expect_err("one missing record unit must reject the whole binder");
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(short.type_work.used(), EXACT_WORK - 1);
@@ -10238,7 +11572,7 @@ mod tests {
         let mut exact =
             Resolver::with_type_work(ModuleId::new(0), TypeWorkBudget::with_limit(EXACT_WORK));
         let retained = exact
-            .allocate_type_variable(&parameter.name, parameter.kind.as_ref())
+            .allocate_type_variable(&parameter.name, parameter.kind.as_ref(), Kind::Type)
             .expect("the exact kind-and-record budget should retain one binder");
         assert_eq!(exact.type_work.used(), EXACT_WORK);
         assert_eq!(exact.next_type_variable, 1);
@@ -11267,6 +12601,7 @@ mod tests {
                     &exported,
                     &declarations.registry,
                     &declarations.interfaces,
+                    &declarations.effects,
                     &declarations.definitions,
                     std::mem::take(&mut resolver.public_import_candidate),
                     &mut resolver.type_work,
@@ -11335,7 +12670,7 @@ mod tests {
         budget
             .charge(TYPE_WORK_LIMIT - 2)
             .expect("the fixture leaves two units");
-        let mut seen = HashSet::new();
+        let mut seen = HashMap::new();
         let mut output = Vec::new();
 
         let error = collect_free_type_names(
@@ -11345,6 +12680,7 @@ mod tests {
             &HashSet::new(),
             &mut seen,
             &mut output,
+            true,
             &mut budget,
         )
         .expect_err("the second name exceeds the remaining budget");
@@ -11355,11 +12691,11 @@ mod tests {
         assert_eq!(
             output
                 .iter()
-                .map(|name| name.text.as_str())
+                .map(|free| free.name.text.as_str())
                 .collect::<Vec<_>>(),
             ["A"]
         );
-        assert_eq!(seen, HashSet::from(["A"]));
+        assert_eq!(seen.get("A"), Some(&Some(FreeTypeNameRole::Type)));
     }
 
     #[test]
@@ -11799,5 +13135,81 @@ mod tests {
             .expect("the disposal thread should start")
             .join()
             .expect("late resolver failure should dispose completed types iteratively");
+    }
+
+    #[test]
+    fn source_effect_row_rebuild_is_exact_retryable_and_stack_safe() {
+        const DEPTH: usize = 16_384;
+        std::thread::Builder::new()
+            .name("source-effect-row-rebuild".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("source-effect-row.ash", "{State<Int>}")
+                    .expect("the row fixture should fit");
+                let span = source
+                    .span(ByteRange::new(0, 12).expect("the row range is ordered"))
+                    .expect("the row span should fit");
+                let effect = EffectId::new(ModuleId::new(41), 0);
+                let fixture = |reverse| {
+                    let nested = |leaf| {
+                        let mut argument = leaf;
+                        for _ in 0..DEPTH {
+                            argument = Type::function(Type::Unit, argument);
+                        }
+                        argument
+                    };
+                    let integer = (
+                        EffectInstance::new(effect, vec![nested(Type::Int)].into_boxed_slice()),
+                        span,
+                        vec![17].into_boxed_slice(),
+                    );
+                    let boolean = (
+                        EffectInstance::new(effect, vec![nested(Type::Bool)].into_boxed_slice()),
+                        span,
+                        vec![29].into_boxed_slice(),
+                    );
+                    if reverse {
+                        vec![boolean, integer]
+                    } else {
+                        vec![integer, boolean]
+                    }
+                };
+
+                let mut measured = TypeWorkBudget::unbounded();
+                let (row, roots) = build_source_effect_row_with_provenance(
+                    fixture(false),
+                    None,
+                    span,
+                    &mut measured,
+                )
+                .expect("the unbounded measurement should rebuild the row and provenance");
+                let exact_work = measured.used();
+                let expected_roots = roots.into_vec();
+                drop(row);
+
+                let mut one_short = TypeWorkBudget::with_limit(exact_work - 1);
+                let failure = build_source_effect_row_with_provenance(
+                    fixture(false),
+                    None,
+                    span,
+                    &mut one_short,
+                )
+                .expect_err("one missing unit must publish no partial row or provenance");
+                assert_eq!(failure.reason, ResolveReason::TypeResourceExhausted);
+
+                let mut exact = TypeWorkBudget::with_limit(exact_work);
+                let (row, roots) =
+                    build_source_effect_row_with_provenance(fixture(true), None, span, &mut exact)
+                        .expect(
+                            "a fresh exact retry should publish the complete row and provenance",
+                        );
+                assert_eq!(exact.used(), exact_work);
+                assert_eq!(row.known().len(), 2);
+                assert_eq!(roots.as_ref(), expected_roots);
+                drop(row);
+            })
+            .expect("the row owner test should start")
+            .join()
+            .expect("success, rejection, retry, and teardown should fit a small stack");
     }
 }

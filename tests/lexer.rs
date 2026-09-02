@@ -58,6 +58,32 @@ fn recognizes_interface_reserved_words_without_stealing_identifier_boundaries() 
 }
 
 #[test]
+fn recognizes_effect_reserved_words_without_stealing_identifier_boundaries() {
+    let source = SourceFile::new(
+        "effect-keywords.ash",
+        "effect perform handle with resume effectful performer handler within resumed !",
+    )
+    .expect("the keyword fixture should fit");
+    assert_eq!(
+        token_kinds(&source),
+        vec![
+            TokenKind::Effect,
+            TokenKind::Perform,
+            TokenKind::Handle,
+            TokenKind::With,
+            TokenKind::Resume,
+            TokenKind::Identifier("effectful".into()),
+            TokenKind::Identifier("performer".into()),
+            TokenKind::Identifier("handler".into()),
+            TokenKind::Identifier("within".into()),
+            TokenKind::Identifier("resumed".into()),
+            TokenKind::Bang,
+            TokenKind::EndOfFile,
+        ]
+    );
+}
+
+#[test]
 fn recognizes_data_and_pattern_tokens_without_stealing_identifier_boundaries() {
     let source = SourceFile::new(
         "data-pattern-tokens.ash",

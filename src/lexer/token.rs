@@ -38,8 +38,18 @@ pub enum TokenKind {
     Type,
     /// The `newtype` reserved word.
     Newtype,
+    /// The `effect` reserved word.
+    Effect,
     /// The `match` reserved word.
     Match,
+    /// The `perform` reserved word.
+    Perform,
+    /// The `handle` reserved word.
+    Handle,
+    /// The `with` reserved word.
+    With,
+    /// The `resume` reserved word.
+    Resume,
     /// The `import` reserved word.
     Import,
     /// The `as` reserved word.
@@ -88,6 +98,8 @@ pub enum TokenKind {
     FatArrow,
     /// `|`.
     Pipe,
+    /// `!`.
+    Bang,
     /// `,`, separating tuple elements, parameters, and constructor fields.
     Comma,
     /// `<`, opening a type argument list.

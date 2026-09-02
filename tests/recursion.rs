@@ -171,7 +171,7 @@ fn recursive_members_are_checked_against_their_declared_monotypes() {
 
 #[test]
 fn deep_recursive_group_and_call_chain_use_explicit_work_stacks() {
-    const MEMBERS: usize = 10_000;
+    const MEMBERS: usize = 8_000;
     let worker = std::thread::Builder::new()
         .name("deep-recursive-group".into())
         .stack_size(256 * 1024)

@@ -308,6 +308,7 @@ pub(crate) fn lex_with_budget(
             b'<' => single(&mut offset, TokenKind::Less),
             b'>' => single(&mut offset, TokenKind::Greater),
             b'|' => single(&mut offset, TokenKind::Pipe),
+            b'!' => single(&mut offset, TokenKind::Bang),
             b';' => single(&mut offset, TokenKind::Semicolon),
             b'=' if bytes.get(offset + 1) == Some(&b'=') => {
                 offset += 2;
@@ -441,7 +442,12 @@ fn classify_word(word: &str) -> Option<TokenKind> {
         "and" => Some(TokenKind::And),
         "type" => Some(TokenKind::Type),
         "newtype" => Some(TokenKind::Newtype),
+        "effect" => Some(TokenKind::Effect),
         "match" => Some(TokenKind::Match),
+        "perform" => Some(TokenKind::Perform),
+        "handle" => Some(TokenKind::Handle),
+        "with" => Some(TokenKind::With),
+        "resume" => Some(TokenKind::Resume),
         "import" => Some(TokenKind::Import),
         "as" => Some(TokenKind::As),
         "pub" => Some(TokenKind::Pub),

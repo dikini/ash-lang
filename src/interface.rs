@@ -108,6 +108,16 @@ impl InterfaceConstraintBudget {
                     pending.push(Task::Type(codomain));
                     pending.push(Task::Type(domain));
                 }
+                Type::EffectfulFunction(domain, codomain) => {
+                    let children = codomain.effect_argument_count().saturating_add(2);
+                    self.charge(children)?;
+                    pending.try_reserve(children).map_err(|_| ())?;
+                    for argument in codomain.effect_arguments() {
+                        pending.push(Task::Type(argument));
+                    }
+                    pending.push(Task::Type(&codomain.value));
+                    pending.push(Task::Type(domain));
+                }
                 Type::Forall(parameters, body) => {
                     self.charge(parameters.len().saturating_add(1))?;
                     for (_, kind) in parameters {
@@ -325,6 +335,17 @@ fn type_contains_any_variable(
                 pending.push(codomain);
                 pending.push(domain);
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                if codomain.tail_variable().is_some() {
+                    return Ok(true);
+                }
+                let children = codomain.effect_argument_count().saturating_add(2);
+                budget.charge(children)?;
+                pending.try_reserve(children).map_err(|_| ())?;
+                codomain.extend_effect_arguments(&mut pending);
+                pending.push(&codomain.value);
+                pending.push(domain);
+            }
             Type::Forall(parameters, body) => {
                 budget.charge(parameters.len().saturating_add(1))?;
                 for (_, kind) in parameters {
@@ -360,6 +381,14 @@ fn schedule_type_children<'a>(
             budget.charge(2)?;
             pending.try_reserve(2).map_err(|_| ())?;
             pending.push(codomain);
+            pending.push(domain);
+        }
+        Type::EffectfulFunction(domain, codomain) => {
+            let children = codomain.effect_argument_count().saturating_add(2);
+            budget.charge(children)?;
+            pending.try_reserve(children).map_err(|_| ())?;
+            codomain.extend_effect_arguments(pending);
+            pending.push(&codomain.value);
             pending.push(domain);
         }
         Type::Forall(parameters, body) => {
@@ -434,6 +463,14 @@ pub(crate) fn collect_type_nominal_identities_with_constraint_budget(
                 pending.push(argument);
                 pending.push(function);
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                let children = codomain.effect_argument_count().saturating_add(2);
+                budget.charge(children)?;
+                pending.try_reserve(children).map_err(|_| ())?;
+                codomain.extend_effect_arguments(&mut pending);
+                pending.push(&codomain.value);
+                pending.push(domain);
+            }
             Type::Tuple(elements) => {
                 budget.charge(elements.len())?;
                 pending.try_reserve(elements.len()).map_err(|_| ())?;
@@ -471,6 +508,82 @@ fn same_type_with_constraint_budget_inner(
     pending.push((left, right));
     while let Some((left, right)) = pending.pop() {
         budget.charge(1)?;
+        if let (Some(left_function), Some(right_function)) =
+            (left.function_view(), right.function_view())
+        {
+            let effect_pairs = match (left_function.effects(), right_function.effects()) {
+                (None, None) => 0,
+                (Some(left_effects), Some(right_effects))
+                    if left_effects.known().len() == right_effects.known().len()
+                        && match (left_effects.tail(), right_effects.tail()) {
+                            (None, None) => true,
+                            (Some(left), Some(right)) => {
+                                left.variable() == right.variable()
+                                    && left.lacks().len() == right.lacks().len()
+                            }
+                            _ => false,
+                        } =>
+                {
+                    let mut argument_pairs = 0usize;
+                    let left_members = left_effects.known().iter().chain(
+                        left_effects
+                            .tail()
+                            .into_iter()
+                            .flat_map(|tail| tail.lacks()),
+                    );
+                    let right_members = right_effects.known().iter().chain(
+                        right_effects
+                            .tail()
+                            .into_iter()
+                            .flat_map(|tail| tail.lacks()),
+                    );
+                    for (left_member, right_member) in left_members.zip(right_members) {
+                        budget.charge(1)?;
+                        if left_member.effect() != right_member.effect()
+                            || left_member.arguments().len() != right_member.arguments().len()
+                        {
+                            return Ok(false);
+                        }
+                        argument_pairs = argument_pairs
+                            .checked_add(left_member.arguments().len())
+                            .ok_or(())?;
+                    }
+                    argument_pairs
+                }
+                _ => return Ok(false),
+            };
+            let pending_pairs = effect_pairs.checked_add(2).ok_or(())?;
+            budget.charge(pending_pairs)?;
+            pending.try_reserve(pending_pairs).map_err(|_| ())?;
+            if let (Some(left_effects), Some(right_effects)) =
+                (left_function.effects(), right_function.effects())
+            {
+                let left_members = left_effects.known().iter().chain(
+                    left_effects
+                        .tail()
+                        .into_iter()
+                        .flat_map(|tail| tail.lacks()),
+                );
+                let right_members = right_effects.known().iter().chain(
+                    right_effects
+                        .tail()
+                        .into_iter()
+                        .flat_map(|tail| tail.lacks()),
+                );
+                for (left_member, right_member) in left_members.zip(right_members) {
+                    pending.extend(
+                        left_member
+                            .arguments()
+                            .iter()
+                            .zip(right_member.arguments())
+                            .rev(),
+                    );
+                }
+            }
+            pending.push((left_function.value(), right_function.value()));
+            pending.push((left_function.domain(), right_function.domain()));
+            continue;
+        }
         match (left, right) {
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {
@@ -853,6 +966,48 @@ where
             }
             continue;
         }
+        if let (Some(candidate_function), Some(goal_function)) =
+            (candidate.function_view(), goal.function_view())
+        {
+            let effect_pairs = match (candidate_function.effects(), goal_function.effects()) {
+                (None, None) => 0,
+                (Some(candidate), Some(goal))
+                    if candidate.tail().is_none()
+                        && goal.tail().is_none()
+                        && candidate.known().len() == goal.known().len() =>
+                {
+                    let mut count = 0usize;
+                    for (candidate, goal) in candidate.known().iter().zip(goal.known()) {
+                        if candidate.effect() != goal.effect()
+                            || candidate.arguments().len() != goal.arguments().len()
+                        {
+                            return Ok(None);
+                        }
+                        count = count
+                            .checked_add(candidate.arguments().len())
+                            .ok_or(HeadMatchFailure::ConstraintResource)?;
+                    }
+                    count
+                }
+                _ => return Ok(None),
+            };
+            constraint_budget
+                .charge(effect_pairs.saturating_add(2))
+                .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+            pending
+                .try_reserve(effect_pairs.saturating_add(2))
+                .map_err(|_| HeadMatchFailure::ConstraintResource)?;
+            if let (Some(candidate), Some(goal)) =
+                (candidate_function.effects(), goal_function.effects())
+            {
+                for (candidate, goal) in candidate.known().iter().zip(goal.known()).rev() {
+                    pending.extend(candidate.arguments().iter().zip(goal.arguments()).rev());
+                }
+            }
+            pending.push((candidate_function.value(), goal_function.value()));
+            pending.push((candidate_function.domain(), goal_function.domain()));
+            continue;
+        }
         match (candidate, goal) {
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(candidate), Type::Nominal(goal)) if candidate == goal => {}
@@ -873,19 +1028,6 @@ where
                 if candidate_types.len() == goal_types.len() =>
             {
                 schedule_match_pairs(candidate_types, goal_types, &mut pending, constraint_budget)?;
-            }
-            (
-                Type::Function(candidate_domain, candidate_codomain),
-                Type::Function(goal_domain, goal_codomain),
-            ) => {
-                constraint_budget
-                    .charge(2)
-                    .map_err(|()| HeadMatchFailure::ConstraintResource)?;
-                pending
-                    .try_reserve(2)
-                    .map_err(|_| HeadMatchFailure::ConstraintResource)?;
-                pending.push((candidate_codomain, goal_codomain));
-                pending.push((candidate_domain, goal_domain));
             }
             (Type::Variable(_), _)
             | (Type::Forall(_, _), _)
@@ -932,6 +1074,34 @@ fn validate_match_type(
         budget
             .charge(1)
             .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+        if let Some(function) = ty.function_view() {
+            let effects = function.effects();
+            if effects.is_some_and(|effects| effects.tail().is_some()) {
+                return Err(HeadMatchFailure::InvalidState);
+            }
+            let effect_arguments = effects.map_or(0, |effects| {
+                effects
+                    .known()
+                    .iter()
+                    .map(|member| member.arguments().len())
+                    .sum()
+            });
+            let retained = effect_arguments.saturating_add(2);
+            budget
+                .charge(retained)
+                .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+            pending
+                .try_reserve(retained)
+                .map_err(|_| HeadMatchFailure::ConstraintResource)?;
+            if let Some(effects) = effects {
+                for member in effects.known().iter().rev() {
+                    pending.extend(member.arguments().iter().rev());
+                }
+            }
+            pending.push(function.value());
+            pending.push(function.domain());
+            continue;
+        }
         match ty {
             Type::Tuple(elements) => {
                 budget
@@ -952,16 +1122,7 @@ fn validate_match_type(
                 pending.push(argument);
                 pending.push(function);
             }
-            Type::Function(domain, codomain) => {
-                budget
-                    .charge(2)
-                    .map_err(|()| HeadMatchFailure::ConstraintResource)?;
-                pending
-                    .try_reserve(2)
-                    .map_err(|_| HeadMatchFailure::ConstraintResource)?;
-                pending.push(codomain);
-                pending.push(domain);
-            }
+            Type::Function(_, _) | Type::EffectfulFunction(_, _) => unreachable!(),
             Type::Variable(variable) => {
                 if candidate_parameters.is_some_and(|positions| !positions.contains_key(variable)) {
                     return Err(HeadMatchFailure::InvalidState);
@@ -1009,6 +1170,58 @@ fn match_types_equal(
         budget
             .charge(1)
             .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+        if let (Some(left_function), Some(right_function)) =
+            (left.function_view(), right.function_view())
+        {
+            let effect_pairs = match (left_function.effects(), right_function.effects()) {
+                (None, None) => 0,
+                (Some(left_effects), Some(right_effects))
+                    if left_effects.tail().is_none()
+                        && right_effects.tail().is_none()
+                        && left_effects.known().len() == right_effects.known().len() =>
+                {
+                    let mut count = 0usize;
+                    for (left_member, right_member) in
+                        left_effects.known().iter().zip(right_effects.known())
+                    {
+                        if left_member.effect() != right_member.effect()
+                            || left_member.arguments().len() != right_member.arguments().len()
+                        {
+                            return Ok(false);
+                        }
+                        count = count
+                            .checked_add(left_member.arguments().len())
+                            .ok_or(HeadMatchFailure::ConstraintResource)?;
+                    }
+                    count
+                }
+                _ => return Ok(false),
+            };
+            budget
+                .charge(effect_pairs.saturating_add(2))
+                .map_err(|()| HeadMatchFailure::ConstraintResource)?;
+            pending
+                .try_reserve(effect_pairs.saturating_add(2))
+                .map_err(|_| HeadMatchFailure::ConstraintResource)?;
+            if let (Some(left_effects), Some(right_effects)) =
+                (left_function.effects(), right_function.effects())
+            {
+                for (left_member, right_member) in
+                    left_effects.known().iter().zip(right_effects.known()).rev()
+                {
+                    pending.extend(
+                        left_member
+                            .arguments()
+                            .iter()
+                            .zip(right_member.arguments())
+                            .rev(),
+                    );
+                }
+            }
+            pending.push((left_function.value(), right_function.value()));
+            pending.push((left_function.domain(), right_function.domain()));
+            continue;
+        }
         match (left, right) {
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
@@ -1031,19 +1244,8 @@ fn match_types_equal(
             {
                 schedule_match_pairs(left_types, right_types, &mut pending, budget)?;
             }
-            (
-                Type::Function(left_domain, left_codomain),
-                Type::Function(right_domain, right_codomain),
-            ) => {
-                budget
-                    .charge(2)
-                    .map_err(|()| HeadMatchFailure::ConstraintResource)?;
-                pending
-                    .try_reserve(2)
-                    .map_err(|_| HeadMatchFailure::ConstraintResource)?;
-                pending.push((left_codomain, right_codomain));
-                pending.push((left_domain, right_domain));
-            }
+            (Type::Function(_, _) | Type::EffectfulFunction(_, _), _)
+            | (_, Type::Function(_, _) | Type::EffectfulFunction(_, _)) => unreachable!(),
             (Type::Forall(_, _), _)
             | (_, Type::Forall(_, _))
             | (Type::Inference(_), _)
@@ -1302,6 +1504,88 @@ where
             solutions.insert(variable, value);
             continue;
         }
+        if let (Some(left_function), Some(right_function)) =
+            (left.ty.function_view(), right.ty.function_view())
+        {
+            let effect_pairs = match (left_function.effects(), right_function.effects()) {
+                (None, None) => 0,
+                (Some(left_effects), Some(right_effects))
+                    if left_effects.tail().is_none()
+                        && right_effects.tail().is_none()
+                        && left_effects.known().len() == right_effects.known().len() =>
+                {
+                    let mut count = 0usize;
+                    for (left_member, right_member) in
+                        left_effects.known().iter().zip(right_effects.known())
+                    {
+                        if left_member.effect() != right_member.effect()
+                            || left_member.arguments().len() != right_member.arguments().len()
+                        {
+                            return Ok(false);
+                        }
+                        count = count
+                            .checked_add(left_member.arguments().len())
+                            .ok_or(OverlapFailure::Resource)?;
+                    }
+                    count
+                }
+                _ => return Ok(false),
+            };
+            budget
+                .charge(effect_pairs.saturating_add(2))
+                .map_err(|()| OverlapFailure::Resource)?;
+            pending
+                .try_reserve(effect_pairs.saturating_add(2))
+                .map_err(|_| OverlapFailure::Resource)?;
+            if let (Some(left_effects), Some(right_effects)) =
+                (left_function.effects(), right_function.effects())
+            {
+                for (left_member, right_member) in
+                    left_effects.known().iter().zip(right_effects.known()).rev()
+                {
+                    pending.extend(
+                        left_member
+                            .arguments()
+                            .iter()
+                            .zip(right_member.arguments())
+                            .rev()
+                            .map(|(left_argument, right_argument)| {
+                                (
+                                    OverlapHead {
+                                        side: left.side,
+                                        ty: left_argument,
+                                    },
+                                    OverlapHead {
+                                        side: right.side,
+                                        ty: right_argument,
+                                    },
+                                )
+                            }),
+                    );
+                }
+            }
+            pending.push((
+                OverlapHead {
+                    side: left.side,
+                    ty: left_function.value(),
+                },
+                OverlapHead {
+                    side: right.side,
+                    ty: right_function.value(),
+                },
+            ));
+            pending.push((
+                OverlapHead {
+                    side: left.side,
+                    ty: left_function.domain(),
+                },
+                OverlapHead {
+                    side: right.side,
+                    ty: right_function.domain(),
+                },
+            ));
+            continue;
+        }
         match (left.ty, right.ty) {
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
@@ -1346,35 +1630,8 @@ where
                     budget,
                 )?;
             }
-            (
-                Type::Function(left_domain, left_codomain),
-                Type::Function(right_domain, right_codomain),
-            ) => {
-                budget.charge(2).map_err(|()| OverlapFailure::Resource)?;
-                pending
-                    .try_reserve(2)
-                    .map_err(|_| OverlapFailure::Resource)?;
-                pending.push((
-                    OverlapHead {
-                        side: left.side,
-                        ty: left_codomain,
-                    },
-                    OverlapHead {
-                        side: right.side,
-                        ty: right_codomain,
-                    },
-                ));
-                pending.push((
-                    OverlapHead {
-                        side: left.side,
-                        ty: left_domain,
-                    },
-                    OverlapHead {
-                        side: right.side,
-                        ty: right_domain,
-                    },
-                ));
-            }
+            (Type::Function(_, _) | Type::EffectfulFunction(_, _), _)
+            | (_, Type::Function(_, _) | Type::EffectfulFunction(_, _)) => unreachable!(),
             (Type::Variable(_), _) | (_, Type::Variable(_)) => {
                 return Err(OverlapFailure::InvalidState);
             }
@@ -1501,6 +1758,43 @@ fn overlap_occurs<'a>(
             }
             continue;
         }
+        if let Some(function) = head.ty.function_view() {
+            let effects = function.effects();
+            if effects.is_some_and(|effects| effects.tail().is_some()) {
+                return Err(OverlapFailure::InvalidState);
+            }
+            let effect_arguments = effects.map_or(0, |effects| {
+                effects
+                    .known()
+                    .iter()
+                    .map(|member| member.arguments().len())
+                    .sum()
+            });
+            let retained = effect_arguments.saturating_add(2);
+            budget
+                .charge(retained)
+                .map_err(|()| OverlapFailure::Resource)?;
+            pending
+                .try_reserve(retained)
+                .map_err(|_| OverlapFailure::Resource)?;
+            if let Some(effects) = effects {
+                for member in effects.known().iter().rev() {
+                    pending.extend(member.arguments().iter().rev().map(|argument| OverlapHead {
+                        side: head.side,
+                        ty: argument,
+                    }));
+                }
+            }
+            pending.push(OverlapHead {
+                side: head.side,
+                ty: function.value(),
+            });
+            pending.push(OverlapHead {
+                side: head.side,
+                ty: function.domain(),
+            });
+            continue;
+        }
         match head.ty {
             Type::Tuple(elements) => {
                 budget
@@ -1528,20 +1822,7 @@ fn overlap_occurs<'a>(
                     ty: function,
                 });
             }
-            Type::Function(domain, codomain) => {
-                budget.charge(2).map_err(|()| OverlapFailure::Resource)?;
-                pending
-                    .try_reserve(2)
-                    .map_err(|_| OverlapFailure::Resource)?;
-                pending.push(OverlapHead {
-                    side: head.side,
-                    ty: codomain,
-                });
-                pending.push(OverlapHead {
-                    side: head.side,
-                    ty: domain,
-                });
-            }
+            Type::Function(_, _) | Type::EffectfulFunction(_, _) => unreachable!(),
             Type::Variable(_) => return Err(OverlapFailure::InvalidState),
             Type::Forall(_, _) | Type::Inference(_) => return Err(OverlapFailure::InvalidState),
             Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
@@ -2614,7 +2895,10 @@ mod tests {
         module::ModuleId,
         resolved::{BinderId, ResolvedNominalType, ResolvedRegistry, ResolvedTypeVariable},
         source::{ByteRange, Origin, SourceFile},
-        types::{IterativeTypeOwner, Kind, NominalTypeId, TypeVariableId},
+        types::{
+            ComputationType, EffectId, EffectInstance, EffectRow, IterativeTypeOwner, Kind,
+            NominalTypeId, TypeVariableId,
+        },
     };
 
     #[test]
@@ -2650,6 +2934,135 @@ mod tests {
         };
         assert_eq!(*retained, parameter);
         assert_eq!(kind, &Kind::Type);
+    }
+
+    #[test]
+    fn closed_effectful_function_heads_match_and_overlap_semantically() {
+        let function = Type::function_computation(
+            Type::Int,
+            ComputationType::new(
+                Type::Bool,
+                EffectRow::singleton(EffectInstance::new(
+                    EffectId::new(ModuleId::new(5), 0),
+                    Box::new([]),
+                )),
+            ),
+        );
+
+        assert!(matches!(
+            match_implementation_head_structurally(
+                std::iter::empty(),
+                &function,
+                &function,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            ),
+            Ok(Some(substitutions)) if substitutions.is_empty()
+        ));
+        assert_eq!(
+            implementation_heads_overlap_structurally(
+                std::iter::empty(),
+                &function,
+                std::iter::empty(),
+                &function,
+                &mut InterfaceConstraintBudget::default(),
+            ),
+            Ok(true),
+        );
+
+        let parameter = TypeVariableId::new(12);
+        let repeated = Type::Tuple(Box::new([
+            Type::Variable(parameter),
+            Type::Variable(parameter),
+        ]));
+        let repeated_goal = Type::Tuple(Box::new([function.clone(), function.clone()]));
+        assert!(matches!(
+            match_implementation_head_structurally(
+                std::iter::once(parameter),
+                &repeated,
+                &repeated_goal,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            ),
+            Ok(Some(substitutions)) if substitutions.len() == 1
+        ));
+
+        let row = TypeVariableId::new(13);
+        let open = Type::function_computation(
+            Type::Int,
+            ComputationType::new(
+                Type::Bool,
+                EffectRow::open(crate::types::EffectRowVariable::rigid(row), Box::new([])),
+            ),
+        );
+        assert_eq!(
+            same_type_with_constraint_budget_inner(
+                &open,
+                &open,
+                &mut InterfaceConstraintBudget::default(),
+                None,
+            ),
+            Ok(true),
+        );
+
+        let pure = Type::function(Type::Int, Type::Bool);
+        let noncanonical_empty = Type::EffectfulFunction(
+            Box::new(Type::Int),
+            Box::new(ComputationType::pure(Type::Bool)),
+        );
+        assert!(matches!(
+            match_implementation_head_structurally(
+                std::iter::empty(),
+                &pure,
+                &noncanonical_empty,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            ),
+            Ok(Some(substitutions)) if substitutions.is_empty()
+        ));
+    }
+
+    #[test]
+    fn constrained_schemes_retain_row_kind_binders_and_occurrence_lacks() {
+        let parameter = TypeVariableId::resolved(ModuleId::new(5), 8);
+        let member = crate::types::EffectInstance::new(
+            crate::types::EffectId::new(ModuleId::new(5), 0),
+            Box::new([Type::Int]),
+        );
+        let scheme = ConstrainedScheme::from_rank1_type(Type::Forall(
+            Box::new([(parameter, Kind::EffectRow)]),
+            Box::new(Type::function_computation(
+                Type::Unit,
+                crate::types::ComputationType::new(
+                    Type::Int,
+                    crate::types::EffectRow::with_tail(
+                        Box::new([member.clone()]),
+                        crate::types::EffectRowVariable::rigid(parameter),
+                        Box::new([member.clone()]),
+                    ),
+                ),
+            )),
+        ));
+        let cloned = scheme
+            .clone_with_budget(&mut TypeWorkBudget::default())
+            .expect("the row-bearing constrained scheme should clone");
+
+        assert!(matches!(
+            cloned.type_parameters.as_ref(),
+            [(identity, Kind::EffectRow)] if *identity == parameter
+        ));
+        let Type::EffectfulFunction(_, codomain) = cloned.value_type() else {
+            panic!("the scheme should retain its latent computation row");
+        };
+        let tail = codomain
+            .effects()
+            .tail()
+            .expect("the generalized row should remain open");
+        assert_eq!(
+            tail.variable(),
+            crate::types::EffectRowVariable::rigid(parameter)
+        );
+        assert_eq!(tail.lacks(), &[member]);
     }
 
     #[test]
