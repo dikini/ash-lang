@@ -14167,7 +14167,7 @@ impl ExportSummary {
     }
 }
 
-fn collect_nominal_identities(
+pub(crate) fn collect_nominal_identities(
     root: &Type,
     output: &mut HashSet<NominalTypeId>,
     budget: &mut TypeWorkBudget,

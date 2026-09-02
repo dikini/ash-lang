@@ -344,6 +344,7 @@ fn rebuild_with_initial_type_work<F: TransformFamily>(
                     | PureComputation::Primitive(_)
                     | PureComputation::Tuple(_)
                     | PureComputation::NewtypeConversion(_)
+                    | PureComputation::LocalNominalScope(_)
                     | PureComputation::TypeAbstraction(_)
                     | PureComputation::TypeApplication(_),
                 ),
@@ -584,6 +585,18 @@ fn rebuild_node<F: TransformFamily>(
                     child,
                     ty.into_inner(),
                     origin,
+                )
+                .map_err(TransformError::from)
+        }
+        PureExprKind::Computation(PureComputation::LocalNominalScope(node)) => {
+            let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
+            let body = remap(remapped, node.body())?;
+            builder
+                .local_nominal_scope(
+                    node.owner(),
+                    body,
+                    ty.into_inner(),
+                    expression.origin.clone(),
                 )
                 .map_err(TransformError::from)
         }

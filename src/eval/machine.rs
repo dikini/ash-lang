@@ -839,6 +839,9 @@ fn dispatch_entry(
         PureExprKind::Computation(PureComputation::NewtypeConversion(operation)) => {
             Transition::direct(Control::Evaluate(operation.child(), environment))
         }
+        PureExprKind::Computation(PureComputation::LocalNominalScope(scope)) => {
+            Transition::direct(Control::Evaluate(scope.body(), environment))
+        }
         PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
             enter_type_abstraction(operation, environment)
         }

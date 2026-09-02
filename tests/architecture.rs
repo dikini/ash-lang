@@ -6993,6 +6993,7 @@ enum ShadowPureComputation {
     Tuple(TupleNode),
     Match(MatchNode),
     NewtypeConversion(NewtypeConversionNode),
+    LocalNominalScope(ash::core::LocalNominalScopeNode),
     TypeAbstraction(TypeAbstractionNode),
     TypeApplication(TypeApplicationNode),
 }
@@ -7018,6 +7019,9 @@ fn assemble_shadow(expression: &TypedExpr) -> ShadowTypedExpr {
             PureComputation::Match(node) => ShadowPureComputation::Match(node.clone()),
             PureComputation::NewtypeConversion(node) => {
                 ShadowPureComputation::NewtypeConversion(*node)
+            }
+            PureComputation::LocalNominalScope(node) => {
+                ShadowPureComputation::LocalNominalScope(*node)
             }
             PureComputation::TypeAbstraction(node) => {
                 ShadowPureComputation::TypeAbstraction(node.clone())
@@ -7155,6 +7159,9 @@ fn validate_shadow_computation(
                     }
                 }
         }
+        ShadowPureComputation::LocalNominalScope(node) => {
+            node.owner().is_lexical() && facts.node_type(node.body()) == Some(ty)
+        }
         ShadowPureComputation::TypeAbstraction(node) => {
             matches!(ty, Type::Forall(parameters, body)
                 if parameters.as_ref() == node.parameters()
@@ -7191,6 +7198,7 @@ fn traverse_shadow(expression: &ShadowTypedExpr) -> Vec<NodeId> {
                 .chain(node.arms().iter().map(|arm| arm.body()))
                 .collect(),
             ShadowPureComputation::NewtypeConversion(node) => vec![node.child()],
+            ShadowPureComputation::LocalNominalScope(node) => vec![node.body()],
             ShadowPureComputation::TypeAbstraction(node) => vec![node.body()],
             ShadowPureComputation::TypeApplication(node) => vec![node.function()],
         },
@@ -7241,6 +7249,9 @@ fn transform_shadow(expression: &ShadowTypedExpr) -> ShadowTransformPlan {
             ShadowPureComputation::NewtypeConversion(node) => {
                 ShadowTransformPlan::Preserve(vec![node.child()])
             }
+            ShadowPureComputation::LocalNominalScope(node) => {
+                ShadowTransformPlan::Preserve(vec![node.body()])
+            }
             ShadowPureComputation::TypeAbstraction(node) => {
                 ShadowTransformPlan::Preserve(vec![node.body()])
             }
@@ -7270,6 +7281,7 @@ fn consume_shadow(expression: &ShadowTypedExpr) -> &'static str {
             ShadowPureComputation::Tuple(_) => "tuple",
             ShadowPureComputation::Match(_) => "match",
             ShadowPureComputation::NewtypeConversion(_) => "newtype conversion",
+            ShadowPureComputation::LocalNominalScope(_) => "local nominal scope",
             ShadowPureComputation::TypeAbstraction(_) => "type abstraction",
             ShadowPureComputation::TypeApplication(_) => "type application",
         },

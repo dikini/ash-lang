@@ -53,13 +53,13 @@ use crate::{
         ResolvedModuleProgram, ResolvedNominalDeclarationKind, ResolvedPattern,
         ResolvedPatternKind, ResolvedRecursiveGroup, ResolvedRegistry, ResolvedType,
         ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResumeId,
-        clone_resolved_type_variable_with_budget,
+        clone_resolved_type_variable_with_budget, collect_nominal_identities,
     },
     source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
     types::{
         ComputationType, EffectInstance, EffectRow, EffectRowError, EffectRowVariable,
-        InferenceVariableId, IterativeTypeOwner, Kind, Type, TypeVariableId, TypeWorkBudget,
-        charge_type_cells, clone_effect_row_with_budget, clone_kind_with_budget,
+        InferenceVariableId, IterativeTypeOwner, Kind, NominalTypeId, Type, TypeVariableId,
+        TypeWorkBudget, charge_type_cells, clone_effect_row_with_budget, clone_kind_with_budget,
         clone_kinded_type_parameters_with_budget, compare_effect_instances_with_budget,
         discard_type_iteratively, effect_row_from_owned_parts_with_budget,
         rebuild_effect_row_with_budget, replace_type_iteratively, same_effect_rows_with_budget,
@@ -116,6 +116,8 @@ pub enum TypeReason {
     PolymorphicRecursion,
     /// A module newtype representation reaches itself through newtype declarations.
     NewtypeRecursiveRepresentation,
+    /// A local nominal identity occurs in the outward computation.
+    LocalNominalEscape,
     /// An effect-row union has no unqualified principal result.
     AmbiguousEffectRow,
     /// A handler body does not request the exact handled instance.
@@ -338,6 +340,7 @@ impl fmt::Display for TypeReason {
             Self::NewtypeRecursiveRepresentation => {
                 formatter.write_str("newtype.recursive-representation")
             }
+            Self::LocalNominalEscape => formatter.write_str("type.local-nominal-escape"),
             Self::AmbiguousEffectRow => formatter.write_str("effect.row-union-ambiguous"),
             Self::MissingHandledEffect => formatter.write_str("effect.handler-missing-input"),
             Self::HandlerCoverage => formatter.write_str("effect.handler-coverage"),
@@ -8195,6 +8198,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut declarations = ElaboratedDeclarationBuffer(Vec::new());
         while let Some(task) = tasks.pop() {
             match task {
+                ElaborationTask::RetainLocalNewtype(owner) => {
+                    declarations.push(ElaboratedDeclaration::Newtype(owner));
+                }
                 ElaborationTask::Synthesize {
                     expression: current,
                     cause,
@@ -9529,12 +9535,54 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ElaborationTask::FinishBlock {
                     declarations: source_declarations,
                     declaration_start,
+                    result_span,
                 } => {
                     let mut body = values.pop().ok_or_else(invalid_state)?;
                     if declaration_start > declarations.len()
                         || declarations.len() - declaration_start != source_declarations.len()
                     {
                         return Err(invalid_state());
+                    }
+                    let outward_identities = if source_declarations.iter().any(|declaration| {
+                        matches!(declaration, ResolvedLocalDeclaration::Newtype(_))
+                    }) {
+                        let zonked_type = IterativeTypeOwner::new(self.zonk(&body.ty)?);
+                        let zonked_effects = self.zonk_effect_row(&body.effects)?;
+                        Some(computation_nominal_identities(
+                            &zonked_type,
+                            &zonked_effects,
+                            &mut self.type_work,
+                        )?)
+                    } else {
+                        None
+                    };
+                    if let Some(owner) = source_declarations.iter().find_map(|declaration| {
+                        let ResolvedLocalDeclaration::Newtype(owner) = declaration else {
+                            return None;
+                        };
+                        outward_identities
+                            .as_ref()
+                            .is_some_and(|identities| identities.contains(owner))
+                            .then_some(*owner)
+                    }) {
+                        let declaration_span = self
+                            .registry
+                            .nominal(owner)
+                            .ok_or_else(invalid_state)?
+                            .origin
+                            .primary_span();
+                        let mut diagnostic = Diagnostic::new(
+                            TypeReason::LocalNominalEscape,
+                            SourceLabel::new(
+                                result_span,
+                                "this outward type contains a local nominal identity",
+                            ),
+                        );
+                        diagnostic.related.push(SourceLabel::new(
+                            declaration_span,
+                            "this local nominal identity is scoped here",
+                        ));
+                        return Err(TypeError::Source(Box::new(diagnostic)));
                     }
                     let mut retained_declarations = declarations.split_off(declaration_start);
                     while !retained_declarations.is_empty() {
@@ -9598,6 +9646,47 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                         origin,
                                     )?,
                                     effects,
+                                    effect_span,
+                                )
+                            }
+                            ElaboratedDeclaration::Newtype(owner) => {
+                                let origin = self
+                                    .registry
+                                    .nominal(owner)
+                                    .ok_or_else(invalid_state)?
+                                    .origin
+                                    .clone();
+                                let effect_span = origin.primary_span();
+                                let zonked_type = IterativeTypeOwner::new(self.zonk(&body.ty)?);
+                                let zonked_effects = self.zonk_effect_row(&body.effects)?;
+                                if computation_nominal_identities(
+                                    &zonked_type,
+                                    &zonked_effects,
+                                    &mut self.type_work,
+                                )?
+                                .contains(&owner)
+                                {
+                                    let mut diagnostic = Diagnostic::new(
+                                        TypeReason::LocalNominalEscape,
+                                        SourceLabel::new(
+                                            result_span,
+                                            "this outward type contains a local nominal identity",
+                                        ),
+                                    );
+                                    diagnostic.related.push(SourceLabel::new(
+                                        effect_span,
+                                        "this local nominal identity is scoped here",
+                                    ));
+                                    return Err(TypeError::Source(Box::new(diagnostic)));
+                                }
+                                (
+                                    self.builder.local_nominal_scope(
+                                        owner,
+                                        body.node,
+                                        core_body_type,
+                                        origin,
+                                    )?,
+                                    EffectRow::empty(),
                                     effect_span,
                                 )
                             }
@@ -15364,6 +15453,7 @@ impl Default for CoreElaborator<PureOperationFamily> {
 }
 
 enum ElaborationTask<'a> {
+    RetainLocalNewtype(NominalTypeId),
     Synthesize {
         expression: &'a ResolvedExpr,
         cause: Option<SynthesisCause>,
@@ -15464,6 +15554,7 @@ enum ElaborationTask<'a> {
     FinishBlock {
         declarations: &'a [ResolvedLocalDeclaration],
         declaration_start: usize,
+        result_span: Span,
     },
 }
 
@@ -15730,6 +15821,7 @@ enum ElaboratedDeclaration {
         effects: EffectRow,
         origin: Origin,
     },
+    Newtype(NominalTypeId),
 }
 
 struct ElaborationTaskBuffer<'a>(Vec<ElaborationTask<'a>>);
@@ -16672,7 +16764,8 @@ fn discard_match_progress(progress: Box<MatchProgress<'_>>) {
 
 fn discard_elaboration_task(task: ElaborationTask<'_>) {
     match task {
-        ElaborationTask::Synthesize { .. }
+        ElaborationTask::RetainLocalNewtype(_)
+        | ElaborationTask::Synthesize { .. }
         | ElaborationTask::AfterApplicationFunction { .. }
         | ElaborationTask::AfterLeft { .. }
         | ElaborationTask::CheckRecursiveMember(_)
@@ -16773,6 +16866,7 @@ fn discard_elaborated_declaration(declaration: ElaboratedDeclaration) {
             }
             discard_origin_iteratively(origin);
         }
+        ElaboratedDeclaration::Newtype(_) => {}
     }
 }
 
@@ -16810,6 +16904,27 @@ fn operational_domain(
     }
 }
 
+fn computation_nominal_identities(
+    ty: &Type,
+    effects: &EffectRow,
+    budget: &mut TypeWorkBudget,
+) -> Result<HashSet<NominalTypeId>, TypeError> {
+    let mut identities = HashSet::new();
+    collect_nominal_identities(ty, &mut identities, budget)
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    for instance in effects
+        .known()
+        .iter()
+        .chain(effects.tail().into_iter().flat_map(|tail| tail.lacks()))
+    {
+        for argument in instance.arguments() {
+            collect_nominal_identities(argument, &mut identities, budget)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        }
+    }
+    Ok(identities)
+}
+
 fn schedule_block<'a>(
     block: &'a ResolvedBlock,
     expected: Option<(ProvenancedType, CheckKind)>,
@@ -16821,6 +16936,7 @@ fn schedule_block<'a>(
     tasks.push(ElaborationTask::FinishBlock {
         declarations: &block.declarations,
         declaration_start,
+        result_span: block.result.span,
     });
     if let Some((expected, kind)) = expected {
         tasks.push(ElaborationTask::Check {
@@ -16868,10 +16984,8 @@ fn schedule_block<'a>(
             ResolvedLocalDeclaration::Recursive(group) => {
                 tasks.push(ElaborationTask::BeginRecursiveGroup(group));
             }
-            ResolvedLocalDeclaration::Newtype(_) => {
-                unreachable!(
-                    "local newtype elaboration is not installed at the identity checkpoint"
-                )
+            ResolvedLocalDeclaration::Newtype(owner) => {
+                tasks.push(ElaborationTask::RetainLocalNewtype(*owner));
             }
         }
     }

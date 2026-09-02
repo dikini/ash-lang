@@ -222,6 +222,48 @@ fn module_newtype_conversion_authenticates_representation() {
     assert_authenticated_user_id_wrap(&folded, owner);
 }
 
+#[test]
+fn core_transforms_preserve_local_nominal_scope_authentication() {
+    let (program, graph) = validated_interface_core_with_graph(concat!(
+        "main : Unit -> Int\n",
+        "main () = {\n",
+        "    newtype Hidden = Hidden(Int)\n",
+        "    match Hidden(40 + 2) {\n",
+        "        Hidden(value) => value\n",
+        "    }\n",
+        "}\n",
+    ));
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let module_sources = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    for transformed in [
+        identity_traversal(&program).expect("identity transform should rebuild the scope"),
+        fold_literal_primitives(&program).expect("literal fold should rebuild the scope"),
+    ] {
+        let transformed = ash::core::validate_modules(transformed, &sources, &module_sources)
+            .expect("the transformed local scope should reauthenticate");
+        let scopes = reachable_nodes(&transformed)
+            .into_iter()
+            .filter(|id| {
+                matches!(
+                    transformed.node(*id).map(|node| &node.kind),
+                    Some(PureExprKind::Computation(
+                        PureComputation::LocalNominalScope(_)
+                    ))
+                )
+            })
+            .count();
+        assert_eq!(scopes, 1);
+    }
+}
+
 fn linked_product_entry() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/explicit-kinds/linked-product/entry.ash")
@@ -302,6 +344,7 @@ fn assert_higher_kinded_linked_core(
                 | PureComputation::Tuple(_)
                 | PureComputation::Match(_)
                 | PureComputation::NewtypeConversion(_)
+                | PureComputation::LocalNominalScope(_)
                 | PureComputation::TypeAbstraction(_),
             ) => {}
         }
