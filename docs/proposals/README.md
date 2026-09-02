@@ -23,4 +23,6 @@ No proposed change is currently awaiting a decision.
 
 ## Accepted changes
 
-No accepted change is awaiting implementation.
+- [CP-0014: Local `newtype`](CP-0014-local-newtype.md) authorizes sequential
+  lexical nominal identities, identity-free closure escape, and one erased
+  Core scope boundary while reusing module-`newtype` conversions.
