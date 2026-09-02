@@ -18156,6 +18156,145 @@ mod tests {
         assert_eq!(exact_budget.used(), exact);
     }
 
+    #[test]
+    fn lexical_partition_survives_checked_combination_but_not_module_summary() {
+        let source = SourceFile::new("combined-local-newtype.ash", "Token")
+            .expect("the lexical nominal source should fit");
+        let span = source
+            .span(ByteRange::new(0, 5).expect("the lexical nominal range should fit"))
+            .expect("the lexical nominal span should fit");
+        let module = ModuleId::new(7_016);
+        let owner = NominalTypeId::lexical(module, 0);
+        let constructor = ConstructorId::new(owner, 0);
+        let registry = Arc::new(
+            ResolvedRegistry::new(Vec::new(), Vec::new())
+                .with_lexical_nominals_with_budget(
+                    vec![ResolvedNominalType {
+                        id: owner,
+                        declaration_kind: ResolvedNominalDeclarationKind::Newtype,
+                        spelling: "Token".to_owned(),
+                        constructors: Box::new([constructor]),
+                        representation: Some(Type::Int),
+                        representation_provenance: Some(
+                            canonical_representation_provenance_for_test(),
+                        ),
+                        origin: Origin::Source(span),
+                    }],
+                    vec![ResolvedConstructor {
+                        id: constructor,
+                        owner,
+                        spelling: "Token".to_owned(),
+                        payload: None,
+                        origin: Origin::Source(span),
+                    }],
+                    vec![(owner, Vec::new())],
+                    &mut TypeWorkBudget::default(),
+                )
+                .expect("the lexical facts should publish"),
+        );
+        let resolved = ResolvedModule::new(ResolvedModuleParts {
+            module,
+            registry: Arc::clone(&registry),
+            imported: ImportedFacts::default(),
+            direct_dependencies: Vec::new(),
+            declaration_order: Vec::new(),
+            interfaces: Vec::new(),
+            effects: Vec::new(),
+            implementations: Vec::new(),
+            definitions: Vec::new(),
+            export_candidate: ResolvedExportCandidate::default(),
+            span,
+        });
+        let summary = ExportSummary::freeze(
+            &resolved,
+            &[],
+            &[],
+            &[],
+            &[],
+            &mut TypeWorkBudget::default(),
+            &mut crate::interface::InterfaceConstraintBudget::default(),
+        )
+        .expect("the empty public module boundary should freeze");
+        assert!(summary.nominal("Token").is_none());
+        assert!(summary.constructors.is_empty());
+        assert!(summary.hidden_nominals.is_empty());
+        assert!(summary.hidden_constructors.is_empty());
+
+        let checked = CheckedModule {
+            module,
+            registry,
+            direct_dependencies: Box::new([]),
+            declaration_order: Box::new([]),
+            interfaces: Box::new([]),
+            effects: Box::new([]),
+            imported_effects: Box::new([]),
+            implementations: Box::new([]),
+            definitions: Box::new([]),
+            available_implementations: Box::new([]),
+            schemes: Vec::new(),
+            checked_interfaces: Box::new([]),
+            checked_implementations: Box::new([]),
+            interface_facts: Box::new([]),
+            implementation_facts: Box::new([]),
+            exports: summary,
+            span,
+        };
+        let checked = [checked];
+        let mut measured_type = TypeWorkBudget::unbounded();
+        let mut measured_constraint = crate::interface::InterfaceConstraintBudget::default();
+        ResolvedRegistry::combine_checked(&checked, &mut measured_type, &mut measured_constraint)
+            .expect("measurement should retain the lexical partition");
+        let exact_type = measured_type.used();
+        let exact_constraint = measured_constraint.used();
+        assert!(exact_type > 0);
+        assert!(exact_constraint > 0);
+
+        let mut constraint_short =
+            crate::interface::InterfaceConstraintBudget::with_limit(exact_constraint - 1);
+        let mut untouched_type = TypeWorkBudget::with_limit(exact_type);
+        assert_eq!(
+            ResolvedRegistry::combine_checked(&checked, &mut untouched_type, &mut constraint_short,),
+            Err(ResolvedBuildFailure::ConstraintResource),
+        );
+        assert_eq!(constraint_short.used(), 0);
+        assert_eq!(untouched_type.used(), 0);
+        assert_eq!(checked[0].registry().lexical_nominals().len(), 1);
+
+        let mut exact_constraint_budget =
+            crate::interface::InterfaceConstraintBudget::with_limit(exact_constraint);
+        let mut type_short = TypeWorkBudget::with_limit(exact_type - 1);
+        assert_eq!(
+            ResolvedRegistry::combine_checked(
+                &checked,
+                &mut type_short,
+                &mut exact_constraint_budget,
+            ),
+            Err(ResolvedBuildFailure::TypeResource),
+        );
+        assert_eq!(exact_constraint_budget.used(), exact_constraint);
+        assert_eq!(type_short.used(), 0);
+        assert_eq!(checked[0].registry().lexical_constructors().len(), 1);
+
+        let mut exact_type_budget = TypeWorkBudget::with_limit(exact_type);
+        let mut retry_constraint =
+            crate::interface::InterfaceConstraintBudget::with_limit(exact_constraint);
+        let combined = ResolvedRegistry::combine_checked(
+            &checked,
+            &mut exact_type_budget,
+            &mut retry_constraint,
+        )
+        .expect("the exact retry should retain the lexical partition");
+        assert_eq!(exact_type_budget.used(), exact_type);
+        assert_eq!(retry_constraint.used(), exact_constraint);
+        assert_eq!(combined.lexical_nominals().len(), 1);
+        assert_eq!(combined.lexical_constructors().len(), 1);
+        assert_eq!(combined.nominal(owner).map(|fact| fact.id), Some(owner));
+        assert_eq!(
+            combined.constructor(constructor).map(|fact| fact.id),
+            Some(constructor),
+        );
+    }
+
     fn transparent_newtype_summary_for_test() -> ExportSummary {
         let source = SourceFile::new("newtype-summary.ash", "User")
             .expect("the newtype summary fixture source should fit");

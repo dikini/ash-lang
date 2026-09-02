@@ -5134,7 +5134,7 @@ impl Resolver {
     }
 
     fn nominal_reference(
-        &self,
+        &mut self,
         reference: &SurfaceReference,
     ) -> Result<ImportedNominalName, ResolveError> {
         if let Some(namespace) = self.imported_namespace(reference)? {
@@ -5160,12 +5160,13 @@ impl Resolver {
                 });
         }
         let name = reference.member();
-        if let Some(id) = self
-            .lexical_nominal_scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.get(&name.text).copied())
-        {
+        if let Some(id) = charged_lexical_scope_lookup(
+            &self.lexical_nominal_scopes,
+            &name.text,
+            name.span,
+            &mut self.type_work,
+            "lexical nominal lookup exceeded its type-work budget",
+        )? {
             return Ok(ImportedNominalName { id });
         }
         if self.interface_names.contains_key(&name.text) {
@@ -5621,7 +5622,7 @@ impl Resolver {
     }
 
     fn constructor_reference(
-        &self,
+        &mut self,
         reference: &SurfaceReference,
     ) -> Result<ConstructorId, ResolveError> {
         if let Some(namespace) = self.imported_namespace(reference)? {
@@ -5643,17 +5644,18 @@ impl Resolver {
                     )
                 });
         }
-        if let Some(constructor) = self
-            .lexical_constructor_scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.get(&reference.member().text).copied())
-            .or_else(|| {
-                self.constructor_names
-                    .get(&reference.member().text)
-                    .copied()
-            })
-        {
+        if let Some(constructor) = charged_lexical_scope_lookup(
+            &self.lexical_constructor_scopes,
+            &reference.member().text,
+            reference.member().span,
+            &mut self.type_work,
+            "lexical constructor lookup exceeded its type-work budget",
+        )?
+        .or_else(|| {
+            self.constructor_names
+                .get(&reference.member().text)
+                .copied()
+        }) {
             return Ok(constructor);
         }
         if let Some(kind) = self
@@ -8126,9 +8128,27 @@ impl Resolver {
             }),
             SurfaceExprKind::Name(name) => {
                 let member = name.member();
-                let qualified = self.imported_namespace(name)?;
-                let binding = if let Some(namespace) = qualified {
-                    namespace.terms.get(&member.text).copied()
+                let is_qualified = matches!(name, SurfaceReference::Qualified(_));
+                let (qualified_binding, qualified_constructor, qualified_withheld) =
+                    if let Some(namespace) = self.imported_namespace(name)? {
+                        (
+                            namespace.terms.get(&member.text).copied(),
+                            namespace.constructors.get(&member.text).copied(),
+                            namespace
+                                .withheld
+                                .get(&(member.text.clone(), WithheldNamespace::Term))
+                                .or_else(|| {
+                                    namespace
+                                        .withheld
+                                        .get(&(member.text.clone(), WithheldNamespace::Constructor))
+                                })
+                                .copied(),
+                        )
+                    } else {
+                        (None, None, None)
+                    };
+                let binding = if is_qualified {
+                    qualified_binding
                 } else {
                     self.scopes
                         .iter()
@@ -8136,6 +8156,18 @@ impl Resolver {
                         .find_map(|scope| scope.get(&member.text))
                         .copied()
                         .or_else(|| self.method_names.get(&member.text).copied())
+                };
+                let unqualified_constructor = if binding.is_none() && !is_qualified {
+                    charged_lexical_scope_lookup(
+                        &self.lexical_constructor_scopes,
+                        &member.text,
+                        member.span,
+                        &mut self.type_work,
+                        "inline lexical constructor lookup exceeded its type-work budget",
+                    )?
+                    .or_else(|| self.constructor_names.get(&member.text).copied())
+                } else {
+                    None
                 };
                 if let Some(binding) = binding {
                     let term = binding.term;
@@ -8173,20 +8205,7 @@ impl Resolver {
                         }),
                         span: expression.span,
                     });
-                } else if let Some(constructor) = qualified
-                    .and_then(|namespace| namespace.constructors.get(&member.text).copied())
-                    .or_else(|| {
-                        qualified
-                            .is_none()
-                            .then(|| {
-                                self.lexical_constructor_scopes
-                                    .iter()
-                                    .rev()
-                                    .find_map(|scope| scope.get(&member.text).copied())
-                                    .or_else(|| self.constructor_names.get(&member.text).copied())
-                            })
-                            .flatten()
-                    })
+                } else if let Some(constructor) = qualified_constructor.or(unqualified_constructor)
                 {
                     expressions.push(ResolvedExpr {
                         kind: ResolvedExprKind::Constructor(ResolvedConstructorOccurrence {
@@ -8196,19 +8215,11 @@ impl Resolver {
                         }),
                         span: expression.span,
                     });
-                } else if let Some(namespace) = qualified {
+                } else if is_qualified {
                     return Err(withheld_export_error(
                         member.span,
                         &member.text,
-                        namespace
-                            .withheld
-                            .get(&(member.text.clone(), WithheldNamespace::Term))
-                            .or_else(|| {
-                                namespace
-                                    .withheld
-                                    .get(&(member.text.clone(), WithheldNamespace::Constructor))
-                            })
-                            .copied(),
+                        qualified_withheld,
                     ));
                 } else {
                     if let Some(kind) = self
@@ -8794,6 +8805,24 @@ fn type_kind_error(span: crate::source::Span, spelling: &str) -> ResolveError {
     diagnostic.expected = Some("type".to_owned());
     diagnostic.found = Some(spelling.to_owned());
     diagnostic.into()
+}
+
+fn charged_lexical_scope_lookup<Identity: Copy>(
+    scopes: &[HashMap<String, Identity>],
+    spelling: &str,
+    span: crate::source::Span,
+    budget: &mut TypeWorkBudget,
+    message: &'static str,
+) -> Result<Option<Identity>, ResolveError> {
+    for scope in scopes.iter().rev() {
+        budget
+            .charge(1)
+            .map_err(|()| error(ResolveReason::TypeResourceExhausted, span, message))?;
+        if let Some(identity) = scope.get(spelling).copied() {
+            return Ok(Some(identity));
+        }
+    }
+    Ok(None)
 }
 
 fn try_clone_resolution_string(
@@ -12003,6 +12032,97 @@ mod tests {
                 .map(|constructor| constructor.owner()),
             Some(owner),
         );
+    }
+
+    #[test]
+    fn deep_lexical_nominal_and_constructor_probes_are_exact_atomic_and_retryable() {
+        const DEPTH: usize = 32_768;
+        let source = SourceFile::new("deep-lexical-lookup-budget.ash", "Deep")
+            .expect("the lexical lookup fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the range should be ordered"))
+            .expect("the range should belong to the fixture");
+        let reference = SurfaceReference::Unqualified(SurfaceName {
+            text: "Deep".to_owned(),
+            span,
+        });
+        let owner = NominalTypeId::lexical(ModuleId::new(7_014), 0);
+        let constructor = ConstructorId::new(owner, 0);
+        let mut resolver =
+            Resolver::with_type_work(ModuleId::new(7_014), TypeWorkBudget::with_limit(DEPTH - 1));
+        let mut outer_nominals = HashMap::new();
+        outer_nominals.insert("Deep".to_owned(), owner);
+        resolver.lexical_nominal_scopes.push(outer_nominals);
+        resolver
+            .lexical_nominal_scopes
+            .extend((1..DEPTH).map(|_| HashMap::new()));
+        let mut outer_constructors = HashMap::new();
+        outer_constructors.insert("Deep".to_owned(), constructor);
+        resolver.lexical_constructor_scopes.push(outer_constructors);
+        resolver
+            .lexical_constructor_scopes
+            .extend((1..DEPTH).map(|_| HashMap::new()));
+
+        let error = resolver
+            .nominal_reference(&reference)
+            .expect_err("one missing probe unit must reject the outer nominal lookup");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(resolver.type_work.used(), DEPTH - 1);
+        assert_eq!(resolver.lexical_nominal_scopes.len(), DEPTH);
+        assert_eq!(resolver.lexical_nominal_scopes[0].get("Deep"), Some(&owner));
+
+        resolver.type_work = TypeWorkBudget::with_limit(DEPTH);
+        assert_eq!(
+            resolver
+                .nominal_reference(&reference)
+                .expect("the exact retry should reach the outer nominal")
+                .id,
+            owner,
+        );
+        assert_eq!(resolver.type_work.used(), DEPTH);
+
+        resolver.type_work = TypeWorkBudget::with_limit(DEPTH - 1);
+        let error = resolver
+            .constructor_reference(&reference)
+            .expect_err("one missing probe unit must reject the outer constructor lookup");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(resolver.type_work.used(), DEPTH - 1);
+        assert_eq!(resolver.lexical_constructor_scopes.len(), DEPTH);
+        assert_eq!(
+            resolver.lexical_constructor_scopes[0].get("Deep"),
+            Some(&constructor),
+        );
+
+        resolver.type_work = TypeWorkBudget::with_limit(DEPTH);
+        assert_eq!(
+            resolver
+                .constructor_reference(&reference)
+                .expect("the exact retry should reach the outer constructor"),
+            constructor,
+        );
+        assert_eq!(resolver.type_work.used(), DEPTH);
+
+        let expression = SurfaceExpr {
+            kind: SurfaceExprKind::Name(reference),
+            span,
+        };
+        resolver.type_work = TypeWorkBudget::with_limit(DEPTH - 1);
+        let error = resolver
+            .resolve_expr(&expression)
+            .expect_err("one missing probe unit must reject inline constructor lookup");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(resolver.type_work.used(), DEPTH - 1);
+        assert_eq!(resolver.lexical_constructor_scopes.len(), DEPTH);
+
+        resolver.type_work = TypeWorkBudget::with_limit(DEPTH);
+        let resolved = resolver
+            .resolve_expr(&expression)
+            .expect("the exact inline retry should reach the outer constructor");
+        let ResolvedExprKind::Constructor(occurrence) = resolved.kind else {
+            panic!("the inline lookup should resolve the constructor")
+        };
+        assert_eq!(occurrence.constructor, constructor);
+        assert_eq!(resolver.type_work.used(), DEPTH);
     }
 
     #[test]
