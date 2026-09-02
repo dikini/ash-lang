@@ -9625,6 +9625,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                     }
                                 }
                             }
+                            ResolvedLocalDeclaration::Newtype(_) => {}
                         }
                     }
                     values.push(body.into_inner());
@@ -16867,6 +16868,11 @@ fn schedule_block<'a>(
             ResolvedLocalDeclaration::Recursive(group) => {
                 tasks.push(ElaborationTask::BeginRecursiveGroup(group));
             }
+            ResolvedLocalDeclaration::Newtype(_) => {
+                unreachable!(
+                    "local newtype elaboration is not installed at the identity checkpoint"
+                )
+            }
         }
     }
     Ok(())
@@ -17654,6 +17660,7 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
                         ResolvedLocalDeclaration::Recursive(group) => {
                             work.extend(group.members.iter().map(|member| &member.initializer));
                         }
+                        ResolvedLocalDeclaration::Newtype(_) => {}
                     }
                 }
             }
@@ -17667,6 +17674,7 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
                         ResolvedLocalDeclaration::Recursive(group) => {
                             work.extend(group.members.iter().map(|member| &member.initializer));
                         }
+                        ResolvedLocalDeclaration::Newtype(_) => {}
                     }
                 }
             }
@@ -18959,6 +18967,7 @@ fn resume_usage_with_budget(
                             ResolvedLocalDeclaration::Recursive(group) => {
                                 push(&mut tasks, Task::CheckRecursive(group), budget)?;
                             }
+                            ResolvedLocalDeclaration::Newtype(_) => {}
                         }
                     }
                 }
@@ -19111,6 +19120,7 @@ fn block_contains_resume_owner_with_budget(
                     }
                 }
             }
+            ResolvedLocalDeclaration::Newtype(_) => {}
         }
     }
     Ok(false)
@@ -19173,6 +19183,7 @@ fn contains_resume_owner_with_budget(
                                 schedule(&mut pending, &member.initializer, budget)?;
                             }
                         }
+                        ResolvedLocalDeclaration::Newtype(_) => {}
                     }
                 }
             }
@@ -19188,6 +19199,7 @@ fn contains_resume_owner_with_budget(
                                 schedule(&mut pending, &member.initializer, budget)?;
                             }
                         }
+                        ResolvedLocalDeclaration::Newtype(_) => {}
                     }
                 }
             }
@@ -19250,6 +19262,7 @@ pub(crate) fn checked_program_contains_effect_syntax(
                 }
                 Ok(())
             }
+            ResolvedLocalDeclaration::Newtype(_) => Ok(()),
         }
     }
 
@@ -19574,6 +19587,7 @@ fn collect_resolved_declaration<'a>(
                 expressions.push(&member.initializer);
             }
         }
+        ResolvedLocalDeclaration::Newtype(_) => {}
     }
 }
 

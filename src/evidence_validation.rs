@@ -3863,6 +3863,7 @@ fn collect_method_evidence_occurrences(
                                     )?;
                                 }
                             }
+                            ResolvedLocalDeclaration::Newtype(_) => {}
                         }
                     }
                     collect_method_evidence_expression_occurrences(
@@ -4059,6 +4060,7 @@ fn collect_method_evidence_expression_occurrences(
                                 group.members.iter().rev().map(|member| &member.initializer),
                             );
                         }
+                        ResolvedLocalDeclaration::Newtype(_) => {}
                     }
                 }
             }
@@ -4086,6 +4088,7 @@ fn collect_method_evidence_expression_occurrences(
                                 group.members.iter().rev().map(|member| &member.initializer),
                             );
                         }
+                        ResolvedLocalDeclaration::Newtype(_) => {}
                     }
                 }
             }
@@ -6335,6 +6338,7 @@ fn schedule_block<'a>(
                         .ok_or_else(|| resource(block.span))?;
                 }
             }
+            ResolvedLocalDeclaration::Newtype(_) => {}
         }
     }
     reserve_expressions(pending, additional, budget, block.span)?;
@@ -6345,6 +6349,7 @@ fn schedule_block<'a>(
             ResolvedLocalDeclaration::Recursive(group) => {
                 pending.extend(group.members.iter().rev().map(|member| &member.initializer));
             }
+            ResolvedLocalDeclaration::Newtype(_) => {}
         }
     }
     Ok(())

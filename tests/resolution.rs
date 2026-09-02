@@ -14,7 +14,7 @@ use ash::{
         ResolvedDefinitionKind, ResolvedExprKind, ResolvedLocalDeclaration, ResolvedModule,
         ResolvedPattern, ResolvedPatternKind, ResolvedTermName,
     },
-    types::{Kind, Type},
+    types::{Kind, NominalTypeId, Type},
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -65,6 +65,28 @@ fn occurrence_binder(occurrence: &ash::resolved::ResolvedOccurrence) -> BinderId
     occurrence
         .global_binder()
         .expect("the fixture occurrence should resolve to an ordinary binder")
+}
+
+#[test]
+fn lexical_nominal_owner_class_is_distinct_and_preserves_module_coordinates() {
+    let program = resolve_valid("main : Unit -> Unit\nmain () = ()\n");
+    let module_owned = NominalTypeId::new(program.module(), 0);
+    let lexical = NominalTypeId::lexical(program.module(), 0);
+
+    assert_ne!(module_owned, lexical);
+    assert_ne!(module_owned.cmp(&lexical), std::cmp::Ordering::Equal);
+    assert!(!module_owned.is_lexical());
+    assert!(lexical.is_lexical());
+    assert_eq!(module_owned.module(), lexical.module());
+    assert_eq!(module_owned.declaration(), lexical.declaration());
+    assert_eq!(
+        Type::Nominal(module_owned).to_string(),
+        format!("<type:{}:0>", program.module())
+    );
+    assert_eq!(
+        Type::Nominal(lexical).to_string(),
+        format!("<local-type:{}:0>", program.module())
+    );
 }
 
 #[test]

@@ -270,6 +270,7 @@ fn schedule_local_expressions<'a>(
         ResolvedLocalDeclaration::Recursive(group) => {
             expressions.extend(group.members.iter().map(|member| &member.initializer));
         }
+        ResolvedLocalDeclaration::Newtype(_) => {}
     }
 }
 

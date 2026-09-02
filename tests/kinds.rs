@@ -104,6 +104,65 @@ fn arrow(domain: Kind, codomain: Kind) -> Kind {
 }
 
 #[test]
+fn local_newtype_parameters_reuse_nominal_kind_admission() {
+    let resolved = resolve_valid(concat!(
+        "type Option<A> =\n",
+        "    None\n",
+        "    | Some(A)\n\n",
+        "main : Unit -> Unit\n",
+        "main () = {\n",
+        "    newtype Local<F : Type -> Type, A : Type> = Local(F<A>)\n",
+        "    newtype Earlier = Earlier(Option<Int>)\n",
+        "    newtype Later = Later(Earlier)\n",
+        "    ()\n",
+        "}\n",
+    ));
+
+    let [local, earlier, later] = resolved.registry().lexical_nominals() else {
+        panic!("expected three lexical nominals")
+    };
+    let parameters = resolved
+        .registry()
+        .nominal_parameters(local.id)
+        .expect("local parameters should be canonical");
+    assert_eq!(parameters.len(), 2);
+    assert_eq!(parameters[0].kind, arrow(Kind::Type, Kind::Type));
+    assert_eq!(parameters[1].kind, Kind::Type);
+    assert_eq!(
+        later.representation,
+        Some(ash::types::Type::Nominal(earlier.id))
+    );
+}
+
+#[test]
+fn local_newtype_representation_must_have_type_kind() {
+    let fixture = KindFixture::new(concat!(
+        "main : Unit -> Unit\n",
+        "main () = {\n",
+        "    newtype Bad<F : Type -> Type> = Bad(F)\n",
+        "    ()\n",
+        "}\n",
+    ));
+    let error = kind_error(&fixture);
+    assert_eq!(error.reason, KindReason::ExpectedType);
+}
+
+#[test]
+fn local_newtype_representation_precedes_later_top_level_kind_failure() {
+    let fixture = KindFixture::new(concat!(
+        "main : Unit -> Unit\n",
+        "main () = {\n",
+        "    newtype Bad<F : Type -> Type> = Bad(F)\n",
+        "    ()\n",
+        "}\n\n",
+        "later<F : Type -> Type> : F -> Unit\n",
+        "later value = ()\n",
+    ));
+    let error = kind_error(&fixture);
+    assert_eq!(error.reason, KindReason::ExpectedType);
+}
+
+#[test]
 fn effect_row_is_an_atomic_fixed_kind_not_a_value_kind_alias() {
     let row = Kind::EffectRow;
 
