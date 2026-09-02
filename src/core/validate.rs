@@ -6875,6 +6875,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         requirements: &mut ScopeRequirements,
     ) -> Result<(), ValidationError> {
         self.charge_type_work(1)?;
+        if row.tail().is_some() {
+            self.charge_type_work(1)?;
+        }
         for instance in row
             .known()
             .iter()
@@ -9585,7 +9588,8 @@ mod tests {
             let [left, right] = owners else {
                 panic!("the exact fixture should retain two local identities")
             };
-            let row = EffectRow::closed(
+            let row = EffectRow::open(
+                crate::types::EffectRowVariable::rigid(crate::types::TypeVariableId::generated(99)),
                 (0..ROW_WIDTH)
                     .map(|index| {
                         EffectInstance::new(
@@ -9649,9 +9653,9 @@ mod tests {
             Validator::new_modules(&measured.program, &sources, &measured.module_sources)
                 .expect("the row fixture module/source relation should initialize");
         exercise_wide_local_row(&row_validator).expect("the measured local row should fit");
-        // One row header + W instance headers + W nominal argument cells and
+        // One row and one tail header + W instance headers + W nominal argument cells and
         // W identity-index insertions, then two first and propagated entries.
-        const EXACT_ROW_WORK: usize = 1 + ROW_WIDTH + 2 * ROW_WIDTH + 2 + 2;
+        const EXACT_ROW_WORK: usize = 2 + ROW_WIDTH + 2 * ROW_WIDTH + 2 + 2;
         assert_eq!(row_validator.type_work.get(), EXACT_ROW_WORK);
 
         let short = Validator::new_modules(&measured.program, &sources, &measured.module_sources)

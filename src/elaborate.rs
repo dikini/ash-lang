@@ -16915,6 +16915,11 @@ fn computation_nominal_identities(
     budget
         .charge(1)
         .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    if effects.tail().is_some() {
+        budget
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    }
     for instance in effects
         .known()
         .iter()
