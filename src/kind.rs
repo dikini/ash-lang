@@ -439,6 +439,43 @@ impl<'a> KindEnvironments<'a> {
         Ok(())
     }
 
+    fn extend_owner_parameters(
+        &mut self,
+        parameters: &'a [crate::resolved::ResolvedTypeVariable],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), KindFailure> {
+        let mut installed = 0;
+        for parameter in parameters {
+            if !binder_kind_is_admitted(&parameter.kind, false) {
+                self.remove_owner_parameter_extension(&parameters[..installed]);
+                return Err(KindFailure::internal(
+                    parameter.origin.primary_span(),
+                    "this owner cannot bind an EffectRow parameter",
+                ));
+            }
+            if let Err(failure) = self.insert_declared(
+                parameter.id,
+                &parameter.kind,
+                parameter.origin.primary_span(),
+                budget,
+            ) {
+                self.remove_owner_parameter_extension(&parameters[..installed]);
+                return Err(failure);
+            }
+            installed += 1;
+        }
+        Ok(())
+    }
+
+    fn remove_owner_parameter_extension(
+        &mut self,
+        parameters: &[crate::resolved::ResolvedTypeVariable],
+    ) {
+        for parameter in parameters {
+            self.delta.remove(&parameter.id);
+        }
+    }
+
     fn install_scheme_parameters(
         &mut self,
         parameters: &'a [crate::resolved::ResolvedTypeVariable],
@@ -3307,7 +3344,6 @@ fn check_lexical_newtype<'a>(
         budget,
     )?;
     authenticate_owner_parameters(registry, parameters, budget)?;
-    environments.install_owner_parameters(parameters, budget)?;
     if nominal.declaration_kind != ResolvedNominalDeclarationKind::Newtype
         || !nominal.id.is_lexical()
     {
@@ -3346,15 +3382,17 @@ fn check_lexical_newtype<'a>(
             "a lexical newtype does not retain representation provenance",
         )
     })?;
-    environments.expect_value_type_parts(
+    environments.extend_owner_parameters(parameters, budget)?;
+    let result = environments.expect_value_type_parts(
         representation,
         provenance,
         provenance
             .span()
             .unwrap_or_else(|| constructor.origin.primary_span()),
         budget,
-    )?;
-    Ok(())
+    );
+    environments.remove_owner_parameter_extension(parameters);
+    result
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]

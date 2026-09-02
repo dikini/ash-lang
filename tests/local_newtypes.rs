@@ -215,6 +215,36 @@ fn sibling_local_newtypes_with_equal_shapes_have_distinct_identities() {
 }
 
 #[test]
+fn local_nominal_shadows_same_spelled_module_interface() {
+    let resolved = Fixture::new(concat!(
+        "interface Token<A> {\n",
+        "    token : A -> A\n",
+        "}\n\n",
+        "main : Unit -> Unit\n",
+        "main () = {\n",
+        "    newtype Token = Token(Int)\n",
+        "    let local : Token = Token(1)\n",
+        "    ()\n",
+        "}\n",
+    ))
+    .resolve();
+
+    let [local] = resolved.registry().lexical_nominals() else {
+        panic!("expected one lexical nominal")
+    };
+    let ResolvedDefinitionKind::Equational(main) = &resolved.definitions()[0].kind else {
+        panic!("expected equational main")
+    };
+    let ResolvedExprKind::Block(block) = &main.equations[0].body.kind else {
+        panic!("expected main block")
+    };
+    let ResolvedLocalDeclaration::Binding(binding) = &block.declarations[1] else {
+        panic!("expected binding after local newtype")
+    };
+    assert_eq!(annotated_nominal(binding), local.id);
+}
+
+#[test]
 fn local_newtype_visibility_is_strictly_sequential() {
     assert_eq!(
         resolution_error(concat!(

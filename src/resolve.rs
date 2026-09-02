@@ -5160,30 +5160,32 @@ impl Resolver {
                 });
         }
         let name = reference.member();
-        if self.interface_names.contains_key(&name.text) {
-            return Err(type_kind_error(name.span, &name.text));
-        }
-        let id = self
+        if let Some(id) = self
             .lexical_nominal_scopes
             .iter()
             .rev()
             .find_map(|scope| scope.get(&name.text).copied())
-            .or_else(|| self.type_names.get(&name.text).copied())
-            .ok_or_else(|| {
-                if let Some(withheld) = self
-                    .targeted_withheld
-                    .get(&(name.text.clone(), WithheldNamespace::Nominal))
-                    .copied()
-                {
-                    return withheld_export_error(name.span, &name.text, Some(withheld));
-                }
-                let mut diagnostic = Diagnostic::new(
-                    ResolveReason::UnknownType,
-                    SourceLabel::new(name.span, "this nominal type is not declared"),
-                );
-                diagnostic.found = Some(name.text.clone());
-                ResolveError::from(diagnostic)
-            })?;
+        {
+            return Ok(ImportedNominalName { id });
+        }
+        if self.interface_names.contains_key(&name.text) {
+            return Err(type_kind_error(name.span, &name.text));
+        }
+        let id = self.type_names.get(&name.text).copied().ok_or_else(|| {
+            if let Some(withheld) = self
+                .targeted_withheld
+                .get(&(name.text.clone(), WithheldNamespace::Nominal))
+                .copied()
+            {
+                return withheld_export_error(name.span, &name.text, Some(withheld));
+            }
+            let mut diagnostic = Diagnostic::new(
+                ResolveReason::UnknownType,
+                SourceLabel::new(name.span, "this nominal type is not declared"),
+            );
+            diagnostic.found = Some(name.text.clone());
+            ResolveError::from(diagnostic)
+        })?;
         Ok(ImportedNominalName { id })
     }
 

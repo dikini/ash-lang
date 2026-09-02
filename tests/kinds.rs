@@ -135,6 +135,18 @@ fn local_newtype_parameters_reuse_nominal_kind_admission() {
 }
 
 #[test]
+fn local_newtype_kind_check_preserves_enclosing_global_parameters() {
+    resolve_valid(concat!(
+        "keep<A> : A -> A\n",
+        "keep value = {\n",
+        "    newtype Boxed = Boxed(A)\n",
+        "    let retained : A = value\n",
+        "    retained\n",
+        "}\n",
+    ));
+}
+
+#[test]
 fn local_newtype_representation_must_have_type_kind() {
     let fixture = KindFixture::new(concat!(
         "main : Unit -> Unit\n",
