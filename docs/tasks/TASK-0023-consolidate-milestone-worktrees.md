@@ -77,6 +77,43 @@ any tag. Do not push.
 - Task 1 performed no cleanup. It changed no worktree registration, feature
   ref, planning ref, tag, remote ref, source file, specification file, or
   product test.
+- Task 2 removed the CP-0010, CP-0012, and CP-0013 worktrees cleanly with
+  `git worktree remove` and no `--force`. Their feature refs were deleted with
+  `git branch -d` after the required ancestry checks. The exact former tips
+  remain reachable and readable through `main` or the integration branch:
+
+  ```text
+  feature/cp0010-method-local-type-parameters dbe4299c9a0dbee72a94e3f7ba5a85663b2653fd
+  feature/cp0012-module-newtype                e581296d27966d1f49d74ce7b7f140b2885100ba
+  feature/cp0013-effect-kernel                 378a39cf17ef16c8917051c07f6be5c54e0f1baa
+  ```
+
+- Task 2 reduced `.worktree/` disk use from 52 GB to 33 GB.
+- Task 3 removed both planning worktrees cleanly with `git worktree remove`
+  and no `--force`. It moved the exact planning tips to these archive refs:
+
+  ```text
+  archive/planning/effect-ash-program     cddb712f24ac7c57da48015227105b57da5b20a2
+  archive/planning/effect-kernel-proposal e5f7340dd5e6f88ec883bfb41daf5386ffb27100
+  ```
+
+- The old `planning/effect-ash-program` and
+  `planning/effect-kernel-proposal` refs are absent. Task 3 reduced
+  `.worktree/` disk use from 33 GB to 25 GB.
+- Before Task 4, the protected active refs resolve exactly as follows:
+
+  ```text
+  main                               7195500b7a165f8191efa1485e1ca6f4114180fb
+  feature/cp0014-local-newtype       b5f6c128200aa53e935613b9e2215f5266cf99ee
+  integration/effect-ash-foundations d56bb80947f0b065fcb3cac00e8e0ec3a01dca6d
+  ```
+
+- The tag and remote-ref snapshots still match the exact Task 1 baselines.
+  Five worktrees remain registered and clean: the main checkout, the two
+  excluded detached documentation worktrees, CP-0014, and integration. Only
+  CP-0014 and integration remain under `.worktree/`.
+- Tasks 2 and 3 followed the plan without deviations. They changed no remote
+  ref, tag, source file, specification file, or product test.
 
 ## Verification
 
