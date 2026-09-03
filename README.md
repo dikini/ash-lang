@@ -35,6 +35,21 @@ Project artifacts answer different questions:
 - [tool documentation](docs/tools/README.md) describes the retained Ash
   executables.
 
+## What makes Ash different
+
+Ash is not only a language for expressing programs. It aims to be a language for
+expressing truth about programs: values, behavior, invariants, and the laws that
+must hold. In the long-term direction, Ash wants programs to state not only
+what a computation does, but also what properties are required, which facts are
+assumed, which obligations are proven, and which remain subjects for testing.
+The language is designed to combine executable code with sound reasoning so that
+real systems can be built with principled guarantees rather than only informal
+confidence.
+
+In other words, Ash aims to support the full arc from implementation to
+specification to evidence: ordinary computation, static guarantees, property
+checks, and proof-backed facts in one consistent language story.
+
 Human contributors should start with [CONTRIBUTING.md](CONTRIBUTING.md). Agents
 should start with [AGENTS.md](AGENTS.md) and reconstruct only the context needed
 for their task.
