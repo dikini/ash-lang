@@ -49,7 +49,8 @@ The history already contains the required continuity:
 - the relational-interface checkpoint is reachable from `main`;
 - the module-`newtype` and resume-required effect-kernel checkpoints are both
   merged into `integration/effect-ash-foundations`;
-- the active local-`newtype` checkpoint starts from that integration tip; and
+- the active local-`newtype` checkpoint starts from the integrated product
+  baseline `fa26025`; and
 - the two earlier planning tips have patch-equivalent successors in the
   product branches but are not themselves ancestors of those successors.
 

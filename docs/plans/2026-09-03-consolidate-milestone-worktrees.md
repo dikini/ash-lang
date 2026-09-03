@@ -45,6 +45,23 @@ The integration tip will include the decision, task, and plan commits; record
 its value from the command output rather than treating the product baseline
 `fa26025` as its administrative tip.
 
+Record the exact tag and remote-ref baselines:
+
+```bash
+git for-each-ref --format='%(refname) %(objectname)' refs/tags
+git for-each-ref --format='%(refname) %(objectname)' refs/remotes
+```
+
+Expected:
+
+```text
+refs/tags/lib-ash 3173abcf54ec512dcf1b1bf10713faf312917f5e
+refs/tags/mini-ash 819a9b249a19b2399f23ea1ea3a7251e1ed1701a
+refs/tags/modular-ash d6cce6e7c4a7751b1b7306aca4977ddb1fccfb16
+refs/remotes/origin/HEAD 7195500b7a165f8191efa1485e1ca6f4114180fb
+refs/remotes/origin/main 7195500b7a165f8191efa1485e1ca6f4114180fb
+```
+
 ### Step 2: Recheck every scoped worktree
 
 Run:
@@ -190,33 +207,53 @@ Expected: both identity checks exit zero; only the two archive names print.
 
 ### Step 1: Record the verified result
 
-Before removal, update TASK-0023 progress with the protected object IDs,
-removed paths and refs, archive names, disk-use result, and verification
-outcomes. Record deviations instead of silently changing the design.
+Update TASK-0023 progress with the protected object IDs, removed paths and
+refs, archive names, disk-use result, and verification outcomes. Record the
+exact final tag and remote-ref snapshots and any deviations instead of silently
+changing the design.
 
-### Step 2: Remove temporary transition artifacts
+### Step 2: Verify and commit the completed audit
+
+Run:
+
+```bash
+markdownlint --disable MD013 -- \
+  docs/decisions/AD-0011-milestone-worktree-lifecycle.md \
+  docs/tasks/TASK-0023-consolidate-milestone-worktrees.md \
+  docs/plans/2026-09-03-consolidate-milestone-worktrees.md
+git diff --check
+git diff -- docs/tasks/TASK-0023-consolidate-milestone-worktrees.md
+git add docs/tasks/TASK-0023-consolidate-milestone-worktrees.md
+git commit --no-gpg-sign -m "docs: record worktree consolidation audit"
+```
+
+Expected: the completed audit is committed while TASK-0023 and its plan remain
+in the integration history and working tree.
+
+### Step 3: Remove temporary transition artifacts
 
 Remove TASK-0023 and this plan, and remove TASK-0023 from the active-task index.
 Retain AD-0011 and its decision-index entry.
 
-### Step 3: Verify the retained integration diff
+### Step 4: Verify the pending transition cleanup
 
 Run:
 
 ```bash
 markdownlint --disable MD013 -- docs/decisions docs/tasks/README.md
 git diff --check
-git diff --name-only fa26025..HEAD
+git diff --name-only fa26025
 ```
 
-Expected: checks pass, and the final command lists only:
+Expected: checks pass, and the name-only diff of the pending final tree lists
+only:
 
 ```text
 docs/decisions/AD-0011-milestone-worktree-lifecycle.md
 docs/decisions/README.md
 ```
 
-### Step 4: Commit transition cleanup
+### Step 5: Commit transition cleanup
 
 Run:
 
@@ -229,6 +266,26 @@ git commit --no-gpg-sign -m "docs: close worktree consolidation"
 
 Expected: the task and plan leave the integration tree while their history
 remains reachable.
+
+### Step 6: Verify the committed result and immutable refs
+
+Run:
+
+```bash
+git status --short
+git diff --name-only fa26025..HEAD
+test "$(git for-each-ref --format='%(refname) %(objectname)' refs/tags)" = \
+"refs/tags/lib-ash 3173abcf54ec512dcf1b1bf10713faf312917f5e
+refs/tags/mini-ash 819a9b249a19b2399f23ea1ea3a7251e1ed1701a
+refs/tags/modular-ash d6cce6e7c4a7751b1b7306aca4977ddb1fccfb16"
+test "$(git for-each-ref --format='%(refname) %(objectname)' refs/remotes)" = \
+"refs/remotes/origin/HEAD 7195500b7a165f8191efa1485e1ca6f4114180fb
+refs/remotes/origin/main 7195500b7a165f8191efa1485e1ca6f4114180fb"
+```
+
+Expected: the integration worktree is clean, its retained diff contains only
+the accepted decision and decision index, and both exact immutable-ref
+comparisons exit zero.
 
 ## Task 5: Remove the idle integration checkout and verify the final topology
 
@@ -275,7 +332,13 @@ test "$(git rev-parse archive/planning/effect-kernel-proposal)" = \
 git worktree list --porcelain
 find .worktree -mindepth 1 -maxdepth 1 -type d -print
 git branch --list --verbose --no-abbrev
-git tag --list
+test "$(git for-each-ref --format='%(refname) %(objectname)' refs/tags)" = \
+"refs/tags/lib-ash 3173abcf54ec512dcf1b1bf10713faf312917f5e
+refs/tags/mini-ash 819a9b249a19b2399f23ea1ea3a7251e1ed1701a
+refs/tags/modular-ash d6cce6e7c4a7751b1b7306aca4977ddb1fccfb16"
+test "$(git for-each-ref --format='%(refname) %(objectname)' refs/remotes)" = \
+"refs/remotes/origin/HEAD 7195500b7a165f8191efa1485e1ca6f4114180fb
+refs/remotes/origin/main 7195500b7a165f8191efa1485e1ca6f4114180fb"
 git status --short --branch
 du -sh .worktree
 ```
@@ -287,5 +350,5 @@ Expected:
 - main, CP-0014, integration, and both archive refs remain;
 - no completed feature or active planning refs remain;
 - external detached worktrees remain registered;
-- tags are unchanged; and
+- tags and remote refs exactly match their baseline snapshots; and
 - the main checkout is clean and still on `main`.
