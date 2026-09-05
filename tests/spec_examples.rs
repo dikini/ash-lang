@@ -54,6 +54,32 @@ const MODULE_NEWTYPE_MODULE: &str = concat!(
     "main () = increment(UserId(41))\n",
 );
 
+const LOCAL_NEWTYPE_CLOSURE_MODULE: &str = concat!(
+    "make : Unit -> (Unit -> Int)\n",
+    "make () = {\n",
+    "    newtype Offset = Offset(Int)\n",
+    "    let offset = Offset(41)\n",
+    "    fn(ignored) {\n",
+    "        match offset {\n",
+    "            Offset(value) => value + 1\n",
+    "        }\n",
+    "    }\n",
+    "}\n\n",
+    "main : Unit -> Int\n",
+    "main () = make()()\n",
+);
+
+const LOCAL_NEWTYPE_ESCAPE_MODULE: &str = concat!(
+    "main : Unit -> Int\n",
+    "main () = {\n",
+    "    let escaped = {\n",
+    "        newtype Hidden = Hidden(Int)\n",
+    "        Hidden(1)\n",
+    "    }\n",
+    "    0\n",
+    "}\n",
+);
+
 const EFFECT_MODULE: &str = concat!(
     "effect Cell {\n",
     "    read : Unit -> Int\n",
@@ -496,7 +522,7 @@ const NEWTYPE_RULE_FRAGMENTS: &[(&str, &str)] = &[
     ),
     (
         "spec/name-resolution.md",
-        "A `newtype` receives the same module-owned nominal and constructor identity forms",
+        "A module-level `newtype` receives the same module-owned nominal and constructor identity forms",
     ),
     (
         "spec/static-semantics.md",
@@ -507,6 +533,47 @@ const NEWTYPE_RULE_FRAGMENTS: &[(&str, &str)] = &[
         "A newtype constructor occurrence lowers to an ordinary unary function whose body is a wrap conversion.",
     ),
     ("spec/dynamic-semantics.md", "E-Newtype-Conversion :="),
+];
+
+const LOCAL_NEWTYPE_RULE_FRAGMENTS: &[(&str, &str)] = &[
+    (
+        "spec/README.md",
+        "A local `newtype` introduces one compile-time lexical identity",
+    ),
+    ("spec/syntax.md", "local_newtype_declaration ::="),
+    (
+        "spec/name-resolution.md",
+        "one stable, module-qualified lexical nominal identity per source declaration",
+    ),
+    (
+        "spec/name-resolution.md",
+        "The representation sees the preceding lexical type scope and its own parameters.",
+    ),
+    (
+        "spec/name-resolution.md",
+        "Both preceding name bindings are restored when the block ends.",
+    ),
+    (
+        "spec/name-resolution.md",
+        "A local `newtype` cannot be a member of a `let rec` group.",
+    ),
+    ("spec/static-semantics.md", "T-Block-Newtype-Inferred :="),
+    ("spec/static-semantics.md", "T-Block-Newtype-Checked :="),
+    (
+        "spec/static-semantics.md",
+        "Local nominal identities are rigid constants and are never generalized.",
+    ),
+    ("spec/static-semantics.md", "type.local-nominal-escape"),
+    ("spec/elaboration.md", "LocalNominalScope(owner, remainder)"),
+    (
+        "spec/elaboration.md",
+        "Local canonical facts never enter dependency summaries, imports, or exports.",
+    ),
+    (
+        "spec/elaboration.md",
+        "Every retained local nominal fact has exactly one matching scope introduction.",
+    ),
+    ("spec/dynamic-semantics.md", "E-Local-Nominal-Scope :="),
 ];
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -727,6 +794,36 @@ fn overview_sibling_import_example_is_executable() {
 fn overview_module_newtype_example_is_executable() {
     assert_observation("module-newtype.ash", MODULE_NEWTYPE_MODULE, "42", "UserId");
     assert_documented("spec/README.md", MODULE_NEWTYPE_MODULE);
+}
+
+#[test]
+fn overview_local_newtype_closure_example_is_executable() {
+    assert_observation(
+        "local-newtype-closure.ash",
+        LOCAL_NEWTYPE_CLOSURE_MODULE,
+        "42",
+        "Int",
+    );
+    assert_documented("spec/README.md", LOCAL_NEWTYPE_CLOSURE_MODULE);
+}
+
+#[test]
+fn local_newtype_escape_example_has_owned_diagnostic() {
+    let failure = run("local-newtype-escape.ash", LOCAL_NEWTYPE_ESCAPE_MODULE)
+        .expect_err("a local identity must not escape its block");
+    assert_eq!(failure.reason_code(), "type.local-nominal-escape");
+    let PipelineFailure::Typing(TypeError::Source(error)) = failure else {
+        panic!("local identity escape belongs to source typing")
+    };
+    let (start, end) = exact_range(LOCAL_NEWTYPE_ESCAPE_MODULE, "Hidden(1)");
+    assert_eq!(error.primary.span().range().start(), start);
+    assert_eq!(error.primary.span().range().end(), end);
+    assert_eq!(error.related.len(), 1);
+    assert_eq!(
+        error.related[0].span().range().start(),
+        exact_range(LOCAL_NEWTYPE_ESCAPE_MODULE, "newtype Hidden").0
+    );
+    assert_documented("spec/static-semantics.md", LOCAL_NEWTYPE_ESCAPE_MODULE);
 }
 
 #[test]
@@ -1901,6 +1998,13 @@ fn relational_interface_normative_rule_manifest_is_complete() {
 #[test]
 fn module_newtype_normative_rule_manifest_is_complete() {
     for &(path, fragment) in NEWTYPE_RULE_FRAGMENTS {
+        assert_normative_fragment(path, fragment);
+    }
+}
+
+#[test]
+fn local_newtype_normative_rule_manifest_is_complete() {
+    for &(path, fragment) in LOCAL_NEWTYPE_RULE_FRAGMENTS {
         assert_normative_fragment(path, fragment);
     }
 }

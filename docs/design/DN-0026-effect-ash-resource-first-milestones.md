@@ -18,8 +18,8 @@ asynchrony, or concurrency initial dependencies?
 
 ## Current boundary
 
-The [current specification](../../spec/README.md) defines a pure, rank-1
-language with passive, statically linked modules. Nominal declarations,
+At this outline's post-`lib-ash` baseline, the specification defined a pure,
+rank-1 language with passive, statically linked modules. Nominal declarations,
 imports, re-exports, interface constraints, and selected implementation
 evidence preserve checked identities. Static module and interface machinery
 erases: evaluation has no runtime module value, interface registry, or dynamic
@@ -39,14 +39,14 @@ continuations unchosen. These boundaries make later effect work localizable,
 but they do not supply effect semantics.
 
 At the post-`lib-ash` baseline from which this outline was written, the
-following capabilities were absent. The module-`newtype` product branch now
-implements the representation-preserving module case; it does not change the
-remaining absences or make the wider milestone current on `main`:
+following capabilities were absent. The product checkpoints now implement
+module and local `newtype` and the resume-required effect kernel, as described
+by the [branch specification](../../spec/README.md). Local declarations have
+stable lexical identities and permit identity-free closure escape; they do
+not establish identities per execution. The wider milestone remains separate
+from integration into `main`. The remaining gaps are:
 
-- effect API declarations, effect rows, handlers, and typed continuation
-  contracts;
-- local type declarations or runtime-established fresh identities; module
-  `newtype` was the first separately authorized product input;
+- scoped exact evidence and runtime-established fresh identities;
 - resource acquisition scopes, identity-indexed resource values, ownership or
   usage checking, and deterministic cleanup;
 - runtime provider relationships and a checked foreign-provider boundary;
@@ -152,9 +152,10 @@ declaration reuses current visibility and summary machinery:
 - public transparent `newtype` exposes the identity and representation
   constructor.
 
-The exact grammar remains proposal work. It should follow the existing nominal
-declaration shape and existing sequential or recursive binding structure
-rather than introduce a separate `scope` syntax solely for types.
+The module and local checkpoints now settle this grammar in the
+[specification](../../spec/syntax.md). Local `newtype` follows sequential scope
+and is excluded from recursive declaration groups. It reuses the nominal
+declaration shape without a separate source `scope` form.
 
 With static modules, one module-level declaration introduces one identity in
 the linked program. Imports and re-exports preserve it instead of regenerating
@@ -415,20 +416,19 @@ closed it nor authorizes a later language increment.
 
 ## Open questions
 
-- What exact `newtype` grammar and constructor rules best reuse nominal type
-  declarations?
-- Does a local recursive declaration group admit `newtype`, and if so, what
-  recursion is meaningful for representation checking and erasure?
-- At what point does a local pure identity instantiate, and how does that
-  relate to an identity freshly established on each resource acquisition?
-- What Core form or validated metadata must retain a `newtype` representation
-  boundary until its last checked use?
+The module and local `newtype` checkpoints settle declaration grammar,
+sequential lexical scope, stable compile-time identity, escape, and erased
+conversion and scope carriers. The resume-required kernel settles its initial
+row and handler rules. Their retained evidence is linked from the
+[trajectory](../trajectory.md); these results do not settle runtime acquisition
+or resource lifetime.
+
+- How should a fresh identity at resource acquisition relate to the existing
+  stable compile-time lexical identity?
 - Does scoped exact evidence participate in fixed-snapshot improvement for an
   eligible known determinant key, and where does it enter the abstract, exact-
   current, and concrete complete-goal selection order?
 - Which first pure relation best tests scoped exact evidence without effects?
-- Which row representation and inference boundary is sufficient for the first
-  closed and open effect cases?
 - What minimum usage or lifetime rule prevents a resource-bearing closure or
   continuation from escaping its scope?
 - Which cleanup rule applies to checked discard, handler abort, subscriber

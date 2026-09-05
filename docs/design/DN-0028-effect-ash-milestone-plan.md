@@ -38,6 +38,13 @@ proposal cannot settle one named question from the current semantic model and
 existing evidence. State the comparison corpus and disposal rule before writing
 experimental code.
 
+The module-`newtype`, local-`newtype`, and resume-required kernel product
+checkpoints are implemented on the milestone's product history. The
+[local-newtype evidence](effect-ash/local-newtype-evidence.md) records lexical
+identity, escape, validation, and erasure. Scoped exact evidence is the next
+identity-track checkpoint after local-newtype integration. The forecast below
+retains its original relative weights; it is not an elapsed-work ledger.
+
 ## Completion condition
 
 The program is complete only when all of these are true on an integrated
@@ -142,7 +149,7 @@ separate user approval.
 
 Use sub-agents by risk:
 
-- extra-high reasoning for semantic closure, continuation/resource rules, and
+- high reasoning for semantic closure, continuation/resource rules, and
   proposal compliance;
 - high reasoning for compiler/Core/evaluator implementation and architecture
   review;
@@ -150,6 +157,8 @@ Use sub-agents by risk:
   and
 - medium reasoning for mechanical Markdown, link, manifest, and migration
   audits.
+
+The current user-authorized upper bound is high reasoning.
 
 Use one implementation agent at a time when checkpoints share product state.
 Parallelize independent read-only audits and report every agent's assignment,
@@ -197,9 +206,10 @@ on their own terms.
 
 ## First proposal: module `newtype`
 
-At the time of writing, the next unused proposal ID is `CP-0012`. Recheck all
-Git history immediately before creating it; an ID is not reserved by this
-note.
+The first proposal used `CP-0012` and closed with its product checkpoint.
+The following matrix and implementation skeleton retain that planning input,
+not instructions to recreate its removed transition artifacts. Later proposals
+must allocate fresh IDs from current Git history.
 
 ### Goal
 
@@ -551,20 +561,14 @@ accepted evidence obligation.
 
 ### Local `newtype` — forecast 8 units
 
-Prerequisite: integrated module `newtype`.
-
-The proposal must settle local declaration placement, identity instantiation,
-sequential versus recursive scope, shadowing, generalization, name and value
-escape, closure capture, abstract return, excluded existential escape, and the
-shared local identity/Core-validation carrier. Likely product seams include
-`src/surface.rs`, `src/parser/project.rs`, `src/resolve.rs`, `src/resolved.rs`,
-`src/types.rs`, `src/elaborate.rs`, and `src/core/validate.rs`.
-
-Evidence must distinguish nested and sibling declarations, same spelling and
-representation, legal ordinary abstraction, every accepted or rejected escape
-case, recursive groups, tampered lexical ownership, atomic scope teardown, and
-predecessor local binding/generalization behavior. Do not add local `impl`
-search or existential packaging.
+The product checkpoint implements sequential private declarations, stable
+lexical identity, joint nominal/constructor shadowing, rigid generalization,
+outward escape rejection, identity-free closure capture, and one erased Core
+scope. It reuses the module-newtype conversion path. The
+[retained evidence](effect-ash/local-newtype-evidence.md) covers nesting,
+sibling distinctness, preceding representation scope, typed and runtime use,
+Core authentication, exact resource boundaries, and teardown. Local `impl`
+search, runtime-fresh identity, and existential packaging remain excluded.
 
 ### Scoped exact evidence — forecast 7 units
 
@@ -718,8 +722,9 @@ The module-`newtype` decision matrix and independently validated zero-cost
 conversion were the immediate open questions when this plan was written.
 The completed module-`newtype` checkpoint resolves them for module scope. The
 completed resume-required effect-kernel checkpoint also resolves the initial
-row, handler, and one-shot control questions. This integration branch combines
-those results without making them current on `main`. Local `newtype`, scoped
-exact evidence, capture and checked discard, and resource-scope composition
+row, handler, and one-shot control questions. The local-newtype checkpoint
+settles sequential lexical identity, escape, and erased scope validation.
+The branch results are not current on `main`. Scoped exact evidence,
+capture and checked discard, and resource-scope composition
 remain later proposal-owned questions. This informative plan authorizes none
 of them.

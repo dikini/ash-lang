@@ -90,6 +90,9 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 ### Effects and dynamic composition
 
+- [Local `newtype` evidence](effect-ash/local-newtype-evidence.md) — lexical
+  identity, escape, scope authentication, erasure, and exact resources for the
+  local nominal checkpoint.
 - [Resume-required effect kernel evidence](effect-ash/resume-required-effect-kernel-evidence.md)
   — retained source, Core, runtime, diagnostic, resource, and predecessor
   observations for the first effect kernel.

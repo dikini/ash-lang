@@ -23,10 +23,11 @@ proposal. Do not add another nominal pipeline, existential packaging,
 runtime-fresh identity, local implementation search, resource lifetime rules,
 or a general Core authority framework.
 
-Do not merge or push the branch, tag a checkpoint or milestone, delete a
-branch, or remove a worktree without separate direction. Do not merge the
-Effects Ash milestone without independent final review. Intermediate commits
-must not be GPG-signed.
+The user authorizes finishing Task 5, then merging and reconciling the closed
+checkpoint into `integration/effect-ash-foundations`. Apply its accepted
+worktree lifecycle after verification and ancestry checks. This does not
+authorize a push, tag, or merge into `main`. Intermediate commits must not be
+GPG-signed.
 
 ## Work
 
@@ -55,7 +56,22 @@ Execute the linked plan to:
   separate local facts, but not a second type or conversion system.
 - `CARGO_INCREMENTAL=0 cargo test --locked --workspace` passes at the product
   baseline, including 902 library tests and every integration and doc test.
-- No Rust or normative specification file has changed.
+- Tasks 2–4 are retained through `b5f6c12`: syntax, lexical facts, outward
+  escape, one Core scope carrier, transforms, and erased evaluation.
+- Task 5 is complete through its verification gate. Specification examples and
+  the rule manifest were
+  first tested against the previous specification and failed for the missing
+  documented examples/rules. Independent closure reviews identified bounded
+  inference, linked/Core binder, representation-scope, and resource-accounting
+  corrections, with regression tests preceding the fixes.
+- Corrective code is retained at `f7c657b`. The accompanying specification and
+  example harness close the accepted semantic delta. The retained
+  [evidence report](../design/effect-ash/local-newtype-evidence.md) records the
+  exact resource formulas, reviews, corrections, and intentional exclusions.
+- The user authorizes finishing Task 5 and merging and reconciling the closed
+  checkpoint into `integration/effect-ash-foundations`. All review agents use
+  high reasoning as the upper bound. The existing integration branch adds only
+  the accepted milestone worktree lifecycle to the `fa26025` product baseline.
 
 ## Verification
 
@@ -78,6 +94,22 @@ ownership, exact resource accounting, atomic publication and retry,
 stack-safe disposal, complete Core carrier traversal, runtime erasure, and the
 absence of local facts from summaries and imports.
 
+The final gate passed on 2026-09-05: `CARGO_INCREMENTAL=0 cargo xtask verify`
+completed format, metadata, build, Clippy, all 1,968 tests in 59 test binaries,
+and rustdoc with warnings denied. This included 20 local-newtype tests, 71
+specification examples, and 31 architecture checks. Markdown lint and diff
+checks passed; changed relative links and the manual obligations above were
+reviewed. The initial full run exposed an elaborator stack-frame regression;
+helper extraction restored the original 256 KiB predecessor without changing
+stack limits, semantic operations, or work charges.
+
+Independent semantic/specification, compiler/Core, and Rust/resource reviews
+covered the complete checkpoint from `fa26025`, including the corrections
+after `b5f6c12`, and closed with no outstanding Critical or Important findings.
+All reviewers used high reasoning. The specification commit retains this
+record; the following closure commit removes the transition artifacts before
+the separately authorized local integration.
+
 ## Discoveries
 
 The existing module registry validates dense module declaration ordinals and
@@ -92,4 +124,12 @@ arguments and should own outward escape inspection.
 
 ## Deviations
 
-None.
+Closure review found accepted cases that the earlier focused evidence had not
+carried through linking, Core, or final inference closure. The retained
+corrections cover enclosing inference escape, delayed relational improvement,
+parameterized lexical facts, captured global and implementation parameters,
+unused representation dependencies, and charge-before-retention ordering.
+They reuse the accepted mechanisms and require no semantic amendment.
+
+The current user instruction extends the plan's former leave-unmerged endpoint
+to include verified local integration. It does not extend language scope.

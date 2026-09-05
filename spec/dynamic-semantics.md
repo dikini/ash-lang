@@ -19,8 +19,8 @@ identity or observable mutation.
 
 Core type abstractions and applications are static evidence. They are not
 runtime values, do not extend the environment, and allocate no heap cells.
-Validated newtype conversions are likewise erased static operations rather
-than values.
+Validated newtype conversions and local nominal scopes are likewise erased
+static operations rather than values.
 
 ## Initial configuration
 
@@ -64,6 +64,10 @@ family type-erasure-steps:
   E-Newtype-Conversion :=
     ===>
     CONFIG(heap, environment, NewtypeConversion(owner, direction, child), continuation) -> CONFIG(heap, environment, child, continuation)
+
+  E-Local-Nominal-Scope :=
+    ===>
+    CONFIG(heap, environment, LocalNominalScope(owner, body), continuation) -> CONFIG(heap, environment, body, continuation)
 ```
 
 The unchanged heap and environment make erasure observable only as progress in
@@ -73,6 +77,13 @@ Method-local type arguments erase through `E-Type-Application`.
 Core validation has already authenticated the owner, direction, child and
 result types, representation substitution, and provenance, so evaluation does
 not inspect conversion metadata or consult a registry.
+
+`E-Local-Nominal-Scope` likewise enters its body directly with the same heap,
+environment, and continuation. The owner has already been authenticated and
+creates no runtime identity, environment entry, frame, or registry state. A
+closure whose exposed computation is identity-free may retain ordinary erased
+representation values and execute its lexical code after this step's body
+returns; no runtime scope authority needs to survive with it.
 
 ## Generated interface evidence
 
@@ -304,6 +315,8 @@ Those allocation and tag-inspection rules apply to ordinary data constructors.
 A newtype constructor and pattern have already lowered to validated wrap and
 unwrap conversions. `E-Newtype-Conversion` enters their child without a heap
 cell, tag comparison, copy, frame, or new failure mode.
+The same erasure applies to module and local `newtype`. Capturing a local value
+uses the ordinary closure environment and adds no wrapper allocation.
 
 A match evaluates its scrutinee exactly once. Pattern matching follows aliases
 only when it must inspect a tuple or constructor. It compares constructor

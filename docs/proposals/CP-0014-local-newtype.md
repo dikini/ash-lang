@@ -299,3 +299,13 @@ The product checkpoint must establish:
   deep teardown for lexical facts and Core scope work; and
 - the existing module-`newtype`, local binding, generalization, effect,
   pure-Core, transform, evaluator, and diagnostic corpora unchanged.
+
+## Product checkpoint record
+
+TASK-0022 retains the implementation and closure corrections through `f7c657b`,
+with the accompanying specification, executable examples, independent reviews,
+and passing full verification gate. The
+[local-newtype evidence report](../design/effect-ash/local-newtype-evidence.md)
+records the result. This proposal leaves the product tree at transition
+closure; Git preserves the accepted semantic delta. Neither closure nor local
+milestone integration makes it current on `main`.

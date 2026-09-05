@@ -303,6 +303,11 @@ candidates later rejected by the interface method or implementation
 prerequisite rules retain the same encounter order, but their allocation does
 not make them valid binders.
 
+A local `newtype` allocates its written type parameters in the same
+module-wide sequence when resolution reaches the declaration. These parameters
+scope only over its representation and retain their declared order and kinds.
+The nominal itself is a rigid declaration identity, not a type-variable binder.
+
 Nominal and effect parameters use their written set and order and may be
 phantom. Effect parameters scope over all operation signatures in their
 declaration and cannot have kind `EffectRow`. An interface has a nonempty
@@ -401,13 +406,13 @@ main () = 42
 
 ## Type and constructor scope
 
-All nominal data and `newtype` declarations in one module are mutually visible,
+All module-level nominal data and `newtype` declarations in one module are mutually visible,
 including in their own and earlier constructor payloads or representations.
 Resolution allocates each nominal identity in cross-declaration source order
-before resolving any payload or representation type. Two local nominal
+before resolving any payload or representation type. Two module-level nominal
 declarations cannot share a spelling.
 
-A `newtype` receives the same module-owned nominal and constructor identity forms
+A module-level `newtype` receives the same module-owned nominal and constructor identity forms
 as ordinary data. It has exactly one constructor under its owner. Resolution
 requires that constructor's spelling to equal the nominal spelling; a mismatch
 is `resolve.newtype-constructor-name` at the constructor spelling. Imports,
@@ -416,8 +421,8 @@ Equal spellings or equal representations from separate declarations do not
 make their identities equal.
 
 Every constructor receives a stable identity under its owning nominal type.
-Local constructors form one module-wide term namespace and must have distinct
-spellings across all local declarations. Constructor names do not conflict
+Module-level constructors form one module-wide term namespace and must have distinct
+spellings across those declarations. Constructor names do not conflict
 with ordinary lowercase term names unless an import rename gives them the same
 spelling. A type occurrence must name a local or imported nominal type, an
 in-scope type parameter, or one of `Int`, `Bool`, and `Unit`. An uppercase term
@@ -439,6 +444,15 @@ identity; resolution does not require saturation and does not reject a
 parameter merely because it occurs in function position. [Static
 semantics](static-semantics.md) derives the kind of the bare, partial, or
 saturated result and owns any application-kind failure.
+
+A block `newtype` instead receives
+one stable, module-qualified lexical nominal identity per source declaration.
+Lexical and module ownership are distinct. Equal names, parameter lists, or
+representations do not equate declarations. Repeated execution of a block,
+function, generalized binding, or recursive member reuses that declaration's
+identity; it does not allocate a runtime identity. The constructor keeps the
+same owner-and-ordinal relationship and same-spelling requirement as a module
+`newtype`. Lexical facts are not module declarations or importable names.
 
 ## Public, private, and opaque declarations
 
@@ -604,6 +618,19 @@ scope before its binder, so the binding is nonrecursive. The binder is visible
 in later bindings and in the block result. A local may shadow an earlier local,
 global, or targeted import. The stable identities keep the definitions
 distinct.
+
+A local `newtype` installs its nominal name and constructor together for the
+following declarations and block result.
+The representation sees the preceding lexical type scope and its own parameters.
+It may use an enclosing type parameter or preceding nominal. It cannot refer to
+itself or a later local declaration. If it shadows an earlier nominal, the
+earlier identity remains the meaning of that spelling in its representation.
+Later local declarations may shadow earlier local or module nominal and
+constructor bindings. Both preceding name bindings are restored when the block ends.
+
+A local `newtype` cannot be a member of a `let rec` group. A following recursive
+term group may use its nominal name and constructor. Local nominal declarations
+do not form recursive groups.
 
 A `let rec ... and ...` group allocates every member identity before resolving
 any initializer. Every initializer therefore sees all members, and all members

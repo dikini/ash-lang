@@ -104,7 +104,13 @@ interface_reference ::=
 
 block ::=
   "{" line_end { local_declaration line_end } expression [ line_end ] "}" ;
-local_declaration ::= local_binding | recursive_binding_group ;
+local_declaration ::=
+    local_binding
+  | recursive_binding_group
+  | local_newtype_declaration ;
+local_newtype_declaration ::=
+  "newtype" upper_identifier [ type_parameters ] "="
+  upper_identifier "(" type ")" ;
 local_binding ::= "let" pattern [ ":" type ] "=" expression ;
 recursive_binding_group ::=
   "let" "rec" recursive_member
@@ -314,6 +320,11 @@ Braces delimit blocks, and parentheses group expressions and types. A block
 contains ordered local declarations and one result expression. An ordinary
 `let` is sequential. A `let rec` declaration is one simultaneous group; each
 following `and` member occupies another logical line.
+
+A local `newtype` is a sequential declaration with the module form's single
+representation field. `pub` and `opaque` are not admitted in a block. The
+grammar admits no local `type`, `effect`, `interface`, or `impl`, and a local
+`newtype` cannot appear as a recursive-group member.
 
 Every recursive member has a required type annotation. The grammar accepts an
 arbitrary initializer expression so static semantics can distinguish safe
