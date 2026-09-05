@@ -7784,188 +7784,132 @@ impl Resolver {
         self.allocate_declaration_type_parameters(explicit, &names, infer_implicit_effect_rows)
     }
 
-    fn resolve_lexical_evidence(
+    fn resolve_lexical_method_group(
         &mut self,
         source: &crate::surface::SurfaceLexicalEvidence,
-    ) -> Result<crate::resolved::ResolvedLexicalEvidence, ResolveError> {
-        let id = crate::interface::LexicalEvidenceId::new(self.module, self.next_lexical_evidence);
-        self.next_lexical_evidence =
-            self.next_lexical_evidence.checked_add(1).ok_or_else(|| {
-                error(
-                    ResolveReason::InternalState,
-                    source.span,
-                    "lexical evidence identity space is exhausted",
-                )
-            })?;
-        let application = self.resolve_interface_application(&source.application)?;
-        self.constraint_work
-            .charge(source.equations.len().saturating_add(1))
-            .map_err(|()| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    source.span,
-                    "lexical evidence storage exceeded its budget",
-                )
-            })?;
-        let mut groups = ResolvedImplementationMethodGroupBuffer(Vec::new());
-        groups.0.try_reserve(source.equations.len()).map_err(|_| {
-            error(
-                ResolveReason::TypeResourceExhausted,
-                source.span,
-                "lexical evidence storage could not be reserved",
-            )
-        })?;
-        let mut start = 0;
-        while start < source.equations.len() {
-            let first = &source.equations[start];
-            let mut end = start + 1;
-            while end < source.equations.len() && source.equations[end].name.text == first.name.text
-            {
-                end += 1;
-            }
-            let binder = self.allocate_binder(&first.name.text, first.name.span)?;
-            let method = self
-                .method_names
+        start: usize,
+    ) -> Result<(ResolvedImplementationMethodGroup, usize), ResolveError> {
+        let first = &source.equations[start];
+        let mut end = start + 1;
+        while end < source.equations.len() && source.equations[end].name.text == first.name.text {
+            end += 1;
+        }
+        let binder = self.allocate_binder(&first.name.text, first.name.span)?;
+        let method =
+            self.method_names
                 .get(&first.name.text)
                 .and_then(|binding| match binding.term {
                     ResolvedTermName::Method(method) => Some(method),
                     ResolvedTermName::Global(_) => None,
                 });
-            let mut contextual_parameters = ImportedTypeVariableBuffer(Vec::new());
-            if let Some(method) = method {
-                let parameters = if method.interface().module() == self.module {
-                    self.resolved_interfaces
-                        .0
-                        .iter()
-                        .find(|interface| interface.id == method.interface())
-                        .and_then(|interface| {
-                            interface
-                                .methods
-                                .iter()
-                                .find(|candidate| candidate.id == method)
-                        })
-                        .map(|method| method.type_parameters.as_ref())
-                } else {
-                    self.imported
-                        .interface(method.interface())
-                        .and_then(|interface| interface.method(method))
-                        .map(|method| method.authoritative_type_parameters())
-                }
-                .ok_or_else(|| {
-                    error(
-                        ResolveReason::InternalState,
-                        first.span,
-                        "method parameters are unavailable",
-                    )
-                })?;
-                self.type_work.charge(parameters.len()).map_err(|()| {
+        let mut contextual_parameters = ImportedTypeVariableBuffer(Vec::new());
+        if let Some(method) = method {
+            let parameters = if method.interface().module() == self.module {
+                self.resolved_interfaces
+                    .0
+                    .iter()
+                    .find(|interface| interface.id == method.interface())
+                    .and_then(|interface| {
+                        interface
+                            .methods
+                            .iter()
+                            .find(|candidate| candidate.id == method)
+                    })
+                    .map(|method| method.type_parameters.as_ref())
+            } else {
+                self.imported
+                    .interface(method.interface())
+                    .and_then(|interface| interface.method(method))
+                    .map(|method| method.authoritative_type_parameters())
+            }
+            .ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    first.span,
+                    "method parameters are unavailable",
+                )
+            })?;
+            self.type_work.charge(parameters.len()).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    first.span,
+                    "lexical method parameter retention exceeded its budget",
+                )
+            })?;
+            contextual_parameters
+                .try_reserve(parameters.len())
+                .map_err(|_| {
                     error(
                         ResolveReason::TypeResourceExhausted,
                         first.span,
-                        "lexical method parameter retention exceeded its budget",
+                        "lexical method parameter storage could not be reserved",
                     )
                 })?;
-                contextual_parameters
-                    .try_reserve(parameters.len())
-                    .map_err(|_| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            first.span,
-                            "lexical method parameter storage could not be reserved",
-                        )
-                    })?;
-                for parameter in parameters {
-                    let mut fresh =
-                        clone_resolved_type_variable_with_budget(parameter, &mut self.type_work)
-                            .map_err(|()| {
-                                error(
-                                    ResolveReason::TypeResourceExhausted,
-                                    first.span,
-                                    "lexical method parameter retention exceeded its budget",
-                                )
-                            })?;
-                    fresh.id = TypeVariableId::resolved(self.module, self.next_type_variable);
-                    fresh.origin = Origin::Source(first.span);
-                    self.next_type_variable =
-                        self.next_type_variable.checked_add(1).ok_or_else(|| {
+            for parameter in parameters {
+                let mut fresh =
+                    clone_resolved_type_variable_with_budget(parameter, &mut self.type_work)
+                        .map_err(|()| {
                             error(
-                                ResolveReason::BinderIdExhausted,
+                                ResolveReason::TypeResourceExhausted,
                                 first.span,
-                                "lexical method parameter identities exhausted",
+                                "lexical method parameter retention exceeded its budget",
                             )
                         })?;
-                    contextual_parameters.push(fresh);
-                }
-                self.lexical_method_parameters
-                    .try_reserve(contextual_parameters.0.len())
-                    .map_err(|_| {
+                fresh.id = TypeVariableId::resolved(self.module, self.next_type_variable);
+                fresh.origin = Origin::Source(first.span);
+                self.next_type_variable =
+                    self.next_type_variable.checked_add(1).ok_or_else(|| {
                         error(
-                            ResolveReason::TypeResourceExhausted,
+                            ResolveReason::BinderIdExhausted,
                             first.span,
-                            "lexical method registry storage could not be reserved",
+                            "lexical method parameter identities exhausted",
                         )
                     })?;
-                for parameter in &contextual_parameters.0 {
-                    self.lexical_method_parameters.push(
-                        clone_resolved_type_variable_with_budget(parameter, &mut self.type_work)
-                            .map_err(|()| {
-                                error(
-                                    ResolveReason::TypeResourceExhausted,
-                                    first.span,
-                                    "lexical method registry retention exceeded its budget",
-                                )
-                            })?,
-                    );
-                }
+                contextual_parameters.push(fresh);
             }
-            let mut equations = ResolvedEquationBuffer(Vec::with_capacity(end - start));
-            for equation in &source.equations[start..end] {
-                let checkpoint = self.scopes.len();
-                let (patterns, binders) = self.resolve_pattern_vector(&equation.patterns)?;
-                let patterns = ResolvedPatternBuffer(patterns);
-                self.push_binder_scope_many(&binders);
-                let body = self
-                    .resolve_expr(&equation.body)
-                    .map(ResolvedExpressionOwner::new);
-                self.scopes.truncate(checkpoint);
-                equations.0.push(ResolvedEquation {
-                    name: crate::resolved::ResolvedEquationHead {
-                        binder: binder.id,
-                        spelling: equation.name.text.clone(),
-                        origin: Origin::Source(equation.name.span),
-                    },
-                    patterns: patterns.into_vec(),
-                    body: body?.into_inner(),
-                    span: equation.span,
-                });
-            }
-            let span = first
-                .span
-                .cover(source.equations[end - 1].span)
-                .ok_or_else(|| {
+            self.lexical_method_parameters
+                .try_reserve(contextual_parameters.0.len())
+                .map_err(|_| {
                     error(
-                        ResolveReason::InternalState,
-                        source.span,
-                        "method equations cross source files",
+                        ResolveReason::TypeResourceExhausted,
+                        first.span,
+                        "lexical method registry storage could not be reserved",
                     )
                 })?;
-            groups.0.push(ResolvedImplementationMethodGroup {
+            for parameter in &contextual_parameters.0 {
+                self.lexical_method_parameters.push(
+                    clone_resolved_type_variable_with_budget(parameter, &mut self.type_work)
+                        .map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                first.span,
+                                "lexical method registry retention exceeded its budget",
+                            )
+                        })?,
+                );
+            }
+        }
+        let span = first
+            .span
+            .cover(source.equations[end - 1].span)
+            .ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    source.span,
+                    "method equations cross source files",
+                )
+            })?;
+        Ok((
+            ResolvedImplementationMethodGroup {
                 contextual_parameters: contextual_parameters.into_boxed_slice(),
                 method,
                 identity: None,
                 binder,
-                equations: equations.into_boxed_slice(),
+                equations: Box::new([]),
                 span,
-            });
-            start = end;
-        }
-        Ok(crate::resolved::ResolvedLexicalEvidence {
-            checked: crate::interface::LexicalEvidenceSlot::default(),
-            id,
-            application,
-            method_groups: groups.into_boxed_slice(),
-            span: source.span,
-        })
+            },
+            end,
+        ))
     }
 
     fn resolve_expr(&mut self, expression: &SurfaceExpr) -> Result<ResolvedExpr, ResolveError> {
@@ -8020,7 +7964,7 @@ impl Resolver {
                     for declaration in block.declarations.iter().rev() {
                         match declaration {
                             SurfaceLocalDeclaration::Evidence(source) => {
-                                tasks.push(ResolveTask::FinishLexicalEvidence(source));
+                                tasks.push(ResolveTask::VisitLexicalEvidence(source));
                             }
                             SurfaceLocalDeclaration::Binding(binding) => {
                                 tasks.push(ResolveTask::FinishBinding(binding));
@@ -8160,9 +8104,156 @@ impl Resolver {
                     let owner = self.resolve_local_newtype(declaration)?;
                     declarations.push(ResolvedLocalDeclaration::Newtype(owner));
                 }
-                ResolveTask::FinishLexicalEvidence(source) => {
-                    let evidence = self.resolve_lexical_evidence(source)?;
-                    declarations.push(ResolvedLocalDeclaration::Evidence(Box::new(evidence)));
+                ResolveTask::VisitLexicalEvidence(source) => {
+                    let id = crate::interface::LexicalEvidenceId::new(
+                        self.module,
+                        self.next_lexical_evidence,
+                    );
+                    self.next_lexical_evidence =
+                        self.next_lexical_evidence.checked_add(1).ok_or_else(|| {
+                            error(
+                                ResolveReason::InternalState,
+                                source.span,
+                                "lexical evidence identity space is exhausted",
+                            )
+                        })?;
+                    self.constraint_work.charge(1).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            source.span,
+                            "lexical evidence storage exceeded its budget",
+                        )
+                    })?;
+                    let application = self.resolve_interface_application(&source.application)?;
+                    let mut state = Box::new(PendingLexicalResolution {
+                        source,
+                        id,
+                        application: Some(application),
+                        groups: ResolvedImplementationMethodGroupBuffer(Vec::new()),
+                        equations: ResolvedEquationBuffer(Vec::new()),
+                        next: 0,
+                        group_end: 0,
+                    });
+                    self.constraint_work
+                        .charge(source.equations.len())
+                        .map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                source.span,
+                                "lexical evidence storage exceeded its budget",
+                            )
+                        })?;
+                    state
+                        .groups
+                        .0
+                        .try_reserve(source.equations.len())
+                        .map_err(|_| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                source.span,
+                                "lexical evidence storage could not be reserved",
+                            )
+                        })?;
+                    tasks.push(ResolveTask::ContinueLexicalEvidence(state));
+                }
+                ResolveTask::ContinueLexicalEvidence(mut state) => {
+                    if state.next == state.group_end {
+                        if let Some(group) = state.groups.0.last_mut() {
+                            group.equations = std::mem::replace(
+                                &mut state.equations,
+                                ResolvedEquationBuffer(Vec::new()),
+                            )
+                            .into_boxed_slice();
+                        }
+                        if state.next == state.source.equations.len() {
+                            let evidence = crate::resolved::ResolvedLexicalEvidence {
+                                checked: crate::interface::LexicalEvidenceSlot::default(),
+                                id: state.id,
+                                application: state.application.take().ok_or_else(|| {
+                                    error(
+                                        ResolveReason::InternalState,
+                                        state.source.span,
+                                        "lexical evidence application is missing",
+                                    )
+                                })?,
+                                method_groups: std::mem::replace(
+                                    &mut state.groups,
+                                    ResolvedImplementationMethodGroupBuffer(Vec::new()),
+                                )
+                                .into_boxed_slice(),
+                                span: state.source.span,
+                            };
+                            declarations
+                                .push(ResolvedLocalDeclaration::Evidence(Box::new(evidence)));
+                            continue;
+                        }
+                        let (group, end) =
+                            self.resolve_lexical_method_group(state.source, state.next)?;
+                        state.groups.0.push(group);
+                        state.group_end = end;
+                        state
+                            .equations
+                            .0
+                            .try_reserve(end - state.next)
+                            .map_err(|_| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    state.source.span,
+                                    "lexical method equation storage could not be reserved",
+                                )
+                            })?;
+                    }
+                    let equation = &state.source.equations[state.next];
+                    let scope_checkpoint = self.scopes.len();
+                    let (patterns, binders) = self.resolve_pattern_vector(&equation.patterns)?;
+                    let patterns = ResolvedPatternBuffer(patterns);
+                    self.push_binder_scope_many(&binders);
+                    tasks.push(ResolveTask::FinishLexicalEquation {
+                        state,
+                        patterns,
+                        scope_checkpoint,
+                    });
+                    tasks.push(ResolveTask::VisitExpr(&equation.body));
+                }
+                ResolveTask::FinishLexicalEquation {
+                    mut state,
+                    patterns,
+                    scope_checkpoint,
+                } => {
+                    self.scopes.truncate(scope_checkpoint);
+                    let equation = &state.source.equations[state.next];
+                    let body = expressions.pop_owned().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            equation.span,
+                            "lexical method body is missing",
+                        )
+                    })?;
+                    let binder = state
+                        .groups
+                        .0
+                        .last()
+                        .ok_or_else(|| {
+                            error(
+                                ResolveReason::InternalState,
+                                equation.span,
+                                "lexical method group is missing",
+                            )
+                        })?
+                        .binder
+                        .id;
+                    state.equations.0.push(ResolvedEquation {
+                        name: crate::resolved::ResolvedEquationHead {
+                            binder,
+                            spelling: equation.name.text.clone(),
+                            origin: Origin::Source(equation.name.span),
+                        },
+                        patterns: patterns.into_vec(),
+                        body: body.into_inner(),
+                        span: equation.span,
+                    });
+                    state.next += 1;
+                    tasks.push(ResolveTask::ContinueLexicalEvidence(state));
                 }
                 ResolveTask::FinishRecursiveGroup { group, binders } => {
                     if binders.len() != group.members.len()
@@ -8703,6 +8794,27 @@ impl Drop for ResolvedBinderBuffer {
     }
 }
 
+struct PendingLexicalResolution<'a> {
+    source: &'a crate::surface::SurfaceLexicalEvidence,
+    id: crate::interface::LexicalEvidenceId,
+    application: Option<ResolvedInterfaceApplication>,
+    groups: ResolvedImplementationMethodGroupBuffer,
+    equations: ResolvedEquationBuffer,
+    next: usize,
+    group_end: usize,
+}
+
+impl Drop for PendingLexicalResolution<'_> {
+    fn drop(&mut self) {
+        if let Some(application) = self.application.take() {
+            discard_origin_iteratively(application.interface.origin);
+            for argument in application.arguments.into_vec() {
+                argument.discard_iteratively();
+            }
+        }
+    }
+}
+
 enum ResolveTask<'a> {
     VisitExpr(&'a SurfaceExpr),
     VisitBlock(&'a SurfaceBlock),
@@ -8717,7 +8829,13 @@ enum ResolveTask<'a> {
     },
     FinishBinding(&'a SurfaceBinding),
     FinishLocalNewtype(&'a SurfaceTypeDeclaration),
-    FinishLexicalEvidence(&'a crate::surface::SurfaceLexicalEvidence),
+    VisitLexicalEvidence(&'a crate::surface::SurfaceLexicalEvidence),
+    ContinueLexicalEvidence(Box<PendingLexicalResolution<'a>>),
+    FinishLexicalEquation {
+        state: Box<PendingLexicalResolution<'a>>,
+        patterns: ResolvedPatternBuffer,
+        scope_checkpoint: usize,
+    },
     FinishRecursiveGroup {
         group: &'a SurfaceRecursiveGroup,
         binders: ResolvedBinderBuffer,
@@ -8783,7 +8901,10 @@ impl ResolveTask<'_> {
             | Self::FinishTuple { span, .. } => *span,
             Self::FinishBinding(binding) => binding.span,
             Self::FinishLocalNewtype(declaration) => declaration.span,
-            Self::FinishLexicalEvidence(source) => source.span,
+            Self::VisitLexicalEvidence(source) => source.span,
+            Self::ContinueLexicalEvidence(state) | Self::FinishLexicalEquation { state, .. } => {
+                state.source.span
+            }
             Self::FinishRecursiveGroup { group, .. } => group.span,
         }
     }

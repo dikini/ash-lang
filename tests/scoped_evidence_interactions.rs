@@ -1260,3 +1260,58 @@ main () = {
 "#,
     );
 }
+
+#[test]
+fn nested_polymorphic_groups_preserve_source_order_and_declared_method_slots() {
+    assert_execution(
+        r#"interface Choose<I> {
+    left<A> : (I, A) -> A
+    right<B> : (I, B) -> B
+}
+
+main : Unit -> Int
+main () = {
+    newtype Outer = Outer(Unit)
+    with Choose<Outer> {
+        right (_, value) = {
+            newtype Inner = Inner(Unit)
+            with Choose<Inner> {
+                left (_, inner_value) = inner_value
+                right (_, inner_value) = inner_value
+            }
+            left(Inner(), value)
+        }
+        left (_, value) = value
+    }
+    right(Outer(), 21) + left(Outer(), 21)
+}
+"#,
+    );
+}
+
+#[test]
+fn supplied_method_error_inside_handler_keeps_its_source_diagnostic() {
+    assert_reason(
+        r#"interface Read<A> {
+    read : A -> Int
+}
+effect Ping {
+    ping : Unit -> Unit
+}
+main : Unit -> Int
+main () = {
+    let done = handle (perform Ping.ping ()) with Ping {
+        ping ignored => {
+            newtype Token = Token(Unit)
+            with Read<Token> {
+                read ignored = true
+            }
+            resume ()
+        }
+    }
+    42
+}
+"#,
+        "type.definition-result",
+    );
+}

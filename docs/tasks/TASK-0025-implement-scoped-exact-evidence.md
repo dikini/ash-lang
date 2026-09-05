@@ -114,6 +114,33 @@ Return semantic gaps to CP-0015; a scope expansion requires user direction.
   runtime mechanism was added. Final writer verification passed 201 evidence
   tests, both accounting probes, 105 kind-filter tests, all-target check and
   Clippy, formatting, and diff checks. Task 3 remains open.
+- Task 2 is retained at `d87203d`. Task 3 first replaces nested supplied-body
+  reentry with the existing projector, resolver, and elaborator queues. Staged
+  debugger runs located each recursive boundary. The 32-level, 512 KiB
+  accepted/error-disposal fixture now passes without raising limits. The
+  original local-newtype target, including its 256 KiB cases, also passes.
+- A Task 3 semantic review found that failed supplied methods inside handlers
+  could lose their original source diagnostic during cleanup. The new test
+  observed `Internal(InvalidState)` instead of `type.definition-result`.
+  Staging the resume-pop result after the body's original error fixes this
+  under the existing poison-on-failure contract; no general unwind mechanism
+  is needed. The root corpus now has 48 cases, including a new nested
+  polymorphic source-order/method-slot guard. Scheduling quality review and
+  the remaining tamper/resource work are still open.
+- The exact historical 256 KiB type-depth predecessor in `data_and_adts`
+  still overflows after the first queue conversion, despite the 82-case
+  focused run passing. This is a required scheduling correction, not a reason
+  to raise stack sizes or limits. Review identified large by-value progress
+  transfers from the driver as the first frame-size probe.
+- Scheduling review is now closed. Restoring the original outer equation
+  orchestration puts final Core construction after each body's driver returns;
+  supplied methods keep queued continuations using the same prepare/finish
+  helpers. A small equation-phase payload keeps the full task enum out of
+  helper argument copies. The historical 256 KiB and nested 512 KiB witnesses
+  both pass. The writer's final runs passed 388 focused tests, all-target check
+  and Clippy, formatting, and diff checks. Both independent reviews have no
+  outstanding scheduling findings. Tamper, capture-use authentication, and
+  remaining exact resource ledgers are next.
 
 ## Verification
 

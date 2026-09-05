@@ -1532,17 +1532,30 @@ fn project_equation(
     equation: &ConcreteNode,
     tokens: &[Token],
 ) -> Result<SurfaceEquation, ProjectionError> {
+    let pending = project_equation_head(source, equation, tokens)?;
+    let body = project_expression(source, expression_child(equation)?, tokens)?;
+    Ok(SurfaceEquation {
+        name: pending.name,
+        patterns: pending.patterns,
+        body,
+        span: pending.span,
+    })
+}
+
+fn project_equation_head(
+    source: &SourceFile,
+    equation: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<PendingEquation, ProjectionError> {
     require_kind(equation, NodeKind::Equation)?;
     let name = project_binder(only_child_of_kind(equation, NodeKind::Binder)?, tokens)?.name;
     let patterns = child_nodes(equation)
         .filter(|child| child.kind == NodeKind::Pattern)
         .map(|pattern| project_pattern(source, pattern, tokens))
         .collect::<Result<Vec<_>, _>>()?;
-    let body = project_expression(source, expression_child(equation)?, tokens)?;
-    Ok(SurfaceEquation {
+    Ok(PendingEquation {
         name,
         patterns,
-        body,
         span: node_span(source, equation, tokens)?,
     })
 }
@@ -1995,8 +2008,26 @@ fn project_expression(
                             projected_declarations.push(SurfaceLocalDeclaration::Newtype(newtype));
                         }
                         PendingLocalDeclaration::Evidence(evidence) => {
-                            projected_declarations
-                                .push(SurfaceLocalDeclaration::Evidence(evidence));
+                            let mut equations = Vec::with_capacity(evidence.equations.len());
+                            for equation in evidence.equations {
+                                equations.push(SurfaceEquation {
+                                    name: equation.name,
+                                    patterns: equation.patterns,
+                                    body: expressions.next().ok_or(
+                                        ProjectionError::MalformedTree(
+                                            InternalReason::UnexpectedShape,
+                                        ),
+                                    )?,
+                                    span: equation.span,
+                                });
+                            }
+                            projected_declarations.push(SurfaceLocalDeclaration::Evidence(
+                                Box::new(crate::surface::SurfaceLexicalEvidence {
+                                    application: evidence.application,
+                                    equations,
+                                    span: evidence.span,
+                                }),
+                            ));
                         }
                     }
                 }
@@ -2082,7 +2113,7 @@ enum ExpressionTask<'a> {
 }
 
 enum PendingLocalDeclaration {
-    Evidence(Box<crate::surface::SurfaceLexicalEvidence>),
+    Evidence(Box<PendingLexicalEvidence>),
     Binding(Box<PendingBinding>),
     Recursive(PendingRecursiveGroup),
     Newtype(SurfaceTypeDeclaration),
@@ -2093,7 +2124,8 @@ impl PendingLocalDeclaration {
         match self {
             Self::Binding(_) => 1,
             Self::Recursive(group) => group.members.len(),
-            Self::Newtype(_) | Self::Evidence(_) => 0,
+            Self::Evidence(source) => source.equations.len(),
+            Self::Newtype(_) => 0,
         }
     }
 }
@@ -2101,6 +2133,18 @@ impl PendingLocalDeclaration {
 struct PendingBinding {
     pattern: SurfacePattern,
     annotation: Option<SurfaceType>,
+    span: Span,
+}
+
+struct PendingEquation {
+    name: SurfaceName,
+    patterns: Vec<SurfacePattern>,
+    span: Span,
+}
+
+struct PendingLexicalEvidence {
+    application: crate::surface::SurfaceInterfaceApplication,
+    equations: Vec<PendingEquation>,
     span: Span,
 }
 
@@ -2188,17 +2232,19 @@ fn schedule_block<'a>(
                 span: node_span(source, child, tokens)?,
             }));
         } else if child.kind == NodeKind::LexicalEvidenceDeclaration {
+            let mut equations = Vec::new();
+            for equation in child_nodes(child).filter(|node| node.kind == NodeKind::Equation) {
+                equations.push(project_equation_head(source, equation, tokens)?);
+                initializers.push(expression_child(equation)?);
+            }
             declarations.push(PendingLocalDeclaration::Evidence(Box::new(
-                crate::surface::SurfaceLexicalEvidence {
+                PendingLexicalEvidence {
                     application: project_interface_application(
                         source,
                         only_child_of_kind(child, NodeKind::InterfaceApplication)?,
                         tokens,
                     )?,
-                    equations: child_nodes(child)
-                        .filter(|node| node.kind == NodeKind::Equation)
-                        .map(|node| project_equation(source, node, tokens))
-                        .collect::<Result<Vec<_>, _>>()?,
+                    equations,
                     span: node_span(source, child, tokens)?,
                 },
             )));
