@@ -175,6 +175,173 @@ fn direct_local_value_cannot_escape() {
     assert_eq!(diagnostic.reason, TypeReason::LocalNominalEscape);
 }
 
+#[test]
+fn local_nominal_cannot_escape_through_an_outer_inference_variable() {
+    assert_local_escape(
+        concat!(
+            "main : Unit -> Int\n",
+            "main () = {\n",
+            "    let outer = fn(value) {\n",
+            "        let discarded = {\n",
+            "            newtype Hidden = Hidden(Int)\n",
+            "            match value {\n",
+            "                Hidden(number) => ()\n",
+            "            }\n",
+            "        }\n",
+            "        0\n",
+            "    }\n",
+            "    42\n",
+            "}\n",
+        ),
+        0,
+    );
+}
+
+#[test]
+fn delayed_requirement_cannot_solve_an_outer_type_to_a_local_nominal() {
+    assert_local_escape(
+        concat!(
+            "type Box<A> = Box(A)\n",
+            "interface Rel<Key, Value> where Key -> Value {\n    relate : (Key, Value) -> Unit\n}\n",
+            "impl<A> Rel<Box<A>, A> {\n    relate pair = ()\n}\n",
+            "main : Unit -> Int\nmain () = {\n",
+            "    let outer = fn(value) {\n        let discarded = {\n",
+            "            newtype Hidden = Hidden(Int)\n",
+            "            relate((Box(Hidden(42)), value))\n",
+            "        }\n        0\n    }\n    42\n}\n",
+        ),
+        0,
+    );
+}
+
+#[test]
+fn internal_nominal_requirement_keeps_an_unrelated_outward_type_generalizable() {
+    assert_execution(concat!(
+        "type Box<A> = Box(A)\n",
+        "interface Rel<Key, Value> where Key -> Value {\n    relate : (Key, Value) -> Unit\n}\n",
+        "impl<A> Rel<Box<A>, A> {\n    relate pair = ()\n}\n",
+        "main : Unit -> Int\nmain () = {\n",
+        "    let ordinary = fn(value) {\n        let discarded = {\n",
+        "            newtype Hidden = Hidden(Int)\n",
+        "            relate((Box(Hidden(42)), Hidden(0)))\n",
+        "        }\n        value\n    }\n    ordinary(42)\n}\n",
+    ));
+}
+
+#[test]
+fn local_representation_may_use_an_enclosing_type_parameter() {
+    let fixture = Fixture::new(concat!(
+        "wrap<A> : A -> A\n",
+        "wrap value = {\n",
+        "    newtype Local = Local(A)\n",
+        "    match Local(value) {\n",
+        "        Local(result) => result\n",
+        "    }\n",
+        "}\n\n",
+        "main : Unit -> Int\n",
+        "main () = wrap(42)\n",
+    ));
+    let observation = ash::driver::run_path(ash::driver::RunConfiguration {
+        entry: fixture.0.clone(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect("a local representation may use the preceding lexical type scope");
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.type_display(), "Int");
+}
+
+#[test]
+fn parameterized_local_newtype_reaches_execution() {
+    assert_execution(concat!(
+        "main : Unit -> Int\nmain () = {\n",
+        "    newtype Local<A> = Local(A)\n",
+        "    match Local(42) {\n        Local(value) => value\n    }\n}\n",
+    ));
+}
+
+#[test]
+fn kinded_local_newtype_reuses_constructor_application() {
+    assert_execution(concat!(
+        "type Option<A> =\n    None\n    | Some(A)\n",
+        "main : Unit -> Int\nmain () = {\n",
+        "    newtype Local<F : Type -> Type, A> = Local(F<A>)\n",
+        "    let wrapped : Local<Option, Int> = Local(Some(42))\n",
+        "    match wrapped {\n        Local(Some(value)) => value\n        Local(None) => 0\n    }\n}\n",
+    ));
+}
+
+#[test]
+fn following_recursive_group_executes_with_local_nominal() {
+    assert_execution(concat!(
+        "main : Unit -> Int\nmain () = {\n",
+        "    newtype Cell = Cell(Int)\n",
+        "    let rec reveal : Cell -> Int = fn(cell) {\n",
+        "        match cell {\n            Cell(value) => value\n        }\n    }\n",
+        "    reveal(Cell(42))\n}\n",
+    ));
+}
+
+#[test]
+fn representation_interface_evidence_does_not_transfer_to_a_local_nominal() {
+    let resolved = Fixture::new(concat!(
+        "interface Render<A> {\n    render : A -> Int\n}\n",
+        "impl Render<Int> {\n    render value = value\n}\n",
+        "main : Unit -> Int\nmain () = {\n",
+        "    newtype UserId = UserId(Int)\n    render(UserId(41))\n}\n",
+    ))
+    .resolve();
+    let TypeError::Interface(diagnostic) =
+        check_module(resolved).expect_err("representation evidence is not nominal evidence")
+    else {
+        panic!("the interface checker owns the rejection")
+    };
+    assert_eq!(
+        diagnostic.reason,
+        ash::interface::InterfaceReason::Unsatisfied
+    );
+}
+
+#[test]
+fn local_representation_captures_a_generic_implementation_parameter() {
+    assert_execution(concat!(
+        "type Box<A> = Box(A)\n",
+        "interface Keep<A> {\n    keep : A -> A\n}\n",
+        "impl<A> Keep<Box<A>> {\n    keep (Box(value)) = {\n",
+        "        newtype Local = Local(A)\n",
+        "        match Local(value) {\n            Local(result) => Box(result)\n        }\n    }\n}\n",
+        "main : Unit -> Int\nmain () = match keep(Box(42)) {\n    Box(value) => value\n}\n",
+    ));
+}
+
+fn assert_execution(source: &str) {
+    let fixture = Fixture::new(source);
+    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty()).expect("fixture should load");
+    let resolved = resolve_module(&graph.modules()[0], &[]).expect("fixture should resolve");
+    let checked = check_module(resolved).expect("fixture should check");
+    let linked = link_modules(vec![checked], graph.entry()).expect("fixture should link");
+    let linked = validate_interface_evidence(linked).expect("evidence should authenticate");
+    let mut elaborator =
+        Elaborator::for_module_program(&linked).expect("Core namespace should fit");
+    let typed = elaborator
+        .synthesize_module_program(&linked)
+        .expect("fixture should elaborate");
+    let program = elaborator.finish(typed.node).expect("Core should finish");
+    let source = graph.modules()[0].source();
+    let relation = [(graph.entry(), source.id())];
+    let validated = validate_modules(program, &[source], &relation).expect("Core should validate");
+    for transformed in [
+        ash::core::transform::identity_traversal(&validated)
+            .expect("identity traversal should rebuild"),
+        ash::core::transform::fold_literal_primitives(&validated)
+            .expect("literal folding should rebuild"),
+    ] {
+        let validated = validate_modules(transformed, &[source], &relation)
+            .expect("transformed Core should validate");
+        let observed = evaluate(&validated).expect("transformed Core should execute");
+        assert!(matches!(observed.value, Value::Integer(value) if value.to_string() == "42"));
+    }
+}
+
 fn assert_local_escape(source: &str, case: usize) {
     let resolved = Fixture::new(source).resolve();
     let error = check_module(resolved)

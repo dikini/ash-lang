@@ -3638,6 +3638,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     ) -> Result<(), ValidationError> {
         let registry = &self.program.registry;
         let relation = self.module_sources.as_ref();
+        self.charge_type_work(registry.lexical_nominals().len())?;
         let mut identities = HashSet::new();
         identities
             .try_reserve(registry.lexical_nominals().len())
@@ -3660,7 +3661,19 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let parameters = registry
                 .nominal_parameters(nominal.id)
                 .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            self.charge_type_work(
+                parameters
+                    .len()
+                    .checked_mul(2)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+            )?;
+            parameter_owners
+                .try_reserve(parameters.len())
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
             let mut names = HashSet::new();
+            names
+                .try_reserve(parameters.len())
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
             for parameter in parameters {
                 let parameter_range = parameter.origin.primary_span().range();
                 let canonical = registry
@@ -4145,7 +4158,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
                 Type::Variable(variable)
                     if parameter_owners.get(variable)
-                        == Some(&RegistryParameterOwner::Nominal(owner)) => {}
+                        == Some(&RegistryParameterOwner::Nominal(owner))
+                        || owner.is_lexical()
+                            && self.program.registry.type_variable(*variable).is_some() => {}
                 Type::Variable(_) | Type::Inference(_) | Type::Forall(_, _) => return Ok(false),
                 Type::Application(function, argument) => {
                     let child_depth = depth.saturating_add(1);
@@ -4530,6 +4545,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         } => {
                             if parameter_owners.get(identity)
                                 != Some(&RegistryParameterOwner::Nominal(owner))
+                                && !owner.is_lexical()
                             {
                                 self.charge_type_work(1)?;
                                 return Err(ValidationError::new(ValidationReason::Registry, None));
@@ -5665,6 +5681,106 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         Ok(())
     }
 
+    fn scoped_lexical_representation(
+        &self,
+        owner: crate::types::NominalTypeId,
+        occurrence: NodeId,
+    ) -> Result<IterativeTypeOwner, ValidationError> {
+        let nominal =
+            self.program.registry.nominal(owner).ok_or_else(|| {
+                ValidationError::new(ValidationReason::Registry, Some(occurrence))
+            })?;
+        let representation = nominal
+            .representation
+            .as_ref()
+            .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(occurrence)))?;
+        let mut captured = HashSet::new();
+        self.charge_type_structure(representation)?;
+        self.collect_free_type_variables(representation, &mut captured)?;
+        for parameter in self
+            .program
+            .registry
+            .nominal_parameters(owner)
+            .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(occurrence)))?
+        {
+            self.charge_type_work(1)?;
+            captured.remove(&parameter.id);
+        }
+        let mut replacements = TypeReplacementMap::new();
+        if !captured.is_empty() {
+            // Implementation bodies use generated binders. Reuse their independently
+            // authenticated source-to-Core parameter order only beneath that owner.
+            for anchor in &self.program.method_evidence_anchors {
+                self.charge_type_work(1)?;
+                let MethodEvidenceAnchorRole::ImplementationOwner { implementation, .. } =
+                    anchor.role
+                else {
+                    continue;
+                };
+                let Some(expected) = self
+                    .program
+                    .method_evidence
+                    .implementation_owner(implementation)
+                else {
+                    return Err(ValidationError::new(
+                        ValidationReason::Registry,
+                        Some(occurrence),
+                    ));
+                };
+                self.charge_type_work(expected.source_parameters.len())?;
+                if !expected
+                    .source_parameters
+                    .iter()
+                    .any(|(parameter, _)| captured.contains(parameter))
+                    || !self.node_reaches(anchor.node, occurrence)?
+                {
+                    continue;
+                }
+                replacements = self.implementation_replacements(
+                    implementation,
+                    &HashMap::new(),
+                    occurrence,
+                    false,
+                )?;
+                break;
+            }
+        }
+        Ok(IterativeTypeOwner::new(substitute_type_variables_with(
+            representation,
+            replacements.as_map(),
+            |cells| self.charge_type_work(cells),
+            || ValidationError::new(ValidationReason::Resource, Some(occurrence)),
+        )?))
+    }
+
+    fn node_reaches(&self, root: NodeId, target: NodeId) -> Result<bool, ValidationError> {
+        self.charge_type_work(1)?;
+        let mut pending = Vec::new();
+        pending
+            .try_reserve(1)
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(root)))?;
+        pending.push(root);
+        while let Some(id) = pending.pop() {
+            if id == target {
+                return Ok(true);
+            }
+            let node = self.node(id)?;
+            let children = F::child_count(&node.kind);
+            self.charge_type_work(children)?;
+            pending
+                .try_reserve(children)
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+            for index in 0..children {
+                pending.push(
+                    F::child_at(&node.kind, index).ok_or_else(|| {
+                        ValidationError::new(ValidationReason::NodeBounds, Some(id))
+                    })?,
+                );
+            }
+        }
+        Ok(false)
+    }
+
     fn valid_newtype_conversion(
         &self,
         node: &StoredNode<F>,
@@ -5741,6 +5857,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             replacements.insert_replacing(parameter.id, self.clone_type_charged(argument)?);
         }
 
+        let lexical_representation = owner
+            .id
+            .is_lexical()
+            .then(|| self.scoped_lexical_representation(owner.id, conversion.child()))
+            .transpose()?;
+        let representation = lexical_representation.as_deref().unwrap_or(representation);
         let expected = IterativeTypeOwner::new(substitute_type_variables_with(
             representation,
             replacements.as_map(),
@@ -6271,6 +6393,27 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                 free.remove(parameter);
                             }
                         }
+                        Some(PureExprKind::Computation(PureComputation::LocalNominalScope(
+                            scope,
+                        ))) => {
+                            let representation =
+                                self.scoped_lexical_representation(scope.owner(), id)?;
+                            let mut captured = HashSet::new();
+                            self.charge_type_structure(&representation)?;
+                            self.collect_free_type_variables(&representation, &mut captured)?;
+                            for parameter in self
+                                .program
+                                .registry
+                                .nominal_parameters(scope.owner())
+                                .ok_or_else(|| {
+                                    ValidationError::new(ValidationReason::Registry, Some(id))
+                                })?
+                            {
+                                self.charge_type_work(1)?;
+                                captured.remove(&parameter.id);
+                            }
+                            self.merge_type_scope_requirements(&mut free, captured)?;
+                        }
                         Some(
                             PureExprKind::Value(
                                 PureValue::Integer(_)
@@ -6283,8 +6426,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                 PureComputation::Apply(_)
                                 | PureComputation::Primitive(_)
                                 | PureComputation::Tuple(_)
-                                | PureComputation::NewtypeConversion(_)
-                                | PureComputation::LocalNominalScope(_),
+                                | PureComputation::NewtypeConversion(_),
                             ),
                         ) => {}
                         None => {}
@@ -6939,6 +7081,19 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         self.collect_type_local_nominals(&node.ty, occurrence, requirements)?;
         self.collect_row_local_nominals(F::effect_row(&node.effects), occurrence, requirements)?;
         match F::pure(&node.kind) {
+            Some(PureExprKind::Computation(PureComputation::LocalNominalScope(scope))) => {
+                let nominal = self
+                    .program
+                    .registry
+                    .nominal(scope.owner())
+                    .ok_or_else(|| {
+                        ValidationError::new(ValidationReason::Registry, Some(occurrence))
+                    })?;
+                let representation = nominal.representation.as_ref().ok_or_else(|| {
+                    ValidationError::new(ValidationReason::Registry, Some(occurrence))
+                })?;
+                self.collect_type_local_nominals(representation, occurrence, requirements)?;
+            }
             Some(PureExprKind::Value(PureValue::Function(function))) => {
                 self.collect_type_local_nominals(
                     function.parameter().ty(),
@@ -9421,6 +9576,227 @@ mod tests {
     }
 
     #[test]
+    fn unused_local_representation_still_requires_its_lexical_dependencies() {
+        let fixture = LinkedCoreValidationFixture::compile(
+            "",
+            concat!(
+                "main : Unit -> Int\nmain () = {\n",
+                "    newtype Outer = Outer(Int)\n",
+                "    newtype Inner = Inner(Outer)\n    42\n}\n",
+            ),
+            &[],
+        );
+        let sources = fixture
+            .graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let validated = validate_modules(fixture.program, &sources, &fixture.module_sources)
+            .expect("unused nested nominals should validate");
+        let mut tampered = identity_traversal(&validated).expect("scope traversal should rebuild");
+        let scopes = tampered
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| match &node.kind {
+                PureExprKind::Computation(PureComputation::LocalNominalScope(scope)) => {
+                    Some((index, *scope))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [(first_index, first), (second_index, second)] = scopes.as_slice() else {
+            panic!("two local scopes expected")
+        };
+        tampered.nodes[*first_index].kind =
+            PureExprKind::Computation(PureComputation::LocalNominalScope(
+                crate::core::LocalNominalScopeNode::new(second.owner(), first.body()),
+            ));
+        tampered.nodes[*second_index].kind =
+            PureExprKind::Computation(PureComputation::LocalNominalScope(
+                crate::core::LocalNominalScopeNode::new(first.owner(), second.body()),
+            ));
+        assert_eq!(
+            validate_modules(tampered, &sources, &fixture.module_sources)
+                .expect_err("the representation dependency cannot precede its introduction")
+                .reason(),
+            ValidationReason::Scope
+        );
+        drop(fixture.directory);
+    }
+
+    #[test]
+    fn unused_local_representation_cannot_move_outside_its_type_abstraction() {
+        for source in [
+            "keep<A> : A -> A\nkeep value = {\nnewtype Local = Local(A)\nvalue\n}\nmain : Unit -> Int\nmain () = 42\n",
+            "type Box<A> = Box(A)\ninterface Keep<A> {\nkeep : A -> A\n}\nimpl<A> Keep<Box<A>> {\nkeep value = {\nnewtype Local = Local(A)\nvalue\n}\n}\nmain : Unit -> Int\nmain () = 42\n",
+        ] {
+            let fixture = LinkedCoreValidationFixture::compile("", source, &[]);
+            let sources = fixture
+                .graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let validated = validate_modules(fixture.program, &sources, &fixture.module_sources)
+                .expect("the unused captured representation should validate");
+            let mut moved = identity_traversal(&validated).expect("the fixture should rebuild");
+            let (scope_id, scope) = moved
+                .nodes
+                .iter()
+                .enumerate()
+                .find_map(|(index, node)| match &node.kind {
+                    PureExprKind::Computation(PureComputation::LocalNominalScope(scope)) => {
+                        Some((node_id(moved.arena, index).expect("scope id"), *scope))
+                    }
+                    _ => None,
+                })
+                .expect("one local scope");
+            let mut replaced = 0;
+            for node in &mut moved.nodes {
+                match &node.kind {
+                    PureExprKind::Computation(PureComputation::Match(matched))
+                        if matched.arms().iter().any(|arm| arm.body() == scope_id) =>
+                    {
+                        let arms = matched
+                            .arms()
+                            .iter()
+                            .map(|arm| {
+                                crate::core::CoreMatchArm::new(
+                                    arm.pattern().clone(),
+                                    if arm.body() == scope_id {
+                                        scope.body()
+                                    } else {
+                                        arm.body()
+                                    },
+                                    arm.origin().clone(),
+                                )
+                            })
+                            .collect();
+                        node.kind = PureExprKind::Computation(PureComputation::Match(
+                            crate::core::MatchNode::new(matched.scrutinee(), arms),
+                        ));
+                        replaced += 1;
+                    }
+                    PureExprKind::Value(PureValue::Function(function))
+                        if function.body() == scope_id =>
+                    {
+                        node.kind = PureExprKind::Value(PureValue::Function(FunctionNode::new(
+                            function.parameter().clone(),
+                            scope.body(),
+                        )));
+                        replaced += 1;
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!(replaced, 1);
+            let root = moved.root;
+            let ty = moved.nodes[root.index().expect("root index")].ty.clone();
+            let scope_node = &mut moved.nodes[scope_id.index().expect("scope index")];
+            crate::types::replace_type_iteratively(&mut scope_node.ty, ty);
+            scope_node.kind = PureExprKind::Computation(PureComputation::LocalNominalScope(
+                crate::core::LocalNominalScopeNode::new(scope.owner(), root),
+            ));
+            moved.root = scope_id;
+            assert_eq!(
+                validate_modules(moved, &sources, &fixture.module_sources)
+                    .expect_err("a captured type variable requires its enclosing abstraction")
+                    .reason(),
+                ValidationReason::TypeScope
+            );
+        }
+    }
+
+    #[test]
+    fn lexical_representation_and_ancestry_walks_have_exact_retry_boundaries() {
+        let fixture = LinkedCoreValidationFixture::compile(
+            "",
+            "main : Unit -> Unit\nmain () = {\nnewtype First = First(Int)\nnewtype Second<A> = Second(A)\n()\n}\n",
+            &[],
+        );
+        let sources = linked_fixture_sources(&fixture);
+        let make = || {
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                .expect("fixture relation")
+        };
+        for (nominal, exact) in fixture
+            .program
+            .registry
+            .lexical_nominals()
+            .iter()
+            .zip([2, 4])
+        {
+            let short = make();
+            short
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact + 1)
+                .expect("short prefix");
+            assert_eq!(
+                short
+                    .scoped_lexical_representation(nominal.id, fixture.program.root)
+                    .err()
+                    .expect("one missing representation unit should reject")
+                    .reason(),
+                ValidationReason::Resource
+            );
+            for _ in 0..2 {
+                let retry = make();
+                retry
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact)
+                    .expect("exact prefix");
+                drop(
+                    retry
+                        .scoped_lexical_representation(nominal.id, fixture.program.root)
+                        .expect("exact representation should fit"),
+                );
+                assert_eq!(retry.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+            }
+        }
+        let scopes = fixture
+            .program
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| match &node.kind {
+                PureExprKind::Computation(PureComputation::LocalNominalScope(scope)) => Some((
+                    node_id(fixture.program.arena, index).expect("scope id"),
+                    *scope,
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [(inner_id, inner), (outer_id, _)] = scopes.as_slice() else {
+            panic!("two scopes")
+        };
+        for (root, target, exact) in [(*inner_id, *inner_id, 1), (*outer_id, inner.body(), 3)] {
+            let short = make();
+            short
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact + 1)
+                .expect("short prefix");
+            assert_eq!(
+                short
+                    .node_reaches(root, target)
+                    .expect_err("one missing ancestry unit should reject")
+                    .reason(),
+                ValidationReason::Resource
+            );
+            for _ in 0..2 {
+                let retry = make();
+                retry
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact)
+                    .expect("exact prefix");
+                assert!(
+                    retry
+                        .node_reaches(root, target)
+                        .expect("the exact ancestry walk should fit")
+                );
+                assert_eq!(retry.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+            }
+        }
+    }
+
+    #[test]
     fn linked_core_rejects_tampered_local_nominal_scope_relations() {
         #[derive(Clone, Copy, Debug)]
         enum Mutation {
@@ -9559,6 +9935,92 @@ mod tests {
                 .expect_err("forged local facts must fail registry validation");
             assert_eq!(error.reason(), ValidationReason::Registry);
             assert_eq!(error.node(), None);
+        }
+    }
+
+    #[test]
+    fn lexical_registry_indices_charge_before_retention_and_retry_exactly() {
+        let mut fixture = LinkedCoreValidationFixture::compile(
+            "",
+            concat!(
+                "main : Unit -> Unit\n",
+                "main () = {\n",
+                "    newtype First = First(Int)\n",
+                "    newtype Second = Second(Int)\n",
+                "    ()\n",
+                "}\n",
+            ),
+            &[],
+        );
+        let registry = Arc::get_mut(&mut fixture.program.registry)
+            .expect("the unchecked fixture owns its registry");
+        let first = &registry.lexical_nominals()[0];
+        let owner = first.id;
+        let parameter = crate::resolved::ResolvedTypeVariable {
+            id: crate::types::TypeVariableId::resolved(owner.module(), 99),
+            spelling: "A".to_owned(),
+            kind: Kind::Type,
+            origin: first.origin.clone(),
+        };
+        *registry = std::mem::take(registry).with_type_parameters(vec![(owner, vec![parameter])]);
+        let sources = linked_fixture_sources(&fixture);
+        let validator = || {
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                .expect("the lexical registry relation should initialize")
+        };
+        // Two identity-index entries precede both indices for the first parameter.
+        for available in [1, 3] {
+            let early = validator();
+            let prefix = CORE_VALIDATION_TYPE_WORK_LIMIT - available;
+            early
+                .charge_type_work(prefix)
+                .expect("the prefix should fit");
+            let mut owners = HashMap::new();
+            assert_eq!(
+                early
+                    .validate_lexical_registry(&mut owners, None)
+                    .expect_err("incomplete index storage must reject")
+                    .reason(),
+                ValidationReason::Resource,
+            );
+            assert!(owners.is_empty(), "no parameter owner may be retained yet");
+            assert_eq!(
+                early.type_work.get(),
+                prefix + if available == 1 { 0 } else { 2 }
+            );
+        }
+
+        let measured = validator();
+        let mut owners = HashMap::new();
+        measured
+            .validate_lexical_registry(&mut owners, None)
+            .expect("the canonical lexical registry should validate");
+        assert_eq!(owners.len(), 1);
+        let exact = measured.type_work.get();
+        const EXACT_WORK: usize = 18;
+        assert_eq!(exact, EXACT_WORK);
+        let short = validator();
+        short
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (exact - 1))
+            .expect("the one-short prefix should fit");
+        assert_eq!(
+            short
+                .validate_lexical_registry(&mut HashMap::new(), None)
+                .expect_err("one missing registry unit must reject")
+                .reason(),
+            ValidationReason::Resource,
+        );
+        for _ in 0..2 {
+            let retry = validator();
+            retry
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact)
+                .expect("the exact prefix should fit");
+            let mut owners = HashMap::new();
+            retry
+                .validate_lexical_registry(&mut owners, None)
+                .expect("a fresh exact retry should validate");
+            assert_eq!(retry.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+            assert_eq!(owners.len(), 1);
         }
     }
 

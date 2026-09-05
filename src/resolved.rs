@@ -15749,6 +15749,20 @@ impl ResolvedRegistry {
             ));
         }
 
+        budget
+            .charge(
+                self.lexical_nominals
+                    .len()
+                    .checked_mul(2)
+                    .and_then(|work| {
+                        self.lexical_constructors
+                            .len()
+                            .checked_mul(2)?
+                            .checked_add(work)
+                    })
+                    .ok_or(ResolvedBuildFailure::TypeResource)?,
+            )
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         let mut lexical_nominals = ResolvedNominalBuffer(Vec::new());
         lexical_nominals
             .0
@@ -15926,10 +15940,10 @@ impl ResolvedRegistry {
         let mut registry = Self::new(nominals.into_vec(), constructors.into_vec())
             .with_type_parameters_with_budget(parameters.into_vec(), budget)
             .map_err(|()| ResolvedBuildFailure::TypeResource)?
-            .with_lexical_nominals_with_budget(
-                lexical_nominals.into_vec(),
-                lexical_constructors.into_vec(),
-                lexical_parameters.into_vec(),
+            .with_precharged_lexical_nominals(
+                lexical_nominals,
+                lexical_constructors,
+                lexical_parameters,
                 budget,
             )
             .map_err(|()| ResolvedBuildFailure::TypeResource)?
@@ -16090,7 +16104,7 @@ impl ResolvedRegistry {
     }
 
     pub(crate) fn with_lexical_nominals_with_budget(
-        mut self,
+        self,
         nominals: Vec<ResolvedNominalType>,
         constructors: Vec<ResolvedConstructor>,
         parameters: Vec<(NominalTypeId, Vec<ResolvedTypeVariable>)>,
@@ -16107,6 +16121,16 @@ impl ResolvedRegistry {
                 .and_then(|work| constructors.0.len().checked_mul(2)?.checked_add(work))
                 .ok_or(())?,
         )?;
+        self.with_precharged_lexical_nominals(nominals, constructors, parameters, budget)
+    }
+
+    fn with_precharged_lexical_nominals(
+        mut self,
+        nominals: ResolvedNominalBuffer,
+        constructors: ResolvedConstructorBuffer,
+        parameters: ResolvedNominalParameterVecBuffer,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ()> {
         let mut nominal_positions = HashMap::new();
         let mut constructor_positions = HashMap::new();
         nominal_positions
@@ -18178,11 +18202,22 @@ mod tests {
             .expect("the source lexical facts should publish");
 
         let imported = ImportedFacts::default();
+        let mut before_retention = TypeWorkBudget::with_limit(3);
+        assert_eq!(
+            registry.checker_view(&imported, &mut before_retention),
+            Err(ResolvedBuildFailure::TypeResource)
+        );
+        assert_eq!(
+            before_retention.used(),
+            0,
+            "the four lexical carrier units must precede representation cloning"
+        );
         let mut measured = TypeWorkBudget::unbounded();
         registry
             .checker_view(&imported, &mut measured)
             .expect("measurement should retain the lexical partition");
         let exact = measured.used();
+        assert_eq!(exact, 5, "four carriers and one representation cell");
         let mut one_short = TypeWorkBudget::with_limit(exact - 1);
         assert_eq!(
             registry.checker_view(&imported, &mut one_short),

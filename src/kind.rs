@@ -444,8 +444,7 @@ impl<'a> KindEnvironments<'a> {
         parameters: &'a [crate::resolved::ResolvedTypeVariable],
         budget: &mut TypeWorkBudget,
     ) -> Result<(), KindFailure> {
-        let mut installed = 0;
-        for parameter in parameters {
+        for (installed, parameter) in parameters.iter().enumerate() {
             if !binder_kind_is_admitted(&parameter.kind, false) {
                 self.remove_owner_parameter_extension(&parameters[..installed]);
                 return Err(KindFailure::internal(
@@ -462,7 +461,6 @@ impl<'a> KindEnvironments<'a> {
                 self.remove_owner_parameter_extension(&parameters[..installed]);
                 return Err(failure);
             }
-            installed += 1;
         }
         Ok(())
     }
