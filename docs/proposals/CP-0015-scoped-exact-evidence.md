@@ -62,7 +62,9 @@ key. Module implementation coherence and orphan rules remain unchanged.
 The declaration supplies each required method exactly once, using the existing
 equation-grouping, pattern, coverage, and contextual method-checking rules.
 Interface arguments instantiate interface parameters; interface method-local
-parameters remain rigid during checking. Existing higher-kinded parameters and
+parameters remain rigid during checking. Their declaration spellings do not
+enter the supplied body's source type namespace; existing enclosing type names
+retain their meanings, as for implementation equations. Existing higher-kinded parameters and
 effect annotations retain their ordinary meaning. This does not add first-class
 polymorphic source values.
 
@@ -252,9 +254,12 @@ Retain these named obligations in the task and executable corpus:
 - after resolution, arity, and kind admission, local-key admission precedes
   active-key duplicate/conflict checking, then complete method-membership
   checking, then method-body checking in the existing deterministic order;
-  primary labels identify the
-  offending header or method and related labels identify the earlier source
-  or required interface method; malformed compiler facts are internal failures;
+  `evidence.missing-local-key` labels the new header; duplicate/conflicting
+  sources label the new header and relate the earlier header; a missing method
+  labels the header and relates the required interface method; a duplicate
+  method labels the repeated group name and relates the earlier group name;
+  an extra method labels that name and relates the interface declaration;
+  malformed compiler facts are internal failures;
 - linked and Core tampering cannot replace source owner, complete goal,
   method slot, parameter mapping, capture binder, or source scope; both
   transforms revalidate the original runtime observation;
