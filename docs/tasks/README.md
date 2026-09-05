@@ -10,3 +10,4 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 ## Active tasks
 
 - [TASK-0021: Implement Human Diagnostics](TASK-0021-implement-human-diagnostics.md)
+- [TASK-0025: Implement Scoped Exact Evidence](TASK-0025-implement-scoped-exact-evidence.md)
