@@ -2359,3 +2359,32 @@ fn unused_global_body_inference_labels_its_causal_initializer() {
     assert_eq!(error.primary.span().range().start(), offset(none_start));
     assert_eq!(error.primary.span().range().end(), offset(none_start + 4));
 }
+
+#[test]
+fn local_nominal_escape_labels_outward_expression_and_declaration() {
+    let text = concat!(
+        "main : Unit -> Int\n",
+        "main () = {\n",
+        "    let escaped = {\n",
+        "        newtype Hidden = Hidden(Int)\n",
+        "        Hidden(1)\n",
+        "    }\n",
+        "    0\n",
+        "}\n",
+    );
+    let PipelineFailure::Typing(TypeError::Source(error)) =
+        failure("local-nominal-escape.ash", text)
+    else {
+        panic!("local nominal escape should fail during typing")
+    };
+    assert_eq!(error.reason, TypeReason::LocalNominalEscape);
+    assert_eq!(
+        error.primary.span().range().start(),
+        offset(text.find("Hidden(1)").expect("escaping expression")),
+    );
+    assert_eq!(error.related.len(), 1);
+    assert_eq!(
+        error.related[0].span().range().start(),
+        offset(text.find("newtype Hidden").expect("local declaration")),
+    );
+}

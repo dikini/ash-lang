@@ -518,6 +518,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             shape.token(&TokenKind::LineEnd)?;
             while shape.peek_node_is(NodeKind::LocalBinding)
                 || shape.peek_node_is(NodeKind::RecursiveBindingGroup)
+                || shape.peek_node_is(NodeKind::NewtypeDeclaration)
             {
                 shape.any_node()?;
                 shape.token(&TokenKind::LineEnd)?;
@@ -1971,6 +1972,9 @@ fn project_expression(
                                 },
                             ));
                         }
+                        PendingLocalDeclaration::Newtype(newtype) => {
+                            projected_declarations.push(SurfaceLocalDeclaration::Newtype(newtype));
+                        }
                     }
                 }
                 let result = expressions.next().ok_or(ProjectionError::MalformedTree(
@@ -2057,6 +2061,7 @@ enum ExpressionTask<'a> {
 enum PendingLocalDeclaration {
     Binding(Box<PendingBinding>),
     Recursive(PendingRecursiveGroup),
+    Newtype(SurfaceTypeDeclaration),
 }
 
 impl PendingLocalDeclaration {
@@ -2064,6 +2069,7 @@ impl PendingLocalDeclaration {
         match self {
             Self::Binding(_) => 1,
             Self::Recursive(group) => group.members.len(),
+            Self::Newtype(_) => 0,
         }
     }
 }
@@ -2157,6 +2163,10 @@ fn schedule_block<'a>(
                 members,
                 span: node_span(source, child, tokens)?,
             }));
+        } else if child.kind == NodeKind::NewtypeDeclaration {
+            declarations.push(PendingLocalDeclaration::Newtype(
+                project_newtype_declaration(source, child, tokens)?,
+            ));
         } else if is_expression_kind(child.kind) {
             if result.replace(child).is_some() {
                 return malformed(InternalReason::UnexpectedShape);

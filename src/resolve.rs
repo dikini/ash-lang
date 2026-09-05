@@ -54,13 +54,14 @@ use crate::{
     },
     source::{Origin, discard_origin_iteratively},
     surface::{
-        BinaryExpr, SurfaceBinding, SurfaceBlock, SurfaceDeclarationIndex, SurfaceDefinition,
-        SurfaceDefinitionKind, SurfaceEffectDeclaration, SurfaceExpr, SurfaceExprKind,
-        SurfaceImplementation, SurfaceImportItem, SurfaceImportSelection,
-        SurfaceInterfaceApplication, SurfaceInterfaceDeclaration, SurfaceInterfaceDetermination,
-        SurfaceKind, SurfaceKindKind, SurfaceLocalDeclaration, SurfaceModule, SurfaceName,
-        SurfaceNominalDeclarationKind, SurfacePattern, SurfacePatternKind, SurfaceRecursiveGroup,
-        SurfaceReference, SurfaceRequirement, SurfaceType, SurfaceTypeDeclaration, SurfaceTypeKind,
+        BinaryExpr, SurfaceBinding, SurfaceBlock, SurfaceConstructorDeclaration,
+        SurfaceDeclarationIndex, SurfaceDefinition, SurfaceDefinitionKind,
+        SurfaceEffectDeclaration, SurfaceExpr, SurfaceExprKind, SurfaceImplementation,
+        SurfaceImportItem, SurfaceImportSelection, SurfaceInterfaceApplication,
+        SurfaceInterfaceDeclaration, SurfaceInterfaceDetermination, SurfaceKind, SurfaceKindKind,
+        SurfaceLocalDeclaration, SurfaceModule, SurfaceName, SurfaceNominalDeclarationKind,
+        SurfacePattern, SurfacePatternKind, SurfaceRecursiveGroup, SurfaceReference,
+        SurfaceRequirement, SurfaceType, SurfaceTypeDeclaration, SurfaceTypeKind,
         SurfaceTypeParameter, SurfaceTypeVisibility,
     },
     types::{
@@ -668,6 +669,43 @@ impl Drop for ResolvedConstructorOwnerBuffer {
     fn drop(&mut self) {
         for constructor in self.0.drain(..) {
             constructor.discard_iteratively();
+        }
+    }
+}
+
+struct ResolvedNominalOwnerBuffer(Vec<ResolvedNominalType>);
+
+impl ResolvedNominalOwnerBuffer {
+    fn into_vec(mut self) -> Vec<ResolvedNominalType> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for ResolvedNominalOwnerBuffer {
+    fn drop(&mut self) {
+        for nominal in self.0.drain(..) {
+            if let Some(representation) = nominal.representation {
+                discard_type_iteratively(representation);
+            }
+            discard_origin_iteratively(nominal.origin);
+        }
+    }
+}
+
+struct ResolvedNominalParameterOwnerBuffer(Vec<(NominalTypeId, Vec<ResolvedTypeVariable>)>);
+
+impl ResolvedNominalParameterOwnerBuffer {
+    fn into_vec(mut self) -> Vec<(NominalTypeId, Vec<ResolvedTypeVariable>)> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl Drop for ResolvedNominalParameterOwnerBuffer {
+    fn drop(&mut self) {
+        for (_, parameters) in self.0.drain(..) {
+            for parameter in parameters {
+                discard_origin_iteratively(parameter.origin);
+            }
         }
     }
 }
@@ -1435,14 +1473,21 @@ struct Resolver {
     module: ModuleId,
     next_binder: u32,
     next_type_variable: u32,
+    next_lexical_nominal: u32,
     scopes: Vec<HashMap<String, ResolvedTermBinding>>,
     globals: HashMap<String, GlobalFact>,
     type_names: HashMap<String, NominalTypeId>,
     interface_names: HashMap<String, InterfaceId>,
     effect_names: HashMap<String, EffectId>,
+    local_operation_names: HashMap<EffectId, HashMap<String, OperationId>>,
     method_names: HashMap<String, ResolvedTermBinding>,
     global_requirement_counts: HashMap<BinderId, usize>,
     constructor_names: HashMap<String, ConstructorId>,
+    lexical_nominal_scopes: Vec<HashMap<String, NominalTypeId>>,
+    lexical_constructor_scopes: Vec<HashMap<String, ConstructorId>>,
+    lexical_nominals: ResolvedNominalOwnerBuffer,
+    lexical_constructors: ResolvedConstructorOwnerBuffer,
+    lexical_nominal_parameters: ResolvedNominalParameterOwnerBuffer,
     module_aliases: HashMap<String, ImportedNamespaces>,
     targeted_withheld: HashMap<(String, WithheldNamespace), WithheldImport>,
     public_import_candidate: ResolvedExportCandidate,
@@ -1451,7 +1496,6 @@ struct Resolver {
     public_implementation_route_ranks: HashMap<ImplId, ImplementationRouteRank>,
     type_scopes: Vec<HashMap<String, TypeVariableId>>,
     nominal_parameter_counts: HashMap<NominalTypeId, usize>,
-    expression_registry: Option<Arc<ResolvedRegistry>>,
     active_resumes: Vec<ResumeId>,
     next_resume: u32,
     type_work: TypeWorkBudget,
@@ -1497,6 +1541,78 @@ struct PendingImplementation {
 struct NominalDeclarationIdentity {
     id: NominalTypeId,
     constructors: Vec<ConstructorId>,
+}
+
+fn validate_newtype_shape(
+    declaration: &SurfaceTypeDeclaration,
+) -> Result<(&SurfaceConstructorDeclaration, &SurfaceType), ResolveError> {
+    let [constructor] = declaration.constructors.as_slice() else {
+        return Err(error(
+            ResolveReason::InternalState,
+            declaration.span,
+            "a projected newtype does not retain exactly one constructor",
+        ));
+    };
+    let [representation] = constructor.fields.as_slice() else {
+        return Err(error(
+            ResolveReason::InternalState,
+            constructor.span,
+            "a projected newtype does not retain exactly one representation",
+        ));
+    };
+    if constructor.name.text != declaration.name.text {
+        let mut diagnostic = Diagnostic::new(
+            ResolveReason::NewtypeConstructorName,
+            SourceLabel::new(
+                constructor.name.span,
+                "this newtype constructor must use the nominal type's spelling",
+            ),
+        );
+        diagnostic.related.push(SourceLabel::new(
+            declaration.name.span,
+            "this nominal declaration defines the required spelling",
+        ));
+        return Err(diagnostic.into());
+    }
+    Ok((constructor, representation))
+}
+
+fn resolved_newtype_fact_pair(
+    declaration: &SurfaceTypeDeclaration,
+    constructor: &SurfaceConstructorDeclaration,
+    id: NominalTypeId,
+    constructor_id: ConstructorId,
+    representation: IterativeTypeOwner,
+    provenance: ResolvedTypeProvenance,
+) -> Result<(ResolvedNominalType, ResolvedConstructor), ResolveError> {
+    let nominal_spelling = try_clone_resolution_string(
+        &declaration.name.text,
+        declaration.name.span,
+        "newtype nominal spelling storage could not be reserved",
+    )?;
+    let constructor_spelling = try_clone_resolution_string(
+        &constructor.name.text,
+        constructor.name.span,
+        "newtype constructor spelling storage could not be reserved",
+    )?;
+    Ok((
+        ResolvedNominalType {
+            id,
+            declaration_kind: ResolvedNominalDeclarationKind::Newtype,
+            spelling: nominal_spelling,
+            constructors: Box::new([constructor_id]),
+            representation: Some(representation.into_inner()),
+            representation_provenance: Some(provenance),
+            origin: Origin::Source(declaration.span),
+        },
+        ResolvedConstructor {
+            id: constructor_id,
+            owner: id,
+            spelling: constructor_spelling,
+            payload: None,
+            origin: Origin::Source(constructor.span),
+        },
+    ))
 }
 
 struct InterfaceDeclarationIdentity {
@@ -1678,14 +1794,21 @@ impl Resolver {
             module,
             next_binder: 0,
             next_type_variable: 0,
+            next_lexical_nominal: 0,
             scopes: vec![HashMap::new()],
             globals: HashMap::new(),
             type_names: HashMap::new(),
             interface_names: HashMap::new(),
             effect_names: HashMap::new(),
+            local_operation_names: HashMap::new(),
             method_names: HashMap::new(),
             global_requirement_counts: HashMap::new(),
             constructor_names: HashMap::new(),
+            lexical_nominal_scopes: Vec::new(),
+            lexical_constructor_scopes: Vec::new(),
+            lexical_nominals: ResolvedNominalOwnerBuffer(Vec::new()),
+            lexical_constructors: ResolvedConstructorOwnerBuffer(Vec::new()),
+            lexical_nominal_parameters: ResolvedNominalParameterOwnerBuffer(Vec::new()),
             module_aliases: HashMap::new(),
             targeted_withheld: HashMap::new(),
             public_import_candidate: ResolvedExportCandidate::default(),
@@ -1694,7 +1817,6 @@ impl Resolver {
             public_implementation_route_ranks: HashMap::new(),
             type_scopes: Vec::new(),
             nominal_parameter_counts: HashMap::new(),
-            expression_registry: None,
             active_resumes: Vec::new(),
             next_resume: 0,
             type_work,
@@ -1955,6 +2077,38 @@ impl Resolver {
             })?;
             let id = EffectId::new(self.module, declaration_index);
             self.effect_names.insert(declaration.name.text.clone(), id);
+            self.type_work
+                .charge(declaration.operations.len().checked_add(1).ok_or_else(|| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        declaration.span,
+                        "effect operation-name retention exceeded its type-work budget",
+                    )
+                })?)
+                .map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        declaration.span,
+                        "effect operation-name retention exceeded its type-work budget",
+                    )
+                })?;
+            self.local_operation_names.try_reserve(1).map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    declaration.span,
+                    "effect operation-name storage could not be reserved",
+                )
+            })?;
+            let mut operation_names = HashMap::new();
+            operation_names
+                .try_reserve(declaration.operations.len())
+                .map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        declaration.span,
+                        "effect operation-name storage could not be reserved",
+                    )
+                })?;
             let mut operations = Vec::new();
             operations
                 .try_reserve_exact(declaration.operations.len())
@@ -1973,8 +2127,16 @@ impl Resolver {
                         "the effect contains too many operations",
                     )
                 })?;
-                operations.push(OperationId::new(id, operation_index));
+                let operation_id = OperationId::new(id, operation_index);
+                let operation_name = try_clone_resolution_string(
+                    &operation.name.text,
+                    operation.name.span,
+                    "effect operation name could not be retained",
+                )?;
+                operation_names.insert(operation_name, operation_id);
+                operations.push(operation_id);
             }
+            self.local_operation_names.insert(id, operation_names);
             identities.push(EffectDeclarationIdentity { id, operations });
         }
         Ok(identities)
@@ -4972,7 +5134,7 @@ impl Resolver {
     }
 
     fn nominal_reference(
-        &self,
+        &mut self,
         reference: &SurfaceReference,
     ) -> Result<ImportedNominalName, ResolveError> {
         if let Some(namespace) = self.imported_namespace(reference)? {
@@ -4998,6 +5160,15 @@ impl Resolver {
                 });
         }
         let name = reference.member();
+        if let Some(id) = charged_lexical_scope_lookup(
+            &self.lexical_nominal_scopes,
+            &name.text,
+            name.span,
+            &mut self.type_work,
+            "lexical nominal lookup exceeded its type-work budget",
+        )? {
+            return Ok(ImportedNominalName { id });
+        }
         if self.interface_names.contains_key(&name.text) {
             return Err(type_kind_error(name.span, &name.text));
         }
@@ -5278,17 +5449,19 @@ impl Resolver {
         effect: EffectId,
         operation: &SurfaceName,
     ) -> Result<OperationId, ResolveError> {
-        self.expression_registry
-            .as_ref()
-            .and_then(|registry| registry.effect(effect))
-            .or_else(|| self.imported.effect(effect))
-            .and_then(|declaration| {
-                declaration
-                    .operations
-                    .iter()
-                    .find(|candidate| candidate.spelling == operation.text)
+        self.local_operation_names
+            .get(&effect)
+            .and_then(|operations| operations.get(operation.text.as_str()))
+            .copied()
+            .or_else(|| {
+                self.imported.effect(effect).and_then(|declaration| {
+                    declaration
+                        .operations
+                        .iter()
+                        .find(|candidate| candidate.spelling == operation.text)
+                        .map(|operation| operation.id)
+                })
             })
-            .map(|operation| operation.id)
             .ok_or_else(|| {
                 error(
                     ResolveReason::UnknownName,
@@ -5449,7 +5622,7 @@ impl Resolver {
     }
 
     fn constructor_reference(
-        &self,
+        &mut self,
         reference: &SurfaceReference,
     ) -> Result<ConstructorId, ResolveError> {
         if let Some(namespace) = self.imported_namespace(reference)? {
@@ -5471,11 +5644,18 @@ impl Resolver {
                     )
                 });
         }
-        if let Some(constructor) = self
-            .constructor_names
-            .get(&reference.member().text)
-            .copied()
-        {
+        if let Some(constructor) = charged_lexical_scope_lookup(
+            &self.lexical_constructor_scopes,
+            &reference.member().text,
+            reference.member().span,
+            &mut self.type_work,
+            "lexical constructor lookup exceeded its type-work budget",
+        )?
+        .or_else(|| {
+            self.constructor_names
+                .get(&reference.member().text)
+                .copied()
+        }) {
             return Ok(constructor);
         }
         if let Some(kind) = self
@@ -5882,18 +6062,15 @@ impl Resolver {
         }
         let global_registry_type_parameters =
             self.clone_global_type_parameters_for_registry(&global_type_parameters, surface.span)?;
-        let registry = Arc::new(
-            registry
-                .with_additional_type_variables(
-                    interface_type_parameters
-                        .into_iter()
-                        .chain(effect_registry_parameters)
-                        .chain(global_registry_type_parameters)
-                        .chain(implementation_type_parameters),
-                )
-                .with_effects(registry_effects),
-        );
-        self.expression_registry = Some(Arc::clone(&registry));
+        let registry = registry
+            .with_additional_type_variables(
+                interface_type_parameters
+                    .into_iter()
+                    .chain(effect_registry_parameters)
+                    .chain(global_registry_type_parameters)
+                    .chain(implementation_type_parameters),
+            )
+            .with_effects(registry_effects);
         let mut global_binders = vec![None; surface_definitions.len()];
         for declaration in &surface.declaration_order {
             match *declaration {
@@ -6163,6 +6340,35 @@ impl Resolver {
             surface.span,
         )?);
 
+        let lexical_nominals = std::mem::replace(
+            &mut self.lexical_nominals,
+            ResolvedNominalOwnerBuffer(Vec::new()),
+        );
+        let lexical_constructors = std::mem::replace(
+            &mut self.lexical_constructors,
+            ResolvedConstructorOwnerBuffer(Vec::new()),
+        );
+        let lexical_parameters = std::mem::replace(
+            &mut self.lexical_nominal_parameters,
+            ResolvedNominalParameterOwnerBuffer(Vec::new()),
+        );
+        let registry = Arc::new(
+            registry
+                .with_lexical_nominals_with_budget(
+                    lexical_nominals.into_vec(),
+                    lexical_constructors.into_vec(),
+                    lexical_parameters.into_vec(),
+                    &mut self.type_work,
+                )
+                .map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        surface.span,
+                        "lexical nominal registry publication exceeded its type-work budget",
+                    )
+                })?,
+        );
+
         Ok(ResolvedDeclarations {
             registry,
             constructor_payload_provenance,
@@ -6366,27 +6572,7 @@ impl Resolver {
         let mut identities = Vec::with_capacity(type_declarations.len());
         for (declaration, owner) in type_declarations.iter().zip(&nominal_ids) {
             if declaration.declaration_kind == SurfaceNominalDeclarationKind::Newtype {
-                let [constructor] = declaration.constructors.as_slice() else {
-                    return Err(error(
-                        ResolveReason::InternalState,
-                        declaration.span,
-                        "a projected newtype does not retain exactly one constructor",
-                    ));
-                };
-                if constructor.name.text != declaration.name.text {
-                    let mut diagnostic = Diagnostic::new(
-                        ResolveReason::NewtypeConstructorName,
-                        SourceLabel::new(
-                            constructor.name.span,
-                            "this newtype constructor must use the nominal type's spelling",
-                        ),
-                    );
-                    diagnostic.related.push(SourceLabel::new(
-                        declaration.name.span,
-                        "this nominal declaration defines the required spelling",
-                    ));
-                    return Err(diagnostic.into());
-                }
+                let _ = validate_newtype_shape(declaration)?;
             }
             let mut owned = Vec::with_capacity(declaration.constructors.len());
             for (index, constructor) in declaration.constructors.iter().enumerate() {
@@ -6452,6 +6638,157 @@ impl Resolver {
             )?);
         }
         Ok(parameters)
+    }
+
+    fn resolve_newtype_representation(
+        &mut self,
+        representation: &SurfaceType,
+    ) -> Result<(IterativeTypeOwner, ResolvedTypeProvenance), ResolveError> {
+        let ResolvedType {
+            ty,
+            provenance,
+            origin,
+            ..
+        } = self.resolve_type(representation)?;
+        discard_origin_iteratively(origin);
+        Ok((IterativeTypeOwner::new(ty), provenance))
+    }
+
+    fn resolve_local_newtype(
+        &mut self,
+        declaration: &SurfaceTypeDeclaration,
+    ) -> Result<NominalTypeId, ResolveError> {
+        if declaration.declaration_kind != SurfaceNominalDeclarationKind::Newtype {
+            return Err(error(
+                ResolveReason::InternalState,
+                declaration.span,
+                "a block-local nominal is not a newtype",
+            ));
+        }
+        let (constructor, representation) = validate_newtype_shape(declaration)?;
+
+        let parameters = self.allocate_nominal_type_parameters(declaration)?;
+        let type_scope_checkpoint = self.type_scopes.len();
+        self.type_scopes.push(
+            parameters
+                .iter()
+                .map(|parameter| (parameter.spelling.clone(), parameter.id))
+                .collect(),
+        );
+        let resolved = self.resolve_newtype_representation(representation);
+        self.type_scopes.truncate(type_scope_checkpoint);
+        let (representation, provenance) = resolved?;
+
+        self.type_work.charge(6).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                declaration.span,
+                "local newtype fact retention exceeded its type-work budget",
+            )
+        })?;
+        self.lexical_nominals.0.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                declaration.span,
+                "local nominal fact storage could not be reserved",
+            )
+        })?;
+        self.lexical_constructors.0.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                declaration.span,
+                "local constructor fact storage could not be reserved",
+            )
+        })?;
+        self.lexical_nominal_parameters
+            .0
+            .try_reserve(1)
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    declaration.span,
+                    "local nominal parameter storage could not be reserved",
+                )
+            })?;
+        self.nominal_parameter_counts.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                declaration.span,
+                "local nominal arity storage could not be reserved",
+            )
+        })?;
+        let nominal_scope = self.lexical_nominal_scopes.last_mut().ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                declaration.span,
+                "the resolver lost the local nominal scope",
+            )
+        })?;
+        nominal_scope.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                declaration.span,
+                "local nominal name storage could not be reserved",
+            )
+        })?;
+        let constructor_scope = self.lexical_constructor_scopes.last_mut().ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                declaration.span,
+                "the resolver lost the local constructor scope",
+            )
+        })?;
+        constructor_scope.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                declaration.span,
+                "local constructor name storage could not be reserved",
+            )
+        })?;
+
+        let nominal_name = try_clone_resolution_string(
+            &declaration.name.text,
+            declaration.name.span,
+            "local nominal name storage could not be reserved",
+        )?;
+        let constructor_name = try_clone_resolution_string(
+            &constructor.name.text,
+            constructor.name.span,
+            "local constructor name storage could not be reserved",
+        )?;
+        let id = NominalTypeId::lexical(self.module, self.next_lexical_nominal);
+        let constructor_id = ConstructorId::new(id, 0);
+        let next = self.next_lexical_nominal.checked_add(1).ok_or_else(|| {
+            error(
+                ResolveReason::BinderIdExhausted,
+                declaration.span,
+                "the program contains too many lexical nominal declarations",
+            )
+        })?;
+
+        let (nominal, constructor_fact) = resolved_newtype_fact_pair(
+            declaration,
+            constructor,
+            id,
+            constructor_id,
+            representation,
+            provenance,
+        )?;
+        self.lexical_nominals.0.push(nominal);
+        self.lexical_constructors.0.push(constructor_fact);
+        let parameter_count = parameters.len();
+        self.lexical_nominal_parameters.0.push((id, parameters));
+        self.nominal_parameter_counts.insert(id, parameter_count);
+        self.lexical_nominal_scopes
+            .last_mut()
+            .expect("the local nominal scope was reserved")
+            .insert(nominal_name, id);
+        self.lexical_constructor_scopes
+            .last_mut()
+            .expect("the local constructor scope was reserved")
+            .insert(constructor_name, constructor_id);
+        self.next_lexical_nominal = next;
+        Ok(id)
     }
 
     #[cfg(test)]
@@ -6599,15 +6936,24 @@ impl Resolver {
                     let payload = match constructor.fields.as_slice() {
                         [] => None,
                         [field] => {
-                            let ResolvedType {
-                                ty,
-                                provenance,
-                                origin,
-                                ..
-                            } = self.resolve_type(field)?;
-                            field_provenance.push(provenance);
-                            discard_origin_iteratively(origin);
-                            Some(IterativeTypeOwner::new(ty))
+                            if declaration.declaration_kind
+                                == SurfaceNominalDeclarationKind::Newtype
+                            {
+                                let (representation, provenance) =
+                                    self.resolve_newtype_representation(field)?;
+                                field_provenance.push(provenance);
+                                Some(representation)
+                            } else {
+                                let ResolvedType {
+                                    ty,
+                                    provenance,
+                                    origin,
+                                    ..
+                                } = self.resolve_type(field)?;
+                                field_provenance.push(provenance);
+                                discard_origin_iteratively(origin);
+                                Some(IterativeTypeOwner::new(ty))
+                            }
                         }
                         fields => {
                             self.type_work.charge(1).map_err(|()| {
@@ -6645,31 +6991,43 @@ impl Resolver {
                             )))
                         }
                     };
-                    let payload = payload.map(IterativeTypeOwner::into_inner);
-                    let constructor_payload =
-                        if declaration.declaration_kind == SurfaceNominalDeclarationKind::Newtype {
-                            let representation = payload.ok_or_else(|| {
+                    let constructor_payload = if declaration.declaration_kind
+                        == SurfaceNominalDeclarationKind::Newtype
+                    {
+                        let representation = payload.ok_or_else(|| {
+                            error(
+                                ResolveReason::InternalState,
+                                constructor.span,
+                                "a resolved newtype has no representation",
+                            )
+                        })?;
+                        let representation_provenance =
+                            field_provenance.first().cloned().ok_or_else(|| {
                                 error(
                                     ResolveReason::InternalState,
                                     constructor.span,
-                                    "a resolved newtype has no representation",
+                                    "a resolved newtype has no representation provenance",
                                 )
                             })?;
-                            let representation_provenance =
-                                field_provenance.first().cloned().ok_or_else(|| {
-                                    error(
-                                        ResolveReason::InternalState,
-                                        constructor.span,
-                                        "a resolved newtype has no representation provenance",
-                                    )
-                                })?;
-                            nominals[nominal_index].representation = Some(representation);
-                            nominals[nominal_index].representation_provenance =
-                                Some(representation_provenance);
-                            None
-                        } else {
-                            payload
-                        };
+                        let (nominal, constructor_fact) = resolved_newtype_fact_pair(
+                            declaration,
+                            constructor,
+                            identity.id,
+                            *id,
+                            representation,
+                            representation_provenance,
+                        )?;
+                        let displaced = std::mem::replace(&mut nominals[nominal_index], nominal);
+                        discard_origin_iteratively(displaced.origin);
+                        constructors.0.push(constructor_fact);
+                        nominal_payload_provenance.push(ConstructorPayloadProvenance {
+                            constructor: *id,
+                            fields: field_provenance,
+                        });
+                        continue;
+                    } else {
+                        payload.map(IterativeTypeOwner::into_inner)
+                    };
                     constructors.0.push(ResolvedConstructor {
                         id: *id,
                         owner: identity.id,
@@ -7416,9 +7774,15 @@ impl Resolver {
 
     fn resolve_work<'a>(&mut self, initial: ResolveTask<'a>) -> Result<ResolvedExpr, ResolveError> {
         let scope_checkpoint = self.scopes.len();
+        let nominal_scope_checkpoint = self.lexical_nominal_scopes.len();
+        let constructor_scope_checkpoint = self.lexical_constructor_scopes.len();
         let result = self.resolve_work_inner(initial);
         if result.is_err() {
             self.scopes.truncate(scope_checkpoint);
+            self.lexical_nominal_scopes
+                .truncate(nominal_scope_checkpoint);
+            self.lexical_constructor_scopes
+                .truncate(constructor_scope_checkpoint);
         }
         result
     }
@@ -7439,11 +7803,17 @@ impl Resolver {
                 }
                 ResolveTask::VisitBlock(block) => {
                     let scope_checkpoint = self.scopes.len();
+                    let nominal_scope_checkpoint = self.lexical_nominal_scopes.len();
+                    let constructor_scope_checkpoint = self.lexical_constructor_scopes.len();
                     self.scopes.push(HashMap::new());
+                    self.lexical_nominal_scopes.push(HashMap::new());
+                    self.lexical_constructor_scopes.push(HashMap::new());
                     let declaration_start = declarations.len();
                     tasks.push(ResolveTask::FinishBlock {
                         declaration_start,
                         scope_checkpoint,
+                        nominal_scope_checkpoint,
+                        constructor_scope_checkpoint,
                         span: block.span,
                     });
                     tasks.push(ResolveTask::VisitExpr(&block.result));
@@ -7455,6 +7825,9 @@ impl Resolver {
                             }
                             SurfaceLocalDeclaration::Recursive(group) => {
                                 tasks.push(ResolveTask::VisitRecursiveGroup(group));
+                            }
+                            SurfaceLocalDeclaration::Newtype(declaration) => {
+                                tasks.push(ResolveTask::FinishLocalNewtype(declaration));
                             }
                         }
                     }
@@ -7580,6 +7953,10 @@ impl Resolver {
                         },
                     )));
                 }
+                ResolveTask::FinishLocalNewtype(declaration) => {
+                    let owner = self.resolve_local_newtype(declaration)?;
+                    declarations.push(ResolvedLocalDeclaration::Newtype(owner));
+                }
                 ResolveTask::FinishRecursiveGroup { group, binders } => {
                     if binders.len() != group.members.len()
                         || expressions.len() < group.members.len()
@@ -7632,6 +8009,8 @@ impl Resolver {
                 ResolveTask::FinishBlock {
                     declaration_start,
                     scope_checkpoint,
+                    nominal_scope_checkpoint,
+                    constructor_scope_checkpoint,
                     span,
                 } => {
                     let result = expressions.pop_owned().ok_or_else(|| {
@@ -7650,6 +8029,10 @@ impl Resolver {
                     }
                     let block_declarations = declarations.split_off(declaration_start).into_vec();
                     self.scopes.truncate(scope_checkpoint);
+                    self.lexical_nominal_scopes
+                        .truncate(nominal_scope_checkpoint);
+                    self.lexical_constructor_scopes
+                        .truncate(constructor_scope_checkpoint);
                     expressions.push(ResolvedExpr {
                         kind: ResolvedExprKind::Block(ResolvedBlock {
                             declarations: block_declarations,
@@ -7745,9 +8128,27 @@ impl Resolver {
             }),
             SurfaceExprKind::Name(name) => {
                 let member = name.member();
-                let qualified = self.imported_namespace(name)?;
-                let binding = if let Some(namespace) = qualified {
-                    namespace.terms.get(&member.text).copied()
+                let is_qualified = matches!(name, SurfaceReference::Qualified(_));
+                let (qualified_binding, qualified_constructor, qualified_withheld) =
+                    if let Some(namespace) = self.imported_namespace(name)? {
+                        (
+                            namespace.terms.get(&member.text).copied(),
+                            namespace.constructors.get(&member.text).copied(),
+                            namespace
+                                .withheld
+                                .get(&(member.text.clone(), WithheldNamespace::Term))
+                                .or_else(|| {
+                                    namespace
+                                        .withheld
+                                        .get(&(member.text.clone(), WithheldNamespace::Constructor))
+                                })
+                                .copied(),
+                        )
+                    } else {
+                        (None, None, None)
+                    };
+                let binding = if is_qualified {
+                    qualified_binding
                 } else {
                     self.scopes
                         .iter()
@@ -7755,6 +8156,18 @@ impl Resolver {
                         .find_map(|scope| scope.get(&member.text))
                         .copied()
                         .or_else(|| self.method_names.get(&member.text).copied())
+                };
+                let unqualified_constructor = if binding.is_none() && !is_qualified {
+                    charged_lexical_scope_lookup(
+                        &self.lexical_constructor_scopes,
+                        &member.text,
+                        member.span,
+                        &mut self.type_work,
+                        "inline lexical constructor lookup exceeded its type-work budget",
+                    )?
+                    .or_else(|| self.constructor_names.get(&member.text).copied())
+                } else {
+                    None
                 };
                 if let Some(binding) = binding {
                     let term = binding.term;
@@ -7792,14 +8205,7 @@ impl Resolver {
                         }),
                         span: expression.span,
                     });
-                } else if let Some(constructor) = qualified
-                    .and_then(|namespace| namespace.constructors.get(&member.text).copied())
-                    .or_else(|| {
-                        qualified
-                            .is_none()
-                            .then(|| self.constructor_names.get(&member.text).copied())
-                            .flatten()
-                    })
+                } else if let Some(constructor) = qualified_constructor.or(unqualified_constructor)
                 {
                     expressions.push(ResolvedExpr {
                         kind: ResolvedExprKind::Constructor(ResolvedConstructorOccurrence {
@@ -7809,19 +8215,11 @@ impl Resolver {
                         }),
                         span: expression.span,
                     });
-                } else if let Some(namespace) = qualified {
+                } else if is_qualified {
                     return Err(withheld_export_error(
                         member.span,
                         &member.text,
-                        namespace
-                            .withheld
-                            .get(&(member.text.clone(), WithheldNamespace::Term))
-                            .or_else(|| {
-                                namespace
-                                    .withheld
-                                    .get(&(member.text.clone(), WithheldNamespace::Constructor))
-                            })
-                            .copied(),
+                        qualified_withheld,
                     ));
                 } else {
                     if let Some(kind) = self
@@ -8111,6 +8509,7 @@ enum ResolveTask<'a> {
         span: crate::source::Span,
     },
     FinishBinding(&'a SurfaceBinding),
+    FinishLocalNewtype(&'a SurfaceTypeDeclaration),
     FinishRecursiveGroup {
         group: &'a SurfaceRecursiveGroup,
         binders: ResolvedBinderBuffer,
@@ -8118,6 +8517,8 @@ enum ResolveTask<'a> {
     FinishBlock {
         declaration_start: usize,
         scope_checkpoint: usize,
+        nominal_scope_checkpoint: usize,
+        constructor_scope_checkpoint: usize,
         span: crate::source::Span,
     },
     FinishFunction {
@@ -8173,6 +8574,7 @@ impl ResolveTask<'_> {
             | Self::FinishFunction { span, .. }
             | Self::FinishTuple { span, .. } => *span,
             Self::FinishBinding(binding) => binding.span,
+            Self::FinishLocalNewtype(declaration) => declaration.span,
             Self::FinishRecursiveGroup { group, .. } => group.span,
         }
     }
@@ -8403,6 +8805,24 @@ fn type_kind_error(span: crate::source::Span, spelling: &str) -> ResolveError {
     diagnostic.expected = Some("type".to_owned());
     diagnostic.found = Some(spelling.to_owned());
     diagnostic.into()
+}
+
+fn charged_lexical_scope_lookup<Identity: Copy>(
+    scopes: &[HashMap<String, Identity>],
+    spelling: &str,
+    span: crate::source::Span,
+    budget: &mut TypeWorkBudget,
+    message: &'static str,
+) -> Result<Option<Identity>, ResolveError> {
+    for scope in scopes.iter().rev() {
+        budget
+            .charge(1)
+            .map_err(|()| error(ResolveReason::TypeResourceExhausted, span, message))?;
+        if let Some(identity) = scope.get(spelling).copied() {
+            return Ok(Some(identity));
+        }
+    }
+    Ok(None)
 }
 
 fn try_clone_resolution_string(
@@ -8812,7 +9232,10 @@ mod tests {
     use crate::elaborate::check_module;
     use crate::module::{ModuleRoots, load_module_graph};
     use crate::source::{ByteRange, SourceFile};
-    use crate::surface::{SurfaceDefinitionKind, SurfaceName, SurfaceTypeKind};
+    use crate::surface::{
+        SurfaceDefinitionKind, SurfaceExprKind, SurfaceLocalDeclaration, SurfaceName,
+        SurfaceTypeKind,
+    };
     use crate::types::{TYPE_WORK_LIMIT, kind_node_charge_visits, reset_kind_node_charge_visits};
     use crate::{
         lexer::lex,
@@ -11548,6 +11971,158 @@ mod tests {
         let source = SourceFile::new(name, text).expect("the declaration fixture should fit");
         let tree = parse(lex(&source).expect("the declaration fixture should lex"));
         project_module(&source, &tree).expect("the declaration fixture should project")
+    }
+
+    #[test]
+    fn local_newtype_fact_retention_is_exact_atomic_and_retryable() {
+        const EXACT_WORK: usize = 7;
+        let surface = declaration_fixture(
+            "local-newtype-fact-budget.ash",
+            concat!(
+                "main : Unit -> Unit\n",
+                "main () = {\n",
+                "    newtype Token = Token(Int)\n",
+                "    ()\n",
+                "}\n",
+            ),
+        );
+        let SurfaceDefinitionKind::Equational(main) = &surface.definitions[0].kind else {
+            panic!("expected equational main")
+        };
+        let SurfaceExprKind::Block(block) = &main.equations[0].body.kind else {
+            panic!("expected local-newtype block")
+        };
+        let SurfaceLocalDeclaration::Newtype(declaration) = &block.declarations[0] else {
+            panic!("expected local newtype")
+        };
+
+        let module = ModuleId::new(7_014);
+        let mut resolver =
+            Resolver::with_type_work(module, TypeWorkBudget::with_limit(EXACT_WORK - 1));
+        resolver.lexical_nominal_scopes.push(HashMap::new());
+        resolver.lexical_constructor_scopes.push(HashMap::new());
+        let error = resolver
+            .resolve_local_newtype(declaration)
+            .expect_err("one missing fact unit must reject before publication");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(resolver.type_work.used(), 1);
+        assert!(resolver.lexical_nominals.0.is_empty());
+        assert!(resolver.lexical_constructors.0.is_empty());
+        assert!(resolver.lexical_nominal_parameters.0.is_empty());
+        assert!(resolver.lexical_nominal_scopes[0].is_empty());
+        assert!(resolver.lexical_constructor_scopes[0].is_empty());
+        assert_eq!(resolver.next_lexical_nominal, 0);
+
+        resolver.type_work = TypeWorkBudget::with_limit(EXACT_WORK);
+        let owner = resolver
+            .resolve_local_newtype(declaration)
+            .expect("the exact retry should publish one complete fact family");
+        assert_eq!(owner, NominalTypeId::lexical(module, 0));
+        assert_eq!(resolver.type_work.used(), EXACT_WORK);
+        assert_eq!(resolver.lexical_nominals.0.len(), 1);
+        assert_eq!(resolver.lexical_constructors.0.len(), 1);
+        assert_eq!(resolver.lexical_nominal_parameters.0.len(), 1);
+        assert_eq!(
+            resolver.lexical_nominal_scopes[0].get("Token"),
+            Some(&owner)
+        );
+        assert_eq!(
+            resolver.lexical_constructor_scopes[0]
+                .get("Token")
+                .map(|constructor| constructor.owner()),
+            Some(owner),
+        );
+    }
+
+    #[test]
+    fn deep_lexical_nominal_and_constructor_probes_are_exact_atomic_and_retryable() {
+        const DEPTH: usize = 32_768;
+        let source = SourceFile::new("deep-lexical-lookup-budget.ash", "Deep")
+            .expect("the lexical lookup fixture should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the range should be ordered"))
+            .expect("the range should belong to the fixture");
+        let reference = SurfaceReference::Unqualified(SurfaceName {
+            text: "Deep".to_owned(),
+            span,
+        });
+        let owner = NominalTypeId::lexical(ModuleId::new(7_014), 0);
+        let constructor = ConstructorId::new(owner, 0);
+        let mut resolver =
+            Resolver::with_type_work(ModuleId::new(7_014), TypeWorkBudget::with_limit(DEPTH - 1));
+        let mut outer_nominals = HashMap::new();
+        outer_nominals.insert("Deep".to_owned(), owner);
+        resolver.lexical_nominal_scopes.push(outer_nominals);
+        resolver
+            .lexical_nominal_scopes
+            .extend((1..DEPTH).map(|_| HashMap::new()));
+        let mut outer_constructors = HashMap::new();
+        outer_constructors.insert("Deep".to_owned(), constructor);
+        resolver.lexical_constructor_scopes.push(outer_constructors);
+        resolver
+            .lexical_constructor_scopes
+            .extend((1..DEPTH).map(|_| HashMap::new()));
+
+        let error = resolver
+            .nominal_reference(&reference)
+            .expect_err("one missing probe unit must reject the outer nominal lookup");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(resolver.type_work.used(), DEPTH - 1);
+        assert_eq!(resolver.lexical_nominal_scopes.len(), DEPTH);
+        assert_eq!(resolver.lexical_nominal_scopes[0].get("Deep"), Some(&owner));
+
+        resolver.type_work = TypeWorkBudget::with_limit(DEPTH);
+        assert_eq!(
+            resolver
+                .nominal_reference(&reference)
+                .expect("the exact retry should reach the outer nominal")
+                .id,
+            owner,
+        );
+        assert_eq!(resolver.type_work.used(), DEPTH);
+
+        resolver.type_work = TypeWorkBudget::with_limit(DEPTH - 1);
+        let error = resolver
+            .constructor_reference(&reference)
+            .expect_err("one missing probe unit must reject the outer constructor lookup");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(resolver.type_work.used(), DEPTH - 1);
+        assert_eq!(resolver.lexical_constructor_scopes.len(), DEPTH);
+        assert_eq!(
+            resolver.lexical_constructor_scopes[0].get("Deep"),
+            Some(&constructor),
+        );
+
+        resolver.type_work = TypeWorkBudget::with_limit(DEPTH);
+        assert_eq!(
+            resolver
+                .constructor_reference(&reference)
+                .expect("the exact retry should reach the outer constructor"),
+            constructor,
+        );
+        assert_eq!(resolver.type_work.used(), DEPTH);
+
+        let expression = SurfaceExpr {
+            kind: SurfaceExprKind::Name(reference),
+            span,
+        };
+        resolver.type_work = TypeWorkBudget::with_limit(DEPTH - 1);
+        let error = resolver
+            .resolve_expr(&expression)
+            .expect_err("one missing probe unit must reject inline constructor lookup");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(resolver.type_work.used(), DEPTH - 1);
+        assert_eq!(resolver.lexical_constructor_scopes.len(), DEPTH);
+
+        resolver.type_work = TypeWorkBudget::with_limit(DEPTH);
+        let resolved = resolver
+            .resolve_expr(&expression)
+            .expect("the exact inline retry should reach the outer constructor");
+        let ResolvedExprKind::Constructor(occurrence) = resolved.kind else {
+            panic!("the inline lookup should resolve the constructor")
+        };
+        assert_eq!(occurrence.constructor, constructor);
+        assert_eq!(resolver.type_work.used(), DEPTH);
     }
 
     #[test]

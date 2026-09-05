@@ -24,9 +24,9 @@ At this design note's original planning boundary, the
 Ash. Module structure and interface selection erased before evaluation, and
 Ash had no effect rows, handlers, source continuations, resource lifetimes,
 runtime interface lookup, or dynamic module loading. The completed
-module-`newtype` and resume-required effect-kernel checkpoints supersede the
-first parts of that historical inventory on this integration branch; neither
-checkpoint is current on `main` yet.
+module-`newtype`, local-`newtype`, and resume-required effect-kernel checkpoints
+supersede the first parts of that historical inventory on the integration branch.
+Those checkpoints are not current on `main` yet.
 
 [DN-0026](DN-0026-effect-ash-resource-first-milestones.md) supplies the
 resource-first decomposition. It remains exploratory evidence. This note
@@ -41,11 +41,12 @@ uses that boundary while retaining the closed Pure dialect.
 explicit stack-safe evaluator machine used by the kernel; its frames remain
 implementation state rather than source-language continuations.
 
-The retained nominal carrier identifies module declarations but has no lexical
-or runtime-fresh identity class. The kernel adds the bounded effect-row form,
-not local exact-evidence authority. Authenticated lexical exact evidence and
-the later identity classes remain product gaps, not permissions to choose
-representations in a task.
+The retained nominal carrier distinguishes module and lexical declarations.
+The local checkpoint uses one erased Core scope and permits identity-free
+closure escape. It adds no runtime-fresh identity class. The kernel adds the
+bounded effect-row form. Scoped exact evidence is the next identity-track
+checkpoint; its authority and runtime acquisition identities remain proposal
+questions.
 
 ## Closure boundary
 
@@ -141,6 +142,11 @@ branch after their retained checkpoint closes; Git preserves their history.
 That cleanup does not close or tag `effect-ash`. Only the integrated combined
 corpus, simplification audit, documentation review, and trajectory update can
 support a milestone-completion claim or tag.
+
+[AD-0011](../decisions/AD-0011-milestone-worktree-lifecycle.md) governs the
+local worktree lifecycle. The milestone integration branch is the continuation
+anchor between checkpoints; completed feature checkouts and branches are
+removed only after clean-state and retained-ancestry checks.
 
 ## Checkpoint gates
 
@@ -288,13 +294,12 @@ At this design note's original planning boundary, the programme had not chosen
 `newtype` grammar or escape, row algebra or inference, handler syntax or
 forwarding rules, capture classification, resource acquisition syntax,
 hook-chain mutation observation, cleanup order or failure combination, or the
-foreign representation. The completed module-`newtype` and resume-required
-effect-kernel product checkpoints now resolve the first two bounded questions;
-this integration branch combines them without making either checkpoint current
-on `main`.
+foreign representation. The completed module-`newtype`, local-`newtype`, and
+resume-required effect-kernel product checkpoints now resolve the bounded
+identity, lexical escape, row, and handler questions. Their branch specification
+does not make those checkpoints current on `main`.
 
-The next planning questions are the exact local-`newtype` identity, scope, and
-escape semantics, scoped exact evidence, and capture and checked-discard rules
+The next planning questions are scoped exact evidence and capture and checked-discard rules
 needed before safe resource scope. The later questions remain owned by their
 proposal capsules.
 

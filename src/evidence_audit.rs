@@ -197,6 +197,7 @@ fn push_block<'a>(
         let initializers = match declaration {
             ResolvedLocalDeclaration::Binding(_) => 1,
             ResolvedLocalDeclaration::Recursive(group) => group.members.len(),
+            ResolvedLocalDeclaration::Newtype(_) => 0,
         };
         additional = additional
             .checked_add(initializers)
@@ -210,6 +211,7 @@ fn push_block<'a>(
             ResolvedLocalDeclaration::Recursive(group) => {
                 pending.extend(group.members.iter().map(|member| &member.initializer));
             }
+            ResolvedLocalDeclaration::Newtype(_) => {}
         }
     }
     Ok(())

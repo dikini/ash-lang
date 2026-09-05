@@ -439,6 +439,41 @@ impl<'a> KindEnvironments<'a> {
         Ok(())
     }
 
+    fn extend_owner_parameters(
+        &mut self,
+        parameters: &'a [crate::resolved::ResolvedTypeVariable],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), KindFailure> {
+        for (installed, parameter) in parameters.iter().enumerate() {
+            if !binder_kind_is_admitted(&parameter.kind, false) {
+                self.remove_owner_parameter_extension(&parameters[..installed]);
+                return Err(KindFailure::internal(
+                    parameter.origin.primary_span(),
+                    "this owner cannot bind an EffectRow parameter",
+                ));
+            }
+            if let Err(failure) = self.insert_declared(
+                parameter.id,
+                &parameter.kind,
+                parameter.origin.primary_span(),
+                budget,
+            ) {
+                self.remove_owner_parameter_extension(&parameters[..installed]);
+                return Err(failure);
+            }
+        }
+        Ok(())
+    }
+
+    fn remove_owner_parameter_extension(
+        &mut self,
+        parameters: &[crate::resolved::ResolvedTypeVariable],
+    ) {
+        for parameter in parameters {
+            self.delta.remove(&parameter.id);
+        }
+    }
+
     fn install_scheme_parameters(
         &mut self,
         parameters: &'a [crate::resolved::ResolvedTypeVariable],
@@ -3067,7 +3102,12 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
         budget,
         module.span,
     )?;
-    for nominal in module.registry.nominals() {
+    for nominal in module
+        .registry
+        .nominals()
+        .iter()
+        .chain(module.registry.lexical_nominals())
+    {
         let parameters = required_lookup(
             module.registry.canonical_nominal_parameters(nominal.id),
             nominal.origin.primary_span(),
@@ -3285,7 +3325,72 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
             DeclarationKindOutcome::Deferred => return Ok(()),
         }
     }
+
     Ok(())
+}
+
+fn check_lexical_newtype<'a>(
+    nominal: &'a crate::resolved::ResolvedNominalType,
+    registry: &'a crate::resolved::ResolvedRegistry,
+    environments: &mut KindEnvironments<'a>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), KindFailure> {
+    let parameters = required_lookup(
+        registry.canonical_nominal_parameters(nominal.id),
+        nominal.origin.primary_span(),
+        "a lexical nominal has no canonical parameter slice",
+        budget,
+    )?;
+    authenticate_owner_parameters(registry, parameters, budget)?;
+    if nominal.declaration_kind != ResolvedNominalDeclarationKind::Newtype
+        || !nominal.id.is_lexical()
+    {
+        return Err(KindFailure::internal(
+            nominal.origin.primary_span(),
+            "a lexical nominal fact is not a lexical newtype",
+        ));
+    }
+    let [constructor_id] = nominal.constructors.as_ref() else {
+        return Err(KindFailure::internal(
+            nominal.origin.primary_span(),
+            "a lexical newtype does not retain exactly one constructor identity",
+        ));
+    };
+    let constructor = required_lookup(
+        registry.constructor(*constructor_id),
+        nominal.origin.primary_span(),
+        "a lexical newtype names a missing canonical constructor",
+        budget,
+    )?;
+    if constructor.owner != nominal.id || constructor.payload.is_some() {
+        return Err(KindFailure::internal(
+            constructor.origin.primary_span(),
+            "a lexical newtype constructor has invalid ownership or payload",
+        ));
+    }
+    let representation = nominal.representation.as_ref().ok_or_else(|| {
+        KindFailure::internal(
+            nominal.origin.primary_span(),
+            "a lexical newtype does not retain its canonical representation",
+        )
+    })?;
+    let provenance = nominal.representation_provenance.as_ref().ok_or_else(|| {
+        KindFailure::internal(
+            nominal.origin.primary_span(),
+            "a lexical newtype does not retain representation provenance",
+        )
+    })?;
+    environments.extend_owner_parameters(parameters, budget)?;
+    let result = environments.expect_value_type_parts(
+        representation,
+        provenance,
+        provenance
+            .span()
+            .unwrap_or_else(|| constructor.origin.primary_span()),
+        budget,
+    );
+    environments.remove_owner_parameter_extension(parameters);
+    result
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -3886,7 +3991,7 @@ fn visit_interface_applications(
 
 fn check_definition<'a>(
     definition: &'a ResolvedDefinition,
-    registry: &crate::resolved::ResolvedRegistry,
+    registry: &'a crate::resolved::ResolvedRegistry,
     environments: &mut KindEnvironments<'a>,
     budget: &mut TypeWorkBudget,
 ) -> Result<DeclarationKindOutcome, KindFailure> {
@@ -3922,7 +4027,7 @@ fn check_definition<'a>(
                 check_interface_application_kinds(checked, environments, budget)?;
             }
             for equation in &global.equations {
-                check_expression_annotations(&equation.body, environments, budget)?;
+                check_expression_annotations(&equation.body, registry, environments, budget)?;
             }
         }
         ResolvedDefinitionKind::InlineOperational(global) => {
@@ -3970,7 +4075,7 @@ fn check_definition<'a>(
                 }
                 check_interface_application_kinds(checked, environments, budget)?;
             }
-            check_block_annotations(&global.body, environments, budget)?;
+            check_block_annotations(&global.body, registry, environments, budget)?;
         }
     }
     Ok(DeclarationKindOutcome::Checked)
@@ -4212,7 +4317,7 @@ fn contains_type_variable_with_budget(
 
 fn check_implementation<'a>(
     implementation: &'a ResolvedImplementation,
-    registry: &crate::resolved::ResolvedRegistry,
+    registry: &'a crate::resolved::ResolvedRegistry,
     environments: &mut KindEnvironments<'a>,
     budget: &mut TypeWorkBudget,
 ) -> Result<DeclarationKindOutcome, KindFailure> {
@@ -4242,7 +4347,7 @@ fn check_implementation<'a>(
     }
     for group in &implementation.method_groups {
         for equation in &group.equations {
-            check_expression_annotations(&equation.body, environments, budget)?;
+            check_expression_annotations(&equation.body, registry, environments, budget)?;
         }
     }
     Ok(DeclarationKindOutcome::Checked)
@@ -4323,19 +4428,21 @@ fn authenticate_unique_parameter_ids(
     Ok(())
 }
 
-fn check_block_annotations(
-    block: &crate::resolved::ResolvedBlock,
-    environments: &KindEnvironments<'_>,
+fn check_block_annotations<'a>(
+    block: &'a crate::resolved::ResolvedBlock,
+    registry: &'a crate::resolved::ResolvedRegistry,
+    environments: &mut KindEnvironments<'a>,
     budget: &mut TypeWorkBudget,
 ) -> Result<(), KindFailure> {
     let mut work = Vec::new();
-    schedule_block_work(&mut work, block, budget)?;
-    check_expression_work(work, environments, budget)
+    schedule_block_work(&mut work, block, registry, budget)?;
+    check_expression_work(work, registry, environments, budget)
 }
 
-fn check_expression_annotations(
-    expression: &ResolvedExpr,
-    environments: &KindEnvironments<'_>,
+fn check_expression_annotations<'a>(
+    expression: &'a ResolvedExpr,
+    registry: &'a crate::resolved::ResolvedRegistry,
+    environments: &mut KindEnvironments<'a>,
     budget: &mut TypeWorkBudget,
 ) -> Result<(), KindFailure> {
     let mut work = Vec::new();
@@ -4345,19 +4452,21 @@ fn check_expression_annotations(
         expression.span,
         budget,
     )?;
-    check_expression_work(work, environments, budget)
+    check_expression_work(work, registry, environments, budget)
 }
 
 #[derive(Clone, Copy)]
 enum BodyWork<'a> {
     Expression(&'a ResolvedExpr),
     Declaration(&'a ResolvedLocalDeclaration),
+    LexicalNewtype(&'a crate::resolved::ResolvedNominalType),
     RecursiveMember(&'a ResolvedRecursiveMember),
 }
 
 fn check_expression_work<'a>(
     mut work: Vec<BodyWork<'a>>,
-    environments: &KindEnvironments<'_>,
+    registry: &'a crate::resolved::ResolvedRegistry,
+    environments: &mut KindEnvironments<'a>,
     budget: &mut TypeWorkBudget,
 ) -> Result<(), KindFailure> {
     while let Some(item) = work.pop() {
@@ -4391,7 +4500,13 @@ fn check_expression_work<'a>(
                         )?;
                     }
                 }
+                ResolvedLocalDeclaration::Newtype(_) => {
+                    unreachable!("lexical nominal markers are scheduled with their facts")
+                }
             },
+            BodyWork::LexicalNewtype(nominal) => {
+                check_lexical_newtype(nominal, registry, environments, budget)?;
+            }
             BodyWork::RecursiveMember(member) => {
                 environments.expect_value_type(&member.annotation, budget)?;
                 push_body_work(
@@ -4443,10 +4558,10 @@ fn check_expression_work<'a>(
                     )?;
                 }
                 ResolvedExprKind::Block(block) => {
-                    schedule_block_work(&mut work, block, budget)?;
+                    schedule_block_work(&mut work, block, registry, budget)?;
                 }
                 ResolvedExprKind::Function(function) => {
-                    schedule_block_work(&mut work, &function.body, budget)?;
+                    schedule_block_work(&mut work, &function.body, registry, budget)?;
                 }
                 ResolvedExprKind::Match(match_expression) => {
                     for arm in match_expression.arms.iter().rev() {
@@ -4506,6 +4621,7 @@ fn check_expression_work<'a>(
 fn schedule_block_work<'a>(
     work: &mut Vec<BodyWork<'a>>,
     block: &'a crate::resolved::ResolvedBlock,
+    registry: &'a crate::resolved::ResolvedRegistry,
     budget: &mut TypeWorkBudget,
 ) -> Result<(), KindFailure> {
     push_body_work(
@@ -4515,12 +4631,19 @@ fn schedule_block_work<'a>(
         budget,
     )?;
     for declaration in block.declarations.iter().rev() {
-        push_body_work(
-            work,
-            BodyWork::Declaration(declaration),
-            local_declaration_span(declaration),
-            budget,
-        )?;
+        let item = match declaration {
+            ResolvedLocalDeclaration::Newtype(owner) => {
+                let nominal = required_lookup(
+                    registry.nominal(*owner),
+                    block.span,
+                    "a lexical nominal marker names a missing canonical fact",
+                    budget,
+                )?;
+                BodyWork::LexicalNewtype(nominal)
+            }
+            _ => BodyWork::Declaration(declaration),
+        };
+        push_body_work(work, item, body_work_span(item), budget)?;
     }
     Ok(())
 }
@@ -4551,6 +4674,9 @@ fn local_declaration_span(declaration: &ResolvedLocalDeclaration) -> Span {
     match declaration {
         ResolvedLocalDeclaration::Binding(binding) => binding.span,
         ResolvedLocalDeclaration::Recursive(group) => group.span,
+        ResolvedLocalDeclaration::Newtype(_) => {
+            unreachable!("local newtypes are not scheduled as expression annotations")
+        }
     }
 }
 
@@ -4558,6 +4684,7 @@ fn body_work_span(item: BodyWork<'_>) -> Span {
     match item {
         BodyWork::Expression(expression) => expression.span,
         BodyWork::Declaration(declaration) => local_declaration_span(declaration),
+        BodyWork::LexicalNewtype(nominal) => nominal.origin.primary_span(),
         BodyWork::RecursiveMember(member) => member.span,
     }
 }
@@ -6467,7 +6594,8 @@ mod tests {
             .stack_size(256 * 1024)
             .spawn(|| {
                 let span = span();
-                let environments = KindEnvironments::new();
+                let registry = crate::resolved::ResolvedRegistry::default();
+                let mut environments = KindEnvironments::new();
                 let mut expression = unit_expression(span);
                 for _ in 0..DEPTH {
                     expression = ResolvedExpr {
@@ -6482,12 +6610,23 @@ mod tests {
                 const EXACT_WORK: usize = 2 * (2 * DEPTH + 1);
                 let mut short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
                 assert!(matches!(
-                    check_expression_annotations(&expression, &environments, &mut short),
+                    check_expression_annotations(
+                        &expression,
+                        &registry,
+                        &mut environments,
+                        &mut short,
+                    ),
                     Err(KindFailure::Resource(_))
                 ));
                 let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
                 assert!(
-                    check_expression_annotations(&expression, &environments, &mut exact).is_ok()
+                    check_expression_annotations(
+                        &expression,
+                        &registry,
+                        &mut environments,
+                        &mut exact,
+                    )
+                    .is_ok()
                 );
                 assert_eq!(exact.used(), EXACT_WORK);
                 discard_resolved_expression_iteratively(expression);
@@ -6518,14 +6657,18 @@ mod tests {
         // The outer block, inner block, and unit result are each scheduled
         // and visited exactly once: 3 * 2 = 6.
         const EXACT_WORK: usize = 6;
-        let environments = KindEnvironments::new();
+        let registry = crate::resolved::ResolvedRegistry::default();
+        let mut environments = KindEnvironments::new();
         let mut short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
         assert!(matches!(
-            check_expression_annotations(&expression, &environments, &mut short),
+            check_expression_annotations(&expression, &registry, &mut environments, &mut short,),
             Err(KindFailure::Resource(_))
         ));
         let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
-        assert!(check_expression_annotations(&expression, &environments, &mut exact).is_ok());
+        assert!(
+            check_expression_annotations(&expression, &registry, &mut environments, &mut exact,)
+                .is_ok()
+        );
         assert_eq!(exact.used(), EXACT_WORK);
     }
 

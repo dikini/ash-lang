@@ -40,6 +40,14 @@ wrapper allocation or runtime tag. Interface evidence remains nominal: an
 implementation for the representation does not satisfy a requirement for the
 `newtype`.
 
+A local `newtype` introduces one compile-time lexical identity for the
+following declarations and result of its block. Its representation sees the
+preceding type scope; later declarations may shadow the nominal and constructor
+names together. The identity cannot escape in a type, effect row, scheme, or
+requirement. A closure may capture and unwrap a local value when its exposed
+computation contains no such identity. Execution creates no fresh identity or
+scope state.
+
 An interface declares one or more ordered, fixed-kinded type parameters and an
 ordered set of method signatures. It may declare one total forward
 determination edge from a nonempty parameter key to the entire dependent
@@ -99,7 +107,7 @@ Determination adds no associated-output syntax or projection, multiple or
 partial edges, proposition or proof evidence, common universal evidence, or
 existential pack and unpack form.
 
-Module `newtype` adds no local type declaration, runtime-fresh identity,
+Module and local `newtype` add no runtime-fresh identity,
 implicit coercion, general representational equality, local implementation,
 effect or resource mechanism, existential package, dynamic loading, runtime
 nominal registry, heap-inspection API, special value rendering, or general ABI
@@ -107,13 +115,12 @@ or foreign-representation guarantee. Its canonical conversion establishes no
 interface, proof, provider, handler, or hook authority.
 
 Within a module, Ash provides global and explicit local recursion, rank-1
-polymorphism, nominal data, allocation-free module `newtype`, structural tuples, constructor values, typed
+polymorphism, nominal data, allocation-free module and local `newtype`, structural tuples, constructor values, typed
 patterns, exhaustive matches and equations, sequential bindings, method-only
 interfaces, explicit constraints, anonymous implementations, and pure and
 effectful expressions with resume-required handlers.
 
-Beyond the separately implemented module `newtype`, the effect kernel adds no
-local `newtype`, providers, hooks, resource regions, checked discard, escaping
+The effect kernel adds no providers, hooks, resource regions, checked discard, escaping
 or multi-shot resume, asynchronous execution, or dynamic loading. A linked
 nonempty effect row is a source rejection rather than an unhandled-operation
 runtime result.
@@ -202,6 +209,32 @@ main () = increment(UserId(41))
 The executable test `overview_module_newtype_example_is_executable` checks this
 example. Neither constructor use is an implicit conversion, and an importer
 may use the constructor only through a transparent authorized route.
+
+### Local newtypes
+
+This complete module returns a closure that captures a local representation,
+then calls it after `make` returns. The closure exposes only `Unit -> Int`, so
+the program observes `42 : Int` without exposing the local identity:
+
+```ash
+make : Unit -> (Unit -> Int)
+make () = {
+    newtype Offset = Offset(Int)
+    let offset = Offset(41)
+    fn(ignored) {
+        match offset {
+            Offset(value) => value + 1
+        }
+    }
+}
+
+main : Unit -> Int
+main () = make()()
+```
+
+The executable test `overview_local_newtype_closure_example_is_executable`
+checks this example. Local declarations are sequential and private; they do
+not add local implementations or implicit existential packages.
 
 ### Interfaces and selected evidence
 

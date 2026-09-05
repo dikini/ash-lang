@@ -27,7 +27,8 @@ pub use effect::{
 pub use primitive::Primitive;
 pub use recursion::{RecursiveBindingMember, RecursiveBindingNode};
 pub use type_ops::{
-    NewtypeConversionDirection, NewtypeConversionNode, TypeAbstractionNode, TypeApplicationNode,
+    LocalNominalScopeNode, NewtypeConversionDirection, NewtypeConversionNode, TypeAbstractionNode,
+    TypeApplicationNode,
 };
 pub use validate::{ValidationError, ValidationReason, validate, validate_modules};
 pub use variable::TypedBinder;

@@ -8695,8 +8695,9 @@ impl ExportSummary {
                     nominal.representation_provenance.as_ref(),
                 ),
             };
-            if nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
-                && !matches!(&nominal.origin, Origin::Source(_))
+            if nominal.id.is_lexical()
+                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+                    && !matches!(&nominal.origin, Origin::Source(_))
                 || nominal.parameter_count != nominal.parameters.len()
                 || nominal.constructor_count == 0
                 || matches!(
@@ -8825,8 +8826,9 @@ impl ExportSummary {
             );
         }
         for nominal in self.hidden_nominals() {
-            if nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
-                && !matches!(&nominal.origin, Origin::Source(_))
+            if nominal.id.is_lexical()
+                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+                    && !matches!(&nominal.origin, Origin::Source(_))
                 || nominal.parameter_count != nominal.parameters.len()
                 || nominal.constructor_count == 0
                 || matches!(
@@ -14165,7 +14167,7 @@ impl ExportSummary {
     }
 }
 
-fn collect_nominal_identities(
+pub(crate) fn collect_nominal_identities(
     root: &Type,
     output: &mut HashSet<NominalTypeId>,
     budget: &mut TypeWorkBudget,
@@ -14406,6 +14408,10 @@ pub struct ResolvedRegistry {
     constructors: Box<[ResolvedConstructor]>,
     nominal_positions: HashMap<NominalTypeId, usize>,
     constructor_positions: HashMap<ConstructorId, usize>,
+    lexical_nominals: Box<[ResolvedNominalType]>,
+    lexical_constructors: Box<[ResolvedConstructor]>,
+    lexical_nominal_positions: HashMap<NominalTypeId, usize>,
+    lexical_constructor_positions: HashMap<ConstructorId, usize>,
     effects: Box<[ResolvedEffectDeclaration]>,
     effect_positions: HashMap<EffectId, usize>,
     nominal_parameters: HashMap<NominalTypeId, Box<[ResolvedTypeVariable]>>,
@@ -14524,8 +14530,10 @@ impl Drop for ResolvedNominalParameterVecBuffer {
 struct CombinedRegistryCounts {
     modules: usize,
     nominals: usize,
+    lexical_nominals: usize,
     family_entries: usize,
     constructors: usize,
+    lexical_constructors: usize,
     effects: usize,
     effect_operations: usize,
     effect_parameters: usize,
@@ -14548,6 +14556,10 @@ struct CombinedRegistryBuilder {
     constructors: ResolvedConstructorBuffer,
     nominal_positions: HashMap<NominalTypeId, usize>,
     constructor_positions: HashMap<ConstructorId, usize>,
+    lexical_nominals: ResolvedNominalBuffer,
+    lexical_constructors: ResolvedConstructorBuffer,
+    lexical_nominal_positions: HashMap<NominalTypeId, usize>,
+    lexical_constructor_positions: HashMap<ConstructorId, usize>,
     effects: Vec<ResolvedEffectDeclaration>,
     effect_positions: HashMap<EffectId, usize>,
     parameter_rows: ResolvedNominalParameterBuffer,
@@ -14565,6 +14577,10 @@ impl CombinedRegistryBuilder {
             constructors: ResolvedConstructorBuffer(Vec::new()),
             nominal_positions: HashMap::new(),
             constructor_positions: HashMap::new(),
+            lexical_nominals: ResolvedNominalBuffer(Vec::new()),
+            lexical_constructors: ResolvedConstructorBuffer(Vec::new()),
+            lexical_nominal_positions: HashMap::new(),
+            lexical_constructor_positions: HashMap::new(),
             effects: Vec::new(),
             effect_positions: HashMap::new(),
             parameter_rows: ResolvedNominalParameterBuffer(Vec::new()),
@@ -14593,6 +14609,24 @@ impl CombinedRegistryBuilder {
             .try_reserve(counts.constructors)
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         builder
+            .lexical_nominals
+            .0
+            .try_reserve_exact(counts.lexical_nominals)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        builder
+            .lexical_constructors
+            .0
+            .try_reserve_exact(counts.lexical_constructors)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        builder
+            .lexical_nominal_positions
+            .try_reserve(counts.lexical_nominals)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        builder
+            .lexical_constructor_positions
+            .try_reserve(counts.lexical_constructors)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        builder
             .effects
             .try_reserve_exact(counts.effects)
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
@@ -14603,7 +14637,12 @@ impl CombinedRegistryBuilder {
         builder
             .parameter_rows
             .0
-            .try_reserve_exact(counts.nominals)
+            .try_reserve_exact(
+                counts
+                    .nominals
+                    .checked_add(counts.lexical_nominals)
+                    .ok_or(ResolvedBuildFailure::TypeResource)?,
+            )
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         builder
             .canonical_variables
@@ -14612,7 +14651,12 @@ impl CombinedRegistryBuilder {
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         builder
             .nominal_parameters
-            .try_reserve(counts.nominals)
+            .try_reserve(
+                counts
+                    .nominals
+                    .checked_add(counts.lexical_nominals)
+                    .ok_or(ResolvedBuildFailure::TypeResource)?,
+            )
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         builder
             .type_variables
@@ -14692,11 +14736,25 @@ impl CombinedRegistryBuilder {
             ResolvedConstructorBuffer(Vec::new()),
         )
         .into_vec();
+        let lexical_nominals = std::mem::replace(
+            &mut self.lexical_nominals,
+            ResolvedNominalBuffer(Vec::new()),
+        )
+        .into_vec();
+        let lexical_constructors = std::mem::replace(
+            &mut self.lexical_constructors,
+            ResolvedConstructorBuffer(Vec::new()),
+        )
+        .into_vec();
         ResolvedRegistry {
             nominals: nominals.into_boxed_slice(),
             constructors: constructors.into_boxed_slice(),
             nominal_positions: std::mem::take(&mut self.nominal_positions),
             constructor_positions: std::mem::take(&mut self.constructor_positions),
+            lexical_nominals: lexical_nominals.into_boxed_slice(),
+            lexical_constructors: lexical_constructors.into_boxed_slice(),
+            lexical_nominal_positions: std::mem::take(&mut self.lexical_nominal_positions),
+            lexical_constructor_positions: std::mem::take(&mut self.lexical_constructor_positions),
             effects: std::mem::take(&mut self.effects).into_boxed_slice(),
             effect_positions: std::mem::take(&mut self.effect_positions),
             nominal_parameters: std::mem::take(&mut self.nominal_parameters),
@@ -14769,6 +14827,14 @@ fn checked_registry_counts(
         let registry = checked.registry();
         checked_accumulate(&mut counts.nominals, registry.nominals.len())?;
         checked_accumulate(&mut counts.constructors, registry.constructors.len())?;
+        checked_accumulate(
+            &mut counts.lexical_nominals,
+            registry.lexical_nominals.len(),
+        )?;
+        checked_accumulate(
+            &mut counts.lexical_constructors,
+            registry.lexical_constructors.len(),
+        )?;
         checked_accumulate(&mut counts.effects, registry.effects.len())?;
         for effect in registry.effects.iter() {
             checked_accumulate(&mut counts.effect_operations, effect.operations.len())?;
@@ -14796,7 +14862,11 @@ fn checked_registry_counts(
             checked.implementation_facts().len(),
         )?;
         checked_accumulate(&mut counts.type_variables, registry.type_variables.len())?;
-        for nominal in registry.nominals() {
+        for nominal in registry
+            .nominals()
+            .iter()
+            .chain(registry.lexical_nominals())
+        {
             checked_accumulate(&mut counts.family_entries, nominal.constructors.len())?;
             if let Some(representation) = &nominal.representation {
                 let mut representation_work = TypeWorkBudget::unbounded();
@@ -14814,7 +14884,11 @@ fn checked_registry_counts(
                 }
             }
         }
-        for constructor in registry.constructors() {
+        for constructor in registry
+            .constructors()
+            .iter()
+            .chain(registry.lexical_constructors())
+        {
             if let Some(payload) = &constructor.payload {
                 let mut payload_work = TypeWorkBudget::unbounded();
                 charge_type_cells(payload, &mut payload_work)
@@ -14859,17 +14933,23 @@ fn checked_registry_counts(
         .type_variables
         .checked_sub(non_method_type_variables)
         .ok_or(ResolvedBuildFailure::InvalidState)?;
+    let total_nominals = counts
+        .nominals
+        .checked_add(counts.lexical_nominals)
+        .ok_or(ResolvedBuildFailure::TypeResource)?;
+    let total_constructors = counts
+        .constructors
+        .checked_add(counts.lexical_constructors)
+        .ok_or(ResolvedBuildFailure::TypeResource)?;
     let builder_storage = counts
         .family_entries
         .checked_add(
-            counts
-                .nominals
+            total_nominals
                 .checked_mul(4)
                 .ok_or(ResolvedBuildFailure::TypeResource)?,
         )
         .and_then(|work| {
-            counts
-                .constructors
+            total_constructors
                 .checked_mul(2)
                 .and_then(|constructors| work.checked_add(constructors))
         })
@@ -14889,13 +14969,12 @@ fn checked_registry_counts(
     let deterministic_visits = counts
         .modules
         .checked_add(
-            counts
-                .nominals
+            total_nominals
                 .checked_mul(2)
                 .ok_or(ResolvedBuildFailure::ConstraintResource)?,
         )
         .and_then(|work| work.checked_add(counts.family_entries))
-        .and_then(|work| work.checked_add(counts.constructors))
+        .and_then(|work| work.checked_add(total_constructors))
         .and_then(|work| work.checked_add(counts.effects))
         .and_then(|work| work.checked_add(counts.effect_operations))
         .and_then(|work| work.checked_add(counts.interface_parameters))
@@ -14904,9 +14983,9 @@ fn checked_registry_counts(
         .ok_or(ResolvedBuildFailure::ConstraintResource)?;
     let uniqueness = counts
         .modules
-        .checked_add(counts.nominals)
+        .checked_add(total_nominals)
         .and_then(|work| work.checked_add(counts.family_entries))
-        .and_then(|work| work.checked_add(counts.constructors))
+        .and_then(|work| work.checked_add(total_constructors))
         .and_then(|work| work.checked_add(counts.effects))
         .and_then(|work| work.checked_add(counts.global_rows))
         .ok_or(ResolvedBuildFailure::ConstraintResource)?;
@@ -14945,14 +15024,22 @@ fn validate_checked_registries<'a>(
     module_ids
         .try_reserve(counts.modules)
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+    let total_nominals = counts
+        .nominals
+        .checked_add(counts.lexical_nominals)
+        .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+    let total_constructors = counts
+        .constructors
+        .checked_add(counts.lexical_constructors)
+        .ok_or(ResolvedBuildFailure::ConstraintResource)?;
     nominal_ids
-        .try_reserve(counts.nominals)
+        .try_reserve(total_nominals)
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
     family_ids
         .try_reserve(counts.family_entries)
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
     constructor_ids
-        .try_reserve(counts.constructors)
+        .try_reserve(total_constructors)
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
     effect_ids
         .try_reserve(counts.effects)
@@ -14969,13 +15056,21 @@ fn validate_checked_registries<'a>(
             || !registry.abstract_nominal_kinds.is_empty()
             || registry.nominal_positions.len() != registry.nominals.len()
             || registry.constructor_positions.len() != registry.constructors.len()
-            || registry.nominal_parameters.len() != registry.nominals.len()
+            || registry.lexical_nominal_positions.len() != registry.lexical_nominals.len()
+            || registry.lexical_constructor_positions.len() != registry.lexical_constructors.len()
+            || registry.nominal_parameters.len()
+                != registry
+                    .nominals
+                    .len()
+                    .checked_add(registry.lexical_nominals.len())
+                    .ok_or(ResolvedBuildFailure::InvalidState)?
         {
             return Err(ResolvedBuildFailure::InvalidState);
         }
         let mut local_variable_count = 0usize;
         for (position, nominal) in registry.nominals().iter().enumerate() {
             if nominal.id.module() != module
+                || nominal.id.is_lexical()
                 || !nominal_ids.insert(nominal.id)
                 || registry.nominal_positions.get(&nominal.id) != Some(&position)
                 || nominal.constructors.is_empty()
@@ -15019,6 +15114,38 @@ fn validate_checked_registries<'a>(
                 .checked_add(parameters.len())
                 .ok_or(ResolvedBuildFailure::ConstraintResource)?;
         }
+        for (position, nominal) in registry.lexical_nominals().iter().enumerate() {
+            let [constructor_id] = nominal.constructors.as_ref() else {
+                return Err(ResolvedBuildFailure::InvalidState);
+            };
+            if nominal.id.module() != module
+                || !nominal.id.is_lexical()
+                || !nominal_ids.insert(nominal.id)
+                || registry.lexical_nominal_positions.get(&nominal.id) != Some(&position)
+                || nominal.declaration_kind != ResolvedNominalDeclarationKind::Newtype
+                || nominal.representation.is_none()
+                || nominal.representation_provenance.is_none()
+                || constructor_id.owner() != nominal.id
+                || constructor_id.constructor() != 0
+                || !family_ids.insert(*constructor_id)
+                || registry
+                    .constructor(*constructor_id)
+                    .is_none_or(|constructor| {
+                        constructor.owner != nominal.id
+                            || constructor.payload.is_some()
+                            || constructor.spelling != nominal.spelling
+                    })
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            let parameters = registry
+                .nominal_parameters
+                .get(&nominal.id)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            local_variable_count = local_variable_count
+                .checked_add(parameters.len())
+                .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+        }
         for (position, constructor) in registry.constructors().iter().enumerate() {
             let ordinal = usize::try_from(constructor.id.constructor())
                 .map_err(|_| ResolvedBuildFailure::InvalidState)?;
@@ -15030,6 +15157,21 @@ fn validate_checked_registries<'a>(
                 || !constructor_ids.insert(constructor.id)
                 || registry.constructor_positions.get(&constructor.id) != Some(&position)
                 || owner.constructors.get(ordinal) != Some(&constructor.id)
+                || !family_ids.contains(&constructor.id)
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        }
+        for (position, constructor) in registry.lexical_constructors().iter().enumerate() {
+            let owner = registry
+                .nominal(constructor.owner)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            if constructor.owner != constructor.id.owner()
+                || !constructor.owner.is_lexical()
+                || constructor.owner.module() != module
+                || !constructor_ids.insert(constructor.id)
+                || registry.lexical_constructor_positions.get(&constructor.id) != Some(&position)
+                || owner.constructors.as_ref() != [constructor.id]
                 || !family_ids.contains(&constructor.id)
             {
                 return Err(ResolvedBuildFailure::InvalidState);
@@ -15092,9 +15234,9 @@ fn validate_checked_registries<'a>(
         }
     }
     if module_ids.len() != counts.modules
-        || nominal_ids.len() != counts.nominals
+        || nominal_ids.len() != total_nominals
         || family_ids.len() != counts.family_entries
-        || constructor_ids.len() != counts.constructors
+        || constructor_ids.len() != total_constructors
         || effect_ids.len() != counts.effects
         || global_owners.len() != counts.global_rows
     {
@@ -15116,7 +15258,11 @@ fn validate_checked_registries<'a>(
                 return Err(ResolvedBuildFailure::InvalidState);
             }
         }
-        for nominal in registry.nominals() {
+        for nominal in registry
+            .nominals()
+            .iter()
+            .chain(registry.lexical_nominals())
+        {
             let parameters = registry
                 .nominal_parameters
                 .get(&nominal.id)
@@ -15346,6 +15492,40 @@ fn retain_checked_registries(
                 clone_type_variable_row_after_combined_precharge(parameters)?,
             ));
         }
+        for nominal in registry.lexical_nominals() {
+            let position = builder.lexical_nominals.0.len();
+            let retained = ResolvedNominalType {
+                representation_provenance: nominal.representation_provenance.clone(),
+                id: nominal.id,
+                declaration_kind: nominal.declaration_kind,
+                spelling: try_clone_string(&nominal.spelling)?,
+                constructors: clone_constructor_ids_for_combined_registry(&nominal.constructors)?,
+                representation: nominal
+                    .representation
+                    .as_ref()
+                    .map(|representation| {
+                        let mut budget = TypeWorkBudget::unbounded();
+                        clone_type_with_budget(representation, &mut budget)
+                    })
+                    .transpose()
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                origin: nominal.origin.clone(),
+            };
+            let displaced = builder
+                .lexical_nominal_positions
+                .insert(nominal.id, position);
+            debug_assert!(displaced.is_none());
+            builder.lexical_nominals.0.push(retained);
+
+            let parameters = registry
+                .nominal_parameters
+                .get(&nominal.id)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            builder.parameter_rows.0.push((
+                nominal.id,
+                clone_type_variable_row_after_combined_precharge(parameters)?,
+            ));
+        }
         for constructor in registry.constructors() {
             let position = builder.constructors.0.len();
             let spelling = try_clone_string(&constructor.spelling)?;
@@ -15368,6 +15548,29 @@ fn retain_checked_registries(
                 .insert(constructor.id, position);
             debug_assert!(displaced.is_none());
             builder.constructors.0.push(retained);
+        }
+        for constructor in registry.lexical_constructors() {
+            let position = builder.lexical_constructors.0.len();
+            let spelling = try_clone_string(&constructor.spelling)?;
+            let mut unbounded = TypeWorkBudget::unbounded();
+            let payload = constructor
+                .payload
+                .as_ref()
+                .map(|payload| clone_type_with_budget(payload, &mut unbounded))
+                .transpose()
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            let retained = ResolvedConstructor {
+                id: constructor.id,
+                owner: constructor.owner,
+                spelling,
+                payload,
+                origin: constructor.origin.clone(),
+            };
+            let displaced = builder
+                .lexical_constructor_positions
+                .insert(constructor.id, position);
+            debug_assert!(displaced.is_none());
+            builder.lexical_constructors.0.push(retained);
         }
         for effect in registry.effects.iter() {
             let position = builder.effects.len();
@@ -15438,6 +15641,10 @@ impl ResolvedRegistry {
             constructors: constructors.into_boxed_slice(),
             nominal_positions,
             constructor_positions,
+            lexical_nominals: Box::new([]),
+            lexical_constructors: Box::new([]),
+            lexical_nominal_positions: HashMap::new(),
+            lexical_constructor_positions: HashMap::new(),
             effects: Box::new([]),
             effect_positions: HashMap::new(),
             nominal_parameters: HashMap::new(),
@@ -15536,6 +15743,77 @@ impl ResolvedRegistry {
                 .get(&nominal.id)
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
             parameters.0.push((
+                nominal.id,
+                clone_resolved_type_variables_with_budget(owner_parameters, budget)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+            ));
+        }
+
+        budget
+            .charge(
+                self.lexical_nominals
+                    .len()
+                    .checked_mul(2)
+                    .and_then(|work| {
+                        self.lexical_constructors
+                            .len()
+                            .checked_mul(2)?
+                            .checked_add(work)
+                    })
+                    .ok_or(ResolvedBuildFailure::TypeResource)?,
+            )
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let mut lexical_nominals = ResolvedNominalBuffer(Vec::new());
+        lexical_nominals
+            .0
+            .try_reserve_exact(self.lexical_nominals.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for nominal in &self.lexical_nominals {
+            lexical_nominals.0.push(ResolvedNominalType {
+                representation_provenance: nominal.representation_provenance.clone(),
+                id: nominal.id,
+                declaration_kind: nominal.declaration_kind,
+                spelling: nominal.spelling.clone(),
+                constructors: nominal.constructors.clone(),
+                representation: nominal
+                    .representation
+                    .as_ref()
+                    .map(|representation| clone_type_with_budget(representation, budget))
+                    .transpose()
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                origin: nominal.origin.clone(),
+            });
+        }
+        let mut lexical_constructors = ResolvedConstructorBuffer(Vec::new());
+        lexical_constructors
+            .0
+            .try_reserve_exact(self.lexical_constructors.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for constructor in &self.lexical_constructors {
+            lexical_constructors.0.push(ResolvedConstructor {
+                id: constructor.id,
+                owner: constructor.owner,
+                spelling: constructor.spelling.clone(),
+                payload: constructor
+                    .payload
+                    .as_ref()
+                    .map(|payload| clone_type_with_budget(payload, budget))
+                    .transpose()
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                origin: constructor.origin.clone(),
+            });
+        }
+        let mut lexical_parameters = ResolvedNominalParameterVecBuffer(Vec::new());
+        lexical_parameters
+            .0
+            .try_reserve_exact(self.lexical_nominals.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for nominal in &self.lexical_nominals {
+            let owner_parameters = self
+                .nominal_parameters
+                .get(&nominal.id)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            lexical_parameters.0.push((
                 nominal.id,
                 clone_resolved_type_variables_with_budget(owner_parameters, budget)
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?,
@@ -15642,7 +15920,7 @@ impl ResolvedRegistry {
             }
         }
         let mut local_nominal_parameter_ids = HashSet::new();
-        for nominal in &self.nominals {
+        for nominal in self.nominals.iter().chain(self.lexical_nominals.iter()) {
             let parameters = self
                 .nominal_parameters
                 .get(&nominal.id)
@@ -15661,6 +15939,13 @@ impl ResolvedRegistry {
         }
         let mut registry = Self::new(nominals.into_vec(), constructors.into_vec())
             .with_type_parameters_with_budget(parameters.into_vec(), budget)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?
+            .with_precharged_lexical_nominals(
+                lexical_nominals,
+                lexical_constructors,
+                lexical_parameters,
+                budget,
+            )
             .map_err(|()| ResolvedBuildFailure::TypeResource)?
             .with_abstract_nominal_facts(abstract_nominal_names, abstract_nominal_kinds);
         let effect_count = self.effects.len().saturating_add(imported.effects.len());
@@ -15681,7 +15966,7 @@ impl ResolvedRegistry {
             );
         }
         registry = registry.with_effects(effects);
-        for nominal in &self.nominals {
+        for nominal in self.nominals.iter().chain(self.lexical_nominals.iter()) {
             let parameters = self
                 .nominal_parameters
                 .get(&nominal.id)
@@ -15818,6 +16103,96 @@ impl ResolvedRegistry {
         Ok(self)
     }
 
+    pub(crate) fn with_lexical_nominals_with_budget(
+        self,
+        nominals: Vec<ResolvedNominalType>,
+        constructors: Vec<ResolvedConstructor>,
+        parameters: Vec<(NominalTypeId, Vec<ResolvedTypeVariable>)>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ()> {
+        let nominals = ResolvedNominalBuffer(nominals);
+        let constructors = ResolvedConstructorBuffer(constructors);
+        let parameters = ResolvedNominalParameterVecBuffer(parameters);
+        budget.charge(
+            nominals
+                .0
+                .len()
+                .checked_mul(2)
+                .and_then(|work| constructors.0.len().checked_mul(2)?.checked_add(work))
+                .ok_or(())?,
+        )?;
+        self.with_precharged_lexical_nominals(nominals, constructors, parameters, budget)
+    }
+
+    fn with_precharged_lexical_nominals(
+        mut self,
+        nominals: ResolvedNominalBuffer,
+        constructors: ResolvedConstructorBuffer,
+        parameters: ResolvedNominalParameterVecBuffer,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ()> {
+        let mut nominal_positions = HashMap::new();
+        let mut constructor_positions = HashMap::new();
+        nominal_positions
+            .try_reserve(nominals.0.len())
+            .map_err(|_| ())?;
+        constructor_positions
+            .try_reserve(constructors.0.len())
+            .map_err(|_| ())?;
+        for (position, nominal) in nominals.0.iter().enumerate() {
+            if !nominal.id.is_lexical() || nominal_positions.insert(nominal.id, position).is_some()
+            {
+                return Err(());
+            }
+        }
+        for (position, constructor) in constructors.0.iter().enumerate() {
+            if !constructor.id.owner().is_lexical()
+                || constructor_positions
+                    .insert(constructor.id, position)
+                    .is_some()
+            {
+                return Err(());
+            }
+        }
+        self = self.with_type_parameters_with_budget(parameters.into_vec(), budget)?;
+        Ok(self.with_lexical_nominal_facts(
+            nominals.into_vec(),
+            constructors.into_vec(),
+            nominal_positions,
+            constructor_positions,
+        ))
+    }
+
+    fn with_lexical_nominal_facts(
+        mut self,
+        nominals: Vec<ResolvedNominalType>,
+        constructors: Vec<ResolvedConstructor>,
+        nominal_positions: HashMap<NominalTypeId, usize>,
+        constructor_positions: HashMap<ConstructorId, usize>,
+    ) -> Self {
+        self.lexical_nominal_positions = nominal_positions;
+        self.lexical_constructor_positions = constructor_positions;
+        let displaced_nominals =
+            std::mem::replace(&mut self.lexical_nominals, nominals.into_boxed_slice());
+        for nominal in displaced_nominals.into_vec() {
+            if let Some(representation) = nominal.representation {
+                discard_type_iteratively(representation);
+            }
+            discard_origin_iteratively(nominal.origin);
+        }
+        let displaced_constructors = std::mem::replace(
+            &mut self.lexical_constructors,
+            constructors.into_boxed_slice(),
+        );
+        for constructor in displaced_constructors.into_vec() {
+            if let Some(payload) = constructor.payload {
+                discard_type_iteratively(payload);
+            }
+            discard_origin_iteratively(constructor.origin);
+        }
+        self
+    }
+
     /// Attaches non-nominal type parameters before the registry is published.
     #[must_use]
     pub(crate) fn with_additional_type_variables(
@@ -15916,22 +16291,48 @@ impl ResolvedRegistry {
         &self.constructors
     }
 
+    /// Returns lexical nominal facts in source encounter order.
+    #[must_use]
+    pub fn lexical_nominals(&self) -> &[ResolvedNominalType] {
+        &self.lexical_nominals
+    }
+
+    /// Returns lexical constructor facts in source encounter order.
+    #[must_use]
+    pub fn lexical_constructors(&self) -> &[ResolvedConstructor] {
+        &self.lexical_constructors
+    }
+
     /// Looks up a nominal declaration by stable identity.
     #[must_use]
     pub fn nominal(&self, id: NominalTypeId) -> Option<&ResolvedNominalType> {
-        self.nominal_positions
-            .get(&id)
-            .and_then(|index| self.nominals.get(*index))
-            .filter(|nominal| nominal.id == id)
+        if id.is_lexical() {
+            self.lexical_nominal_positions
+                .get(&id)
+                .and_then(|index| self.lexical_nominals.get(*index))
+                .filter(|nominal| nominal.id == id)
+        } else {
+            self.nominal_positions
+                .get(&id)
+                .and_then(|index| self.nominals.get(*index))
+                .filter(|nominal| nominal.id == id)
+        }
     }
 
     /// Looks up a constructor by stable identity.
     #[must_use]
     pub fn constructor(&self, id: ConstructorId) -> Option<&ResolvedConstructor> {
-        self.constructor_positions
-            .get(&id)
-            .and_then(|index| self.constructors.get(*index))
-            .filter(|constructor| constructor.id == id)
+        if id.owner().is_lexical() {
+            self.lexical_constructor_positions
+                .get(&id)
+                .and_then(|index| self.lexical_constructors.get(*index))
+                .filter(|constructor| constructor.id == id)
+        } else {
+            self.constructor_positions
+                .get(&id)
+                .and_then(|index| self.constructors.get(*index))
+                .filter(|constructor| constructor.id == id)
+        }
     }
 
     /// Looks up a declaration type parameter by stable identity.
@@ -16009,6 +16410,47 @@ impl ResolvedRegistry {
     #[cfg(test)]
     pub(crate) fn clear_global_parameter_positions_for_core_test(&mut self) {
         self.global_parameter_positions.clear();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn corrupt_first_lexical_nominal_as_data_for_core_test(&mut self) -> bool {
+        let Some(nominal) = self.lexical_nominals.first_mut() else {
+            return false;
+        };
+        nominal.declaration_kind = ResolvedNominalDeclarationKind::Data;
+        if let Some(representation) = nominal.representation.take() {
+            discard_type_iteratively(representation);
+        }
+        nominal.representation_provenance = None;
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn duplicate_second_lexical_identity_for_core_test(&mut self) -> bool {
+        let [first, second, ..] = self.lexical_nominals.as_mut() else {
+            return false;
+        };
+        second.replace_identity_for_core_test(first.id);
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_first_lexical_representation_effect_for_core_test(
+        &mut self,
+        effect: EffectId,
+    ) -> bool {
+        let Some(Type::EffectfulFunction(_, computation)) = self
+            .lexical_nominals
+            .first_mut()
+            .and_then(|nominal| nominal.representation.as_mut())
+        else {
+            return false;
+        };
+        computation.effects = EffectRow::singleton(crate::types::EffectInstance::new(
+            effect,
+            Box::new([Type::Int]),
+        ));
+        true
     }
 
     #[cfg(test)]
@@ -16288,6 +16730,8 @@ impl ResolvedRegistry {
     fn discard_owned_payloads(&mut self) {
         let nominals = std::mem::take(&mut self.nominals);
         let constructors = std::mem::take(&mut self.constructors);
+        let lexical_nominals = std::mem::take(&mut self.lexical_nominals);
+        let lexical_constructors = std::mem::take(&mut self.lexical_constructors);
         let effects = std::mem::take(&mut self.effects);
         let nominal_parameters = std::mem::take(&mut self.nominal_parameters);
         let type_variables = std::mem::take(&mut self.type_variables);
@@ -16295,6 +16739,8 @@ impl ResolvedRegistry {
         let abstract_nominal_kinds = std::mem::take(&mut self.abstract_nominal_kinds);
         self.nominal_positions.clear();
         self.constructor_positions.clear();
+        self.lexical_nominal_positions.clear();
+        self.lexical_constructor_positions.clear();
         self.effect_positions.clear();
         self.global_parameter_positions.clear();
         for nominal in nominals.into_vec() {
@@ -16304,6 +16750,18 @@ impl ResolvedRegistry {
             discard_origin_iteratively(nominal.origin);
         }
         for constructor in constructors.into_vec() {
+            if let Some(payload) = constructor.payload {
+                discard_type_iteratively(payload);
+            }
+            discard_origin_iteratively(constructor.origin);
+        }
+        for nominal in lexical_nominals.into_vec() {
+            if let Some(representation) = nominal.representation {
+                discard_type_iteratively(representation);
+            }
+            discard_origin_iteratively(nominal.origin);
+        }
+        for constructor in lexical_constructors.into_vec() {
             if let Some(payload) = constructor.payload {
                 discard_type_iteratively(payload);
             }
@@ -16529,6 +16987,13 @@ pub struct ResolvedNominalType {
     pub representation_provenance: Option<ResolvedTypeProvenance>,
     /// Declaration provenance.
     pub origin: Origin,
+}
+
+#[cfg(test)]
+impl ResolvedNominalType {
+    fn replace_identity_for_core_test(&mut self, replacement: NominalTypeId) {
+        self.id = replacement;
+    }
 }
 
 /// One resolved source type binder.
@@ -17127,6 +17592,8 @@ pub enum ResolvedLocalDeclaration {
     Binding(Box<ResolvedBinding>),
     /// A simultaneous recursive binding group.
     Recursive(ResolvedRecursiveGroup),
+    /// A sequential lexical nominal declaration.
+    Newtype(NominalTypeId),
 }
 
 /// One resolved simultaneous recursive binding group.
@@ -17500,6 +17967,7 @@ fn discard_block_into_work(
                     expressions.push(member.initializer);
                 }
             }
+            ResolvedLocalDeclaration::Newtype(_) => {}
         }
     }
 }
@@ -17592,9 +18060,13 @@ pub(crate) fn discard_resolved_pattern_iteratively(pattern: ResolvedPattern) {
 pub(crate) fn discard_resolved_local_declaration_iteratively(
     declaration: ResolvedLocalDeclaration,
 ) {
+    if matches!(declaration, ResolvedLocalDeclaration::Newtype(_)) {
+        return;
+    }
     let span = match &declaration {
         ResolvedLocalDeclaration::Binding(binding) => binding.span,
         ResolvedLocalDeclaration::Recursive(group) => group.span,
+        ResolvedLocalDeclaration::Newtype(_) => unreachable!("handled above"),
     };
     discard_resolved_body_work(
         vec![ResolvedExpr {
@@ -17623,6 +18095,287 @@ mod tests {
             .span(ByteRange::new(0, 1).expect("the fixture range should be ordered"))
             .expect("the fixture span should fit");
         ResolvedTypeProvenance::new(vec![ResolvedTypeProvenanceNode::Fact(span)], 0)
+    }
+
+    #[test]
+    fn lexical_nominal_registry_discards_deep_representation_iteratively() {
+        const DEPTH: usize = 32_768;
+        std::thread::Builder::new()
+            .name("deep-lexical-nominal-registry-drop".to_owned())
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("deep-local-newtype.ash", "Token")
+                    .expect("the lexical nominal source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 5).expect("the lexical nominal range should fit"))
+                    .expect("the lexical nominal span should fit");
+                let owner = NominalTypeId::lexical(ModuleId::new(7_014), 0);
+                let constructor = ConstructorId::new(owner, 0);
+                let facts = || {
+                    let mut representation = Type::Int;
+                    for _ in 0..DEPTH {
+                        representation =
+                            Type::Application(Box::new(representation), Box::new(Type::Int));
+                    }
+                    (
+                        vec![ResolvedNominalType {
+                            id: owner,
+                            declaration_kind: ResolvedNominalDeclarationKind::Newtype,
+                            spelling: "Token".to_owned(),
+                            constructors: Box::new([constructor]),
+                            representation: Some(representation),
+                            representation_provenance: Some(
+                                canonical_representation_provenance_for_test(),
+                            ),
+                            origin: Origin::Source(span),
+                        }],
+                        vec![ResolvedConstructor {
+                            id: constructor,
+                            owner,
+                            spelling: "Token".to_owned(),
+                            payload: None,
+                            origin: Origin::Source(span),
+                        }],
+                        vec![(owner, Vec::new())],
+                    )
+                };
+                let (nominals, constructors, parameters) = facts();
+                let mut one_short = TypeWorkBudget::with_limit(3);
+                assert!(
+                    ResolvedRegistry::new(Vec::new(), Vec::new())
+                        .with_lexical_nominals_with_budget(
+                            nominals,
+                            constructors,
+                            parameters,
+                            &mut one_short,
+                        )
+                        .is_err()
+                );
+
+                let (nominals, constructors, parameters) = facts();
+                let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+                    .with_lexical_nominals_with_budget(
+                        nominals,
+                        constructors,
+                        parameters,
+                        &mut TypeWorkBudget::default(),
+                    )
+                    .expect("the deep lexical fact should publish");
+                assert_eq!(registry.nominal(owner).map(|fact| fact.id), Some(owner));
+                registry.discard_iteratively();
+            })
+            .expect("the deep lexical registry thread should start")
+            .join()
+            .expect("deep lexical registry teardown must remain iterative");
+    }
+
+    #[test]
+    fn checker_view_retains_lexical_fact_partition_exactly_and_retryably() {
+        let source = SourceFile::new("checker-local-newtype.ash", "Token")
+            .expect("the lexical nominal source should fit");
+        let span = source
+            .span(ByteRange::new(0, 5).expect("the lexical nominal range should fit"))
+            .expect("the lexical nominal span should fit");
+        let owner = NominalTypeId::lexical(ModuleId::new(7_015), 0);
+        let constructor = ConstructorId::new(owner, 0);
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+            .with_lexical_nominals_with_budget(
+                vec![ResolvedNominalType {
+                    id: owner,
+                    declaration_kind: ResolvedNominalDeclarationKind::Newtype,
+                    spelling: "Token".to_owned(),
+                    constructors: Box::new([constructor]),
+                    representation: Some(Type::Int),
+                    representation_provenance: Some(canonical_representation_provenance_for_test()),
+                    origin: Origin::Source(span),
+                }],
+                vec![ResolvedConstructor {
+                    id: constructor,
+                    owner,
+                    spelling: "Token".to_owned(),
+                    payload: None,
+                    origin: Origin::Source(span),
+                }],
+                vec![(owner, Vec::new())],
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the source lexical facts should publish");
+
+        let imported = ImportedFacts::default();
+        let mut before_retention = TypeWorkBudget::with_limit(3);
+        assert_eq!(
+            registry.checker_view(&imported, &mut before_retention),
+            Err(ResolvedBuildFailure::TypeResource)
+        );
+        assert_eq!(
+            before_retention.used(),
+            0,
+            "the four lexical carrier units must precede representation cloning"
+        );
+        let mut measured = TypeWorkBudget::unbounded();
+        registry
+            .checker_view(&imported, &mut measured)
+            .expect("measurement should retain the lexical partition");
+        let exact = measured.used();
+        assert_eq!(exact, 5, "four carriers and one representation cell");
+        let mut one_short = TypeWorkBudget::with_limit(exact - 1);
+        assert_eq!(
+            registry.checker_view(&imported, &mut one_short),
+            Err(ResolvedBuildFailure::TypeResource)
+        );
+        let mut exact_budget = TypeWorkBudget::with_limit(exact);
+        let view = registry
+            .checker_view(&imported, &mut exact_budget)
+            .expect("the exact retry should retain the lexical partition");
+        assert!(view.nominals().is_empty());
+        assert!(view.constructors().is_empty());
+        assert_eq!(view.lexical_nominals(), registry.lexical_nominals());
+        assert_eq!(view.lexical_constructors(), registry.lexical_constructors());
+        assert_eq!(view.nominal(owner).map(|fact| fact.id), Some(owner));
+        assert_eq!(
+            view.constructor(constructor).map(|fact| fact.id),
+            Some(constructor)
+        );
+        assert_eq!(exact_budget.used(), exact);
+    }
+
+    #[test]
+    fn lexical_partition_survives_checked_combination_but_not_module_summary() {
+        let source = SourceFile::new("combined-local-newtype.ash", "Token")
+            .expect("the lexical nominal source should fit");
+        let span = source
+            .span(ByteRange::new(0, 5).expect("the lexical nominal range should fit"))
+            .expect("the lexical nominal span should fit");
+        let module = ModuleId::new(7_016);
+        let owner = NominalTypeId::lexical(module, 0);
+        let constructor = ConstructorId::new(owner, 0);
+        let registry = Arc::new(
+            ResolvedRegistry::new(Vec::new(), Vec::new())
+                .with_lexical_nominals_with_budget(
+                    vec![ResolvedNominalType {
+                        id: owner,
+                        declaration_kind: ResolvedNominalDeclarationKind::Newtype,
+                        spelling: "Token".to_owned(),
+                        constructors: Box::new([constructor]),
+                        representation: Some(Type::Int),
+                        representation_provenance: Some(
+                            canonical_representation_provenance_for_test(),
+                        ),
+                        origin: Origin::Source(span),
+                    }],
+                    vec![ResolvedConstructor {
+                        id: constructor,
+                        owner,
+                        spelling: "Token".to_owned(),
+                        payload: None,
+                        origin: Origin::Source(span),
+                    }],
+                    vec![(owner, Vec::new())],
+                    &mut TypeWorkBudget::default(),
+                )
+                .expect("the lexical facts should publish"),
+        );
+        let resolved = ResolvedModule::new(ResolvedModuleParts {
+            module,
+            registry: Arc::clone(&registry),
+            imported: ImportedFacts::default(),
+            direct_dependencies: Vec::new(),
+            declaration_order: Vec::new(),
+            interfaces: Vec::new(),
+            effects: Vec::new(),
+            implementations: Vec::new(),
+            definitions: Vec::new(),
+            export_candidate: ResolvedExportCandidate::default(),
+            span,
+        });
+        let summary = ExportSummary::freeze(
+            &resolved,
+            &[],
+            &[],
+            &[],
+            &[],
+            &mut TypeWorkBudget::default(),
+            &mut crate::interface::InterfaceConstraintBudget::default(),
+        )
+        .expect("the empty public module boundary should freeze");
+        assert!(summary.nominal("Token").is_none());
+        assert!(summary.constructors.is_empty());
+        assert!(summary.hidden_nominals.is_empty());
+        assert!(summary.hidden_constructors.is_empty());
+
+        let checked = CheckedModule {
+            module,
+            registry,
+            direct_dependencies: Box::new([]),
+            declaration_order: Box::new([]),
+            interfaces: Box::new([]),
+            effects: Box::new([]),
+            imported_effects: Box::new([]),
+            implementations: Box::new([]),
+            definitions: Box::new([]),
+            available_implementations: Box::new([]),
+            schemes: Vec::new(),
+            checked_interfaces: Box::new([]),
+            checked_implementations: Box::new([]),
+            interface_facts: Box::new([]),
+            implementation_facts: Box::new([]),
+            exports: summary,
+            span,
+        };
+        let checked = [checked];
+        let mut measured_type = TypeWorkBudget::unbounded();
+        let mut measured_constraint = crate::interface::InterfaceConstraintBudget::default();
+        ResolvedRegistry::combine_checked(&checked, &mut measured_type, &mut measured_constraint)
+            .expect("measurement should retain the lexical partition");
+        let exact_type = measured_type.used();
+        let exact_constraint = measured_constraint.used();
+        assert!(exact_type > 0);
+        assert!(exact_constraint > 0);
+
+        let mut constraint_short =
+            crate::interface::InterfaceConstraintBudget::with_limit(exact_constraint - 1);
+        let mut untouched_type = TypeWorkBudget::with_limit(exact_type);
+        assert_eq!(
+            ResolvedRegistry::combine_checked(&checked, &mut untouched_type, &mut constraint_short,),
+            Err(ResolvedBuildFailure::ConstraintResource),
+        );
+        assert_eq!(constraint_short.used(), 0);
+        assert_eq!(untouched_type.used(), 0);
+        assert_eq!(checked[0].registry().lexical_nominals().len(), 1);
+
+        let mut exact_constraint_budget =
+            crate::interface::InterfaceConstraintBudget::with_limit(exact_constraint);
+        let mut type_short = TypeWorkBudget::with_limit(exact_type - 1);
+        assert_eq!(
+            ResolvedRegistry::combine_checked(
+                &checked,
+                &mut type_short,
+                &mut exact_constraint_budget,
+            ),
+            Err(ResolvedBuildFailure::TypeResource),
+        );
+        assert_eq!(exact_constraint_budget.used(), exact_constraint);
+        assert_eq!(type_short.used(), 0);
+        assert_eq!(checked[0].registry().lexical_constructors().len(), 1);
+
+        let mut exact_type_budget = TypeWorkBudget::with_limit(exact_type);
+        let mut retry_constraint =
+            crate::interface::InterfaceConstraintBudget::with_limit(exact_constraint);
+        let combined = ResolvedRegistry::combine_checked(
+            &checked,
+            &mut exact_type_budget,
+            &mut retry_constraint,
+        )
+        .expect("the exact retry should retain the lexical partition");
+        assert_eq!(exact_type_budget.used(), exact_type);
+        assert_eq!(retry_constraint.used(), exact_constraint);
+        assert_eq!(combined.lexical_nominals().len(), 1);
+        assert_eq!(combined.lexical_constructors().len(), 1);
+        assert_eq!(combined.nominal(owner).map(|fact| fact.id), Some(owner));
+        assert_eq!(
+            combined.constructor(constructor).map(|fact| fact.id),
+            Some(constructor),
+        );
     }
 
     fn transparent_newtype_summary_for_test() -> ExportSummary {
@@ -20331,6 +21084,10 @@ mod tests {
                 constructors,
                 nominal_positions,
                 constructor_positions,
+                lexical_nominals,
+                lexical_constructors,
+                lexical_nominal_positions,
+                lexical_constructor_positions,
                 effects,
                 effect_positions,
                 nominal_parameters,
@@ -20340,6 +21097,12 @@ mod tests {
                 abstract_nominal_names,
                 abstract_nominal_kinds,
             } = registry;
+            let _ = (
+                lexical_nominals,
+                lexical_constructors,
+                lexical_nominal_positions,
+                lexical_constructor_positions,
+            );
             let global_parameter_rows: &Box<[ResolvedGlobalParameterRow]> = global_parameter_rows;
             for row in global_parameter_rows {
                 let ResolvedGlobalParameterRow { owner, parameters } = row;
@@ -26893,6 +27656,10 @@ mod tests {
                     constructors: Box::new([]),
                     nominal_positions: HashMap::new(),
                     constructor_positions: HashMap::new(),
+                    lexical_nominals: Box::new([]),
+                    lexical_constructors: Box::new([]),
+                    lexical_nominal_positions: HashMap::new(),
+                    lexical_constructor_positions: HashMap::new(),
                     effects: Box::new([]),
                     effect_positions: HashMap::new(),
                     nominal_parameters: HashMap::from([(

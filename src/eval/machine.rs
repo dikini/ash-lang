@@ -839,6 +839,9 @@ fn dispatch_entry(
         PureExprKind::Computation(PureComputation::NewtypeConversion(operation)) => {
             Transition::direct(Control::Evaluate(operation.child(), environment))
         }
+        PureExprKind::Computation(PureComputation::LocalNominalScope(scope)) => {
+            Transition::direct(Control::Evaluate(scope.body(), environment))
+        }
         PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
             enter_type_abstraction(operation, environment)
         }
@@ -1410,12 +1413,15 @@ mod tests {
     };
 
     fn sequential_effect_program() -> ValidatedEffectProgram {
-        let text = concat!(
+        effect_program(concat!(
             "effect Ask {\nask : Int -> Int\n}\n\n",
             "main : Unit -> Int\nmain () = handle ({\n",
             "let first = perform Ask.ask 1\nperform Ask.ask first\n",
             "}) with Ask {\nask value => resume (value + 1)\n}\n",
-        );
+        ))
+    }
+
+    fn effect_program(text: &str) -> ValidatedEffectProgram {
         let path = std::env::temp_dir().join(format!(
             "ash-machine-effect-budget-{}-{}.ash",
             std::process::id(),
@@ -2622,6 +2628,29 @@ mod tests {
             1,
             "only the ordinary representation constructor may allocate",
         );
+    }
+
+    #[test]
+    fn local_newtype_closure_allocates_no_wrapper_or_scope_state() {
+        let program = effect_program(concat!(
+            "make : Unit -> (Unit -> Int)\n",
+            "make () = {\n",
+            "    newtype Offset = Offset(Int)\n",
+            "    let offset = Offset(41)\n",
+            "    fn(ignored) {\n",
+            "        match offset {\n",
+            "            Offset(value) => value + 1\n",
+            "        }\n",
+            "    }\n",
+            "}\n\n",
+            "main : Unit -> Int\n",
+            "main () = make()()\n",
+        ));
+        let evaluation = evaluate_effect(&program)
+            .expect("the identity-free closure should execute after its scope returns");
+        assert!(matches!(evaluation.value, Value::Integer(ref value) if value.to_string() == "42"));
+        assert_eq!(evaluation.heap.cell_count(), 0);
+        assert!(evaluation.effect_trace().is_empty());
     }
 
     #[test]

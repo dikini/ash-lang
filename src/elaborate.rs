@@ -53,13 +53,13 @@ use crate::{
         ResolvedModuleProgram, ResolvedNominalDeclarationKind, ResolvedPattern,
         ResolvedPatternKind, ResolvedRecursiveGroup, ResolvedRegistry, ResolvedType,
         ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResumeId,
-        clone_resolved_type_variable_with_budget,
+        clone_resolved_type_variable_with_budget, collect_nominal_identities,
     },
     source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
     types::{
         ComputationType, EffectInstance, EffectRow, EffectRowError, EffectRowVariable,
-        InferenceVariableId, IterativeTypeOwner, Kind, Type, TypeVariableId, TypeWorkBudget,
-        charge_type_cells, clone_effect_row_with_budget, clone_kind_with_budget,
+        InferenceVariableId, IterativeTypeOwner, Kind, NominalTypeId, Type, TypeVariableId,
+        TypeWorkBudget, charge_type_cells, clone_effect_row_with_budget, clone_kind_with_budget,
         clone_kinded_type_parameters_with_budget, compare_effect_instances_with_budget,
         discard_type_iteratively, effect_row_from_owned_parts_with_budget,
         rebuild_effect_row_with_budget, replace_type_iteratively, same_effect_rows_with_budget,
@@ -116,6 +116,8 @@ pub enum TypeReason {
     PolymorphicRecursion,
     /// A module newtype representation reaches itself through newtype declarations.
     NewtypeRecursiveRepresentation,
+    /// A local nominal identity occurs in the outward computation.
+    LocalNominalEscape,
     /// An effect-row union has no unqualified principal result.
     AmbiguousEffectRow,
     /// A handler body does not request the exact handled instance.
@@ -338,6 +340,7 @@ impl fmt::Display for TypeReason {
             Self::NewtypeRecursiveRepresentation => {
                 formatter.write_str("newtype.recursive-representation")
             }
+            Self::LocalNominalEscape => formatter.write_str("type.local-nominal-escape"),
             Self::AmbiguousEffectRow => formatter.write_str("effect.row-union-ambiguous"),
             Self::MissingHandledEffect => formatter.write_str("effect.handler-missing-input"),
             Self::HandlerCoverage => formatter.write_str("effect.handler-coverage"),
@@ -1773,6 +1776,7 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     inference_solutions: InferenceSolutionMap,
     row_inference_solutions: RowInferenceSolutionMap,
     authenticated_inference_solutions: HashSet<InferenceVariableId>,
+    deferred_local_nominal_escapes: Vec<(NominalTypeId, InferenceVariableId, Span)>,
     monomorphic_recursive: HashSet<BinderId>,
     current_implementation_method: Option<CurrentImplementationMethod>,
     method_binders: HashMap<MethodId, BinderId>,
@@ -2006,6 +2010,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             inference_solutions: InferenceSolutionMap::default(),
             row_inference_solutions: RowInferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
+            deferred_local_nominal_escapes: Vec::new(),
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
             method_binders: HashMap::new(),
@@ -2097,6 +2102,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             inference_solutions: InferenceSolutionMap::default(),
             row_inference_solutions: RowInferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
+            deferred_local_nominal_escapes: Vec::new(),
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
             method_binders: HashMap::new(),
@@ -2155,6 +2161,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             inference_solutions: InferenceSolutionMap::default(),
             row_inference_solutions: RowInferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
+            deferred_local_nominal_escapes: Vec::new(),
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
             method_binders: HashMap::new(),
@@ -2593,6 +2600,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             inference_solutions: InferenceSolutionMap::default(),
             row_inference_solutions: RowInferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
+            deferred_local_nominal_escapes: Vec::new(),
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
             method_binders: HashMap::new(),
@@ -7704,6 +7712,86 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok((globals, context))
     }
 
+    fn defer_local_nominal_escape(
+        &mut self,
+        owner: NominalTypeId,
+        ty: &Type,
+        span: Span,
+    ) -> Result<(), TypeError> {
+        let variables = collect_unsolved_inference(ty, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        self.type_work
+            .charge(variables.len().checked_mul(3).ok_or_else(invalid_state)?)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        self.deferred_local_nominal_escapes
+            .try_reserve(variables.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        self.deferred_local_nominal_escapes.extend(
+            variables
+                .into_iter()
+                .map(|variable| (owner, variable, span)),
+        );
+        Ok(())
+    }
+
+    fn check_deferred_local_nominal_escapes(&mut self) -> Result<(), TypeError> {
+        // Evidence improvement can solve these variables after their lexical
+        // blocks have closed. Check their final solutions before publication.
+        let mut escaped = None;
+        for index in 0..self.deferred_local_nominal_escapes.len() {
+            let (owner, variable, span) = self.deferred_local_nominal_escapes[index];
+            let is_row = matches!(
+                self.inference_variables
+                    .fact(variable, &mut self.type_work)
+                    .map_err(inference_registry_error)?
+                    .kind,
+                Kind::EffectRow
+            );
+            let identities = if is_row {
+                self.type_work
+                    .charge(2)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let row = self.zonk_effect_row(&EffectRow::open(
+                    EffectRowVariable::inference(variable),
+                    Box::new([]),
+                ))?;
+                computation_nominal_identities(&Type::Unit, &row, &mut self.type_work)?
+            } else {
+                let ty = IterativeTypeOwner::new(self.zonk(&Type::Inference(variable))?);
+                computation_nominal_identities(&ty, &EffectRow::empty(), &mut self.type_work)?
+            };
+            if identities.contains(&owner)
+                && escaped.is_none_or(|(_, previous): (NominalTypeId, Span)| {
+                    span.range().start() < previous.range().start()
+                })
+            {
+                escaped = Some((owner, span));
+            }
+        }
+        if let Some((owner, span)) = escaped {
+            let declaration = self
+                .registry
+                .nominal(owner)
+                .ok_or_else(invalid_state)?
+                .origin
+                .primary_span();
+            let mut diagnostic = Diagnostic::new(
+                TypeReason::LocalNominalEscape,
+                SourceLabel::new(
+                    span,
+                    "this outward inference contains a local nominal identity",
+                ),
+            );
+            diagnostic.related.push(SourceLabel::new(
+                declaration,
+                "this local nominal identity is scoped here",
+            ));
+            return Err(TypeError::Source(Box::new(diagnostic)));
+        }
+        self.deferred_local_nominal_escapes.clear();
+        Ok(())
+    }
+
     fn elaborate_result(
         &mut self,
         result_expression: &ResolvedExpr,
@@ -7716,6 +7804,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             },
             context,
         )?);
+        self.check_deferred_local_nominal_escapes()?;
         let (zonked_result, result_is_ambiguous) = self.zonk_with_status(&result.ty)?;
         let zonked_result = IterativeTypeOwner::new(zonked_result);
         if result_is_ambiguous {
@@ -8195,6 +8284,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut declarations = ElaboratedDeclarationBuffer(Vec::new());
         while let Some(task) = tasks.pop() {
             match task {
+                ElaborationTask::RetainLocalNewtype(owner) => {
+                    declarations.push(ElaboratedDeclaration::Newtype(owner));
+                }
                 ElaborationTask::Synthesize {
                     expression: current,
                     cause,
@@ -9529,105 +9621,17 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ElaborationTask::FinishBlock {
                     declarations: source_declarations,
                     declaration_start,
+                    result_span,
                 } => {
-                    let mut body = values.pop().ok_or_else(invalid_state)?;
-                    if declaration_start > declarations.len()
-                        || declarations.len() - declaration_start != source_declarations.len()
-                    {
-                        return Err(invalid_state());
-                    }
-                    let mut retained_declarations = declarations.split_off(declaration_start);
-                    while !retained_declarations.is_empty() {
-                        let core_body_type = self.clone_type(&body.ty)?;
-                        let declaration = retained_declarations.pop().ok_or_else(invalid_state)?;
-                        let (node, initializer_effects, effect_span) = match declaration
-                            .into_inner()
-                        {
-                            ElaboratedDeclaration::Binding {
-                                binder,
-                                initializer,
-                                effects,
-                                origin,
-                            } => {
-                                let effect_span = origin.primary_span();
-                                (
-                                    self.builder.binding(
-                                        binder,
-                                        initializer,
-                                        body.node,
-                                        core_body_type,
-                                        origin,
-                                    )?,
-                                    effects,
-                                    effect_span,
-                                )
-                            }
-                            ElaboratedDeclaration::PatternBinding {
-                                pattern,
-                                initializer,
-                                effects,
-                                origin,
-                                contains_newtype,
-                                pattern_count,
-                            } => {
-                                let effect_span = origin.primary_span();
-                                (
-                                    self.lower_match_expression(
-                                        initializer,
-                                        vec![CoreMatchArm::new(pattern, body.node, origin.clone())],
-                                        core_body_type,
-                                        origin,
-                                        contains_newtype,
-                                        pattern_count,
-                                    )?,
-                                    effects,
-                                    effect_span,
-                                )
-                            }
-                            ElaboratedDeclaration::Recursive {
-                                members,
-                                effects,
-                                origin,
-                            } => {
-                                let effect_span = origin.primary_span();
-                                (
-                                    self.builder.recursive_binding(
-                                        members,
-                                        body.node,
-                                        core_body_type,
-                                        origin,
-                                    )?,
-                                    effects,
-                                    effect_span,
-                                )
-                            }
-                        };
-                        let effects =
-                            self.union_effects(&initializer_effects, &body.effects, effect_span)?;
-                        body.set_node(node);
-                        body.replace_effects(effects);
-                    }
-                    for declaration in source_declarations {
-                        match declaration {
-                            ResolvedLocalDeclaration::Binding(binding) => {
-                                let mut ids = Vec::new();
-                                collect_pattern_binders(&binding.pattern, &mut ids);
-                                for id in ids {
-                                    if !context.remove_and_discard(id) {
-                                        return Err(invalid_state());
-                                    }
-                                }
-                            }
-                            ResolvedLocalDeclaration::Recursive(group) => {
-                                for member in &group.members {
-                                    if !context.remove_and_discard(member.binder.id) {
-                                        return Err(invalid_state());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    values.push(body.into_inner());
+                    let body = values.pop().ok_or_else(invalid_state)?;
+                    values.push(self.finish_expression_block(
+                        source_declarations,
+                        declaration_start,
+                        &mut declarations,
+                        body,
+                        context,
+                        result_span,
+                    )?);
                 }
             }
         }
@@ -9637,6 +9641,247 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         } else {
             Err(invalid_state())
         }
+    }
+
+    fn finish_expression_block(
+        &mut self,
+        source_declarations: &[ResolvedLocalDeclaration],
+        declaration_start: usize,
+        declarations: &mut ElaboratedDeclarationBuffer,
+        mut body: TypedNodeOwner,
+        context: &mut TypeContext,
+        result_span: Span,
+    ) -> Result<TypedNode, TypeError> {
+        if declaration_start > declarations.len()
+            || declarations.len() - declaration_start != source_declarations.len()
+        {
+            return Err(invalid_state());
+        }
+        let outward_identities = if source_declarations
+            .iter()
+            .any(|declaration| matches!(declaration, ResolvedLocalDeclaration::Newtype(_)))
+        {
+            let zonked_type = IterativeTypeOwner::new(self.zonk(&body.ty)?);
+            let zonked_effects = self.zonk_effect_row(&body.effects)?;
+            Some(computation_nominal_identities(
+                &zonked_type,
+                &zonked_effects,
+                &mut self.type_work,
+            )?)
+        } else {
+            None
+        };
+        if let Some(owner) = source_declarations.iter().find_map(|declaration| {
+            let ResolvedLocalDeclaration::Newtype(owner) = declaration else {
+                return None;
+            };
+            outward_identities
+                .as_ref()
+                .is_some_and(|identities| identities.contains(owner))
+                .then_some(*owner)
+        }) {
+            let declaration_span = self
+                .registry
+                .nominal(owner)
+                .ok_or_else(invalid_state)?
+                .origin
+                .primary_span();
+            let mut diagnostic = Diagnostic::new(
+                TypeReason::LocalNominalEscape,
+                SourceLabel::new(
+                    result_span,
+                    "this outward type contains a local nominal identity",
+                ),
+            );
+            diagnostic.related.push(SourceLabel::new(
+                declaration_span,
+                "this local nominal identity is scoped here",
+            ));
+            return Err(TypeError::Source(Box::new(diagnostic)));
+        }
+        let mut retained_declarations = declarations.split_off(declaration_start);
+        while !retained_declarations.is_empty() {
+            let core_body_type = self.clone_type(&body.ty)?;
+            let declaration = retained_declarations.pop().ok_or_else(invalid_state)?;
+            match &source_declarations[retained_declarations.len()] {
+                ResolvedLocalDeclaration::Binding(binding) => {
+                    let mut ids = Vec::new();
+                    collect_pattern_binders(&binding.pattern, &mut ids);
+                    for id in ids {
+                        if !context.remove_and_discard(id) {
+                            return Err(invalid_state());
+                        }
+                    }
+                }
+                ResolvedLocalDeclaration::Recursive(group) => {
+                    for member in &group.members {
+                        if !context.remove_and_discard(member.binder.id) {
+                            return Err(invalid_state());
+                        }
+                    }
+                }
+                ResolvedLocalDeclaration::Newtype(_) => {}
+            }
+            let (node, initializer_effects, effect_span) = match declaration.into_inner() {
+                ElaboratedDeclaration::Binding {
+                    binder,
+                    initializer,
+                    effects,
+                    origin,
+                } => {
+                    let effect_span = origin.primary_span();
+                    (
+                        self.builder.binding(
+                            binder,
+                            initializer,
+                            body.node,
+                            core_body_type,
+                            origin,
+                        )?,
+                        effects,
+                        effect_span,
+                    )
+                }
+                ElaboratedDeclaration::PatternBinding {
+                    pattern,
+                    initializer,
+                    effects,
+                    origin,
+                    contains_newtype,
+                    pattern_count,
+                } => {
+                    let effect_span = origin.primary_span();
+                    (
+                        self.lower_match_expression(
+                            initializer,
+                            vec![CoreMatchArm::new(pattern, body.node, origin.clone())],
+                            core_body_type,
+                            origin,
+                            contains_newtype,
+                            pattern_count,
+                        )?,
+                        effects,
+                        effect_span,
+                    )
+                }
+                ElaboratedDeclaration::Recursive {
+                    members,
+                    effects,
+                    origin,
+                } => {
+                    let effect_span = origin.primary_span();
+                    (
+                        self.builder.recursive_binding(
+                            members,
+                            body.node,
+                            core_body_type,
+                            origin,
+                        )?,
+                        effects,
+                        effect_span,
+                    )
+                }
+                ElaboratedDeclaration::Newtype(owner) => self.close_local_nominal_scope(
+                    owner,
+                    &body,
+                    core_body_type,
+                    context,
+                    result_span,
+                )?,
+            };
+            let effects = self.union_effects(&initializer_effects, &body.effects, effect_span)?;
+            body.set_node(node);
+            body.replace_effects(effects);
+        }
+        Ok(body.into_inner())
+    }
+
+    // Keep local-scope checks out of the expression driver's small-stack frame.
+    fn close_local_nominal_scope(
+        &mut self,
+        owner: NominalTypeId,
+        body: &TypedNode,
+        core_body_type: Type,
+        context: &TypeContext,
+        result_span: Span,
+    ) -> Result<(NodeId, EffectRow, Span), TypeError> {
+        let origin = self
+            .registry
+            .nominal(owner)
+            .ok_or_else(invalid_state)?
+            .origin
+            .clone();
+        let effect_span = origin.primary_span();
+        // The reverse fold has removed the remainder's bindings.
+        // Earlier and enclosing bindings must not acquire this identity
+        // through unification performed inside the nominal scope.
+        let mut escaped_binding = None;
+        for fact in context.binders.values() {
+            let ty = IterativeTypeOwner::new(self.zonk(&fact.ty)?);
+            self.defer_local_nominal_escape(
+                owner,
+                &ty,
+                fact.provenance.span().unwrap_or(result_span),
+            )?;
+            let mut identities = HashSet::new();
+            collect_nominal_identities(&ty, &mut identities, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            if identities.contains(&owner) {
+                let span = fact.provenance.span().unwrap_or(result_span);
+                if escaped_binding
+                    .is_none_or(|previous: Span| span.range().start() < previous.range().start())
+                {
+                    escaped_binding = Some(span);
+                }
+            }
+        }
+        if let Some(span) = escaped_binding {
+            let mut diagnostic = Diagnostic::new(
+                TypeReason::LocalNominalEscape,
+                SourceLabel::new(
+                    span,
+                    "this enclosing binding's type contains a local nominal identity",
+                ),
+            );
+            diagnostic.related.push(SourceLabel::new(
+                effect_span,
+                "this local nominal identity is scoped here",
+            ));
+            return Err(TypeError::Source(Box::new(diagnostic)));
+        }
+        let zonked_type = IterativeTypeOwner::new(self.zonk(&body.ty)?);
+        let zonked_effects = self.zonk_effect_row(&body.effects)?;
+        self.defer_local_nominal_escape(owner, &zonked_type, result_span)?;
+        if computation_nominal_identities(&zonked_type, &zonked_effects, &mut self.type_work)?
+            .contains(&owner)
+        {
+            let mut diagnostic = Diagnostic::new(
+                TypeReason::LocalNominalEscape,
+                SourceLabel::new(
+                    result_span,
+                    "this outward type contains a local nominal identity",
+                ),
+            );
+            diagnostic.related.push(SourceLabel::new(
+                effect_span,
+                "this local nominal identity is scoped here",
+            ));
+            return Err(TypeError::Source(Box::new(diagnostic)));
+        }
+        self.type_work
+            .charge(3)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let row_type = IterativeTypeOwner::new(Type::function_computation(
+            Type::Unit,
+            ComputationType::new(Type::Unit, zonked_effects),
+        ));
+        self.defer_local_nominal_escape(owner, &row_type, result_span)?;
+        Ok((
+            self.builder
+                .local_nominal_scope(owner, body.node, core_body_type, origin)?,
+            EffectRow::empty(),
+            effect_span,
+        ))
     }
 
     fn schedule_application_argument<'a>(
@@ -15363,6 +15608,7 @@ impl Default for CoreElaborator<PureOperationFamily> {
 }
 
 enum ElaborationTask<'a> {
+    RetainLocalNewtype(NominalTypeId),
     Synthesize {
         expression: &'a ResolvedExpr,
         cause: Option<SynthesisCause>,
@@ -15463,6 +15709,7 @@ enum ElaborationTask<'a> {
     FinishBlock {
         declarations: &'a [ResolvedLocalDeclaration],
         declaration_start: usize,
+        result_span: Span,
     },
 }
 
@@ -15729,6 +15976,7 @@ enum ElaboratedDeclaration {
         effects: EffectRow,
         origin: Origin,
     },
+    Newtype(NominalTypeId),
 }
 
 struct ElaborationTaskBuffer<'a>(Vec<ElaborationTask<'a>>);
@@ -16671,7 +16919,8 @@ fn discard_match_progress(progress: Box<MatchProgress<'_>>) {
 
 fn discard_elaboration_task(task: ElaborationTask<'_>) {
     match task {
-        ElaborationTask::Synthesize { .. }
+        ElaborationTask::RetainLocalNewtype(_)
+        | ElaborationTask::Synthesize { .. }
         | ElaborationTask::AfterApplicationFunction { .. }
         | ElaborationTask::AfterLeft { .. }
         | ElaborationTask::CheckRecursiveMember(_)
@@ -16772,6 +17021,7 @@ fn discard_elaborated_declaration(declaration: ElaboratedDeclaration) {
             }
             discard_origin_iteratively(origin);
         }
+        ElaboratedDeclaration::Newtype(_) => {}
     }
 }
 
@@ -16809,6 +17059,38 @@ fn operational_domain(
     }
 }
 
+fn computation_nominal_identities(
+    ty: &Type,
+    effects: &EffectRow,
+    budget: &mut TypeWorkBudget,
+) -> Result<HashSet<NominalTypeId>, TypeError> {
+    let mut identities = HashSet::new();
+    collect_nominal_identities(ty, &mut identities, budget)
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    budget
+        .charge(1)
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    if effects.tail().is_some() {
+        budget
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+    }
+    for instance in effects
+        .known()
+        .iter()
+        .chain(effects.tail().into_iter().flat_map(|tail| tail.lacks()))
+    {
+        budget
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for argument in instance.arguments() {
+            collect_nominal_identities(argument, &mut identities, budget)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        }
+    }
+    Ok(identities)
+}
+
 fn schedule_block<'a>(
     block: &'a ResolvedBlock,
     expected: Option<(ProvenancedType, CheckKind)>,
@@ -16820,6 +17102,7 @@ fn schedule_block<'a>(
     tasks.push(ElaborationTask::FinishBlock {
         declarations: &block.declarations,
         declaration_start,
+        result_span: block.result.span,
     });
     if let Some((expected, kind)) = expected {
         tasks.push(ElaborationTask::Check {
@@ -16866,6 +17149,9 @@ fn schedule_block<'a>(
             }
             ResolvedLocalDeclaration::Recursive(group) => {
                 tasks.push(ElaborationTask::BeginRecursiveGroup(group));
+            }
+            ResolvedLocalDeclaration::Newtype(owner) => {
+                tasks.push(ElaborationTask::RetainLocalNewtype(*owner));
             }
         }
     }
@@ -17654,6 +17940,7 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
                         ResolvedLocalDeclaration::Recursive(group) => {
                             work.extend(group.members.iter().map(|member| &member.initializer));
                         }
+                        ResolvedLocalDeclaration::Newtype(_) => {}
                     }
                 }
             }
@@ -17667,6 +17954,7 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
                         ResolvedLocalDeclaration::Recursive(group) => {
                             work.extend(group.members.iter().map(|member| &member.initializer));
                         }
+                        ResolvedLocalDeclaration::Newtype(_) => {}
                     }
                 }
             }
@@ -18959,6 +19247,7 @@ fn resume_usage_with_budget(
                             ResolvedLocalDeclaration::Recursive(group) => {
                                 push(&mut tasks, Task::CheckRecursive(group), budget)?;
                             }
+                            ResolvedLocalDeclaration::Newtype(_) => {}
                         }
                     }
                 }
@@ -19111,6 +19400,7 @@ fn block_contains_resume_owner_with_budget(
                     }
                 }
             }
+            ResolvedLocalDeclaration::Newtype(_) => {}
         }
     }
     Ok(false)
@@ -19173,6 +19463,7 @@ fn contains_resume_owner_with_budget(
                                 schedule(&mut pending, &member.initializer, budget)?;
                             }
                         }
+                        ResolvedLocalDeclaration::Newtype(_) => {}
                     }
                 }
             }
@@ -19188,6 +19479,7 @@ fn contains_resume_owner_with_budget(
                                 schedule(&mut pending, &member.initializer, budget)?;
                             }
                         }
+                        ResolvedLocalDeclaration::Newtype(_) => {}
                     }
                 }
             }
@@ -19250,6 +19542,7 @@ pub(crate) fn checked_program_contains_effect_syntax(
                 }
                 Ok(())
             }
+            ResolvedLocalDeclaration::Newtype(_) => Ok(()),
         }
     }
 
@@ -19279,7 +19572,11 @@ pub(crate) fn checked_program_contains_effect_syntax(
     }
 
     let registry = program.registry();
-    for nominal in registry.nominals() {
+    for nominal in registry
+        .nominals()
+        .iter()
+        .chain(registry.lexical_nominals())
+    {
         let parameters = registry
             .nominal_parameters(nominal.id)
             .ok_or_else(resource)?;
@@ -19574,6 +19871,7 @@ fn collect_resolved_declaration<'a>(
                 expressions.push(&member.initializer);
             }
         }
+        ResolvedLocalDeclaration::Newtype(_) => {}
     }
 }
 
@@ -20035,6 +20333,39 @@ mod tests {
                 .expect("the scoped-evidence worker should start")
                 .join()
                 .expect("both accepted and rejected scope owners must tear down iteratively");
+        }
+    }
+
+    #[test]
+    fn deferred_local_nominal_escape_retention_is_exact_atomic_and_retryable() {
+        let resolved = resolved_module_fixture("deferred-local-escape.ash", "", "Unit", "()");
+        let span = fixture_result(&resolved).span;
+        let owner = NominalTypeId::lexical(ModuleId::new(902), 0);
+        let first = Type::Inference(InferenceVariableId::new(0));
+        let second = Type::Inference(InferenceVariableId::new(1));
+        for (ty, exact, count) in [
+            (first.clone(), 6, 1),
+            (Type::Tuple(Box::new([first.clone(), first.clone()])), 8, 1),
+            (Type::Tuple(Box::new([first, second])), 13, 2),
+        ] {
+            let mut short = Elaborator::new();
+            short.type_work = TypeWorkBudget::with_limit(exact - 1);
+            assert!(matches!(
+                short.defer_local_nominal_escape(owner, &ty, span),
+                Err(TypeError::Internal(
+                    ElaborationFailure::TypeResourceExhausted
+                ))
+            ));
+            assert!(short.deferred_local_nominal_escapes.is_empty());
+            for _ in 0..2 {
+                let mut retry = Elaborator::new();
+                retry.type_work = TypeWorkBudget::with_limit(exact);
+                retry
+                    .defer_local_nominal_escape(owner, &ty, span)
+                    .expect("the exact outward inference retention should fit");
+                assert_eq!(retry.type_work.used(), exact);
+                assert_eq!(retry.deferred_local_nominal_escapes.len(), count);
+            }
         }
     }
 

@@ -61,6 +61,13 @@ An ordinary local binding becomes a nonrecursive Core binding around the
 remainder of its block. Its initializer remains outside its new binder's
 scope.
 
+A local `newtype` lowers to `LocalNominalScope(owner, remainder)` around the
+following declarations and result of its block. It uses the shared pure Core
+family in both Pure and Effect dialects. The unary carrier records its lexical
+owner and child; its value type and effect row equal the child's. It has no
+initializer or runtime value. Local construction and matching reuse the same
+representation conversions as module `newtype`.
+
 All globals in one module elaborate together through one recursive binding.
 One explicit local recursive group elaborates through the same form around the
 remainder of its block. The recursive binding owns a nonempty ordered sequence
@@ -107,6 +114,13 @@ access, origin, and representation provenance. Linking authenticates these
 facts across direct, aliased, opaque, re-exported, and diamond routes. Hidden
 facts authorize later Core validation but create no source name, constructor
 access, coercion, or interface evidence.
+
+Local canonical facts never enter dependency summaries, imports, or exports.
+Each checked module retains its lexical nominals and constructors separately
+from module declaration arrays. Linking preserves their module-qualified
+lexical owners and canonical representation facts for independent Core checking;
+it creates no source access or implementation-search entry. Shared nominal
+lookup and conversion validation serve both ownership classes.
 
 Each checked module also contributes its local implementation inventory, its
 effective imported implementation inventory, and a lightweight public
@@ -380,6 +394,11 @@ newtype pattern lowers through an unwrap conversion before ordinary pattern
 structure. Neither path emits an ordinary constructor Core node for the
 `newtype`.
 
+For a local representation, enclosing type parameters remain free relative to
+its own constructor scheme. Generated Core binder renaming must preserve their
+authenticated enclosing scope. Neither constructor instantiation nor local
+generalization replaces the lexical nominal identity with a type variable.
+
 An explicit global binder list establishes abstraction order. A global that
 omits the list preserves the shared first-occurrence order of ordinary type and
 effect-row-tail variables. A name occurring only in ordinary type positions
@@ -602,6 +621,22 @@ ordinary constructor used as a conversion and a newtype constructor or pattern
 lowered through ordinary allocating Core. Resolution and linked-summary
 validation remain the exclusive authorities for source access and import
 routes.
+
+Every retained local nominal fact has exactly one matching scope introduction.
+The introduction must have its canonical lexical owner and declaration origin.
+Every use of a local identity in a type, row, effect argument, constructor,
+pattern, conversion, or operation metadata must lie beneath its introduction.
+The scope node's own result type and row must not contain its owner. Dependencies
+of the canonical representation must already be in scope at that declaration,
+including preceding local nominals and enclosing type parameters, even when
+the constructor is unused. Its own declared parameters remain bound only by
+the representation template.
+
+Validation rejects missing, duplicate, unmatched, wrong-owner, out-of-scope,
+and escaping scope relations before evaluation. Identity traversal and folding
+preserve or rebuild the unary scope, conversions, and their metadata and return
+the program to independent validation. A scope node contributes no effect-row
+member and does not change effect-row algebra.
 
 Validation distinguishes unary structural monotype applications from Core
 type applications. A Core type application supplies one argument per quantified

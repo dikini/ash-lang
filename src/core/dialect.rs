@@ -28,7 +28,8 @@ use super::{
     primitive::{Primitive, PrimitiveNode},
     recursion::{RecursiveBindingMember, RecursiveBindingNode},
     type_ops::{
-        NewtypeConversionDirection, NewtypeConversionNode, TypeAbstractionNode, TypeApplicationNode,
+        LocalNominalScopeNode, NewtypeConversionDirection, NewtypeConversionNode,
+        TypeAbstractionNode, TypeApplicationNode,
     },
     variable::{TypedBinder, VariableNode},
 };
@@ -1140,6 +1141,7 @@ impl PureExprKind {
                 PureComputation::Tuple(node) => node.elements().len(),
                 PureComputation::Match(node) => node.arms().len() + 1,
                 PureComputation::NewtypeConversion(_)
+                | PureComputation::LocalNominalScope(_)
                 | PureComputation::TypeAbstraction(_)
                 | PureComputation::TypeApplication(_) => 1,
             },
@@ -1179,6 +1181,9 @@ impl PureExprKind {
                 }
                 PureComputation::NewtypeConversion(node) => {
                     fixed_child_at([Some(node.child())], index)
+                }
+                PureComputation::LocalNominalScope(node) => {
+                    fixed_child_at([Some(node.body())], index)
                 }
             },
         }
@@ -1225,6 +1230,8 @@ pub enum PureComputation {
     Match(MatchNode),
     /// An explicit erased module-newtype representation conversion.
     NewtypeConversion(NewtypeConversionNode),
+    /// A runtime-erased lexical nominal scope.
+    LocalNominalScope(LocalNominalScopeNode),
     /// An explicit erased rank-1 type abstraction.
     TypeAbstraction(TypeAbstractionNode),
     /// An explicit erased rank-1 type application.
@@ -2242,6 +2249,23 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         )
     }
 
+    /// Adds an unchecked runtime-erased lexical nominal scope.
+    pub fn local_nominal_scope(
+        &mut self,
+        owner: crate::types::NominalTypeId,
+        body: NodeId,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        self.push(
+            ty,
+            origin,
+            PureExprKind::Computation(PureComputation::LocalNominalScope(
+                LocalNominalScopeNode::new(owner, body),
+            )),
+        )
+    }
+
     /// Adds strict tuple construction with an unchecked result annotation.
     pub fn tuple(
         &mut self,
@@ -2919,6 +2943,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
                     | PureComputation::Primitive(_)
                     | PureComputation::Tuple(_)
                     | PureComputation::NewtypeConversion(_)
+                    | PureComputation::LocalNominalScope(_)
                     | PureComputation::TypeAbstraction(_),
                 ) => {}
             }
@@ -3266,6 +3291,7 @@ pub(super) fn discard_pure_expr_kind_metadata(kind: PureExprKind) {
             | PureComputation::Primitive(_)
             | PureComputation::Tuple(_)
             | PureComputation::NewtypeConversion(_)
+            | PureComputation::LocalNominalScope(_)
             | PureComputation::TypeAbstraction(_),
         ) => {}
     }
@@ -4564,6 +4590,91 @@ mod tests {
                 .expect("the exact conversion should finish");
             drop(program);
         }
+    }
+
+    #[test]
+    fn local_nominal_scope_admission_has_an_exact_atomic_retry_boundary() {
+        let source = SourceFile::new("local-nominal-scope.ash", "()").expect("test source");
+        let origin = Origin::Source(
+            source
+                .span(ByteRange::new(0, 2).expect("ordered range"))
+                .expect("source span"),
+        );
+        let owner = NominalTypeId::lexical(ModuleId::new(0), 0);
+        let prepare = || {
+            let mut builder = CoreBuilder::new();
+            let body = builder
+                .unit(Type::Unit, origin.clone())
+                .expect("the scope body should fit");
+            (builder, body)
+        };
+
+        let (mut measured, measured_body) = prepare();
+        let before = measured.type_work.used();
+        measured
+            .local_nominal_scope(owner, measured_body, Type::Unit, origin.clone())
+            .expect("the measured scope should fit");
+        let scope_work = measured.type_work.used() - before;
+        assert_eq!(
+            scope_work, 1,
+            "the carrier admits only its unit result type"
+        );
+
+        let (mut short, short_body) = prepare();
+        let short_node_count = short.nodes.len();
+        short
+            .charge_type_work_for_test(TYPE_WORK_LIMIT - short.type_work.used())
+            .expect("the one-short prefix should fit");
+        assert_eq!(
+            short.local_nominal_scope(owner, short_body, Type::Unit, origin.clone()),
+            Err(BuildError::TypeWorkExceeded),
+        );
+        assert_eq!(short.nodes.len(), short_node_count);
+
+        for _ in 0..2 {
+            let (mut exact, exact_body) = prepare();
+            exact
+                .charge_type_work_for_test(TYPE_WORK_LIMIT - exact.type_work.used() - scope_work)
+                .expect("the exact prefix should fit");
+            let root = exact
+                .local_nominal_scope(owner, exact_body, Type::Unit, origin.clone())
+                .expect("a fresh exact builder should retry the scope");
+            assert_eq!(exact.type_work.used(), TYPE_WORK_LIMIT);
+            assert_eq!(exact.nodes.len(), 2);
+            drop(exact.finish(root).expect("the exact scope should finish"));
+        }
+    }
+
+    #[test]
+    fn unvalidated_local_nominal_scope_chain_discards_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("local-nominal-scope-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("local-scope-chain.ash", "()").expect("test source");
+                let origin = Origin::Source(
+                    source
+                        .span(ByteRange::new(0, 2).expect("ordered range"))
+                        .expect("source span"),
+                );
+                let owner = NominalTypeId::lexical(ModuleId::new(0), 0);
+                let mut builder = CoreBuilder::new();
+                let mut root = builder
+                    .unit(Type::Unit, origin.clone())
+                    .expect("the scope leaf should fit");
+                for _ in 0..DEPTH {
+                    root = builder
+                        .local_nominal_scope(owner, root, Type::Unit, origin.clone())
+                        .expect("the scope chain should fit");
+                }
+                assert_eq!(builder.nodes.len(), DEPTH + 1);
+                drop(builder.finish(root).expect("the scope chain should finish"));
+            })
+            .expect("the local-scope disposal thread should start")
+            .join()
+            .expect("local scope teardown must remain iterative");
     }
 
     #[test]

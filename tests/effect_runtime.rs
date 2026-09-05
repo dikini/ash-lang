@@ -1,7 +1,8 @@
 use ash::{
     core::{
-        CoreMatchArm, CorePattern, CorePatternKind, EffectClause, EffectCoreBuilder, HandlerId,
-        Primitive, ResumeUse, ValidatedEffectProgram, validate_effect_modules,
+        CoreMatchArm, CorePattern, CorePatternKind, EffectClause, EffectCoreBuilder,
+        EffectExprKind, HandlerId, Primitive, PureComputation, PureExprKind, ResumeUse,
+        ValidatedEffectProgram, validate_effect_modules,
     },
     elaborate::{EffectElaborator, check_module, link_modules},
     eval::{EffectTraceEvent, evaluate_effect},
@@ -105,6 +106,59 @@ fn handled_request_preserves_erased_newtype_values_across_resume() {
             EffectTraceEvent::ClauseReturned(_),
         ]
     ));
+}
+
+#[test]
+fn local_nominal_scope_is_static_in_effect_core() {
+    let source = concat!(
+        "effect Ask {\nask : Unit -> Int\n}\n\n",
+        "main : Unit -> Int\n",
+        "main () = {\n",
+        "newtype Offset = Offset(Int)\n",
+        "let offset = Offset(41)\n",
+        "handle (perform Ask.ask ()) with Ask {\n",
+        "ask ignored => resume (match offset {\n",
+        "Offset(value) => value + 1\n",
+        "})\n",
+        "}\n",
+        "}\n",
+    );
+    let path = std::env::temp_dir().join(format!(
+        "ash-effect-runtime-local-scope-{}-{}.ash",
+        std::process::id(),
+        SourceFile::new("local-scope", "")
+            .expect("source identity")
+            .id()
+            .value()
+    ));
+    std::fs::write(&path, source).expect("effect local-scope fixture should be writable");
+    let program = effect_program(&path);
+    let _ = std::fs::remove_file(path);
+
+    let mut pending = vec![program.root()];
+    let mut scopes = 0;
+    while let Some(id) = pending.pop() {
+        let node = program.node(id).expect("reachable effect Core node");
+        if matches!(
+            &node.kind,
+            EffectExprKind::Pure(PureExprKind::Computation(
+                PureComputation::LocalNominalScope(_)
+            ))
+        ) {
+            scopes += 1;
+        }
+        pending.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
+    }
+    assert_eq!(scopes, 1);
+
+    let evaluation = evaluate_effect(&program).expect("effect local scope should execute");
+    assert_eq!(evaluation.value.to_string(), "42");
+    assert!(
+        evaluation
+            .effect_trace()
+            .iter()
+            .any(|event| matches!(event, EffectTraceEvent::Resume(_)))
+    );
 }
 
 #[test]

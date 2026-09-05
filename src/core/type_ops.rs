@@ -27,6 +27,31 @@ pub struct NewtypeConversionNode {
     child: NodeId,
 }
 
+/// A compile-time lexical nominal scope. Evaluation enters its child directly.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LocalNominalScopeNode {
+    owner: crate::types::NominalTypeId,
+    body: NodeId,
+}
+
+impl LocalNominalScopeNode {
+    pub(crate) const fn new(owner: crate::types::NominalTypeId, body: NodeId) -> Self {
+        Self { owner, body }
+    }
+
+    /// Returns the lexical nominal introduced by this scope.
+    #[must_use]
+    pub const fn owner(self) -> crate::types::NominalTypeId {
+        self.owner
+    }
+
+    /// Returns the scoped computation.
+    #[must_use]
+    pub const fn body(self) -> NodeId {
+        self.body
+    }
+}
+
 impl NewtypeConversionNode {
     pub(crate) const fn new(
         owner: NominalTypeId,

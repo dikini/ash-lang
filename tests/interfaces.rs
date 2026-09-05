@@ -270,6 +270,7 @@ fn schedule_local_expressions<'a>(
         ResolvedLocalDeclaration::Recursive(group) => {
             expressions.extend(group.members.iter().map(|member| &member.initializer));
         }
+        ResolvedLocalDeclaration::Newtype(_) => {}
     }
 }
 
@@ -1724,6 +1725,9 @@ fn higher_kinded_interface_erasure_adds_no_runtime_state_or_transition() {
                     PureExprKind::Computation(PureComputation::Match(_)) => "match",
                     PureExprKind::Computation(PureComputation::NewtypeConversion(_)) => {
                         "newtype-conversion-erasure"
+                    }
+                    PureExprKind::Computation(PureComputation::LocalNominalScope(_)) => {
+                        "local-nominal-scope-erasure"
                     }
                     PureExprKind::Computation(PureComputation::TypeAbstraction(_)) => {
                         "type-abstraction-erasure"

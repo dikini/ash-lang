@@ -1681,6 +1681,9 @@ fn block(parser: &mut Parser<'_>) {
                 local_binding(parser);
             }
             let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+        } else if parser.at(&TokenKind::Newtype) {
+            newtype_declaration(parser);
+            let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
         } else if parser.at(&TokenKind::And) {
             rejected_stray_and(parser);
             if parser.at(&TokenKind::LineEnd) {
@@ -2559,6 +2562,46 @@ mod tests {
         );
         assert!(exact_work > baseline.tokens().len());
 
+        let exact = parse_newtype_with_limit(&source, exact_work);
+        assert_eq!(exact.resource_failure(), None);
+        assert!(
+            exact
+                .events()
+                .iter()
+                .any(|event| matches!(event, Event::Start(NodeKind::NewtypeDeclaration)))
+        );
+
+        let one_short_limit = exact_work - 1;
+        let one_short = parse_newtype_with_limit(&source, one_short_limit);
+        assert_eq!(
+            one_short.resource_failure(),
+            Some(ResourceFailure::SyntaxWork {
+                limit: one_short_limit
+            })
+        );
+        assert!(one_short.root().is_none());
+
+        let retry = parse_newtype_with_limit(&source, exact_work);
+        assert_eq!(retry.resource_failure(), None);
+        assert_eq!(retry.tokens().len(), baseline.tokens().len());
+        assert_eq!(retry.events().len(), baseline.events().len());
+    }
+
+    #[test]
+    fn local_newtype_declaration_consumes_exact_cumulative_syntax_work_and_retries_cleanly() {
+        let source = SourceFile::new(
+            "local-newtype-resource.ash",
+            "main : Unit -> Int\nmain () = {\nnewtype Exact = Exact(Int)\nlet answer = 1\nanswer\n}\n",
+        )
+        .expect("the parser fixture should fit");
+        let baseline = super::super::parse(lex(&source).expect("the parser fixture should lex"));
+        let exact_work = baseline.tokens().len() + baseline.events().len();
+
+        assert!(
+            baseline.parse_diagnostics().is_empty(),
+            "{:?}",
+            baseline.parse_diagnostics()
+        );
         let exact = parse_newtype_with_limit(&source, exact_work);
         assert_eq!(exact.resource_failure(), None);
         assert!(

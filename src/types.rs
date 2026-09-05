@@ -411,12 +411,19 @@ fn clone_type(ty: &Type) -> Type {
 
 /// Stable identity of one nominal type declaration.
 ///
-/// The declaration index is assigned in source order within its defining
-/// canonical module.
+/// Module declarations and lexical declarations use distinct owner classes.
+/// The declaration coordinate is stable within the same canonical module.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct NominalTypeId {
     module: ModuleId,
+    owner: NominalOwner,
     declaration: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum NominalOwner {
+    Module,
+    Lexical,
 }
 
 /// Stable identity of one constructor declaration.
@@ -1580,6 +1587,17 @@ impl NominalTypeId {
     pub fn new(module: impl Into<ModuleId>, declaration: u32) -> Self {
         Self {
             module: module.into(),
+            owner: NominalOwner::Module,
+            declaration,
+        }
+    }
+
+    /// Creates the identity for one lexical nominal declaration.
+    #[must_use]
+    pub fn lexical(module: impl Into<ModuleId>, declaration: u32) -> Self {
+        Self {
+            module: module.into(),
+            owner: NominalOwner::Lexical,
             declaration,
         }
     }
@@ -1594,6 +1612,12 @@ impl NominalTypeId {
     #[must_use]
     pub const fn declaration(self) -> u32 {
         self.declaration
+    }
+
+    /// Reports whether this identity belongs to a lexical declaration.
+    #[must_use]
+    pub const fn is_lexical(self) -> bool {
+        matches!(self.owner, NominalOwner::Lexical)
     }
 }
 
@@ -2012,11 +2036,21 @@ fn write_type(ty: &Type, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 work.push(Task::Sequence(elements.iter()));
                 work.push(Task::Text("("));
             }
-            Task::Visit(Type::Nominal(identity)) => write!(
-                formatter,
-                "<type:{}:{}>",
-                identity.module, identity.declaration
-            )?,
+            Task::Visit(Type::Nominal(identity)) => {
+                if identity.is_lexical() {
+                    write!(
+                        formatter,
+                        "<local-type:{}:{}>",
+                        identity.module, identity.declaration
+                    )?;
+                } else {
+                    write!(
+                        formatter,
+                        "<type:{}:{}>",
+                        identity.module, identity.declaration
+                    )?;
+                }
+            }
             Task::Visit(Type::Variable(TypeVariableId::Resolved { module, local })) => {
                 write!(formatter, "<type-variable:{module}:{local}>")?;
             }

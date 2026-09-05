@@ -1729,7 +1729,11 @@ fn build_linked_kind_environments<'a>(
     span: Span,
 ) -> Result<KindEnvironments<'a>, EvidenceValidationFailure> {
     let mut environments = KindEnvironments::new();
-    for nominal in registry.nominals() {
+    for nominal in registry
+        .nominals()
+        .iter()
+        .chain(registry.lexical_nominals())
+    {
         let parameters = registry
             .nominal_parameters(nominal.id)
             .ok_or_else(|| unknown(span))?;
@@ -2600,7 +2604,11 @@ fn build_core_method_evidence_catalog(
                     canonical.id == method.id.method() && method_is_polymorphic(canonical)
                 }) || method.scheme.requirements.iter().any(|requirement| {
                     interface_has_polymorphic_method(methods.as_slice(), requirement.interface())
-                }) {
+                }) || local_representation_captures_method_parameter(
+                    program.registry(),
+                    method,
+                    constraint_work,
+                )? {
                     implementation_owner_count = implementation_owner_count
                         .checked_add(1)
                         .ok_or_else(|| resource(program.result().span))?;
@@ -2638,7 +2646,11 @@ fn build_core_method_evidence_catalog(
                     canonical.id == method.id.method() && method_is_polymorphic(canonical)
                 }) || method.scheme.requirements.iter().any(|requirement| {
                     interface_has_polymorphic_method(methods.as_slice(), requirement.interface())
-                })) {
+                }) || local_representation_captures_method_parameter(
+                    program.registry(),
+                    method,
+                    constraint_work,
+                )?) {
                     continue;
                 }
                 let mut source_parameters = Vec::new();
@@ -3863,6 +3875,7 @@ fn collect_method_evidence_occurrences(
                                     )?;
                                 }
                             }
+                            ResolvedLocalDeclaration::Newtype(_) => {}
                         }
                     }
                     collect_method_evidence_expression_occurrences(
@@ -4059,6 +4072,7 @@ fn collect_method_evidence_expression_occurrences(
                                 group.members.iter().rev().map(|member| &member.initializer),
                             );
                         }
+                        ResolvedLocalDeclaration::Newtype(_) => {}
                     }
                 }
             }
@@ -4086,6 +4100,7 @@ fn collect_method_evidence_expression_occurrences(
                                 group.members.iter().rev().map(|member| &member.initializer),
                             );
                         }
+                        ResolvedLocalDeclaration::Newtype(_) => {}
                     }
                 }
             }
@@ -4185,6 +4200,51 @@ fn push_method_evidence_occurrence(
         selection: selection.clone(),
     });
     Ok(())
+}
+
+fn local_representation_captures_method_parameter(
+    registry: &ResolvedRegistry,
+    method: &crate::resolved::CheckedImplementationMethodFact,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<bool, EvidenceValidationFailure> {
+    if method.scheme.type_parameters.is_empty() {
+        return Ok(false);
+    }
+    for nominal in registry.lexical_nominals() {
+        charge(budget, 1, method.span)?;
+        let span = nominal.origin.primary_span();
+        if span.source() != method.span.source()
+            || span.range().start() < method.span.range().start()
+            || span.range().end() > method.span.range().end()
+        {
+            continue;
+        }
+        let representation = nominal
+            .representation
+            .as_ref()
+            .ok_or_else(|| unknown(span))?;
+        let mut variables = Vec::new();
+        collect_linked_constraint_variables(representation, &mut variables, budget, span)?;
+        charge(
+            budget,
+            method
+                .scheme
+                .type_parameters
+                .len()
+                .checked_mul(variables.len())
+                .ok_or_else(|| resource(span))?,
+            span,
+        )?;
+        if method
+            .scheme
+            .type_parameters
+            .iter()
+            .any(|(parameter, _)| variables.contains(parameter))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn authenticate_linked_constructor_payloads<'a>(
@@ -4294,7 +4354,11 @@ fn authenticate_linked_registry_facts(
     }
     let mut constructor_count = 0_usize;
 
-    for nominal in registry.nominals() {
+    for nominal in registry
+        .nominals()
+        .iter()
+        .chain(registry.lexical_nominals())
+    {
         charge(budget, 1, span)?;
         if !modules.contains(&nominal.id.module())
             || registry
@@ -4340,7 +4404,7 @@ fn authenticate_linked_registry_facts(
             }
         }
     }
-    if constructor_count != registry.constructors().len() {
+    if constructor_count != registry.constructors().len() + registry.lexical_constructors().len() {
         return Err(unknown(span));
     }
 
@@ -6335,6 +6399,7 @@ fn schedule_block<'a>(
                         .ok_or_else(|| resource(block.span))?;
                 }
             }
+            ResolvedLocalDeclaration::Newtype(_) => {}
         }
     }
     reserve_expressions(pending, additional, budget, block.span)?;
@@ -6345,6 +6410,7 @@ fn schedule_block<'a>(
             ResolvedLocalDeclaration::Recursive(group) => {
                 pending.extend(group.members.iter().rev().map(|member| &member.initializer));
             }
+            ResolvedLocalDeclaration::Newtype(_) => {}
         }
     }
     Ok(())
@@ -7523,6 +7589,37 @@ mod tests {
         let fixture = ValidationFixture::create(source);
         let graph = fixture.graph();
         link_modules(check_graph(&graph), graph.entry()).expect("the entry fixture should link")
+    }
+
+    #[test]
+    fn captured_method_parameter_detection_has_an_exact_retry_boundary() {
+        let program = entry_program(concat!(
+            "type Box<A> = Box(A)\n",
+            "interface Keep<A> {\nkeep : A -> A\n}\n",
+            "impl<A> Keep<Box<A>> {\nkeep value = {\nnewtype Local = Local(A)\nvalue\n}\n}\n",
+            "main : Unit -> Int\nmain () = 42\n",
+        ));
+        let method = &program.groups()[0].implementation_facts()[0].methods[0];
+        const EXACT: usize = 5;
+        let mut short = InterfaceConstraintBudget::with_limit(EXACT - 1);
+        assert_eq!(
+            local_representation_captures_method_parameter(program.registry(), method, &mut short)
+                .expect_err("the capture lookup must charge before completion")
+                .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted
+        );
+        for _ in 0..2 {
+            let mut exact = InterfaceConstraintBudget::with_limit(EXACT);
+            assert!(
+                local_representation_captures_method_parameter(
+                    program.registry(),
+                    method,
+                    &mut exact
+                )
+                .expect("the exact lookup should fit")
+            );
+            assert_eq!(exact.used(), EXACT);
+        }
     }
 
     fn linked_determined_generic_decrease_program() -> ResolvedModuleProgram {

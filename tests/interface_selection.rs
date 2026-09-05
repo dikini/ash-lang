@@ -285,6 +285,7 @@ fn schedule_local_declaration<'a>(
         ResolvedLocalDeclaration::Recursive(group) => {
             expressions.extend(group.members.iter().map(|member| &member.initializer));
         }
+        ResolvedLocalDeclaration::Newtype(_) => {}
     }
 }
 

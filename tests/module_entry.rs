@@ -126,6 +126,28 @@ fn effectful_nominal_representation_selects_effect_core() {
 }
 
 #[test]
+fn effectful_local_nominal_representation_selects_effect_core() {
+    let tree = TempTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "effect Ask<A> {\nask : Unit -> Unit\n}\n\n",
+            "main : Unit -> Int\n",
+            "main () = {\n",
+            "newtype Hidden = Hidden(Unit -> Unit ! {Ask<Int>})\n",
+            "42\n",
+            "}\n",
+        ),
+    );
+
+    let observation =
+        run(&entry).expect("an effectful retained local representation should select Effect Core");
+
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.ty(), &Type::Int);
+}
+
+#[test]
 fn rejects_an_entry_module_without_a_local_main() {
     let tree = TempTree::create();
     let entry = tree.write("entry.ash", "helper : Unit -> Unit\nhelper value = value\n");

@@ -93,15 +93,20 @@ nominals under the ordinary scope and kind rules. Kinding a computation
 codomain checks every nested effect instance, including effect arguments that
 contain a `newtype` identity.
 
-After every ordinary constructor payload and every `newtype` representation in
-one module is kind-correct, static nominal admission constructs the directed
-graph whose vertices are the module's `newtype` declarations and whose edges
+After every module-level ordinary constructor payload and `newtype` representation
+is kind-correct, static nominal admission constructs the directed
+graph whose vertices are the module-level `newtype` declarations and whose edges
 are `newtype` identities occurring anywhere in another representation. The directed graph containing only `newtype` representation edges must be acyclic.
 Traversal follows declaration and structural type order; the first closing edge
 owns `newtype.recursive-representation`. Its primary label identifies the
 rejected representation occurrence, and its related labels identify the
 declarations that complete the cycle. An ordinary data declaration ends this
 graph traversal even if its payload refers back to the originating `newtype`.
+
+A local `newtype` uses the same representation-kind check under its own
+parameters and enclosing lexical type parameters. Its nominal kind depends
+only on its declared parameter vector. Sequential scope rules out self and
+forward representation references, so local declarations add no cycle pass.
 
 The total synthesis judgment
 `DELTA; OMEGA; XI |- monotype => kind` assigns a kind to every well-formed
@@ -735,6 +740,76 @@ main : Unit -> Int
 main () = add 20 22
 ```
 
+### Local nominal scope
+
+A local `newtype` checks its remainder with its rigid nominal and unary
+constructor in scope. Construction, irrefutable pattern matching, and
+representation substitution use the same rules as module `newtype`. No
+representation interface evidence transfers to the local nominal.
+
+At each declaration boundary, the compiler zonks the outward computation and
+rejects a local identity in its value type, effect row, generalized scheme, or
+requirements. Traversal includes function domains and codomains, tuple members,
+nominal applications, effect arguments, and row structure. Solving an inference
+variable in a preceding or enclosing binding must not carry the identity
+outside the declaration's scope either, even when the block returns `Unit`.
+If later constraint improvement solves an outward inference variable, its
+solution must satisfy the same boundary before checked publication. This check
+does not change ordinary unification, improvement, or evidence-selection order.
+
+In the following rules, `n` is the resolved lexical nominal identity, `P` its
+ordered parameters, and `R` its representation template. Extending `XI` with
+`n(P) = R` also makes its constructor scheme available. `outward` includes the
+zonked result computation, any outward scheme or requirement, and the zonked
+types of bindings that preceded the declaration. The semicolons separate
+semantic fields and add no source punctuation.
+
+```sequent
+family local-newtype-typing:
+  T-Block-Newtype-Inferred :=
+    n(P) = R is resolved and kind-correct
+    GAMMA; XI, n(P) = R |- { remainder } ⇒ A ! epsilon
+    n does not occur in outward(GAMMA, A ! epsilon)
+    ===>
+    GAMMA; XI |- { newtype n(P) = R; remainder } ⇒ A ! epsilon
+
+  T-Block-Newtype-Checked :=
+    n(P) = R is resolved and kind-correct
+    GAMMA; XI, n(P) = R |- { remainder } ⇐ A ! epsilon
+    n does not occur in outward(GAMMA, A ! epsilon)
+    ===>
+    GAMMA; XI |- { newtype n(P) = R; remainder } ⇐ A ! epsilon
+```
+
+Escape is `type.local-nominal-escape`. Its primary label identifies the
+expression or binding whose outward type contains the identity, and a related
+label identifies the declaration. The following complete module is rejected
+at `Hidden(1)`, related to `newtype Hidden`, even though `escaped` is unused:
+
+```ash
+main : Unit -> Int
+main () = {
+    let escaped = {
+        newtype Hidden = Hidden(Int)
+        Hidden(1)
+    }
+    0
+}
+```
+
+The executable test `local_newtype_escape_example_has_owned_diagnostic` checks
+the reason and source labels. Returning the constructor, an identity-exposing
+closure, or a pair of a hidden value and its eliminator is rejected by the same
+rule. The last case would require an existential package, which Ash does not
+infer. Using the nominal or constructor name after the block instead fails
+during name resolution.
+
+A closure may escape when its exposed computation is identity-free, even if
+its body captures and unwraps a local value. The
+[local-newtype example](README.md#local-newtypes) executes this case. Returning
+the unwrapped representation or consuming a local value through an ordinary
+polymorphic function with an identity-free result is also valid.
+
 ## Inference and rank-1 restrictions
 
 Inference variables are compiler facts, not source types. Each inference
@@ -781,6 +856,11 @@ the omitted global binder list discovers their first row-tail occurrences along
 with ordinary type occurrences. Eligible local anonymous-function bindings may
 generalize row variables not free in `GAMMA`, preserving their lacks facts.
 Other local bindings remain monomorphic.
+
+Local nominal identities are rigid constants and are never generalized.
+Eligible local functions may quantify unrelated inference variables under the
+existing rules; that quantification cannot hide a nominal identity or create an
+inferred local requirement.
 
 The executable test `static_semantics_rank_one_polymorphism_is_executable`
 checks parameterized data, one implicitly quantified global, and one eligible
@@ -1716,20 +1796,22 @@ dependency-summary failure. An alias, facade, opacity boundary, transitive
 route, or dependency diamond cannot recompute a defining kind or effect
 identity.
 
-After resolution allocates all local nominal and parameter identities, kind
-checking derives and freezes every local nominal constructor kind and every
+After resolution allocates all nominal and parameter identities, kind
+checking derives and freezes every module-level nominal constructor kind and every
 canonical local effect and interface parameter vector and interface determinant
 record. Imported effect facts and the pre-frozen local effect headers supply
 the identity and parameter authority needed while checking computation rows in
-ordinary constructor payloads and `newtype` representations. Those checks
+module-level constructor payloads and `newtype` representations. Those checks
 include nested effect-instance arity, positional argument kinds, and row
 formation in combined cross-declaration source and structural type order. Only
 after all those types are kind-correct does checking construct and traverse the
-newtype-only representation graph. It then completes local effect-declaration,
+module-level newtype-only representation graph. It then completes local effect-declaration,
 global-signature, interface, implementation-head, and prerequisite checks in
 deterministic dependency, declaration, binder, and type traversal order. No
 body or public summary can observe a partially admitted kind or effect registry
-or representation graph.
+or representation graph. Local-newtype representations are kind-checked under
+their enclosing type scope when resolved-kind checking visits body annotations
+in source order; they are not vertices of that module representation graph.
 
 The remaining static stages check interface declarations and admit
 implementation headers, build and check the effective implementation
@@ -1748,9 +1830,10 @@ family module-and-program-typing:
     PHI = authenticated imported effects plus pre-frozen local effect headers
     IOTA = imported interface parameter vectors and determinant positions
       plus pre-frozen local interface parameter vectors and determinant positions
-    for each ordinary constructor payload and newtype representation in combined order,
+    for each module-level constructor payload and newtype representation in combined order,
       DELTA; empty_OMEGA; XI |- value type ok
-    the newtype-only representation graph is acyclic
+    the module-level newtype-only representation graph is acyclic
+    local-newtype representations pass resolved body-annotation kind checks in lexical scope
     GAMMA_D = checked kinded schemes imported from direct dependency summaries
     each local effect completes the declaration checks above
     for each local interface, |-interface interface ok
@@ -1815,11 +1898,13 @@ positional kinds before classifying detached prerequisite pairs. It then uses
 the same current-then-earlier source order and complete-before-key identity
 precedence as source header admission.
 
-For every retained `newtype` identity, the canonical hidden closure includes
+For every module-owned `newtype` identity retained by a summary, the canonical hidden closure includes
 its declaration kind, ordered parameters, sole constructor identity and owner,
 representation template, access, origin, and representation provenance. A
 transparent projection exposes the source facts authorized by visibility;
 opaque and private projections do not expose the representation or constructor.
+Checked lexical facts remain separate from this summary closure, as specified
+by [elaboration](elaboration.md#module-linking-and-entry-generation).
 
 The filled occurrence fields and checked modules become inputs to
 [module linking and linked interface-evidence validation](elaboration.md#module-linking-and-entry-generation).
@@ -1870,6 +1955,14 @@ kind checking owns an arity-correct positional failure. Interface admission
 owns an invalid partition as `interface.determination-parameter` and an
 incomplete method seed as `interface.method-parameter`.
 
+For local `newtype`, resolution additionally owns sequential visibility and
+lexical identity assignment; kind checking owns the representation under the
+enclosing type scope. Ordinary source typing owns `type.local-nominal-escape`
+after zonking at the declaration's outward boundary. An earlier name, kind, or
+ordinary typing failure retains its existing ownership. Linked and Core
+validation reject forged local facts and scope relations only after source
+checking succeeds.
+
 Lexing owns the reserved effect keywords. Parsing owns malformed effect
 declarations, rows, requests, handlers, clauses, and resume forms. Resolution
 owns unknown effects or operations, namespace and visibility failures, stable
@@ -1914,11 +2007,11 @@ Within one source unit, causal precedence is:
 1. parsing and recovery, including `newtype` and effect forms;
 2. name resolution, including nominal and effect identities, row-tail scope,
    and resume scope;
-3. local effect-header formation, then ordinary constructor-payload and
+3. local effect-header formation, then module-level constructor-payload and
    `newtype`-representation kinds in combined declaration and structural type
    order, including effect-instance arity, positional argument kinds, and row
    formation encountered within those types;
-4. the newtype-only representation-cycle pass;
+4. the module-level newtype-only representation-cycle pass;
 5. remaining effect declarations and complete applications, with arity before
    positional argument kinds and effect-row formation;
 6. determination partition admission;
@@ -1988,6 +2081,13 @@ and functions, transform copies, and Core validation facts charge their
 existing owning syntax, type-work, graph-wide, Core-construction, or
 Core-validation ledgers. Every proportional allocation or traversal charges
 before publication.
+Lexical nominal and constructor names, canonical local facts, scope nodes,
+and independent validator indices charge their owning ledger before allocation
+or publication. Outward escape inspection charges the existing iterative type
+and row traversal, including preceding binding types affected by inference.
+Failure publishes no partial lexical registry or checked module; lexical scope
+restoration and disposal remain iterative, and a fresh budget permits retry of
+the same logical input. Local identities add no runtime resource ledger.
 The module type-work ledger also owns newtype representation substitution and
 graph construction and traversal. Each discovered representation occurrence,
 retained edge or owner-index entry, pending-stack entry, and visited or active

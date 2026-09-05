@@ -389,6 +389,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_core_with_ledger::State.Visit.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/kind.rs::BodyWork.Declaration.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree),
     kind_site!("src/kind.rs::BodyWork.Expression.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree),
+    kind_site!("src/kind.rs::BodyWork.LexicalNewtype.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree),
     kind_site!("src/kind.rs::BodyWork.RecursiveMember.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeResolvedTree),
     kind_site!("src/kind.rs::InterfaceKindFact.parameters", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
     kind_site!("src/kind.rs::KindEnvironments.delta", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
@@ -931,6 +932,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/parser/project.rs::TypeTask.FinishFunction.effects", FieldSurfaceProjectionOnlyDeferredProjectionProjectionProjectionSurfaceTree),
     kind_site!("src/parser/project.rs::PendingBinding.annotation", FieldSurfaceProjectionOnlyDeferredProjectionProjectionProjectionSurfaceTree),
     kind_site!("src/parser/project.rs::PendingLocalDeclaration.Binding.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
+    kind_site!("src/parser/project.rs::PendingLocalDeclaration.Newtype.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
     kind_site!("src/parser/project.rs::PendingLocalDeclaration.Recursive.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
     kind_site!("src/parser/project.rs::PendingRecursiveGroup.members", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
     kind_site!("src/parser/project.rs::PendingRecursiveMember.annotation", FieldSurfaceProjectionOnlyDeferredProjectionProjectionProjectionSurfaceTree),
@@ -978,11 +980,14 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolve.rs::ResolvedInterfaceBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::ResolvedInterfaceMethodBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::ResolvedMatchArmBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork, Mixed),
+    kind_site!("src/resolve.rs::ResolvedNominalOwnerBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
+    kind_site!("src/resolve.rs::ResolvedNominalParameterOwnerBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::ResolvedRequirementBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::ResolvedTypedPatternBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::ResolvedTypeOccurrenceBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::ResolvedTypeOccurrenceOwner.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::ResolveTask.FinishBinding.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
+    kind_site!("src/resolve.rs::ResolveTask.FinishLocalNewtype.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
     kind_site!("src/resolve.rs::ResolveTask.FinishRecursiveGroup.group", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
     kind_site!("src/resolve.rs::ResolveTask.VisitBlock.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
     kind_site!("src/resolve.rs::ResolveTask.VisitExpr.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
@@ -995,7 +1000,9 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolve.rs::ResolvedDeclarationParts.$alias", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolve.rs::ResolvedTypeBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::Resolver.imported", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree),
-    kind_site!("src/resolve.rs::Resolver.expression_registry", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree, Shared),
+    kind_site!("src/resolve.rs::Resolver.lexical_constructors", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
+    kind_site!("src/resolve.rs::Resolver.lexical_nominal_parameters", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
+    kind_site!("src/resolve.rs::Resolver.lexical_nominals", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::ValidatedImportedConstructorRoute.exported", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::$impl_ResolvedRegistry::$fn_display_type_with_inference::Task.ApplicationSpine.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/resolved.rs::$impl_ResolvedRegistry::$fn_display_type_with_inference::Task.EffectRow.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
@@ -1037,6 +1044,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::CheckedModuleParts.schemes", FieldCheckedCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree),
     kind_site!("src/resolved.rs::CombinedRegistryBuilder.canonical_variables", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::CombinedRegistryBuilder.constructors", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
+    kind_site!("src/resolved.rs::CombinedRegistryBuilder.lexical_constructors", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
+    kind_site!("src/resolved.rs::CombinedRegistryBuilder.lexical_nominals", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::CombinedRegistryBuilder.nominals", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::CombinedRegistryBuilder.effects", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolved.rs::CombinedRegistryBuilder.nominal_parameters", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
@@ -1175,6 +1184,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::ResolvedRecursiveMember.initializer", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
     kind_site!("src/resolved.rs::ResolvedRegistry.abstract_nominal_kinds", FieldRegistryCarrierRetentionPreservedCarrierElaborationInferenceTypeRegistryTree),
     kind_site!("src/resolved.rs::ResolvedRegistry.constructors", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),
+    kind_site!("src/resolved.rs::ResolvedRegistry.lexical_constructors", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),
+    kind_site!("src/resolved.rs::ResolvedRegistry.lexical_nominals", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),
     kind_site!("src/resolved.rs::ResolvedRegistry.nominals", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),
     kind_site!("src/resolved.rs::ResolvedRegistry.effects", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),
     kind_site!("src/resolved.rs::ResolvedRegistry.nominal_parameters", FieldRegistryCarrierRetentionPreservedCarrierResolutionResolutionTypeRegistryTree),
@@ -1254,6 +1265,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/surface.rs::SurfaceKindKind.Function.codomain", FieldSurfaceDeclaredKindDeclaredProjectionProjectionSurfaceTree),
     kind_site!("src/surface.rs::SurfaceKindKind.Function.domain", FieldSurfaceDeclaredKindDeclaredProjectionProjectionSurfaceTree),
     kind_site!("src/surface.rs::SurfaceLocalDeclaration.Binding.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
+    kind_site!("src/surface.rs::SurfaceLocalDeclaration.Newtype.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
     kind_site!("src/surface.rs::SurfaceLocalDeclaration.Recursive.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
     kind_site!("src/surface.rs::SurfaceMatchArm.body", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
     kind_site!("src/surface.rs::SurfaceMatchExpr.arms", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
@@ -6981,6 +6993,7 @@ enum ShadowPureComputation {
     Tuple(TupleNode),
     Match(MatchNode),
     NewtypeConversion(NewtypeConversionNode),
+    LocalNominalScope(ash::core::LocalNominalScopeNode),
     TypeAbstraction(TypeAbstractionNode),
     TypeApplication(TypeApplicationNode),
 }
@@ -7006,6 +7019,9 @@ fn assemble_shadow(expression: &TypedExpr) -> ShadowTypedExpr {
             PureComputation::Match(node) => ShadowPureComputation::Match(node.clone()),
             PureComputation::NewtypeConversion(node) => {
                 ShadowPureComputation::NewtypeConversion(*node)
+            }
+            PureComputation::LocalNominalScope(node) => {
+                ShadowPureComputation::LocalNominalScope(*node)
             }
             PureComputation::TypeAbstraction(node) => {
                 ShadowPureComputation::TypeAbstraction(node.clone())
@@ -7143,6 +7159,9 @@ fn validate_shadow_computation(
                     }
                 }
         }
+        ShadowPureComputation::LocalNominalScope(node) => {
+            node.owner().is_lexical() && facts.node_type(node.body()) == Some(ty)
+        }
         ShadowPureComputation::TypeAbstraction(node) => {
             matches!(ty, Type::Forall(parameters, body)
                 if parameters.as_ref() == node.parameters()
@@ -7179,6 +7198,7 @@ fn traverse_shadow(expression: &ShadowTypedExpr) -> Vec<NodeId> {
                 .chain(node.arms().iter().map(|arm| arm.body()))
                 .collect(),
             ShadowPureComputation::NewtypeConversion(node) => vec![node.child()],
+            ShadowPureComputation::LocalNominalScope(node) => vec![node.body()],
             ShadowPureComputation::TypeAbstraction(node) => vec![node.body()],
             ShadowPureComputation::TypeApplication(node) => vec![node.function()],
         },
@@ -7229,6 +7249,9 @@ fn transform_shadow(expression: &ShadowTypedExpr) -> ShadowTransformPlan {
             ShadowPureComputation::NewtypeConversion(node) => {
                 ShadowTransformPlan::Preserve(vec![node.child()])
             }
+            ShadowPureComputation::LocalNominalScope(node) => {
+                ShadowTransformPlan::Preserve(vec![node.body()])
+            }
             ShadowPureComputation::TypeAbstraction(node) => {
                 ShadowTransformPlan::Preserve(vec![node.body()])
             }
@@ -7258,6 +7281,7 @@ fn consume_shadow(expression: &ShadowTypedExpr) -> &'static str {
             ShadowPureComputation::Tuple(_) => "tuple",
             ShadowPureComputation::Match(_) => "match",
             ShadowPureComputation::NewtypeConversion(_) => "newtype conversion",
+            ShadowPureComputation::LocalNominalScope(_) => "local nominal scope",
             ShadowPureComputation::TypeAbstraction(_) => "type abstraction",
             ShadowPureComputation::TypeApplication(_) => "type application",
         },

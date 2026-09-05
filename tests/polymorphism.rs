@@ -123,6 +123,9 @@ fn runtime_class(program: &ValidatedProgram, event: &TraceEvent) -> &'static str
         PureExprKind::Computation(PureComputation::NewtypeConversion(_)) => {
             "newtype-conversion-erasure"
         }
+        PureExprKind::Computation(PureComputation::LocalNominalScope(_)) => {
+            "local-nominal-scope-erasure"
+        }
         PureExprKind::Computation(PureComputation::TypeAbstraction(_)) => {
             "type-abstraction-erasure"
         }
