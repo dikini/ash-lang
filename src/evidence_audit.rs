@@ -409,6 +409,7 @@ mod tests {
             prerequisite_only_parameters: Box::new([]),
             prerequisites: Box::new([]),
             method_groups: vec![ResolvedImplementationMethodGroup {
+                contextual_parameters: Box::new([]),
                 method: Some(method),
                 identity: Some(crate::interface::ImplMethodId::new(implementation, method)),
                 binder: Binder {

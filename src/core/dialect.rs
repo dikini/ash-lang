@@ -81,6 +81,7 @@ pub(crate) struct MethodEvidenceCatalog {
 #[derive(Debug)]
 #[cfg_attr(test, derive(Clone))]
 pub(crate) struct MethodEvidenceLexicalOwner {
+    pub(crate) source_parameters: Box<[TypeVariableId]>,
     pub(crate) source: crate::interface::LexicalEvidenceId,
     pub(crate) method: MethodId,
     pub(crate) binder: BinderId,

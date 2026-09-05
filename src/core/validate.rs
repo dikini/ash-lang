@@ -999,9 +999,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             Some(anchor.node),
                         ));
                     };
-                    let expected = self.expected_lexical_method_scheme(anchor)?;
                     if binding.binder().id() != binder
-                        || !self.same_type_charged(binding.binder().ty(), &expected)?
+                        || !self.lexical_method_scheme_matches(anchor, binding.binder().ty())?
                         || self
                             .program
                             .method_evidence
@@ -1016,9 +1015,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     carriers.insert(binding.initializer());
                 }
                 MethodEvidenceAnchorRole::LexicalUse { source, binder, .. } => {
-                    let expected = self.expected_lexical_method_scheme(anchor)?;
                     if !matches!(self.pure_kind(anchor.node)?, PureExprKind::Variable(variable) if variable.binder() == binder)
-                        || !self.same_type_charged(&self.node(anchor.node)?.ty, &expected)?
+                        || !self.lexical_method_scheme_matches(anchor, &self.node(anchor.node)?.ty)?
                         || !anchors.values().any(|owner| matches!(owner.role, MethodEvidenceAnchorRole::LexicalOwner { source: actual, binder: actual_binder } if actual == source && actual_binder == binder)) {
                         return Err(ValidationError::new(ValidationReason::NodeType, Some(anchor.node)));
                     }
@@ -1337,6 +1335,19 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         self.charge_type_work(self.program.nodes.len())?;
         for (index, stored) in self.program.nodes.iter().enumerate() {
             let parent = node_id(self.program.arena, index)?;
+            if !self.program.method_evidence.lexical_owners().is_empty()
+                && let Some(PureExprKind::Computation(PureComputation::Bind(binding))) =
+                    F::pure(&stored.kind)
+            {
+                self.charge_type_work(self.program.method_evidence_anchors.len())?;
+                if self.program.method_evidence_anchors.iter().any(|anchor| {
+                    anchor.node == parent
+                        && matches!(anchor.role, MethodEvidenceAnchorRole::LexicalOwner { binder, .. }
+                            if binder == binding.binder().id())
+                }) {
+                    owner_edges.insert((binding.initializer(), parent));
+                }
+            }
             let Some(PureExprKind::Computation(PureComputation::RecursiveBind(group))) =
                 F::pure(&stored.kind)
             else {
@@ -1767,18 +1778,132 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         Ok(())
     }
 
-    fn expected_lexical_method_scheme(
+    fn extend_lexical_method_replacements(
+        &self,
+        node: NodeId,
+        replacements: &mut TypeReplacementMap,
+    ) -> Result<(), ValidationError> {
+        if self.program.method_evidence.lexical_owners().is_empty() {
+            return Ok(());
+        }
+        for anchor in &self.program.method_evidence_anchors {
+            self.charge_type_work(1)?;
+            let MethodEvidenceAnchorRole::LexicalOwner { source, binder } = anchor.role else {
+                continue;
+            };
+            self.charge_type_work(self.program.method_evidence.lexical_owners().len())?;
+            let owner = self
+                .program
+                .method_evidence
+                .lexical_owner(source, anchor.method)
+                .ok_or_else(|| {
+                    ValidationError::new(ValidationReason::NodeType, Some(anchor.node))
+                })?;
+            if owner.source_parameters.is_empty() {
+                continue;
+            }
+            let PureExprKind::Computation(PureComputation::Bind(binding)) =
+                self.pure_kind(anchor.node)?
+            else {
+                return Err(ValidationError::new(
+                    ValidationReason::NodeType,
+                    Some(anchor.node),
+                ));
+            };
+            let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                self.pure_kind(binding.initializer())?
+            else {
+                return Err(ValidationError::new(
+                    ValidationReason::NodeType,
+                    Some(anchor.node),
+                ));
+            };
+            if binding.binder().id() != binder
+                || abstraction.parameters().len() != owner.source_parameters.len()
+            {
+                return Err(ValidationError::new(
+                    ValidationReason::NodeType,
+                    Some(anchor.node),
+                ));
+            }
+            let mut pending = Vec::new();
+            let mut visited = HashSet::new();
+            self.charge_type_work(1)?;
+            pending
+                .try_reserve(1)
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(node)))?;
+            pending.push(abstraction.body());
+            let mut contains = false;
+            while let Some(current) = pending.pop() {
+                self.charge_type_work(1)?;
+                visited
+                    .try_reserve(1)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(node)))?;
+                if !visited.insert(current) {
+                    continue;
+                }
+                if current == node {
+                    contains = true;
+                    break;
+                }
+                let stored = self.node(current)?;
+                let count = F::child_count(&stored.kind);
+                self.charge_type_work(count)?;
+                pending
+                    .try_reserve(count)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(node)))?;
+                for index in 0..count {
+                    pending.push(F::child_at(&stored.kind, index).ok_or_else(|| {
+                        ValidationError::new(ValidationReason::NodeType, Some(current))
+                    })?);
+                }
+            }
+            if contains {
+                self.charge_type_work(owner.source_parameters.len())?;
+                replacements
+                    .try_reserve(owner.source_parameters.len())
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(node)))?;
+                for (source, (actual, _)) in
+                    owner.source_parameters.iter().zip(abstraction.parameters())
+                {
+                    replacements.insert_replacing(*source, Type::Variable(*actual));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn is_lexical_source_parameter(
+        &self,
+        id: crate::types::TypeVariableId,
+    ) -> Result<bool, ValidationError> {
+        for owner in self.program.method_evidence.lexical_owners() {
+            self.charge_type_work(
+                1usize
+                    .checked_add(owner.source_parameters.len())
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+            )?;
+            if owner.source_parameters.contains(&id) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn lexical_method_scheme_matches(
         &self,
         anchor: &MethodEvidenceAnchor,
-    ) -> Result<IterativeTypeOwner, ValidationError> {
+        actual: &Type,
+    ) -> Result<bool, ValidationError> {
         let scheme = self.expected_method_scheme(anchor)?;
         if matches!(&*scheme, Type::Forall(parameters, _) if parameters.is_empty()) {
             let Type::Forall(_, body) = scheme.into_inner() else {
                 unreachable!()
             };
-            Ok(IterativeTypeOwner::new(*body))
+            let body = IterativeTypeOwner::new(*body);
+            self.same_type_charged(&body, actual)
         } else {
-            Ok(scheme)
+            self.adapter_scheme_matches(&scheme, actual)
         }
     }
 
@@ -1795,6 +1920,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         application: &InterfaceApplication,
         node: NodeId,
     ) -> Result<IterativeTypeOwner, ValidationError> {
+        let contextual_application = if self.program.method_evidence.lexical_owners().is_empty() {
+            None
+        } else {
+            let mut replacements = TypeReplacementMap::new();
+            self.extend_lexical_method_replacements(node, &mut replacements)?;
+            Some(self.substitute_interface_application(application, replacements.as_map())?)
+        };
+        let application = contextual_application.as_ref().unwrap_or(application);
         let method = self
             .program
             .method_evidence
@@ -2340,7 +2473,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 Some(anchor.node),
             ));
         }
-        let scope_replacements = match anchor.owner {
+        let mut scope_replacements = match anchor.owner {
             Some(MethodEvidenceOwner::Implementation(implementation))
                 if self
                     .program
@@ -2354,6 +2487,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             | Some(MethodEvidenceOwner::Global(_))
             | None => TypeReplacementMap::new(),
         };
+        self.extend_lexical_method_replacements(anchor.node, &mut scope_replacements)?;
         for (expected, actual) in occurrence
             .method_arguments
             .iter()
@@ -2481,7 +2615,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             MethodEvidenceAnchorRole::LexicalOwner { source, binder } => {
                 matches!(F::pure(&argument.kind), Some(PureExprKind::Variable(variable)) if variable.binder() == binder)
                     && actual_producer == MethodEvidenceProducer::Lexical { source }
-                    && self.same_type_charged(&argument.ty, &canonical)?
+                    && self.adapter_scheme_matches(&canonical, &argument.ty)?
             }
             MethodEvidenceAnchorRole::Adapter { implementation, .. } => {
                 source.node == application.argument()
@@ -3320,17 +3454,21 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             self.charge_type_work(1)?;
             let parameter_span = parameter.origin.primary_span();
             let parameter_range = parameter_span.range();
+            let contextual = self.is_lexical_source_parameter(parameter.id)?;
             if identity != parameter.id
                 || Some(parameter_span.source()) != registry_source
                 || !origin_depth_within_limit(&parameter.origin)
                 || !valid_upper_spelling(&parameter.spelling)
                 || parameter_range.start() >= parameter_range.end()
-                || previous_type_variable_start
-                    .is_some_and(|previous| parameter_range.start() <= previous)
+                || !contextual
+                    && previous_type_variable_start
+                        .is_some_and(|previous| parameter_range.start() <= previous)
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
-            previous_type_variable_start = Some(parameter_range.start());
+            if !contextual {
+                previous_type_variable_start = Some(parameter_range.start());
+            }
             self.validate_origin(&parameter.origin, self.program.root)?;
         }
         let mut parameter_owners = HashMap::new();
@@ -3594,21 +3732,25 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let parameter_span = parameter.origin.primary_span();
             let parameter_range = parameter_span.range();
             self.charge_type_work(1)?;
+            let contextual = self.is_lexical_source_parameter(parameter.id)?;
             if parameter.id.local() != *expected
                 || parameter_span.source() != source
                 || !origin_depth_within_limit(&parameter.origin)
                 || !valid_upper_spelling(&parameter.spelling)
                 || parameter_range.start() >= parameter_range.end()
-                || previous_type_variable_start
-                    .get(&module)
-                    .is_some_and(|previous| parameter_range.start() <= *previous)
+                || !contextual
+                    && previous_type_variable_start
+                        .get(&module)
+                        .is_some_and(|previous| parameter_range.start() <= *previous)
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
             *expected = expected
                 .checked_add(1)
                 .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
-            previous_type_variable_start.insert(module, parameter_range.start());
+            if !contextual {
+                previous_type_variable_start.insert(module, parameter_range.start());
+            }
             self.validate_origin(&parameter.origin, self.program.root)?;
         }
 
@@ -5414,6 +5556,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         Ok(())
     }
 
+    fn effect_row_subset_charged(
+        &self,
+        subset: &EffectRow,
+        superset: &EffectRow,
+        node: NodeId,
+    ) -> Result<bool, ValidationError> {
+        let union = self.union_effect_rows_charged(subset, superset, node)?;
+        self.same_effect_row_charged(&union, superset, node)
+    }
+
     fn validate_value(
         &self,
         id: NodeId,
@@ -5431,7 +5583,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 };
                 let effects_match = match function_type.effects() {
                     Some(effects) => {
-                        self.same_effect_row_charged(effects, F::effect_row(&body.effects), id)?
+                        self.effect_row_subset_charged(F::effect_row(&body.effects), effects, id)?
                     }
                     None => F::effect_row(&body.effects).is_empty(),
                 };
@@ -7578,16 +7730,6 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             }
         }
         Ok(())
-    }
-
-    fn effect_row_subset_charged(
-        &self,
-        subset: &EffectRow,
-        superset: &EffectRow,
-        node: NodeId,
-    ) -> Result<bool, ValidationError> {
-        let union = self.union_effect_rows_charged(subset, superset, node)?;
-        self.same_effect_row_charged(&union, superset, node)
     }
 
     fn validate_effect_nodes(
@@ -9843,6 +9985,109 @@ mod tests {
                 ValidationReason::TypeScope
             );
         }
+    }
+
+    #[test]
+    fn lexical_parameter_scan_charges_monomorphic_owners_and_preserves_empty_catalog() {
+        for (source, expected) in [
+            ("main : Unit -> Unit\nmain () = ()\n", 0),
+            (
+                "interface Read<I> {\nread : I -> Int\n}\nmain : Unit -> Int\nmain () = {\nnewtype Token = Token(Unit)\nwith Read<Token> {\nread ignored = 42\n}\nread(Token(()))\n}\n",
+                1,
+            ),
+        ] {
+            let fixture = LinkedCoreValidationFixture::compile("", source, &[]);
+            let sources = linked_fixture_sources(&fixture);
+            let make = || {
+                Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                    .expect("fixture relation")
+            };
+            for _ in 0..2 {
+                let exact = make();
+                exact
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - expected)
+                    .expect("prefix");
+                assert!(
+                    !exact
+                        .is_lexical_source_parameter(crate::types::TypeVariableId::generated(0))
+                        .expect("exact scan")
+                );
+                assert_eq!(exact.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+            }
+            if expected != 0 {
+                let short = make();
+                short
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT)
+                    .expect("prefix");
+                assert_eq!(
+                    short
+                        .is_lexical_source_parameter(crate::types::TypeVariableId::generated(0))
+                        .expect_err("owner scan must charge")
+                        .reason(),
+                    ValidationReason::Resource
+                );
+            } else {
+                let empty = make();
+                empty
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT)
+                    .expect("prefix");
+                empty
+                    .extend_lexical_method_replacements(
+                        fixture.program.root,
+                        &mut TypeReplacementMap::new(),
+                    )
+                    .expect("no-owner mapping needs no work");
+            }
+        }
+    }
+
+    #[test]
+    fn lexical_parameter_scan_charges_the_owner_lookup_width() {
+        let fixture = LinkedCoreValidationFixture::compile(
+            "",
+            "interface Read<I> {\nread : I -> Int\n}\nmain : Unit -> Int\nmain () = {\nnewtype Token = Token(Unit)\nwith Read<Token> {\nread ignored = 42\n}\nread(Token(()))\n}\n",
+            &[],
+        );
+        let sources = linked_fixture_sources(&fixture);
+        let make = || {
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                .expect("fixture relation")
+        };
+        let owners = fixture
+            .program
+            .method_evidence_anchors
+            .iter()
+            .filter(|anchor| matches!(anchor.role, MethodEvidenceAnchorRole::LexicalOwner { .. }))
+            .count();
+        let expected = fixture.program.method_evidence_anchors.len()
+            + owners * fixture.program.method_evidence.lexical_owners().len();
+        for _ in 0..2 {
+            let exact = make();
+            exact
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - expected)
+                .expect("prefix");
+            exact
+                .extend_lexical_method_replacements(
+                    fixture.program.root,
+                    &mut TypeReplacementMap::new(),
+                )
+                .expect("exact owner lookup");
+            assert_eq!(exact.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+        }
+        let short = make();
+        short
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - expected + 1)
+            .expect("prefix");
+        assert_eq!(
+            short
+                .extend_lexical_method_replacements(
+                    fixture.program.root,
+                    &mut TypeReplacementMap::new()
+                )
+                .expect_err("lookup width must charge")
+                .reason(),
+            ValidationReason::Resource
+        );
     }
 
     #[test]

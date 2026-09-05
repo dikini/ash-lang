@@ -633,6 +633,9 @@ impl ResolvedImplementationMethodGroupBuffer {
 impl Drop for ResolvedImplementationMethodGroupBuffer {
     fn drop(&mut self) {
         for group in self.0.drain(..) {
+            for parameter in group.contextual_parameters.into_vec() {
+                discard_origin_iteratively(parameter.origin);
+            }
             discard_origin_iteratively(group.binder.origin);
             for equation in group.equations.into_vec() {
                 discard_resolved_equation_iteratively(equation);
@@ -1475,6 +1478,8 @@ struct Resolver {
     next_type_variable: u32,
     next_lexical_nominal: u32,
     next_lexical_evidence: u32,
+    resolved_interfaces: ResolvedInterfaceBuffer,
+    lexical_method_parameters: ImportedTypeVariableBuffer,
     scopes: Vec<HashMap<String, ResolvedTermBinding>>,
     globals: HashMap<String, GlobalFact>,
     type_names: HashMap<String, NominalTypeId>,
@@ -1797,6 +1802,8 @@ impl Resolver {
             next_type_variable: 0,
             next_lexical_nominal: 0,
             next_lexical_evidence: 0,
+            resolved_interfaces: ResolvedInterfaceBuffer(Vec::new()),
+            lexical_method_parameters: ImportedTypeVariableBuffer(Vec::new()),
             scopes: vec![HashMap::new()],
             globals: HashMap::new(),
             type_names: HashMap::new(),
@@ -6017,7 +6024,7 @@ impl Resolver {
             interface_type_parameters,
             surface.span,
         )?;
-        let interfaces = ResolvedInterfaceBuffer(interfaces);
+        self.resolved_interfaces = ResolvedInterfaceBuffer(interfaces);
         let (effects, effect_registry_parameters) = self.resolve_effect_declarations(
             &surface.effects,
             effect_identities,
@@ -6354,8 +6361,10 @@ impl Resolver {
             &mut self.lexical_nominal_parameters,
             ResolvedNominalParameterOwnerBuffer(Vec::new()),
         );
+        let lexical_method_parameters = std::mem::take(&mut self.lexical_method_parameters.0);
         let registry = Arc::new(
             registry
+                .with_additional_type_variables(lexical_method_parameters)
                 .with_lexical_nominals_with_budget(
                     lexical_nominals.into_vec(),
                     lexical_constructors.into_vec(),
@@ -6374,7 +6383,11 @@ impl Resolver {
         Ok(ResolvedDeclarations {
             registry,
             constructor_payload_provenance,
-            interfaces: interfaces.into_vec(),
+            interfaces: std::mem::replace(
+                &mut self.resolved_interfaces,
+                ResolvedInterfaceBuffer(Vec::new()),
+            )
+            .into_vec(),
             effects,
             implementations: implementations.into_vec(),
             definitions: definitions.into_vec(),
@@ -6499,6 +6512,7 @@ impl Resolver {
                         });
                     }
                     method_groups.0.push(ResolvedImplementationMethodGroup {
+                        contextual_parameters: Box::new([]),
                         method,
                         identity,
                         binder,
@@ -7817,6 +7831,93 @@ impl Resolver {
                     ResolvedTermName::Method(method) => Some(method),
                     ResolvedTermName::Global(_) => None,
                 });
+            let mut contextual_parameters = ImportedTypeVariableBuffer(Vec::new());
+            if let Some(method) = method {
+                let parameters = if method.interface().module() == self.module {
+                    self.resolved_interfaces
+                        .0
+                        .iter()
+                        .find(|interface| interface.id == method.interface())
+                        .and_then(|interface| {
+                            interface
+                                .methods
+                                .iter()
+                                .find(|candidate| candidate.id == method)
+                        })
+                        .map(|method| method.type_parameters.as_ref())
+                } else {
+                    self.imported
+                        .interface(method.interface())
+                        .and_then(|interface| interface.method(method))
+                        .map(|method| method.authoritative_type_parameters())
+                }
+                .ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        first.span,
+                        "method parameters are unavailable",
+                    )
+                })?;
+                self.type_work.charge(parameters.len()).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        first.span,
+                        "lexical method parameter retention exceeded its budget",
+                    )
+                })?;
+                contextual_parameters
+                    .try_reserve(parameters.len())
+                    .map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            first.span,
+                            "lexical method parameter storage could not be reserved",
+                        )
+                    })?;
+                for parameter in parameters {
+                    let mut fresh =
+                        clone_resolved_type_variable_with_budget(parameter, &mut self.type_work)
+                            .map_err(|()| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    first.span,
+                                    "lexical method parameter retention exceeded its budget",
+                                )
+                            })?;
+                    fresh.id = TypeVariableId::resolved(self.module, self.next_type_variable);
+                    fresh.origin = Origin::Source(first.span);
+                    self.next_type_variable =
+                        self.next_type_variable.checked_add(1).ok_or_else(|| {
+                            error(
+                                ResolveReason::BinderIdExhausted,
+                                first.span,
+                                "lexical method parameter identities exhausted",
+                            )
+                        })?;
+                    contextual_parameters.push(fresh);
+                }
+                self.lexical_method_parameters
+                    .try_reserve(contextual_parameters.0.len())
+                    .map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            first.span,
+                            "lexical method registry storage could not be reserved",
+                        )
+                    })?;
+                for parameter in &contextual_parameters.0 {
+                    self.lexical_method_parameters.push(
+                        clone_resolved_type_variable_with_budget(parameter, &mut self.type_work)
+                            .map_err(|()| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    first.span,
+                                    "lexical method registry retention exceeded its budget",
+                                )
+                            })?,
+                    );
+                }
+            }
             let mut equations = ResolvedEquationBuffer(Vec::with_capacity(end - start));
             for equation in &source.equations[start..end] {
                 let checkpoint = self.scopes.len();
@@ -7849,6 +7950,7 @@ impl Resolver {
                     )
                 })?;
             groups.0.push(ResolvedImplementationMethodGroup {
+                contextual_parameters: contextual_parameters.into_boxed_slice(),
                 method,
                 identity: None,
                 binder,

@@ -2398,6 +2398,36 @@ fn same_type_after_method_instantiation(
                 pending.push((left_codomain, right_codomain));
                 pending.push((left_domain, right_domain));
             }
+            (Type::EffectfulFunction(_, _), Type::EffectfulFunction(_, _)) => {
+                let count = interface_parameters
+                    .len()
+                    .checked_add(method_parameters.len())
+                    .ok_or_else(|| resource(span))?;
+                charge(budget, count, span)?;
+                let mut substitution = Vec::new();
+                substitution
+                    .try_reserve(count)
+                    .map_err(|_| resource(span))?;
+                for (parameter, argument) in interface_parameters
+                    .iter()
+                    .zip(interface_arguments)
+                    .chain(method_parameters.iter().zip(method_arguments))
+                {
+                    substitution.push(EvidenceSubstitution::new(
+                        parameter.id,
+                        clone_type_with_budget(argument, &mut |cells| charge(budget, cells, span))?,
+                    ));
+                }
+                let expected = IterativeTypeOwner::new(substitute_evidence_type(
+                    source,
+                    &substitution,
+                    budget,
+                    span,
+                )?);
+                if !same_type_charged(&expected, actual, budget, span)? {
+                    return Ok(false);
+                }
+            }
             _ => return Ok(false),
         }
     }
@@ -2482,7 +2512,10 @@ pub(crate) fn validate_interface_evidence_with_budget(
         constraint_work,
         type_work,
     )?;
-    finalize_linked_registry_authentication(&program, &binder_owners, constraint_work)?;
+    let has_contextual_parameters = binder_owners.len() != program.registry().type_variable_count();
+    if !has_contextual_parameters {
+        finalize_linked_registry_authentication(&program, &binder_owners, constraint_work)?;
+    }
     validate_linked_value_schemes(
         &program,
         &linked_interfaces,
@@ -2499,6 +2532,44 @@ pub(crate) fn validate_interface_evidence_with_budget(
     )?;
     drop(kind_environments);
     let method_evidence = build_core_method_evidence_catalog(&program, constraint_work, type_work)?;
+    if has_contextual_parameters {
+        for owner in method_evidence.lexical_owners() {
+            let method = method_evidence
+                .method(owner.method)
+                .ok_or_else(|| unknown(program.result().span))?;
+            if owner.source_parameters.len() != method.parameters.len() {
+                return Err(unknown(program.result().span));
+            }
+            charge(
+                constraint_work,
+                owner.source_parameters.len(),
+                program.result().span,
+            )?;
+            binder_owners
+                .try_reserve(owner.source_parameters.len())
+                .map_err(|_| resource(program.result().span))?;
+            for (parameter, (_, kind)) in owner.source_parameters.iter().zip(&method.parameters) {
+                charge(constraint_work, 1, program.result().span)?;
+                let canonical = program
+                    .registry()
+                    .type_variable(*parameter)
+                    .ok_or_else(|| unknown(program.result().span))?;
+                if parameter.module() != Some(owner.source.module())
+                    || !same_kind_with_charge(&canonical.kind, kind, || constraint_work.charge(1))
+                        .map_err(|()| resource(program.result().span))?
+                    || binder_owners
+                        .insert(
+                            *parameter,
+                            LinkedBinderOwner::LexicalMethod(owner.source, owner.method),
+                        )
+                        .is_some()
+                {
+                    return Err(unknown(program.result().span));
+                }
+            }
+        }
+        finalize_linked_registry_authentication(&program, &binder_owners, constraint_work)?;
+    }
     charge(constraint_work, 1, program.result().span)?;
     Ok(ValidatedInterfaceProgram {
         source: program,
@@ -4023,9 +4094,14 @@ fn retain_lexical_owners(
             return Err(invalid_root(group.span));
         }
         let mut replacements = HashMap::new();
-        charge(budget, canonical.interface_parameters.len(), group.span)?;
+        let replacement_count = canonical
+            .interface_parameters
+            .len()
+            .checked_add(canonical.parameters.len())
+            .ok_or_else(|| resource(group.span))?;
+        charge(budget, replacement_count, group.span)?;
         replacements
-            .try_reserve(canonical.interface_parameters.len())
+            .try_reserve(replacement_count)
             .map_err(|_| resource(group.span))?;
         let mut replacement_types = TypeBuffer::new();
         replacement_types
@@ -4037,6 +4113,23 @@ fn retain_lexical_owners(
                     .map_err(|()| type_resource(group.span))?,
             );
         }
+        if group.contextual_parameters.len() != canonical.parameters.len() {
+            return Err(invalid_root(group.span));
+        }
+        for ((parameter, kind), contextual) in canonical
+            .parameters
+            .iter()
+            .zip(&group.contextual_parameters)
+        {
+            if !same_kind_with_charge(kind, &contextual.kind, || budget.charge(1))
+                .map_err(|()| resource(group.span))?
+            {
+                return Err(invalid_root(group.span));
+            }
+            replacements.insert(*parameter, Type::Variable(contextual.id));
+        }
+        // Keep deep arguments in their iterative owner until every fallible
+        // contextual-parameter check and map reservation has succeeded.
         for (parameter, argument) in canonical
             .interface_parameters
             .iter()
@@ -4055,9 +4148,20 @@ fn retain_lexical_owners(
         }
         let method_type = IterativeTypeOwner::new(method_type?);
         let actual_value_type = match (&checked_method.scheme, canonical.parameters.is_empty()) {
-            (Type::Forall(parameters, body), false)
-                if parameters.as_ref() == canonical.parameters.as_ref() =>
-            {
+            (Type::Forall(parameters, body), false) => {
+                if parameters.len() != group.contextual_parameters.len() {
+                    return Err(invalid_root(group.span));
+                }
+                charge(budget, parameters.len(), group.span)?;
+                for ((id, kind), contextual) in parameters.iter().zip(&group.contextual_parameters)
+                {
+                    if *id != contextual.id
+                        || !same_kind_with_charge(kind, &contextual.kind, || budget.charge(1))
+                            .map_err(|()| resource(group.span))?
+                    {
+                        return Err(invalid_root(group.span));
+                    }
+                }
                 body.as_ref()
             }
             (ty, true) => ty,
@@ -4076,7 +4180,19 @@ fn retain_lexical_owners(
             .try_reserve(checked_method.captures.len())
             .map_err(|_| resource(group.span))?;
         captures.extend_from_slice(&checked_method.captures);
+        charge(budget, group.contextual_parameters.len(), group.span)?;
+        let mut source_parameters = Vec::new();
+        source_parameters
+            .try_reserve(group.contextual_parameters.len())
+            .map_err(|_| resource(group.span))?;
+        source_parameters.extend(
+            group
+                .contextual_parameters
+                .iter()
+                .map(|parameter| parameter.id),
+        );
         owners.push(crate::core::dialect::MethodEvidenceLexicalOwner {
+            source_parameters: source_parameters.into_boxed_slice(),
             source: source.id,
             method,
             binder: group.binder.id,
@@ -4669,6 +4785,7 @@ fn authenticate_linked_constructor_payloads<'a>(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LinkedBinderOwner {
+    LexicalMethod(crate::interface::LexicalEvidenceId, MethodId),
     Nominal(NominalTypeId),
     Effect(crate::types::EffectId),
     Interface(InterfaceId),
@@ -5189,19 +5306,66 @@ fn validate_pending_expressions<'a, 'body>(
     type_work: &mut TypeWorkBudget,
 ) -> Result<(), EvidenceValidationFailure> {
     let mut sources = Vec::new();
+    let mut method_scopes = Vec::new();
     let mut heads = Vec::new();
+    let mut variables = Vec::new();
+    let mut active_method_scope = None;
     if let Some(block) = initial_block {
-        schedule_lexical_block(pending, &mut heads, &mut sources, None, block, budget)?;
+        schedule_lexical_block(
+            pending,
+            &mut heads,
+            &mut sources,
+            &mut method_scopes,
+            (None, None),
+            block,
+            budget,
+        )?;
     }
     while let Some(expression) = pending.pop() {
         let head = if sources.is_empty() {
-            None
+            (None, None)
         } else {
             heads.pop().ok_or_else(|| invalid_root(expression.span))?
         };
+        if head.1 != active_method_scope {
+            variables.clear();
+            let mut method_head = head.1;
+            while let Some(index) = method_head {
+                let (method, parent): &(
+                    &crate::resolved::ResolvedImplementationMethodGroup,
+                    Option<usize>,
+                ) = method_scopes
+                    .get(index)
+                    .ok_or_else(|| invalid_root(expression.span))?;
+                charge(budget, method.contextual_parameters.len(), expression.span)?;
+                variables
+                    .try_reserve(method.contextual_parameters.len())
+                    .map_err(|_| resource(expression.span))?;
+                variables.extend(
+                    method
+                        .contextual_parameters
+                        .iter()
+                        .map(|parameter| parameter.id),
+                );
+                method_head = *parent;
+            }
+            if head.1.is_some() {
+                charge(budget, scope.variables.len(), expression.span)?;
+                variables
+                    .try_reserve(scope.variables.len())
+                    .map_err(|_| resource(expression.span))?;
+                variables.extend_from_slice(scope.variables);
+            }
+            active_method_scope = head.1;
+        }
         let scope = EvidenceScope {
             lexical_sources: &sources,
-            lexical_head: head,
+            lexical_head: head.0,
+            variables: if head.1.is_some() {
+                &variables
+            } else {
+                scope.variables
+            },
             ..scope
         };
         charge(budget, 1, expression.span)?;
@@ -5239,13 +5403,22 @@ fn validate_pending_expressions<'a, 'body>(
                 pending.push(binary.left.as_ref());
             }
             ResolvedExprKind::Block(block) => {
-                schedule_lexical_block(pending, &mut heads, &mut sources, head, block, budget)?;
+                schedule_lexical_block(
+                    pending,
+                    &mut heads,
+                    &mut sources,
+                    &mut method_scopes,
+                    head,
+                    block,
+                    budget,
+                )?;
             }
             ResolvedExprKind::Function(function) => {
                 schedule_lexical_block(
                     pending,
                     &mut heads,
                     &mut sources,
+                    &mut method_scopes,
                     head,
                     &function.body,
                     budget,
@@ -6843,11 +7016,16 @@ fn validate_requirement(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn schedule_lexical_block<'a>(
     pending: &mut Vec<&'a ResolvedExpr>,
-    heads: &mut Vec<Option<usize>>,
+    heads: &mut Vec<(Option<usize>, Option<usize>)>,
     sources: &mut Vec<(&'a crate::resolved::ResolvedLexicalEvidence, Option<usize>)>,
-    mut head: Option<usize>,
+    method_scopes: &mut Vec<(
+        &'a crate::resolved::ResolvedImplementationMethodGroup,
+        Option<usize>,
+    )>,
+    mut head: (Option<usize>, Option<usize>),
     block: &'a ResolvedBlock,
     budget: &mut InterfaceConstraintBudget,
 ) -> Result<(), EvidenceValidationFailure> {
@@ -6869,18 +7047,31 @@ fn schedule_lexical_block<'a>(
             ResolvedLocalDeclaration::Evidence(source) => {
                 charge(budget, 2, source.span)?;
                 sources.try_reserve(1).map_err(|_| resource(source.span))?;
-                for equation in source
-                    .method_groups
-                    .iter()
-                    .flat_map(|group| &group.equations)
-                {
-                    reserve_expressions(pending, 1, budget, equation.span)?;
-                    resize_lexical_heads(heads, pending.len() + 1, head, budget, equation.span)?;
-                    pending.push(&equation.body);
+                for method in &source.method_groups {
+                    let mut method_head = head;
+                    if !method.contextual_parameters.is_empty() {
+                        charge(budget, 2, method.span)?;
+                        method_scopes
+                            .try_reserve(1)
+                            .map_err(|_| resource(method.span))?;
+                        method_head.1 = Some(method_scopes.len());
+                        method_scopes.push((method, head.1));
+                    }
+                    for equation in &method.equations {
+                        reserve_expressions(pending, 1, budget, equation.span)?;
+                        resize_lexical_heads(
+                            heads,
+                            pending.len() + 1,
+                            method_head,
+                            budget,
+                            equation.span,
+                        )?;
+                        pending.push(&equation.body);
+                    }
                 }
                 let next = sources.len();
-                sources.push((source, head));
-                head = Some(next);
+                sources.push((source, head.0));
+                head.0 = Some(next);
             }
             ResolvedLocalDeclaration::Binding(binding) => {
                 reserve_expressions(pending, 1, budget, binding.span)?;
@@ -6912,14 +7103,18 @@ fn schedule_lexical_block<'a>(
 }
 
 fn resize_lexical_heads(
-    heads: &mut Vec<Option<usize>>,
+    heads: &mut Vec<(Option<usize>, Option<usize>)>,
     length: usize,
-    head: Option<usize>,
+    head: (Option<usize>, Option<usize>),
     budget: &mut InterfaceConstraintBudget,
     span: Span,
 ) -> Result<(), EvidenceValidationFailure> {
     let additional = length.saturating_sub(heads.len());
-    charge(budget, additional, span)?;
+    charge(
+        budget,
+        additional.saturating_mul(1 + usize::from(head.1.is_some())),
+        span,
+    )?;
     heads.try_reserve(additional).map_err(|_| resource(span))?;
     heads.resize(length, head);
     Ok(())
@@ -8326,6 +8521,99 @@ mod tests {
             assert_eq!(type_exact.used(), type_work);
             drop(retry);
         }
+    }
+
+    #[test]
+    fn lexical_contextual_count_failure_discards_deep_replacements_on_a_small_stack() {
+        thread::Builder::new()
+            .name("lexical-contextual-replacement-drop".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let file = SourceFile::new("lexical-contextual-drop.ash", "Read").expect("fixture");
+                let span = file
+                    .span(ByteRange::new(0, 4).expect("range"))
+                    .expect("span");
+                let module = ModuleId::from(file.id());
+                let interface = InterfaceId::new(module, 0);
+                let method = MethodId::new(interface, 0);
+                let binder = BinderId::resolved(module, 0);
+                let id = crate::interface::LexicalEvidenceId::new(module, 0);
+                let checked = crate::interface::LexicalEvidenceSlot::default();
+                checked
+                    .fill(crate::interface::CheckedLexicalEvidence {
+                        id,
+                        application: InterfaceApplication::new(
+                            interface,
+                            Box::new([deep_application_type(16_384)]),
+                        ),
+                        methods: Box::new([crate::interface::CheckedLexicalMethod {
+                            method,
+                            binder,
+                            scheme: Type::Int,
+                            captures: Box::new([]),
+                        }]),
+                    })
+                    .expect("checked fixture");
+                let mut source = crate::resolved::ResolvedLexicalEvidence {
+                    checked,
+                    id,
+                    span,
+                    application: ResolvedInterfaceApplication {
+                        interface: crate::resolved::ResolvedInterfaceOccurrence {
+                            id: interface,
+                            spelling: "Read".to_owned(),
+                            origin: Origin::Source(span),
+                        },
+                        arguments: Box::new([crate::resolved::ResolvedType {
+                            ty: deep_application_type(16_384),
+                            provenance: crate::resolved::ResolvedTypeProvenance::new(
+                                vec![crate::resolved::ResolvedTypeProvenanceNode::Fact(span)],
+                                0,
+                            ),
+                            origin: Origin::Source(span),
+                            span,
+                        }]),
+                        span,
+                    },
+                    method_groups: Box::new([crate::resolved::ResolvedImplementationMethodGroup {
+                        contextual_parameters: Box::new([]),
+                        method: Some(method),
+                        identity: None,
+                        binder: crate::resolved::Binder {
+                            id: binder,
+                            spelling: "read".to_owned(),
+                            origin: Origin::Source(span),
+                        },
+                        equations: Box::new([]),
+                        span,
+                    }]),
+                };
+                let methods = [MethodEvidenceMethod {
+                    id: method,
+                    interface_parameters: Box::new([TypeVariableId::resolved(module, 0)]),
+                    parameters: Box::new([(TypeVariableId::resolved(module, 1), Kind::Type)]),
+                    value_type: Type::Int,
+                }];
+                assert_eq!(
+                    retain_lexical_owners(
+                        &source,
+                        &methods,
+                        &mut Vec::new(),
+                        &mut InterfaceConstraintBudget::default(),
+                        &mut TypeWorkBudget::default()
+                    )
+                    .expect_err("the malformed contextual count must reject")
+                    .reason(),
+                    EvidenceValidationReason::InvalidEvidenceRoot
+                );
+                discard_type_iteratively(std::mem::replace(
+                    &mut source.application.arguments[0].ty,
+                    Type::Unit,
+                ));
+            })
+            .expect("small-stack worker")
+            .join()
+            .expect("failure must dispose iteratively");
     }
 
     #[test]

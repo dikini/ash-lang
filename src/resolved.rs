@@ -17440,6 +17440,9 @@ pub struct ResolvedImplementation {
 /// One maximal contiguous implementation method-equation group.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedImplementationMethodGroup {
+    /// Declaration-owned contextual binders for a lexical supplied method.
+    /// Module implementation methods use their existing interface binders.
+    pub contextual_parameters: Box<[ResolvedTypeVariable]>,
     /// Interface method named by the source head, when it is a method at all.
     pub method: Option<MethodId>,
     /// Identity derived from the impl and method, retained even for duplicates.
@@ -18123,6 +18126,9 @@ fn discard_block_into_work(
             ResolvedLocalDeclaration::Evidence(evidence) => {
                 discard_resolved_interface_application(evidence.application);
                 for group in evidence.method_groups.into_vec() {
+                    for parameter in group.contextual_parameters.into_vec() {
+                        discard_resolved_type_variable(parameter);
+                    }
                     discard_binder(group.binder);
                     for equation in group.equations.into_vec() {
                         discard_equation_into_work(equation, expressions, patterns);
@@ -27658,6 +27664,7 @@ mod tests {
                     prerequisite_only_parameters: Box::new([]),
                     prerequisites: Box::new([]),
                     method_groups: vec![ResolvedImplementationMethodGroup {
+                        contextual_parameters: Box::new([]),
                         method: None,
                         identity: None,
                         binder: Binder {

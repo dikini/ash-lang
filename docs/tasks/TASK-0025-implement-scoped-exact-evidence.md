@@ -76,6 +76,44 @@ Return semantic gaps to CP-0015; a scope expansion requires user direction.
   two exact-budget/bypass tests and all 200 affected evidence tests pass.
   The reviewer confirmed the correction and closed Task 1 with no outstanding
   Critical or Important findings. Tasks 2 and 3 remain open.
+- Task 1 is retained at `f01e8e3`; all-target Clippy also passed before commit.
+  Task 2 is active. Its first 42 interaction cases now all pass, including
+  polymorphic forwarding, effects, enclosing parameters, and a cross-module
+  closure. The importer receives the ordinary factory without its interface or
+  implementation facts.
+- Task 2 review added four failing witnesses: lexical method-parameter scope
+  through preceding/nested evidence, invalid sharing of two methods' rigid
+  parameters, and coalescing closed effect instances after substitution. The
+  46-case corpus retains these. Corrections must allocate independent contextual
+  method rigids and reuse existing canonical row substitution; they add no
+  source type namespace, open method rows, or solver.
+- Task 3's 32-level nested-method fixture overflows a 512 KiB host stack at
+  `f01e8e3` (`target/scoped-evidence-nested-stack-red.log`). Its accepted branch
+  is observed RED; a wrong-result branch is also prepared for error disposal.
+  The test uses unchanged production limits and disables core dumps for the
+  isolated failing run.
+- All 46 Task 2 interaction cases now pass in an independent root run
+  (`target/scoped-evidence-interactions-task2-final.log`). Semantic re-review
+  closed the independent-rigid and canonical-row findings. Function-body row
+  weakening now uses the existing subset check required by static semantics;
+  ordinary type equality and Pure Core restrictions remain unchanged.
+- Task 2 quality review found early-error recursive disposal of a temporary
+  replacement map and uncharged contextual-owner scans. Both have concrete
+  bounded fixes under review. The writer's predecessor run passed 177 tests
+  across 12 targets, plus all 200 evidence tests and all-target Clippy.
+- The root has prepared specification and example drafts while Task 3 remains
+  open. All 74 specification tests passed before the draft review's small
+  consistency corrections. The draft review required the new lexical arm in
+  the conceptual selection model as well as the selection judgment; the
+  manifest now guards both. These drafts are not Task 2 completion or closure.
+- Task 2's two Important quality findings are closed. The deep replacement
+  test first overflowed a 256 KiB stack at depth 16,384; retaining arguments
+  in the existing iterative buffer through fallible checks fixes disposal.
+  Two accounting probes observed missing charges and now cover exact success,
+  one-short failure, retries, and zero-cost empty catalogs. No new map owner or
+  runtime mechanism was added. Final writer verification passed 201 evidence
+  tests, both accounting probes, 105 kind-filter tests, all-target check and
+  Clippy, formatting, and diff checks. Task 3 remains open.
 
 ## Verification
 

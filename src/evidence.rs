@@ -7071,6 +7071,7 @@ mod tests {
                 }]
                 .into_boxed_slice(),
                 method_groups: vec![ResolvedImplementationMethodGroup {
+                    contextual_parameters: Box::new([]),
                     method: Some(method),
                     identity: Some(implementation_method),
                     binder: Binder {
