@@ -1834,6 +1834,18 @@ fn overlap_occurs<'a>(
 /// The interface or implementation header judgment that rejected source.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InterfaceReason {
+    /// A lexical source has no active local nominal in its selection key.
+    EvidenceMissingLocalKey,
+    /// An active lexical source already supplies this exact application.
+    EvidenceDuplicate,
+    /// Active lexical sources share a key but disagree on dependents.
+    EvidenceDeterminationConflict,
+    /// A lexical source omits a required method.
+    EvidenceMissingMethod,
+    /// A lexical source repeats a method group.
+    EvidenceDuplicateMethod,
+    /// A lexical source supplies an unrelated method.
+    EvidenceExtraMethod,
     /// An interface application has a different arity from its declaration.
     ArgumentCount,
     /// An interface determination does not partition its parameters exactly once.
@@ -1883,6 +1895,12 @@ pub enum InterfaceReason {
 impl fmt::Display for InterfaceReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::EvidenceMissingLocalKey => "evidence.missing-local-key",
+            Self::EvidenceDuplicate => "evidence.duplicate",
+            Self::EvidenceDeterminationConflict => "evidence.determination-conflict",
+            Self::EvidenceMissingMethod => "evidence.missing-method",
+            Self::EvidenceDuplicateMethod => "evidence.duplicate-method",
+            Self::EvidenceExtraMethod => "evidence.extra-method",
             Self::ArgumentCount => "interface.argument-count",
             Self::DeterminationParameter => "interface.determination-parameter",
             Self::MethodParameter => "interface.method-parameter",
@@ -1963,6 +1981,87 @@ impl MethodId {
     }
 
     /// Returns the source-order method declaration index.
+    #[must_use]
+    pub const fn declaration(self) -> u32 {
+        self.declaration
+    }
+}
+
+/// Stable identity of one lexical evidence declaration.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct LexicalEvidenceId {
+    module: ModuleId,
+    declaration: u32,
+}
+
+/// One immutable checked source fact shared through linking.
+#[derive(Debug, Default)]
+pub(crate) struct LexicalEvidenceSlot(Arc<OnceLock<CheckedLexicalEvidence>>);
+
+impl LexicalEvidenceSlot {
+    pub(crate) fn get(&self) -> Option<&CheckedLexicalEvidence> {
+        self.0.get()
+    }
+    pub(crate) fn fill(&self, fact: CheckedLexicalEvidence) -> Result<(), ()> {
+        self.0.set(fact).map_err(|_| ())
+    }
+}
+
+impl Clone for LexicalEvidenceSlot {
+    fn clone(&self) -> Self {
+        if self.0.get().is_some() {
+            Self(Arc::clone(&self.0))
+        } else {
+            Self::default()
+        }
+    }
+}
+
+impl PartialEq for LexicalEvidenceSlot {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0) || (self.0.get().is_none() && other.0.get().is_none())
+    }
+}
+impl Eq for LexicalEvidenceSlot {}
+
+#[derive(Debug)]
+pub(crate) struct CheckedLexicalEvidence {
+    pub(crate) id: LexicalEvidenceId,
+    pub(crate) application: InterfaceApplication,
+    pub(crate) methods: Box<[CheckedLexicalMethod]>,
+}
+
+#[derive(Debug)]
+pub(crate) struct CheckedLexicalMethod {
+    pub(crate) method: MethodId,
+    pub(crate) binder: BinderId,
+    pub(crate) scheme: Type,
+    pub(crate) captures: Box<[BinderId]>,
+}
+
+impl Drop for CheckedLexicalMethod {
+    fn drop(&mut self) {
+        discard_type_iteratively(std::mem::replace(&mut self.scheme, Type::Unit));
+    }
+}
+
+impl LexicalEvidenceId {
+    /// Creates the identity of one sequential evidence declaration.
+    #[must_use]
+    pub const fn new(module: ModuleId, declaration: u32) -> Self {
+        Self {
+            module,
+            declaration,
+        }
+    }
+
+    /// Returns the defining module.
+    #[must_use]
+    pub const fn module(self) -> ModuleId {
+        self.module
+    }
+
+    /// Returns the lexical declaration ordinal.
     #[must_use]
     pub const fn declaration(self) -> u32 {
         self.declaration
@@ -2070,6 +2169,9 @@ impl RequirementId {
 pub struct EvidenceNodeId(usize);
 
 impl EvidenceNodeId {
+    pub(crate) const fn new(index: usize) -> Self {
+        Self(index)
+    }
     /// Returns the node's index in its plan.
     #[must_use]
     pub const fn index(self) -> usize {
@@ -2188,6 +2290,10 @@ impl Drop for EvidenceSubstitution {
 
 #[derive(Debug)]
 enum EvidenceNodeData {
+    Lexical {
+        source: LexicalEvidenceId,
+        methods: Box<[MethodId]>,
+    },
     Abstract {
         requirement: RequirementId,
         methods: Box<[MethodId]>,
@@ -2209,6 +2315,13 @@ struct EvidencePlan {
 /// Read-only view of one structural evidence node.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EvidenceNode<'a> {
+    /// One exact lexical source and its interface method order.
+    Lexical {
+        /// Canonical source selected at the occurrence's lexical scope.
+        source: LexicalEvidenceId,
+        /// Interface methods in declaration order.
+        methods: &'a [MethodId],
+    },
     /// One exact abstract requirement and its interface method order.
     Abstract {
         /// Requirement binder selected before implementation search.
@@ -2265,6 +2378,10 @@ impl EvidenceSelection {
     #[must_use]
     pub fn node(&self, id: EvidenceNodeId) -> Option<EvidenceNode<'_>> {
         match self.plan.nodes.get(id.0)? {
+            EvidenceNodeData::Lexical { source, methods } => Some(EvidenceNode::Lexical {
+                source: *source,
+                methods,
+            }),
             EvidenceNodeData::Abstract {
                 requirement,
                 methods,
@@ -2310,6 +2427,21 @@ pub(crate) struct EvidenceSelectionBuilder {
 impl EvidenceSelectionBuilder {
     pub(crate) const fn new() -> Self {
         Self { nodes: Vec::new() }
+    }
+
+    pub(crate) fn push_lexical(
+        &mut self,
+        source: LexicalEvidenceId,
+        methods: &[MethodId],
+        budget: &mut InterfaceConstraintBudget,
+    ) -> Result<EvidenceNodeId, ()> {
+        budget.charge(1usize.checked_add(methods.len()).ok_or(())?)?;
+        let methods = try_copy_slice(methods)?;
+        self.nodes.try_reserve(1).map_err(|_| ())?;
+        let id = EvidenceNodeId(self.nodes.len());
+        self.nodes
+            .push(EvidenceNodeData::Lexical { source, methods });
+        Ok(id)
     }
 
     pub(crate) fn push_abstract(

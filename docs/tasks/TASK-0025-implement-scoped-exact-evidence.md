@@ -46,8 +46,36 @@ Return semantic gaps to CP-0015; a scope expansion requires user direction.
 - Independent high semantic and medium implementation-mapping reviews converged
   the accepted contract. They required explicit method resume barriers,
   complete admission precedence, and inert Core authentication facts.
-- Product implementation has not started. The first pair must fail because
-  sequential `with` is absent before production code changes.
+- The first direct/forwarding pair failed because sequential `with` was absent
+  before production edits. Ten independent interaction cases also compiled and
+  failed on that missing syntax; their RED log is
+  `target/scoped-evidence-interactions-red.log`.
+- One high-reasoning agent owns production source and the first-pair test file.
+  The root prepares the disjoint `tests/scoped_evidence_interactions.rs` corpus
+  and review evidence. The direct/forwarding pair now passes; source and capture
+  authentication is still being completed before its reviewed checkpoint.
+- The expanded interaction run passed 36 of 39 tests; all six syntax tests
+  passed. Two polymorphic-method cases fail Core type validation; a supplied
+  effectful method fails during checking. Independent diagnosis identified
+  missing local-binding authentication/parameter renaming and source-to-Core
+  type projection, respectively. The corrected fixture log is
+  `target/scoped-evidence-interactions-corrected.log`.
+- Task 3 still owns iterative scheduling for nested supplied method bodies,
+  exact resource boundaries, and forged-source tests. Those tests must include
+  priority substitution (abstract/current versus lexical, lexical versus
+  concrete) and moving an unused checked source outside its nominal scope.
+  Passing ordinary selection tests does not establish those validation facts.
+- Task 1 semantic review closed with no findings. The root reran the vertical
+  pair, syntax, interface-selection, interface, and local-newtype targets:
+  all 112 tests passed (`target/scoped-evidence-checkpoint-1.log`). Eight
+  focused architecture checks passed after recording the new static carriers;
+  runtime inventories and scanner rules remain unchanged.
+- Rust/resource review found one uncharged lexical-only plan scan on existing
+  programs. A regression observed three inspections where none were needed.
+  The correction skips empty-owner paths and charges feature-path inspections;
+  two exact-budget/bypass tests and all 200 affected evidence tests pass.
+  The reviewer confirmed the correction and closed Task 1 with no outstanding
+  Critical or Important findings. Tasks 2 and 3 remain open.
 
 ## Verification
 

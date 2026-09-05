@@ -68,6 +68,7 @@ impl Drop for MethodEvidenceMethod {
 #[derive(Debug)]
 #[cfg_attr(test, derive(Clone))]
 pub(crate) struct MethodEvidenceCatalog {
+    lexical_owners: Vec<MethodEvidenceLexicalOwner>,
     methods: Vec<MethodEvidenceMethod>,
     implementation_owners: Vec<MethodEvidenceImplementationOwner>,
     domains: Vec<MethodEvidenceDomain>,
@@ -75,6 +76,16 @@ pub(crate) struct MethodEvidenceCatalog {
     adapters: Vec<MethodEvidenceAdapter>,
     concrete_sources: Vec<MethodEvidenceConcreteSource>,
     expectations: Vec<MethodEvidenceExpectation>,
+}
+
+#[derive(Debug)]
+#[cfg_attr(test, derive(Clone))]
+pub(crate) struct MethodEvidenceLexicalOwner {
+    pub(crate) source: crate::interface::LexicalEvidenceId,
+    pub(crate) method: MethodId,
+    pub(crate) binder: BinderId,
+    pub(crate) application: InterfaceApplication,
+    pub(crate) captures: Box<[BinderId]>,
 }
 
 impl Default for MethodEvidenceCatalog {
@@ -135,12 +146,33 @@ pub(crate) enum MethodEvidenceOwner {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MethodEvidenceExpectedRole {
-    ImplementationOwner { owner: usize },
-    Domain { domain: usize },
-    Application { domain: usize, producer: usize },
-    Instantiation { producer: usize },
-    Adapter { adapter: usize },
-    AdapterEdge { adapter: usize, ordinal: usize },
+    LexicalOwner {
+        owner: usize,
+    },
+    LexicalUse {
+        owner: usize,
+        selection_node: EvidenceNodeId,
+    },
+    ImplementationOwner {
+        owner: usize,
+    },
+    Domain {
+        domain: usize,
+    },
+    Application {
+        domain: usize,
+        producer: usize,
+    },
+    Instantiation {
+        producer: usize,
+    },
+    Adapter {
+        adapter: usize,
+    },
+    AdapterEdge {
+        adapter: usize,
+        ordinal: usize,
+    },
 }
 
 #[derive(Debug)]
@@ -216,8 +248,15 @@ impl Drop for MethodEvidenceAdapter {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MethodEvidenceProducer {
-    Abstract { requirement: RequirementId },
-    Adapter { implementation: ImplMethodId },
+    Lexical {
+        source: crate::interface::LexicalEvidenceId,
+    },
+    Abstract {
+        requirement: RequirementId,
+    },
+    Adapter {
+        implementation: ImplMethodId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -288,7 +327,8 @@ impl MethodEvidenceCatalog {
     fn lookup_work(&self) -> Option<usize> {
         self.methods
             .len()
-            .checked_add(self.implementation_owners.len())
+            .checked_add(self.lexical_owners.len())
+            .and_then(|work| work.checked_add(self.implementation_owners.len()))
             .and_then(|work| work.checked_add(self.domains.len()))
             .and_then(|work| work.checked_add(self.occurrences.len()))
             .and_then(|work| work.checked_add(self.adapters.len()))
@@ -318,6 +358,7 @@ impl MethodEvidenceCatalog {
         expectations: Vec<MethodEvidenceExpectation>,
     ) -> Self {
         Self {
+            lexical_owners: Vec::new(),
             methods,
             implementation_owners,
             domains,
@@ -336,6 +377,24 @@ impl MethodEvidenceCatalog {
             .binary_search_by_key(&implementation, |owner| owner.implementation)
             .ok()
             .and_then(|index| self.implementation_owners.get(index))
+    }
+
+    pub(crate) fn set_lexical_owners(&mut self, owners: Vec<MethodEvidenceLexicalOwner>) {
+        self.lexical_owners = owners;
+    }
+
+    pub(crate) fn lexical_owners(&self) -> &[MethodEvidenceLexicalOwner] {
+        &self.lexical_owners
+    }
+
+    pub(crate) fn lexical_owner(
+        &self,
+        source: crate::interface::LexicalEvidenceId,
+        method: MethodId,
+    ) -> Option<&MethodEvidenceLexicalOwner> {
+        self.lexical_owners
+            .iter()
+            .find(|owner| owner.source == source && owner.method == method)
     }
 
     pub(crate) fn implementation_owners(&self) -> &[MethodEvidenceImplementationOwner] {
@@ -580,6 +639,52 @@ pub(super) fn method_evidence_anchor_matches_expectation(
     type_work.charge(1)?;
     match (expected.role, role) {
         (
+            MethodEvidenceExpectedRole::LexicalOwner { owner: index },
+            MethodEvidenceAnchorRole::LexicalOwner { source, binder },
+        ) => {
+            let Some(expected) = catalog.lexical_owners.get(index) else {
+                return Ok(false);
+            };
+            Ok(expected.source == source
+                && expected.binder == binder
+                && requirement.is_none()
+                && same_interface_application_with_budget(
+                    &expected.application,
+                    application,
+                    type_work,
+                )?)
+        }
+        (
+            MethodEvidenceExpectedRole::LexicalUse {
+                owner: index,
+                selection_node,
+            },
+            MethodEvidenceAnchorRole::LexicalUse {
+                source,
+                binder,
+                selection_node: actual,
+            },
+        ) => {
+            let Some(expected_owner) = catalog.lexical_owners.get(index) else {
+                return Ok(false);
+            };
+            let Some(occurrence) = expected
+                .occurrence
+                .and_then(|slot| catalog.occurrence(slot))
+            else {
+                return Ok(false);
+            };
+            Ok(expected_owner.source == source
+                && expected_owner.binder == binder
+                && selection_node == actual
+                && matches!(occurrence.selection.node(selection_node), Some(EvidenceNode::Lexical { source: selected, methods }) if selected == source && methods.contains(&expected.method))
+                && same_interface_application_with_budget(
+                    &expected_owner.application,
+                    application,
+                    type_work,
+                )?)
+        }
+        (
             MethodEvidenceExpectedRole::ImplementationOwner {
                 owner: expected_owner,
             },
@@ -663,6 +768,13 @@ pub(super) fn method_evidence_anchor_matches_expectation(
                 }
                 Some(MethodEvidenceExpectedRole::Adapter { .. }) => {
                     binder.is_none() && requirement.is_none()
+                }
+                Some(MethodEvidenceExpectedRole::LexicalOwner { owner }) => {
+                    catalog
+                        .lexical_owners
+                        .get(owner)
+                        .is_some_and(|owner| binder == Some(owner.binder))
+                        && requirement.is_none()
                 }
                 _ => false,
             };
@@ -852,6 +964,13 @@ pub(super) fn method_evidence_producer_matches(
         actual,
     ) {
         (
+            Some(MethodEvidenceExpectedRole::LexicalOwner { owner }),
+            MethodEvidenceProducer::Lexical { source },
+        ) => catalog
+            .lexical_owners
+            .get(owner)
+            .is_some_and(|owner| owner.source == source),
+        (
             Some(MethodEvidenceExpectedRole::Domain { domain }),
             MethodEvidenceProducer::Abstract { requirement },
         ) => catalog
@@ -875,7 +994,9 @@ fn selection_contains_method(
     type_work: &mut TypeWorkBudget,
 ) -> Result<bool, ()> {
     selection_contains(selection, type_work, |node| match node {
-        EvidenceNode::Abstract { methods, .. } => methods.contains(&method),
+        EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. } => {
+            methods.contains(&method)
+        }
         EvidenceNode::Implementation { methods, .. } => {
             methods.iter().any(|candidate| candidate.method() == method)
         }
@@ -907,7 +1028,9 @@ fn selection_contains(
             return Ok(false);
         };
         let method_count = match node {
-            EvidenceNode::Abstract { methods, .. } => methods.len(),
+            EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. } => {
+                methods.len()
+            }
             EvidenceNode::Implementation { methods, .. } => methods.len(),
         };
         type_work.charge(method_count)?;
@@ -925,6 +1048,15 @@ fn selection_contains(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MethodEvidenceAnchorRole {
+    LexicalOwner {
+        source: crate::interface::LexicalEvidenceId,
+        binder: BinderId,
+    },
+    LexicalUse {
+        source: crate::interface::LexicalEvidenceId,
+        binder: BinderId,
+        selection_node: EvidenceNodeId,
+    },
     ImplementationOwner {
         implementation: ImplMethodId,
         binder: BinderId,
@@ -958,6 +1090,8 @@ const fn method_evidence_anchor_identity_work(role: MethodEvidenceAnchorRole) ->
         MethodEvidenceAnchorRole::Adapter { .. } => 1,
         MethodEvidenceAnchorRole::AdapterEdge { .. } => 4,
         MethodEvidenceAnchorRole::ImplementationOwner { .. }
+        | MethodEvidenceAnchorRole::LexicalOwner { .. }
+        | MethodEvidenceAnchorRole::LexicalUse { .. }
         | MethodEvidenceAnchorRole::Domain { .. }
         | MethodEvidenceAnchorRole::Application { .. }
         | MethodEvidenceAnchorRole::Instantiation { .. } => 0,
@@ -1876,7 +2010,8 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         let owner = match (role, occurrence) {
             (
                 MethodEvidenceAnchorRole::Instantiation { .. }
-                | MethodEvidenceAnchorRole::Adapter { .. },
+                | MethodEvidenceAnchorRole::Adapter { .. }
+                | MethodEvidenceAnchorRole::LexicalUse { .. },
                 Some(slot),
             ) => self
                 .method_evidence
@@ -1946,9 +2081,11 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             && matches!(
                 (role, occurrence),
                 (MethodEvidenceAnchorRole::ImplementationOwner { .. }, None)
+                    | (MethodEvidenceAnchorRole::LexicalOwner { .. }, None)
                     | (MethodEvidenceAnchorRole::Domain { .. }, None)
                     | (
                         MethodEvidenceAnchorRole::Instantiation { .. }
+                            | MethodEvidenceAnchorRole::LexicalUse { .. }
                             | MethodEvidenceAnchorRole::Application { .. }
                             | MethodEvidenceAnchorRole::Adapter { .. }
                             | MethodEvidenceAnchorRole::AdapterEdge { .. },
@@ -1977,7 +2114,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
                     });
                 application_argument == Some(producer_node)
                     && match (producer, producer_binder) {
-                        (MethodEvidenceProducer::Abstract { .. }, Some(binder)) => producer_node
+                        (MethodEvidenceProducer::Abstract { .. } | MethodEvidenceProducer::Lexical { .. }, Some(binder)) => producer_node
                             .index()
                             .ok()
                             .and_then(|index| self.nodes.get(index))

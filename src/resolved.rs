@@ -17588,12 +17588,180 @@ pub struct ResolvedBlock {
 /// The closed resolved local-declaration family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResolvedLocalDeclaration {
+    /// Exact methods available in the following block remainder.
+    Evidence(Box<ResolvedLexicalEvidence>),
     /// A sequential nonrecursive binding.
     Binding(Box<ResolvedBinding>),
     /// A simultaneous recursive binding group.
     Recursive(ResolvedRecursiveGroup),
     /// A sequential lexical nominal declaration.
     Newtype(NominalTypeId),
+}
+
+/// A resolved sequential source of exact evidence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedLexicalEvidence {
+    pub(crate) checked: crate::interface::LexicalEvidenceSlot,
+    /// Module-qualified lexical identity.
+    pub id: crate::interface::LexicalEvidenceId,
+    /// Complete application, resolved in the preceding type scope.
+    pub application: ResolvedInterfaceApplication,
+    /// Maximal contiguous method groups with ordinary hidden binders.
+    pub method_groups: Box<[ResolvedImplementationMethodGroup]>,
+    /// Complete declaration span.
+    pub span: Span,
+}
+
+/// Direct term captures of a supplied method, independent of evidence lowering.
+pub(crate) fn lexical_method_captures(
+    group: &ResolvedImplementationMethodGroup,
+    budget: &mut TypeWorkBudget,
+) -> Result<Box<[BinderId]>, ()> {
+    fn pattern_ids(
+        pattern: &ResolvedPattern,
+        bound: &mut HashSet<BinderId>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        let mut pending = vec![pattern];
+        while let Some(pattern) = pending.pop() {
+            budget.charge(1)?;
+            match &pattern.kind {
+                ResolvedPatternKind::Binder(binder) => {
+                    bound.try_reserve(1).map_err(|_| ())?;
+                    bound.insert(binder.id);
+                }
+                ResolvedPatternKind::Tuple(elements) => {
+                    budget.charge(elements.len())?;
+                    pending.try_reserve(elements.len()).map_err(|_| ())?;
+                    pending.extend(elements);
+                }
+                ResolvedPatternKind::Constructor {
+                    payload: Some(payload),
+                    ..
+                } => pending.push(payload),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    fn block<'a>(
+        block: &'a ResolvedBlock,
+        work: &mut Vec<&'a ResolvedExpr>,
+        bound: &mut HashSet<BinderId>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        budget.charge(1)?;
+        work.try_reserve(1).map_err(|_| ())?;
+        work.push(&block.result);
+        for declaration in &block.declarations {
+            budget.charge(1)?;
+            match declaration {
+                ResolvedLocalDeclaration::Binding(binding) => {
+                    pattern_ids(&binding.pattern, bound, budget)?;
+                    work.try_reserve(1).map_err(|_| ())?;
+                    work.push(&binding.initializer);
+                }
+                ResolvedLocalDeclaration::Recursive(group) => {
+                    budget.charge(group.members.len())?;
+                    bound.try_reserve(group.members.len()).map_err(|_| ())?;
+                    work.try_reserve(group.members.len()).map_err(|_| ())?;
+                    for member in &group.members {
+                        bound.insert(member.binder.id);
+                        work.push(&member.initializer);
+                    }
+                }
+                ResolvedLocalDeclaration::Evidence(source) => {
+                    for group in &source.method_groups {
+                        bound.try_reserve(1).map_err(|_| ())?;
+                        bound.insert(group.binder.id);
+                        for equation in &group.equations {
+                            for pattern in &equation.patterns {
+                                pattern_ids(pattern, bound, budget)?;
+                            }
+                            work.try_reserve(1).map_err(|_| ())?;
+                            work.push(&equation.body);
+                        }
+                    }
+                }
+                ResolvedLocalDeclaration::Newtype(_) => {}
+            }
+        }
+        Ok(())
+    }
+    let mut bound = HashSet::new();
+    let mut captures = Vec::new();
+    let mut pending = Vec::new();
+    budget.charge(group.equations.len())?;
+    pending.try_reserve(group.equations.len()).map_err(|_| ())?;
+    for equation in &group.equations {
+        for pattern in &equation.patterns {
+            pattern_ids(pattern, &mut bound, budget)?;
+        }
+        pending.push(&equation.body);
+    }
+    while let Some(expression) = pending.pop() {
+        budget.charge(1)?;
+        pending.try_reserve(2).map_err(|_| ())?;
+        match &expression.kind {
+            ResolvedExprKind::Occurrence(occurrence) => {
+                if let ResolvedTermName::Global(binder) = occurrence.term {
+                    captures.try_reserve(1).map_err(|_| ())?;
+                    captures.push(binder);
+                }
+            }
+            ResolvedExprKind::Tuple(elements) => {
+                budget.charge(elements.len())?;
+                pending.try_reserve(elements.len()).map_err(|_| ())?;
+                pending.extend(elements);
+            }
+            ResolvedExprKind::Apply(application) => {
+                pending.push(&application.function);
+                pending.push(&application.argument);
+            }
+            ResolvedExprKind::Add(binary)
+            | ResolvedExprKind::Multiply(binary)
+            | ResolvedExprKind::Equal(binary) => {
+                pending.push(&binary.left);
+                pending.push(&binary.right);
+            }
+            ResolvedExprKind::Block(body) => block(body, &mut pending, &mut bound, budget)?,
+            ResolvedExprKind::Function(function) => {
+                pattern_ids(&function.pattern, &mut bound, budget)?;
+                block(&function.body, &mut pending, &mut bound, budget)?;
+            }
+            ResolvedExprKind::Match(matched) => {
+                budget.charge(matched.arms.len())?;
+                pending
+                    .try_reserve(matched.arms.len().saturating_add(1))
+                    .map_err(|_| ())?;
+                pending.push(&matched.scrutinee);
+                for arm in &matched.arms {
+                    pattern_ids(&arm.pattern, &mut bound, budget)?;
+                    pending.push(&arm.body);
+                }
+            }
+            ResolvedExprKind::Perform(request) => pending.push(&request.operand),
+            ResolvedExprKind::Handle(handler) => {
+                budget.charge(handler.clauses.len())?;
+                pending
+                    .try_reserve(handler.clauses.len().saturating_add(1))
+                    .map_err(|_| ())?;
+                pending.push(&handler.body);
+                for clause in &handler.clauses {
+                    pattern_ids(&clause.pattern, &mut bound, budget)?;
+                    pending.push(&clause.body);
+                }
+            }
+            ResolvedExprKind::Resume(resume) => pending.push(&resume.value),
+            ResolvedExprKind::Integer(_)
+            | ResolvedExprKind::Boolean(_)
+            | ResolvedExprKind::Unit
+            | ResolvedExprKind::Constructor(_) => {}
+        }
+    }
+    budget.charge(captures.len())?;
+    captures.retain(|binder| !bound.contains(binder));
+    Ok(captures.into_boxed_slice())
 }
 
 /// One resolved simultaneous recursive binding group.
@@ -17952,6 +18120,15 @@ fn discard_block_into_work(
     expressions.push(*block.result);
     for declaration in block.declarations {
         match declaration {
+            ResolvedLocalDeclaration::Evidence(evidence) => {
+                discard_resolved_interface_application(evidence.application);
+                for group in evidence.method_groups.into_vec() {
+                    discard_binder(group.binder);
+                    for equation in group.equations.into_vec() {
+                        discard_equation_into_work(equation, expressions, patterns);
+                    }
+                }
+            }
             ResolvedLocalDeclaration::Binding(binding) => {
                 let binding = *binding;
                 patterns.push(binding.pattern);
@@ -18066,6 +18243,7 @@ pub(crate) fn discard_resolved_local_declaration_iteratively(
     let span = match &declaration {
         ResolvedLocalDeclaration::Binding(binding) => binding.span,
         ResolvedLocalDeclaration::Recursive(group) => group.span,
+        ResolvedLocalDeclaration::Evidence(evidence) => evidence.span,
         ResolvedLocalDeclaration::Newtype(_) => unreachable!("handled above"),
     };
     discard_resolved_body_work(

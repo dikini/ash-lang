@@ -195,6 +195,11 @@ fn push_block<'a>(
             .charge(1)
             .map_err(|()| EvidenceAuditFailure::ConstraintResource)?;
         let initializers = match declaration {
+            ResolvedLocalDeclaration::Evidence(source) => source
+                .method_groups
+                .iter()
+                .map(|group| group.equations.len())
+                .sum(),
             ResolvedLocalDeclaration::Binding(_) => 1,
             ResolvedLocalDeclaration::Recursive(group) => group.members.len(),
             ResolvedLocalDeclaration::Newtype(_) => 0,
@@ -207,6 +212,14 @@ fn push_block<'a>(
     pending.push(block.result.as_ref());
     for declaration in &block.declarations {
         match declaration {
+            ResolvedLocalDeclaration::Evidence(source) => {
+                pending.extend(
+                    source
+                        .method_groups
+                        .iter()
+                        .flat_map(|group| group.equations.iter().map(|equation| &equation.body)),
+                );
+            }
             ResolvedLocalDeclaration::Binding(binding) => pending.push(&binding.initializer),
             ResolvedLocalDeclaration::Recursive(group) => {
                 pending.extend(group.members.iter().map(|member| &member.initializer));

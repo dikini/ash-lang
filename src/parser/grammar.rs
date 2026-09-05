@@ -757,6 +757,37 @@ fn implementation_declaration(parser: &mut Parser<'_>) -> TypeParametersOutcome 
     TypeParametersOutcome::Complete
 }
 
+fn lexical_evidence_declaration(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::LexicalEvidenceDeclaration);
+    let _ = parser.bump();
+    let _ = interface_application(parser);
+    if !declaration_body_starts(
+        parser,
+        SynchronizationBoundary::ImplementationBodyOpeningBrace,
+        SynchronizationBoundary::ImplementationClosingBrace,
+    ) {
+        parser.finish();
+        return;
+    }
+    let _ = parser.bump();
+    let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+    while !matches!(
+        parser.current(),
+        Some(TokenKind::RightBrace | TokenKind::EndOfFile) | None
+    ) {
+        if matches!(parser.current(), Some(TokenKind::Identifier(_))) {
+            equation(parser, SynchronizationBoundary::ImplementationClosingBrace);
+        } else {
+            recover_implementation_method(parser);
+        }
+        if parser.at(&TokenKind::LineEnd) {
+            let _ = parser.bump();
+        }
+    }
+    let _ = parser.expect(&TokenKind::RightBrace, ExpectedForm::RightBrace);
+    parser.finish();
+}
+
 fn recover_implementation_method(parser: &mut Parser<'_>) {
     parser.start(NodeKind::Error);
     let recovery_start = parser.pending_recovery_count();
@@ -1683,6 +1714,9 @@ fn block(parser: &mut Parser<'_>) {
             let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
         } else if parser.at(&TokenKind::Newtype) {
             newtype_declaration(parser);
+            let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
+        } else if parser.at(&TokenKind::With) {
+            lexical_evidence_declaration(parser);
             let _ = parser.expect(&TokenKind::LineEnd, ExpectedForm::LineEnd);
         } else if parser.at(&TokenKind::And) {
             rejected_stray_and(parser);

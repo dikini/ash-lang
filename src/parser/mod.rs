@@ -68,6 +68,8 @@ pub enum NodeKind {
     InterfaceApplication,
     /// One implementation declaration with flat method equations.
     ImplementationDeclaration,
+    /// A sequential exact evidence declaration.
+    LexicalEvidenceDeclaration,
     /// An equational global definition.
     EquationalGlobal,
     /// An external name and type interface.

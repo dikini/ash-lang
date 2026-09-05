@@ -4479,6 +4479,28 @@ fn check_expression_work<'a>(
         })?;
         match item {
             BodyWork::Declaration(declaration) => match declaration {
+                ResolvedLocalDeclaration::Evidence(source) => {
+                    if let Some(application) = authenticate_interface_application(
+                        &source.application,
+                        environments,
+                        budget,
+                    )? {
+                        check_interface_application_kinds(application, environments, budget)?;
+                    }
+                    for equation in source
+                        .method_groups
+                        .iter()
+                        .rev()
+                        .flat_map(|group| group.equations.iter().rev())
+                    {
+                        push_body_work(
+                            &mut work,
+                            BodyWork::Expression(&equation.body),
+                            equation.body.span,
+                            budget,
+                        )?;
+                    }
+                }
                 ResolvedLocalDeclaration::Binding(binding) => {
                     if let Some(annotation) = &binding.annotation {
                         environments.expect_value_type(annotation, budget)?;
@@ -4672,6 +4694,7 @@ fn push_body_work<'a>(
 
 fn local_declaration_span(declaration: &ResolvedLocalDeclaration) -> Span {
     match declaration {
+        ResolvedLocalDeclaration::Evidence(source) => source.span,
         ResolvedLocalDeclaration::Binding(binding) => binding.span,
         ResolvedLocalDeclaration::Recursive(group) => group.span,
         ResolvedLocalDeclaration::Newtype(_) => {

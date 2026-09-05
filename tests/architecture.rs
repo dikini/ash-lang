@@ -235,6 +235,7 @@ define_kind_site_profiles! {
     FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeTypeTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, EvidenceSelection, EvidenceType, TypeTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeResolvedTreeAndCheckedTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, EvidenceSelection, EvidenceType, ResolvedTreeAndCheckedTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeTypeTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, EvidenceValidation, EvidenceType, TypeTree),
+    FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, EvidenceValidation, EvidenceType, ResolvedTree),
     FieldBorrowedTransientInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeTypeTree => (Field, Borrowed, Transient, InterfaceArgument, InterfaceParameter, EvidenceSelection, EvidenceType, TypeTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeCheckedTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, InterfaceValidation, InterfaceType, CheckedTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierInterfaceValidationInterfaceTypeTypeTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, InterfaceValidation, InterfaceType, TypeTree),
@@ -376,6 +377,27 @@ const TASK_4_PHASE_CONSTRAINT: &str = "kind inference is intentionally absent on
 
 #[rustfmt::skip]
 const KIND_SITES: &[KindSite] = &[
+    kind_site!("src/core/dialect.rs::MethodEvidenceCatalog.lexical_owners", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/core/dialect.rs::MethodEvidenceLexicalOwner.application", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
+    kind_site!("src/elaborate.rs::ElaboratedDeclaration.Evidence.members", FieldTransientCarrierRetentionPreservedCarrierElaborationCoreTypeTransientWork),
+    kind_site!("src/elaborate.rs::ElaborationTask.LexicalEvidence.0", FieldBorrowedResolvedCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTree),
+    kind_site!("src/elaborate.rs::EvidenceLowering.lexical_binders", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/evidence.rs::EvidenceSelector.lexical_sources", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
+    kind_site!("src/evidence.rs::LexicalSource.application", FieldEvidenceInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeEvidenceTree),
+    kind_site!("src/evidence_validation.rs::EvidenceScope.lexical_sources", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
+    kind_site!("src/interface.rs::CheckedLexicalEvidence.application", FieldEvidenceInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeEvidenceTree),
+    kind_site!("src/interface.rs::CheckedLexicalEvidence.methods", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
+    kind_site!("src/interface.rs::CheckedLexicalMethod.scheme", FieldEvidenceSchemeSchemeValueEvidenceSelectionEvidenceTypeEvidenceTree),
+    kind_site!("src/interface.rs::LexicalEvidenceSlot.0", FieldSharedEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
+    kind_site!("src/parser/project.rs::PendingLocalDeclaration.Evidence.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
+    kind_site!("src/resolve.rs::ResolveTask.FinishLexicalEvidence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSurfaceTree),
+    kind_site!("src/resolved.rs::ResolvedLexicalEvidence.application", FieldResolvedInterfaceArgumentInterfaceParameterResolutionResolutionTypeResolvedTree),
+    kind_site!("src/resolved.rs::ResolvedLexicalEvidence.checked", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Shared),
+    kind_site!("src/resolved.rs::ResolvedLexicalEvidence.method_groups", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/resolved.rs::ResolvedLocalDeclaration.Evidence.0", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Mixed),
+    kind_site!("src/surface.rs::SurfaceLocalDeclaration.Evidence.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
+    kind_site!("src/surface.rs::SurfaceLexicalEvidence.application", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
+    kind_site!("src/surface.rs::SurfaceLexicalEvidence.equations", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
     kind_site!("src/driver.rs::PipelineFailure.Kind.0", FieldTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree),
     kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_core_with_ledger::Continuation.ApplicationArgument.function", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/kind.rs::$impl_KindEnvironments::$fn_synthesize_core_with_ledger::Continuation.ApplicationFunction.argument", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
@@ -2203,6 +2225,18 @@ const METHOD_PARAMETER_CARRIERS: &[MethodParameterCarrier] = &[
         "src/core/dialect.rs",
         CORE_DIALECT_SOURCE,
         "implementation_owners: Vec<MethodEvidenceImplementationOwner>"
+    ),
+    method_parameter_carrier!(
+        "linked.catalog_lexical_owners",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "lexical_owners: Vec<MethodEvidenceLexicalOwner>"
+    ),
+    method_parameter_carrier!(
+        "linked.lexical_owner_relation",
+        "src/core/dialect.rs",
+        CORE_DIALECT_SOURCE,
+        "pub(crate) struct MethodEvidenceLexicalOwner"
     ),
     method_parameter_carrier!(
         "linked.catalog_domains",
@@ -5390,6 +5424,8 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
             "src/core/dialect.rs" => matches!(
                 identifier,
                 "MethodEvidenceAdapter"
+                    | "MethodEvidenceLexicalOwner"
+                    | "LexicalEvidenceId"
                     | "MethodEvidenceAdapterEdge"
                     | "MethodEvidenceConcretePrerequisite"
                     | "MethodEvidenceConcreteSource"

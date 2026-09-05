@@ -2732,8 +2732,14 @@ fn build_core_method_evidence_catalog(
             }
         }
     }
-    let mut occurrences =
-        collect_method_evidence_occurrences(program, &methods, constraint_work, type_work)?;
+    let mut lexical_owners = Vec::new();
+    let mut occurrences = collect_method_evidence_occurrences(
+        program,
+        &methods,
+        &mut lexical_owners,
+        constraint_work,
+        type_work,
+    )?;
     for index in 1..occurrences.len() {
         let mut cursor = index;
         while cursor > 0 {
@@ -2760,6 +2766,7 @@ fn build_core_method_evidence_catalog(
         program,
         &methods,
         &implementation_owners,
+        &lexical_owners,
         &domains,
         &occurrences,
         constraint_work,
@@ -2777,7 +2784,7 @@ fn build_core_method_evidence_catalog(
         program.result().span,
     )?;
     charge(constraint_work, 1, program.result().span)?;
-    Ok(MethodEvidenceCatalog::new(
+    let mut catalog = MethodEvidenceCatalog::new(
         methods,
         implementation_owners,
         domains,
@@ -2785,7 +2792,9 @@ fn build_core_method_evidence_catalog(
         adapters,
         concrete_sources,
         expectations,
-    ))
+    );
+    catalog.set_lexical_owners(lexical_owners);
+    Ok(catalog)
 }
 
 fn checked_implementation_method_count(
@@ -3015,7 +3024,9 @@ fn build_method_evidence_concrete_sources(
                 .node(*prerequisite)
                 .ok_or_else(|| invalid_root(span))?
             {
-                EvidenceNode::Abstract { methods, .. } => methods.len(),
+                EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. } => {
+                    methods.len()
+                }
                 EvidenceNode::Implementation { methods, .. } => methods.len(),
             };
             prerequisite_count = prerequisite_count
@@ -3049,6 +3060,17 @@ fn build_method_evidence_concrete_sources(
                 .node(*prerequisite)
                 .ok_or_else(|| invalid_root(span))?
             {
+                EvidenceNode::Lexical { methods, .. } => {
+                    for method in methods {
+                        retained_prerequisites.push(
+                            crate::core::dialect::MethodEvidenceConcretePrerequisite {
+                                selection_node: *prerequisite,
+                                method: *method,
+                                scope_position: None,
+                            },
+                        );
+                    }
+                }
                 EvidenceNode::Abstract { methods, .. } => {
                     for method in methods {
                         let EvidenceNode::Abstract { requirement, .. } = occurrence
@@ -3119,6 +3141,7 @@ fn build_method_evidence_expectations(
     program: &ResolvedModuleProgram,
     methods: &[MethodEvidenceMethod],
     implementation_owners: &[MethodEvidenceImplementationOwner],
+    lexical_owners: &[crate::core::dialect::MethodEvidenceLexicalOwner],
     domains: &[MethodEvidenceDomain],
     occurrences: &[MethodEvidenceOccurrence],
     constraint_work: &mut InterfaceConstraintBudget,
@@ -3155,6 +3178,27 @@ fn build_method_evidence_expectations(
             role: MethodEvidenceExpectedRole::Domain { domain },
         });
         if domain_expectations.insert(domain, expectation).is_some() {
+            return Err(invalid_root(span));
+        }
+    }
+
+    let mut lexical_expectations = HashMap::new();
+    for (owner, row) in lexical_owners.iter().enumerate() {
+        charge(constraint_work, 2, span)?;
+        expectations.try_reserve(1).map_err(|_| resource(span))?;
+        lexical_expectations
+            .try_reserve(1)
+            .map_err(|_| resource(span))?;
+        let expectation = expectations.len();
+        expectations.push(MethodEvidenceExpectation {
+            occurrence: None,
+            method: row.method,
+            role: MethodEvidenceExpectedRole::LexicalOwner { owner },
+        });
+        if lexical_expectations
+            .insert((row.source, row.method), expectation)
+            .is_some()
+        {
             return Err(invalid_root(span));
         }
     }
@@ -3285,10 +3329,61 @@ fn build_method_evidence_expectations(
             .node(occurrence.selection.root())
             .ok_or_else(|| invalid_root(span))?
         {
-            EvidenceNode::Abstract { methods, .. } => methods.len(),
+            EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. } => {
+                methods.len()
+            }
             EvidenceNode::Implementation { methods, .. } => methods.len(),
         };
-        if let Some(method) = occurrence.checked_method {
+        let lexical_node_count = if lexical_owners.is_empty() {
+            0
+        } else {
+            occurrence.selection.node_count()
+        };
+        charge(constraint_work, lexical_node_count, span)?;
+        for index in 0..lexical_node_count {
+            #[cfg(test)]
+            LEXICAL_PLAN_INSPECTIONS.with(|count| count.set(count.get() + 1));
+            let selection_node = EvidenceNodeId::new(index);
+            let Some(EvidenceNode::Lexical {
+                source,
+                methods: selected,
+            }) = occurrence.selection.node(selection_node)
+            else {
+                continue;
+            };
+            for method in selected {
+                if selection_node == occurrence.selection.root()
+                    && occurrence
+                        .checked_method
+                        .is_some_and(|requested| requested != *method)
+                {
+                    continue;
+                }
+                charge(
+                    constraint_work,
+                    lexical_owners.len().saturating_add(1),
+                    span,
+                )?;
+                let owner = lexical_owners
+                    .iter()
+                    .position(|owner| owner.source == source && owner.method == *method)
+                    .ok_or_else(|| invalid_root(span))?;
+                expectations.try_reserve(1).map_err(|_| resource(span))?;
+                expectations.push(MethodEvidenceExpectation {
+                    occurrence: Some(occurrence.slot),
+                    method: *method,
+                    role: MethodEvidenceExpectedRole::LexicalUse {
+                        owner,
+                        selection_node,
+                    },
+                });
+            }
+        }
+        if let Some(method) = occurrence.checked_method.filter(|id| {
+            methods
+                .iter()
+                .any(|method| method.id == *id && method_is_polymorphic(method))
+        }) {
             charge(
                 constraint_work,
                 domains
@@ -3305,6 +3400,7 @@ fn build_method_evidence_expectations(
                 domains,
                 &domain_expectations,
                 &adapter_expectations,
+                &lexical_expectations,
                 span,
             )?;
             charge(constraint_work, 1, span)?;
@@ -3314,12 +3410,12 @@ fn build_method_evidence_expectations(
                 method,
                 role: MethodEvidenceExpectedRole::Instantiation { producer },
             });
-        } else {
+        } else if occurrence.checked_method.is_none() {
             charge(constraint_work, methods.len(), span)?;
-            for method in methods
-                .iter()
-                .filter(|method| method.id.interface() == occurrence.selection.interface())
-            {
+            for method in methods.iter().filter(|method| {
+                method.id.interface() == occurrence.selection.interface()
+                    && method_is_polymorphic(method)
+            }) {
                 charge(constraint_work, domains.len(), span)?;
                 let domain = domains
                     .iter()
@@ -3352,6 +3448,7 @@ fn build_method_evidence_expectations(
                             domains,
                             &domain_expectations,
                             &adapter_expectations,
+                            &lexical_expectations,
                             span,
                         )?,
                     },
@@ -3433,7 +3530,8 @@ fn build_method_evidence_expectations(
                         .node(*prerequisite)
                         .ok_or_else(|| invalid_root(span))?;
                     let methods = match child {
-                        EvidenceNode::Abstract { methods, .. } => methods.len(),
+                        EvidenceNode::Abstract { methods, .. }
+                        | EvidenceNode::Lexical { methods, .. } => methods.len(),
                         EvidenceNode::Implementation { methods, .. } => methods.len(),
                     };
                     adapter_edge_count = adapter_edge_count
@@ -3462,7 +3560,7 @@ fn build_method_evidence_expectations(
                                 .and_then(|count| count.checked_add(adapter_expectations.len()))
                                 .and_then(|count| {
                                     let child_methods = match child {
-                                        EvidenceNode::Abstract { methods, .. } => methods.len(),
+                                        EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. } => methods.len(),
                                         EvidenceNode::Implementation { methods, .. } => {
                                             methods.len()
                                         }
@@ -3483,6 +3581,7 @@ fn build_method_evidence_expectations(
                                         domains,
                                         &domain_expectations,
                                         &adapter_expectations,
+                                        &lexical_expectations,
                                         span,
                                     )?,
                                 )
@@ -3506,7 +3605,7 @@ fn build_method_evidence_expectations(
                                     )?),
                                     crate::core::dialect::MethodEvidenceProducer::Adapter {
                                         ..
-                                    } => None,
+                                    } | crate::core::dialect::MethodEvidenceProducer::Lexical { .. } => None,
                                 };
                                 crate::core::dialect::MethodEvidenceExpectedProducer::Monomorphic {
                                     selection_node: *prerequisite,
@@ -3603,7 +3702,8 @@ fn build_method_evidence_expectations(
                         }};
                     }
                     match child {
-                        EvidenceNode::Abstract { methods, .. } => {
+                        EvidenceNode::Abstract { methods, .. }
+                        | EvidenceNode::Lexical { methods, .. } => {
                             for method in methods {
                                 retain_edge!(*method);
                             }
@@ -3640,6 +3740,10 @@ fn build_method_evidence_expectations(
     Ok((adapters, expectations))
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "producer identities use separate canonical domain, adapter, and lexical indexes"
+)]
 fn method_evidence_producer_expectation(
     occurrence: &MethodEvidenceOccurrence,
     node: EvidenceNodeId,
@@ -3647,6 +3751,7 @@ fn method_evidence_producer_expectation(
     domains: &[MethodEvidenceDomain],
     domain_expectations: &HashMap<usize, usize>,
     adapter_expectations: &HashMap<(usize, EvidenceNodeId, ImplMethodId), usize>,
+    lexical_expectations: &HashMap<(crate::interface::LexicalEvidenceId, MethodId), usize>,
     span: Span,
 ) -> Result<usize, EvidenceValidationFailure> {
     match occurrence
@@ -3654,6 +3759,12 @@ fn method_evidence_producer_expectation(
         .node(node)
         .ok_or_else(|| invalid_root(span))?
     {
+        EvidenceNode::Lexical { source, methods } if methods.contains(&method) => {
+            lexical_expectations
+                .get(&(source, method))
+                .copied()
+                .ok_or_else(|| invalid_root(span))
+        }
         EvidenceNode::Abstract {
             requirement,
             methods,
@@ -3675,7 +3786,7 @@ fn method_evidence_producer_expectation(
                     .copied()
             })
             .ok_or_else(|| invalid_root(span)),
-        EvidenceNode::Abstract { .. } => Err(invalid_root(span)),
+        EvidenceNode::Abstract { .. } | EvidenceNode::Lexical { .. } => Err(invalid_root(span)),
     }
 }
 
@@ -3686,6 +3797,9 @@ fn method_evidence_semantic_producer(
     span: Span,
 ) -> Result<crate::core::dialect::MethodEvidenceProducer, EvidenceValidationFailure> {
     match selection.node(node).ok_or_else(|| invalid_root(span))? {
+        EvidenceNode::Lexical { source, methods } if methods.contains(&method) => {
+            Ok(crate::core::dialect::MethodEvidenceProducer::Lexical { source })
+        }
         EvidenceNode::Abstract {
             requirement,
             methods,
@@ -3702,7 +3816,7 @@ fn method_evidence_semantic_producer(
                 },
             )
             .ok_or_else(|| invalid_root(span)),
-        EvidenceNode::Abstract { .. } => Err(invalid_root(span)),
+        EvidenceNode::Abstract { .. } | EvidenceNode::Lexical { .. } => Err(invalid_root(span)),
     }
 }
 
@@ -3824,9 +3938,159 @@ fn collect_method_evidence_domains(
     Ok(())
 }
 
+#[cfg(test)]
+thread_local! {
+    static LEXICAL_PLAN_INSPECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn selection_has_lexical(
+    selection: &EvidenceSelection,
+    budget: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<bool, EvidenceValidationFailure> {
+    for index in 0..selection.node_count() {
+        charge(budget, 1, span)?;
+        #[cfg(test)]
+        LEXICAL_PLAN_INSPECTIONS.with(|count| count.set(count.get() + 1));
+        if matches!(
+            selection.node(EvidenceNodeId::new(index)),
+            Some(EvidenceNode::Lexical { .. })
+        ) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn retain_lexical_owners(
+    source: &crate::resolved::ResolvedLexicalEvidence,
+    methods: &[MethodEvidenceMethod],
+    owners: &mut Vec<crate::core::dialect::MethodEvidenceLexicalOwner>,
+    budget: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+) -> Result<(), EvidenceValidationFailure> {
+    let checked = source
+        .checked
+        .get()
+        .ok_or_else(|| invalid_root(source.span))?;
+    if checked.id != source.id
+        || checked.application.interface() != source.application.interface.id
+        || checked.application.arguments().len() != source.application.arguments.len()
+        || checked.methods.len() != source.method_groups.len()
+    {
+        return Err(invalid_root(source.span));
+    }
+    for (checked, resolved) in checked
+        .application
+        .arguments()
+        .iter()
+        .zip(&source.application.arguments)
+    {
+        if !same_type_charged(checked, &resolved.ty, budget, source.span)? {
+            return Err(invalid_root(source.span));
+        }
+    }
+    charge(
+        budget,
+        owners.len().saturating_add(source.method_groups.len()),
+        source.span,
+    )?;
+    if owners.iter().any(|owner| owner.source == source.id) {
+        return Err(invalid_root(source.span));
+    }
+    owners
+        .try_reserve(source.method_groups.len())
+        .map_err(|_| resource(source.span))?;
+    for group in &source.method_groups {
+        let method = group.method.ok_or_else(|| invalid_root(group.span))?;
+        if group.identity.is_some() || method.interface() != source.application.interface.id {
+            return Err(invalid_root(group.span));
+        }
+        let checked_method = checked
+            .methods
+            .get(method.declaration() as usize)
+            .ok_or_else(|| invalid_root(group.span))?;
+        let canonical = methods
+            .iter()
+            .find(|row| row.id == method)
+            .ok_or_else(|| invalid_root(group.span))?;
+        if checked_method.method != method
+            || checked_method.binder != group.binder.id
+            || checked_method.captures
+                != crate::resolved::lexical_method_captures(group, type_work)
+                    .map_err(|()| type_resource(group.span))?
+        {
+            return Err(invalid_root(group.span));
+        }
+        let mut replacements = HashMap::new();
+        charge(budget, canonical.interface_parameters.len(), group.span)?;
+        replacements
+            .try_reserve(canonical.interface_parameters.len())
+            .map_err(|_| resource(group.span))?;
+        let mut replacement_types = TypeBuffer::new();
+        replacement_types
+            .try_reserve(checked.application.arguments().len())
+            .map_err(|_| resource(group.span))?;
+        for argument in checked.application.arguments() {
+            replacement_types.push(
+                clone_type_with_budget(argument, type_work)
+                    .map_err(|()| type_resource(group.span))?,
+            );
+        }
+        for (parameter, argument) in canonical
+            .interface_parameters
+            .iter()
+            .zip(replacement_types.0.drain(..))
+        {
+            replacements.insert(*parameter, argument);
+        }
+        let method_type = crate::types::substitute_type_variables_with(
+            &canonical.value_type,
+            &replacements,
+            |cells| charge(budget, cells, group.span),
+            || resource(group.span),
+        );
+        for (_, ty) in replacements {
+            discard_type_iteratively(ty);
+        }
+        let method_type = IterativeTypeOwner::new(method_type?);
+        let actual_value_type = match (&checked_method.scheme, canonical.parameters.is_empty()) {
+            (Type::Forall(parameters, body), false)
+                if parameters.as_ref() == canonical.parameters.as_ref() =>
+            {
+                body.as_ref()
+            }
+            (ty, true) => ty,
+            _ => return Err(invalid_root(group.span)),
+        };
+        if !same_type_charged(&method_type, actual_value_type, budget, group.span)? {
+            return Err(invalid_root(group.span));
+        }
+        let application = checked
+            .application
+            .clone_with_budget(type_work)
+            .map_err(|()| type_resource(group.span))?;
+        charge(budget, checked_method.captures.len(), group.span)?;
+        let mut captures = Vec::new();
+        captures
+            .try_reserve(checked_method.captures.len())
+            .map_err(|_| resource(group.span))?;
+        captures.extend_from_slice(&checked_method.captures);
+        owners.push(crate::core::dialect::MethodEvidenceLexicalOwner {
+            source: source.id,
+            method,
+            binder: group.binder.id,
+            application,
+            captures: captures.into_boxed_slice(),
+        });
+    }
+    Ok(())
+}
+
 fn collect_method_evidence_occurrences(
     program: &ResolvedModuleProgram,
     methods: &[MethodEvidenceMethod],
+    lexical_owners: &mut Vec<crate::core::dialect::MethodEvidenceLexicalOwner>,
     constraint_work: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
 ) -> Result<Vec<MethodEvidenceOccurrence>, EvidenceValidationFailure> {
@@ -3843,6 +4107,7 @@ fn collect_method_evidence_occurrences(
                             &equation.body,
                             methods,
                             &mut occurrences,
+                            lexical_owners,
                             constraint_work,
                             type_work,
                         )?;
@@ -3858,6 +4123,7 @@ fn collect_method_evidence_occurrences(
                                     &binding.initializer,
                                     methods,
                                     &mut occurrences,
+                                    lexical_owners,
                                     constraint_work,
                                     type_work,
                                 )?;
@@ -3870,6 +4136,32 @@ fn collect_method_evidence_occurrences(
                                         &member.initializer,
                                         methods,
                                         &mut occurrences,
+                                        lexical_owners,
+                                        constraint_work,
+                                        type_work,
+                                    )?;
+                                }
+                            }
+                            ResolvedLocalDeclaration::Evidence(source) => {
+                                retain_lexical_owners(
+                                    source,
+                                    methods,
+                                    lexical_owners,
+                                    constraint_work,
+                                    type_work,
+                                )?;
+                                for equation in source
+                                    .method_groups
+                                    .iter()
+                                    .flat_map(|group| &group.equations)
+                                {
+                                    collect_method_evidence_expression_occurrences(
+                                        program,
+                                        owner,
+                                        &equation.body,
+                                        methods,
+                                        &mut occurrences,
+                                        lexical_owners,
                                         constraint_work,
                                         type_work,
                                     )?;
@@ -3884,6 +4176,7 @@ fn collect_method_evidence_occurrences(
                         &global.body.result,
                         methods,
                         &mut occurrences,
+                        lexical_owners,
                         constraint_work,
                         type_work,
                     )?;
@@ -3902,6 +4195,7 @@ fn collect_method_evidence_occurrences(
                         &equation.body,
                         methods,
                         &mut occurrences,
+                        lexical_owners,
                         constraint_work,
                         type_work,
                     )?;
@@ -3915,18 +4209,24 @@ fn collect_method_evidence_occurrences(
         program.result(),
         methods,
         &mut occurrences,
+        lexical_owners,
         constraint_work,
         type_work,
     )?;
     Ok(occurrences)
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "occurrence and lexical owner outputs retain independent constraint and type ledgers"
+)]
 fn collect_method_evidence_expression_occurrences(
     program: &ResolvedModuleProgram,
     scope: Option<MethodEvidenceOwner>,
     root: &ResolvedExpr,
     methods: &[MethodEvidenceMethod],
     occurrences: &mut Vec<MethodEvidenceOccurrence>,
+    lexical_owners: &mut Vec<crate::core::dialect::MethodEvidenceLexicalOwner>,
     constraint_work: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
 ) -> Result<(), EvidenceValidationFailure> {
@@ -3958,7 +4258,20 @@ fn collect_method_evidence_expression_occurrences(
                     for (slot, requirement) in occurrence.evidence.iter().zip(&scheme.requirements)
                     {
                         charge(constraint_work, methods.len(), expression.span)?;
-                        if !interface_has_polymorphic_method(methods, requirement.interface()) {
+                        if !interface_has_polymorphic_method(methods, requirement.interface())
+                            && (lexical_owners.is_empty()
+                                || !slot
+                                    .selection()
+                                    .map(|selection| {
+                                        selection_has_lexical(
+                                            selection,
+                                            constraint_work,
+                                            expression.span,
+                                        )
+                                    })
+                                    .transpose()?
+                                    .unwrap_or(false))
+                        {
                             continue;
                         }
                         let (checked_application, selection) =
@@ -3983,15 +4296,27 @@ fn collect_method_evidence_expression_occurrences(
                 }
                 ResolvedTermName::Method(method) => {
                     charge(constraint_work, methods.len(), expression.span)?;
-                    if !methods
-                        .iter()
-                        .any(|row| row.id == method && method_is_polymorphic(row))
-                    {
-                        continue;
-                    }
                     let [slot] = occurrence.evidence.as_ref() else {
                         return Err(invalid_root(expression.span));
                     };
+                    if !methods
+                        .iter()
+                        .any(|row| row.id == method && method_is_polymorphic(row))
+                        && (lexical_owners.is_empty()
+                            || !slot
+                                .selection()
+                                .map(|selection| {
+                                    selection_has_lexical(
+                                        selection,
+                                        constraint_work,
+                                        expression.span,
+                                    )
+                                })
+                                .transpose()?
+                                .unwrap_or(false))
+                    {
+                        continue;
+                    }
                     let (
                         checked_method,
                         checked_application,
@@ -4056,6 +4381,29 @@ fn collect_method_evidence_expression_occurrences(
                 pending.push(&block.result);
                 for declaration in block.declarations.iter().rev() {
                     match declaration {
+                        ResolvedLocalDeclaration::Evidence(source) => {
+                            retain_lexical_owners(
+                                source,
+                                methods,
+                                lexical_owners,
+                                constraint_work,
+                                type_work,
+                            )?;
+                            for equation in source
+                                .method_groups
+                                .iter()
+                                .rev()
+                                .flat_map(|group| group.equations.iter().rev())
+                            {
+                                reserve_expressions(
+                                    &mut pending,
+                                    1,
+                                    constraint_work,
+                                    equation.span,
+                                )?;
+                                pending.push(&equation.body);
+                            }
+                        }
                         ResolvedLocalDeclaration::Binding(binding) => {
                             charge(constraint_work, 1, expression.span)?;
                             pending
@@ -4084,6 +4432,29 @@ fn collect_method_evidence_expression_occurrences(
                 pending.push(&function.body.result);
                 for declaration in function.body.declarations.iter().rev() {
                     match declaration {
+                        ResolvedLocalDeclaration::Evidence(source) => {
+                            retain_lexical_owners(
+                                source,
+                                methods,
+                                lexical_owners,
+                                constraint_work,
+                                type_work,
+                            )?;
+                            for equation in source
+                                .method_groups
+                                .iter()
+                                .rev()
+                                .flat_map(|group| group.equations.iter().rev())
+                            {
+                                reserve_expressions(
+                                    &mut pending,
+                                    1,
+                                    constraint_work,
+                                    equation.span,
+                                )?;
+                                pending.push(&equation.body);
+                            }
+                        }
                         ResolvedLocalDeclaration::Binding(binding) => {
                             charge(constraint_work, 1, expression.span)?;
                             pending
@@ -4670,6 +5041,8 @@ fn validate_definition<'a>(
         .ok_or_else(|| unknown(definition.span()))?;
     let variables = copy_kinded_parameter_ids(&scheme.type_parameters, budget, definition.span())?;
     let scope = EvidenceScope {
+        lexical_sources: &[],
+        lexical_head: None,
         owner: Some(RequirementOwner::Global(binder)),
         variables: &variables,
     };
@@ -4695,13 +5068,13 @@ fn validate_definition<'a>(
         }
         ResolvedDefinitionKind::InlineOperational(global) => {
             let mut pending = Vec::new();
-            schedule_block(&mut pending, &global.body, budget)?;
             validate_pending_expressions(
                 program,
                 registry,
                 group,
                 scope,
                 &mut pending,
+                Some(&global.body),
                 kind_environments,
                 budget,
                 type_work,
@@ -4750,6 +5123,8 @@ fn validate_implementation<'a>(
                 .map(|(identity, _)| *identity),
         );
         let scope = EvidenceScope {
+            lexical_sources: &[],
+            lexical_head: None,
             owner: Some(RequirementOwner::Impl(implementation.id())),
             variables: &method_parameters,
         };
@@ -4794,6 +5169,7 @@ fn validate_expression<'a>(
         group,
         scope,
         &mut pending,
+        None,
         kind_environments,
         budget,
         type_work,
@@ -4801,17 +5177,33 @@ fn validate_expression<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn validate_pending_expressions<'a>(
+fn validate_pending_expressions<'a, 'body>(
     program: &'a ResolvedModuleProgram,
     registry: &LinkedInterfaceRegistry,
     group: &ResolvedModuleGroup,
     scope: EvidenceScope<'_>,
-    pending: &mut Vec<&ResolvedExpr>,
+    pending: &mut Vec<&'body ResolvedExpr>,
+    initial_block: Option<&'body ResolvedBlock>,
     kind_environments: &mut KindEnvironments<'a>,
     budget: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
 ) -> Result<(), EvidenceValidationFailure> {
+    let mut sources = Vec::new();
+    let mut heads = Vec::new();
+    if let Some(block) = initial_block {
+        schedule_lexical_block(pending, &mut heads, &mut sources, None, block, budget)?;
+    }
     while let Some(expression) = pending.pop() {
+        let head = if sources.is_empty() {
+            None
+        } else {
+            heads.pop().ok_or_else(|| invalid_root(expression.span))?
+        };
+        let scope = EvidenceScope {
+            lexical_sources: &sources,
+            lexical_head: head,
+            ..scope
+        };
         charge(budget, 1, expression.span)?;
         match &expression.kind {
             ResolvedExprKind::Occurrence(occurrence) => {
@@ -4846,9 +5238,18 @@ fn validate_pending_expressions<'a>(
                 pending.push(binary.right.as_ref());
                 pending.push(binary.left.as_ref());
             }
-            ResolvedExprKind::Block(block) => schedule_block(pending, block, budget)?,
+            ResolvedExprKind::Block(block) => {
+                schedule_lexical_block(pending, &mut heads, &mut sources, head, block, budget)?;
+            }
             ResolvedExprKind::Function(function) => {
-                schedule_block(pending, &function.body, budget)?;
+                schedule_lexical_block(
+                    pending,
+                    &mut heads,
+                    &mut sources,
+                    head,
+                    &function.body,
+                    budget,
+                )?;
             }
             ResolvedExprKind::Match(matched) => {
                 let additional = matched
@@ -4868,6 +5269,9 @@ fn validate_pending_expressions<'a>(
                 pending.push(handler.body.as_ref());
             }
             ResolvedExprKind::Resume(resume) => pending.push(resume.value.as_ref()),
+        }
+        if !sources.is_empty() {
+            resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;
         }
     }
     Ok(())
@@ -4957,9 +5361,9 @@ fn validate_occurrence<'a>(
                 span,
             )?;
             let authentic_method_relation = match selection.node(selection.root()) {
-                Some(EvidenceNode::Abstract { methods, .. }) => {
-                    method_relation_slot_matches(methods, checked_method, &checked_method)
-                }
+                Some(
+                    EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. },
+                ) => method_relation_slot_matches(methods, checked_method, &checked_method),
                 Some(EvidenceNode::Implementation {
                     implementation,
                     methods,
@@ -5047,12 +5451,16 @@ fn validate_occurrence<'a>(
 struct EvidenceScope<'a> {
     owner: Option<RequirementOwner>,
     variables: &'a [TypeVariableId],
+    lexical_sources: &'a [(&'a crate::resolved::ResolvedLexicalEvidence, Option<usize>)],
+    lexical_head: Option<usize>,
 }
 
 impl EvidenceScope<'static> {
     const NONE: Self = Self {
         owner: None,
         variables: &[],
+        lexical_sources: &[],
+        lexical_head: None,
     };
 }
 
@@ -5241,6 +5649,64 @@ fn validate_evidence_node(
         .interface(program, expected_application.interface())
         .ok_or_else(|| unknown(span))?;
     match selection.node(node).ok_or_else(|| invalid_root(span))? {
+        EvidenceNode::Lexical { source, methods } => {
+            if mandated_requirement.is_some() {
+                return Err(invalid_root(span));
+            }
+            let mut head = scope.lexical_head;
+            let mut found = None;
+            while let Some(index) = head {
+                charge(budget, 1, span)?;
+                let (candidate, parent) = scope
+                    .lexical_sources
+                    .get(index)
+                    .ok_or_else(|| invalid_root(span))?;
+                if candidate.id == source {
+                    found = Some(*candidate);
+                    break;
+                }
+                head = *parent;
+            }
+            let source = found.ok_or_else(|| invalid_root(span))?;
+            if source.id.module() != group.module()
+                || source.application.interface.id != expected_application.interface()
+                || source.application.arguments.len() != expected_application.arguments().len()
+                || !methods
+                    .iter()
+                    .copied()
+                    .eq(interface.methods.iter().map(|method| method.id))
+            {
+                return Err(invalid_root(span));
+            }
+            for (actual, expected) in source
+                .application
+                .arguments
+                .iter()
+                .zip(expected_application.arguments())
+            {
+                if !same_type_charged(&actual.ty, expected, budget, span)? {
+                    return Err(invalid_root(span));
+                }
+            }
+            let mut supplied = HashSet::new();
+            for method in &source.method_groups {
+                let id = method.method.ok_or_else(|| invalid_root(span))?;
+                if method.identity.is_some()
+                    || !methods.contains(&id)
+                    || !supplied.insert(id)
+                    || method.binder.id.module() != Some(source.id.module())
+                    || method
+                        .equations
+                        .iter()
+                        .any(|equation| equation.name.binder != method.binder.id)
+                {
+                    return Err(invalid_root(span));
+                }
+            }
+            if supplied.len() != methods.len() {
+                return Err(invalid_root(span));
+            }
+        }
         EvidenceNode::Abstract {
             requirement,
             methods,
@@ -6377,6 +6843,88 @@ fn validate_requirement(
     Ok(())
 }
 
+fn schedule_lexical_block<'a>(
+    pending: &mut Vec<&'a ResolvedExpr>,
+    heads: &mut Vec<Option<usize>>,
+    sources: &mut Vec<(&'a crate::resolved::ResolvedLexicalEvidence, Option<usize>)>,
+    mut head: Option<usize>,
+    block: &'a ResolvedBlock,
+    budget: &mut InterfaceConstraintBudget,
+) -> Result<(), EvidenceValidationFailure> {
+    let start = pending.len();
+    if !block
+        .declarations
+        .iter()
+        .any(|declaration| matches!(declaration, ResolvedLocalDeclaration::Evidence(_)))
+    {
+        schedule_block(pending, block, budget)?;
+        if !sources.is_empty() {
+            resize_lexical_heads(heads, pending.len(), head, budget, block.span)?;
+        }
+        return Ok(());
+    }
+    resize_lexical_heads(heads, pending.len(), head, budget, block.span)?;
+    for declaration in &block.declarations {
+        match declaration {
+            ResolvedLocalDeclaration::Evidence(source) => {
+                charge(budget, 2, source.span)?;
+                sources.try_reserve(1).map_err(|_| resource(source.span))?;
+                for equation in source
+                    .method_groups
+                    .iter()
+                    .flat_map(|group| &group.equations)
+                {
+                    reserve_expressions(pending, 1, budget, equation.span)?;
+                    resize_lexical_heads(heads, pending.len() + 1, head, budget, equation.span)?;
+                    pending.push(&equation.body);
+                }
+                let next = sources.len();
+                sources.push((source, head));
+                head = Some(next);
+            }
+            ResolvedLocalDeclaration::Binding(binding) => {
+                reserve_expressions(pending, 1, budget, binding.span)?;
+                resize_lexical_heads(heads, pending.len() + 1, head, budget, binding.span)?;
+                pending.push(&binding.initializer);
+            }
+            ResolvedLocalDeclaration::Recursive(group) => {
+                reserve_expressions(pending, group.members.len(), budget, group.span)?;
+                resize_lexical_heads(
+                    heads,
+                    pending.len() + group.members.len(),
+                    head,
+                    budget,
+                    group.span,
+                )?;
+                for member in &group.members {
+                    pending.push(&member.initializer);
+                }
+            }
+            ResolvedLocalDeclaration::Newtype(_) => {}
+        }
+    }
+    reserve_expressions(pending, 1, budget, block.span)?;
+    resize_lexical_heads(heads, pending.len() + 1, head, budget, block.span)?;
+    pending.push(&block.result);
+    pending[start..].reverse();
+    heads[start..].reverse();
+    Ok(())
+}
+
+fn resize_lexical_heads(
+    heads: &mut Vec<Option<usize>>,
+    length: usize,
+    head: Option<usize>,
+    budget: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<(), EvidenceValidationFailure> {
+    let additional = length.saturating_sub(heads.len());
+    charge(budget, additional, span)?;
+    heads.try_reserve(additional).map_err(|_| resource(span))?;
+    heads.resize(length, head);
+    Ok(())
+}
+
 fn schedule_block<'a>(
     pending: &mut Vec<&'a ResolvedExpr>,
     block: &'a ResolvedBlock,
@@ -6386,6 +6934,13 @@ fn schedule_block<'a>(
     for declaration in &block.declarations {
         charge(budget, 1, block.span)?;
         match declaration {
+            ResolvedLocalDeclaration::Evidence(source) => {
+                for group in &source.method_groups {
+                    additional = additional
+                        .checked_add(group.equations.len())
+                        .ok_or_else(|| resource(block.span))?;
+                }
+            }
             ResolvedLocalDeclaration::Binding(_) => {
                 additional = additional
                     .checked_add(1)
@@ -6406,6 +6961,13 @@ fn schedule_block<'a>(
     pending.push(block.result.as_ref());
     for declaration in block.declarations.iter().rev() {
         match declaration {
+            ResolvedLocalDeclaration::Evidence(source) => {
+                pending.extend(
+                    source.method_groups.iter().rev().flat_map(|group| {
+                        group.equations.iter().rev().map(|equation| &equation.body)
+                    }),
+                );
+            }
             ResolvedLocalDeclaration::Binding(binding) => pending.push(&binding.initializer),
             ResolvedLocalDeclaration::Recursive(group) => {
                 pending.extend(group.members.iter().rev().map(|member| &member.initializer));
@@ -7763,6 +8325,48 @@ mod tests {
             assert_eq!(constraint_exact.used(), constraint_work);
             assert_eq!(type_exact.used(), type_work);
             drop(retry);
+        }
+    }
+
+    #[test]
+    fn lexical_plan_scans_preserve_the_no_source_fast_path() {
+        for program in [generic_program(), polymorphic_method_program()] {
+            LEXICAL_PLAN_INSPECTIONS.with(|count| count.set(0));
+            let catalog = build_core_method_evidence_catalog(
+                &program,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("existing concrete plans should build without lexical scanning");
+            assert!(catalog.lexical_owners().is_empty());
+            assert_eq!(LEXICAL_PLAN_INSPECTIONS.with(std::cell::Cell::get), 0);
+        }
+    }
+
+    #[test]
+    fn lexical_plan_scan_charges_each_inspection_before_work_and_retries_exactly() {
+        let program = generic_program();
+        let selection = nested_generic_selection(&program, &Type::Int, Type::Int);
+        let span = program.result().span;
+        assert_eq!(selection.node_count(), 2);
+        LEXICAL_PLAN_INSPECTIONS.with(|count| count.set(0));
+        let mut short = InterfaceConstraintBudget::with_limit(1);
+        assert_eq!(
+            selection_has_lexical(&selection, &mut short, span)
+                .expect_err("the second node must be charged before inspection")
+                .reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted,
+        );
+        assert_eq!(LEXICAL_PLAN_INSPECTIONS.with(std::cell::Cell::get), 1);
+        for _ in 0..2 {
+            LEXICAL_PLAN_INSPECTIONS.with(|count| count.set(0));
+            let mut exact = InterfaceConstraintBudget::with_limit(2);
+            assert!(
+                !selection_has_lexical(&selection, &mut exact, span)
+                    .expect("both concrete nodes fit exactly")
+            );
+            assert_eq!(exact.used(), 2);
+            assert_eq!(LEXICAL_PLAN_INSPECTIONS.with(std::cell::Cell::get), 2);
         }
     }
 
@@ -10846,6 +11450,8 @@ mod tests {
                 &selection,
                 &application,
                 EvidenceScope {
+                    lexical_sources: &[],
+                    lexical_head: None,
                     owner: None,
                     variables: &[*rigid_function],
                 },
@@ -11154,6 +11760,8 @@ mod tests {
                 .expect("the valid linked registry should authenticate");
         let variables = [second.scheme.type_parameters[0].0];
         let scope = EvidenceScope {
+            lexical_sources: &[],
+            lexical_head: None,
             owner: Some(RequirementOwner::Global(second.binder)),
             variables: &variables,
         };
@@ -11191,6 +11799,8 @@ mod tests {
                 .expect("the valid linked registry should authenticate");
         let variables = [first.scheme.type_parameters[0].0];
         let scope = EvidenceScope {
+            lexical_sources: &[],
+            lexical_head: None,
             owner: Some(RequirementOwner::Global(first.binder)),
             variables: &variables,
         };
@@ -11289,6 +11899,8 @@ mod tests {
             .map(|parameter| parameter.id)
             .collect::<Vec<_>>();
         let scope = EvidenceScope {
+            lexical_sources: &[],
+            lexical_head: None,
             owner: Some(RequirementOwner::Impl(implementation.id)),
             variables: &scope_variables,
         };
@@ -11341,6 +11953,8 @@ mod tests {
             LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
                 .expect("the valid linked registry should authenticate");
         let scope = EvidenceScope {
+            lexical_sources: &[],
+            lexical_head: None,
             owner: Some(RequirementOwner::Impl(current.id)),
             variables: &current
                 .head_parameters
@@ -11408,6 +12022,8 @@ mod tests {
             .map(|parameter| parameter.id)
             .collect::<Vec<_>>();
         let scope = EvidenceScope {
+            lexical_sources: &[],
+            lexical_head: None,
             owner: Some(RequirementOwner::Impl(current.id)),
             variables: &scope_variables,
         };
@@ -11444,6 +12060,8 @@ mod tests {
         };
         let variables = [scope_parameter.0];
         let scope = EvidenceScope {
+            lexical_sources: &[],
+            lexical_head: None,
             owner: Some(RequirementOwner::Global(shadowed.binder)),
             variables: &variables,
         };
@@ -11530,6 +12148,8 @@ mod tests {
             panic!("the generic implementation should retain one rigid parameter");
         };
         let implementation_scope = EvidenceScope {
+            lexical_sources: &[],
+            lexical_head: None,
             owner: Some(RequirementOwner::Impl(outer.id)),
             variables: std::slice::from_ref(&implementation_parameter.id),
         };
@@ -11611,6 +12231,8 @@ mod tests {
         };
         let variables = [shadowed.scheme.type_parameters[0].0];
         let scope = EvidenceScope {
+            lexical_sources: &[],
+            lexical_head: None,
             owner: Some(RequirementOwner::Global(shadowed.binder)),
             variables: &variables,
         };
@@ -11726,6 +12348,8 @@ mod tests {
             .map(|parameter| parameter.id)
             .collect::<Vec<_>>();
         let scope = EvidenceScope {
+            lexical_sources: &[],
+            lexical_head: None,
             owner: Some(RequirementOwner::Impl(current.id)),
             variables: &scope_variables,
         };

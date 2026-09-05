@@ -814,6 +814,40 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             self.charge_type_work(exact_identity_work)?;
             let role_matches = match (expected.role, anchor.role) {
                 (
+                    MethodEvidenceExpectedRole::LexicalOwner { owner },
+                    MethodEvidenceAnchorRole::LexicalOwner { source, binder },
+                ) => {
+                    let Some(row) = catalog.lexical_owners().get(owner) else {
+                        return Err(ValidationError::new(
+                            ValidationReason::NodeType,
+                            Some(anchor.node),
+                        ));
+                    };
+                    row.source == source && row.binder == binder && row.method == anchor.method
+                }
+                (
+                    MethodEvidenceExpectedRole::LexicalUse {
+                        owner,
+                        selection_node,
+                    },
+                    MethodEvidenceAnchorRole::LexicalUse {
+                        source,
+                        binder,
+                        selection_node: actual,
+                    },
+                ) => {
+                    let Some(row) = catalog.lexical_owners().get(owner) else {
+                        return Err(ValidationError::new(
+                            ValidationReason::NodeType,
+                            Some(anchor.node),
+                        ));
+                    };
+                    row.source == source
+                        && row.binder == binder
+                        && row.method == anchor.method
+                        && selection_node == actual
+                }
+                (
                     MethodEvidenceExpectedRole::ImplementationOwner { owner },
                     MethodEvidenceAnchorRole::ImplementationOwner {
                         implementation,
@@ -956,6 +990,40 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         self.validate_method_evidence_owner_envelopes(&anchors, &mut carriers)?;
         for anchor in anchors.values() {
             match anchor.role {
+                MethodEvidenceAnchorRole::LexicalOwner { source, binder } => {
+                    let PureExprKind::Computation(PureComputation::Bind(binding)) =
+                        self.pure_kind(anchor.node)?
+                    else {
+                        return Err(ValidationError::new(
+                            ValidationReason::NodeType,
+                            Some(anchor.node),
+                        ));
+                    };
+                    let expected = self.expected_lexical_method_scheme(anchor)?;
+                    if binding.binder().id() != binder
+                        || !self.same_type_charged(binding.binder().ty(), &expected)?
+                        || self
+                            .program
+                            .method_evidence
+                            .lexical_owner(source, anchor.method)
+                            .is_none()
+                    {
+                        return Err(ValidationError::new(
+                            ValidationReason::NodeType,
+                            Some(anchor.node),
+                        ));
+                    }
+                    carriers.insert(binding.initializer());
+                }
+                MethodEvidenceAnchorRole::LexicalUse { source, binder, .. } => {
+                    let expected = self.expected_lexical_method_scheme(anchor)?;
+                    if !matches!(self.pure_kind(anchor.node)?, PureExprKind::Variable(variable) if variable.binder() == binder)
+                        || !self.same_type_charged(&self.node(anchor.node)?.ty, &expected)?
+                        || !anchors.values().any(|owner| matches!(owner.role, MethodEvidenceAnchorRole::LexicalOwner { source: actual, binder: actual_binder } if actual == source && actual_binder == binder)) {
+                        return Err(ValidationError::new(ValidationReason::NodeType, Some(anchor.node)));
+                    }
+                    carriers.insert(anchor.node);
+                }
                 MethodEvidenceAnchorRole::ImplementationOwner { .. } => {}
                 MethodEvidenceAnchorRole::Domain { .. } => {
                     self.validate_method_evidence_domain(anchor, &anchors, &mut carriers)?;
@@ -1699,6 +1767,21 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         Ok(())
     }
 
+    fn expected_lexical_method_scheme(
+        &self,
+        anchor: &MethodEvidenceAnchor,
+    ) -> Result<IterativeTypeOwner, ValidationError> {
+        let scheme = self.expected_method_scheme(anchor)?;
+        if matches!(&*scheme, Type::Forall(parameters, _) if parameters.is_empty()) {
+            let Type::Forall(_, body) = scheme.into_inner() else {
+                unreachable!()
+            };
+            Ok(IterativeTypeOwner::new(*body))
+        } else {
+            Ok(scheme)
+        }
+    }
+
     fn expected_method_scheme(
         &self,
         anchor: &MethodEvidenceAnchor,
@@ -2325,7 +2408,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let function = self.node(application.function())?;
         let producer_matches = match binder {
             Some(binder) => {
-                matches!(source.role, MethodEvidenceAnchorRole::Domain { binder: expected } if expected == binder)
+                matches!(source.role, MethodEvidenceAnchorRole::Domain { binder: expected } | MethodEvidenceAnchorRole::LexicalOwner { binder: expected, .. } if expected == binder)
                     && matches!(F::pure(&function.kind), Some(PureExprKind::Variable(variable)) if variable.binder() == binder)
             }
             None => {
@@ -2395,6 +2478,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             ));
         };
         let producer_matches = match source.role {
+            MethodEvidenceAnchorRole::LexicalOwner { source, binder } => {
+                matches!(F::pure(&argument.kind), Some(PureExprKind::Variable(variable)) if variable.binder() == binder)
+                    && actual_producer == MethodEvidenceProducer::Lexical { source }
+                    && self.same_type_charged(&argument.ty, &canonical)?
+            }
             MethodEvidenceAnchorRole::Adapter { implementation, .. } => {
                 source.node == application.argument()
                     && actual_producer == MethodEvidenceProducer::Adapter { implementation }
@@ -2511,7 +2599,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     .ok_or_else(|| {
                         ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
                     })? {
-                    EvidenceNode::Abstract { methods, .. } => {
+                    EvidenceNode::Abstract { methods, .. }
+                    | EvidenceNode::Lexical { methods, .. } => {
                         self.charge_type_work(methods.len())?;
                         for expected_method in methods {
                             let Some(retained) = retained_prerequisites.next() else {
@@ -2557,6 +2646,23 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     .ok_or_else(|| {
                         ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
                     })? {
+                    EvidenceNode::Lexical { source, methods } => {
+                        let owner = self
+                            .program
+                            .method_evidence
+                            .lexical_owner(source, prerequisite.method)
+                            .ok_or_else(|| {
+                                ValidationError::new(
+                                    ValidationReason::ApplicationType,
+                                    Some(anchor.node),
+                                )
+                            })?;
+                        if !methods.contains(&prerequisite.method)
+                            || !matches!(self.pure_kind(argument)?, PureExprKind::Variable(variable) if variable.binder() == owner.binder)
+                        {
+                            return Ok(false);
+                        }
+                    }
                     EvidenceNode::Abstract {
                         requirement,
                         methods,
@@ -2918,7 +3024,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             implementation,
                             application.argument(),
                         )?,
-                    MethodEvidenceProducer::Abstract { .. } => true,
+                    MethodEvidenceProducer::Abstract { .. }
+                    | MethodEvidenceProducer::Lexical { .. } => true,
                 };
                 (
                     concrete_source_matches
@@ -6713,6 +6820,29 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         Some(PureExprKind::Computation(PureComputation::Bind(binding))) => {
                             let initializer =
                                 self.requirements_for(&requirements, binding.initializer())?;
+                            if !self.program.method_evidence.lexical_owners().is_empty() {
+                                self.charge_type_work(
+                                    self.program.method_evidence.lexical_owners().len(),
+                                )?;
+                                if let Some(owner) = self
+                                    .program
+                                    .method_evidence
+                                    .lexical_owners()
+                                    .iter()
+                                    .find(|owner| owner.binder == binding.binder().id())
+                                {
+                                    self.charge_type_work(owner.captures.len())?;
+                                    if owner.captures.iter().any(|capture| {
+                                        !initializer
+                                            .contains_key(&ScopeRequirementKey::Binder(*capture))
+                                    }) {
+                                        return Err(ValidationError::new(
+                                            ValidationReason::Scope,
+                                            Some(id),
+                                        ));
+                                    }
+                                }
+                            }
                             let mut body = self.requirements_for(&requirements, binding.body())?;
                             body.remove(&ScopeRequirementKey::Binder(binding.binder().id()));
                             self.union_scope_requirements(initializer, body, id)?
@@ -9052,6 +9182,9 @@ mod tests {
                     };
                     anchor.role = MethodEvidenceAnchorRole::Application {
                         producer: match producer {
+                            MethodEvidenceProducer::Lexical { .. } => {
+                                unreachable!("fixture uses module evidence")
+                            }
                             MethodEvidenceProducer::Abstract { requirement } => {
                                 MethodEvidenceProducer::Abstract {
                                     requirement: crate::interface::RequirementId::new(
@@ -9093,6 +9226,9 @@ mod tests {
                         unreachable!()
                     };
                     let producer = match producer {
+                        MethodEvidenceProducer::Lexical { .. } => {
+                            unreachable!("fixture uses module evidence")
+                        }
                         MethodEvidenceProducer::Abstract { requirement } => {
                             MethodEvidenceProducer::Abstract {
                                 requirement: crate::interface::RequirementId::new(

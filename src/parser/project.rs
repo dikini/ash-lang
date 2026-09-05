@@ -430,6 +430,24 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             }
             shape.token(&TokenKind::Greater)?;
         }
+        NodeKind::LexicalEvidenceDeclaration => {
+            shape.token(&TokenKind::With)?;
+            shape.node(NodeKind::InterfaceApplication)?;
+            shape.token(&TokenKind::LeftBrace)?;
+            shape.token(&TokenKind::LineEnd)?;
+            if shape.peek_node_is(NodeKind::Equation) {
+                shape.node(NodeKind::Equation)?;
+                while shape.peek_token_is(&TokenKind::LineEnd) {
+                    shape.token(&TokenKind::LineEnd)?;
+                    if shape.peek_node_is(NodeKind::Equation) {
+                        shape.node(NodeKind::Equation)?;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            shape.token(&TokenKind::RightBrace)?;
+        }
         NodeKind::ImplementationDeclaration => {
             shape.optional_token(&TokenKind::Pub)?;
             shape.token(&TokenKind::Impl)?;
@@ -519,6 +537,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             while shape.peek_node_is(NodeKind::LocalBinding)
                 || shape.peek_node_is(NodeKind::RecursiveBindingGroup)
                 || shape.peek_node_is(NodeKind::NewtypeDeclaration)
+                || shape.peek_node_is(NodeKind::LexicalEvidenceDeclaration)
             {
                 shape.any_node()?;
                 shape.token(&TokenKind::LineEnd)?;
@@ -1975,6 +1994,10 @@ fn project_expression(
                         PendingLocalDeclaration::Newtype(newtype) => {
                             projected_declarations.push(SurfaceLocalDeclaration::Newtype(newtype));
                         }
+                        PendingLocalDeclaration::Evidence(evidence) => {
+                            projected_declarations
+                                .push(SurfaceLocalDeclaration::Evidence(evidence));
+                        }
                     }
                 }
                 let result = expressions.next().ok_or(ProjectionError::MalformedTree(
@@ -2059,6 +2082,7 @@ enum ExpressionTask<'a> {
 }
 
 enum PendingLocalDeclaration {
+    Evidence(Box<crate::surface::SurfaceLexicalEvidence>),
     Binding(Box<PendingBinding>),
     Recursive(PendingRecursiveGroup),
     Newtype(SurfaceTypeDeclaration),
@@ -2069,7 +2093,7 @@ impl PendingLocalDeclaration {
         match self {
             Self::Binding(_) => 1,
             Self::Recursive(group) => group.members.len(),
-            Self::Newtype(_) => 0,
+            Self::Newtype(_) | Self::Evidence(_) => 0,
         }
     }
 }
@@ -2163,6 +2187,21 @@ fn schedule_block<'a>(
                 members,
                 span: node_span(source, child, tokens)?,
             }));
+        } else if child.kind == NodeKind::LexicalEvidenceDeclaration {
+            declarations.push(PendingLocalDeclaration::Evidence(Box::new(
+                crate::surface::SurfaceLexicalEvidence {
+                    application: project_interface_application(
+                        source,
+                        only_child_of_kind(child, NodeKind::InterfaceApplication)?,
+                        tokens,
+                    )?,
+                    equations: child_nodes(child)
+                        .filter(|node| node.kind == NodeKind::Equation)
+                        .map(|node| project_equation(source, node, tokens))
+                        .collect::<Result<Vec<_>, _>>()?,
+                    span: node_span(source, child, tokens)?,
+                },
+            )));
         } else if child.kind == NodeKind::NewtypeDeclaration {
             declarations.push(PendingLocalDeclaration::Newtype(
                 project_newtype_declaration(source, child, tokens)?,

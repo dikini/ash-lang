@@ -1474,6 +1474,7 @@ struct Resolver {
     next_binder: u32,
     next_type_variable: u32,
     next_lexical_nominal: u32,
+    next_lexical_evidence: u32,
     scopes: Vec<HashMap<String, ResolvedTermBinding>>,
     globals: HashMap<String, GlobalFact>,
     type_names: HashMap<String, NominalTypeId>,
@@ -1795,6 +1796,7 @@ impl Resolver {
             next_binder: 0,
             next_type_variable: 0,
             next_lexical_nominal: 0,
+            next_lexical_evidence: 0,
             scopes: vec![HashMap::new()],
             globals: HashMap::new(),
             type_names: HashMap::new(),
@@ -7768,6 +7770,102 @@ impl Resolver {
         self.allocate_declaration_type_parameters(explicit, &names, infer_implicit_effect_rows)
     }
 
+    fn resolve_lexical_evidence(
+        &mut self,
+        source: &crate::surface::SurfaceLexicalEvidence,
+    ) -> Result<crate::resolved::ResolvedLexicalEvidence, ResolveError> {
+        let id = crate::interface::LexicalEvidenceId::new(self.module, self.next_lexical_evidence);
+        self.next_lexical_evidence =
+            self.next_lexical_evidence.checked_add(1).ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    source.span,
+                    "lexical evidence identity space is exhausted",
+                )
+            })?;
+        let application = self.resolve_interface_application(&source.application)?;
+        self.constraint_work
+            .charge(source.equations.len().saturating_add(1))
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    source.span,
+                    "lexical evidence storage exceeded its budget",
+                )
+            })?;
+        let mut groups = ResolvedImplementationMethodGroupBuffer(Vec::new());
+        groups.0.try_reserve(source.equations.len()).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                source.span,
+                "lexical evidence storage could not be reserved",
+            )
+        })?;
+        let mut start = 0;
+        while start < source.equations.len() {
+            let first = &source.equations[start];
+            let mut end = start + 1;
+            while end < source.equations.len() && source.equations[end].name.text == first.name.text
+            {
+                end += 1;
+            }
+            let binder = self.allocate_binder(&first.name.text, first.name.span)?;
+            let method = self
+                .method_names
+                .get(&first.name.text)
+                .and_then(|binding| match binding.term {
+                    ResolvedTermName::Method(method) => Some(method),
+                    ResolvedTermName::Global(_) => None,
+                });
+            let mut equations = ResolvedEquationBuffer(Vec::with_capacity(end - start));
+            for equation in &source.equations[start..end] {
+                let checkpoint = self.scopes.len();
+                let (patterns, binders) = self.resolve_pattern_vector(&equation.patterns)?;
+                let patterns = ResolvedPatternBuffer(patterns);
+                self.push_binder_scope_many(&binders);
+                let body = self
+                    .resolve_expr(&equation.body)
+                    .map(ResolvedExpressionOwner::new);
+                self.scopes.truncate(checkpoint);
+                equations.0.push(ResolvedEquation {
+                    name: crate::resolved::ResolvedEquationHead {
+                        binder: binder.id,
+                        spelling: equation.name.text.clone(),
+                        origin: Origin::Source(equation.name.span),
+                    },
+                    patterns: patterns.into_vec(),
+                    body: body?.into_inner(),
+                    span: equation.span,
+                });
+            }
+            let span = first
+                .span
+                .cover(source.equations[end - 1].span)
+                .ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        source.span,
+                        "method equations cross source files",
+                    )
+                })?;
+            groups.0.push(ResolvedImplementationMethodGroup {
+                method,
+                identity: None,
+                binder,
+                equations: equations.into_boxed_slice(),
+                span,
+            });
+            start = end;
+        }
+        Ok(crate::resolved::ResolvedLexicalEvidence {
+            checked: crate::interface::LexicalEvidenceSlot::default(),
+            id,
+            application,
+            method_groups: groups.into_boxed_slice(),
+            span: source.span,
+        })
+    }
+
     fn resolve_expr(&mut self, expression: &SurfaceExpr) -> Result<ResolvedExpr, ResolveError> {
         self.resolve_work(ResolveTask::VisitExpr(expression))
     }
@@ -7819,6 +7917,9 @@ impl Resolver {
                     tasks.push(ResolveTask::VisitExpr(&block.result));
                     for declaration in block.declarations.iter().rev() {
                         match declaration {
+                            SurfaceLocalDeclaration::Evidence(source) => {
+                                tasks.push(ResolveTask::FinishLexicalEvidence(source));
+                            }
                             SurfaceLocalDeclaration::Binding(binding) => {
                                 tasks.push(ResolveTask::FinishBinding(binding));
                                 tasks.push(ResolveTask::VisitExpr(&binding.initializer));
@@ -7956,6 +8057,10 @@ impl Resolver {
                 ResolveTask::FinishLocalNewtype(declaration) => {
                     let owner = self.resolve_local_newtype(declaration)?;
                     declarations.push(ResolvedLocalDeclaration::Newtype(owner));
+                }
+                ResolveTask::FinishLexicalEvidence(source) => {
+                    let evidence = self.resolve_lexical_evidence(source)?;
+                    declarations.push(ResolvedLocalDeclaration::Evidence(Box::new(evidence)));
                 }
                 ResolveTask::FinishRecursiveGroup { group, binders } => {
                     if binders.len() != group.members.len()
@@ -8510,6 +8615,7 @@ enum ResolveTask<'a> {
     },
     FinishBinding(&'a SurfaceBinding),
     FinishLocalNewtype(&'a SurfaceTypeDeclaration),
+    FinishLexicalEvidence(&'a crate::surface::SurfaceLexicalEvidence),
     FinishRecursiveGroup {
         group: &'a SurfaceRecursiveGroup,
         binders: ResolvedBinderBuffer,
@@ -8575,6 +8681,7 @@ impl ResolveTask<'_> {
             | Self::FinishTuple { span, .. } => *span,
             Self::FinishBinding(binding) => binding.span,
             Self::FinishLocalNewtype(declaration) => declaration.span,
+            Self::FinishLexicalEvidence(source) => source.span,
             Self::FinishRecursiveGroup { group, .. } => group.span,
         }
     }

@@ -56,7 +56,7 @@ interaction visible in Task 2; do not narrow the accepted contract to the pair.
 
 ## Task 2: Expand the interaction matrix
 
-Primary files: the first task's owners and `tests/scoped_evidence.rs`,
+Primary files: the first task's owners and `tests/scoped_evidence_interactions.rs`,
 `tests/interface_selection.rs`, `tests/effect_diagnostics.rs`, and
 `tests/local_newtypes.rs` where existing regression owners are preferable.
 
