@@ -49,9 +49,9 @@ retains its original relative weights; it is not an elapsed-work ledger.
 Capture/usage and checked discard are complete in the retained checkpoint;
 their [evidence](effect-ash/capture-discard-evidence.md) records inference,
 runtime behavior, reviews, full verification and transition cleanup.
-Safe resource scope also has a complete verified product checkpoint; its
+Safe resource scope is also complete and verified on the integration branch; its
 [evidence](effect-ash/resource-scope-evidence.md) records the retained contract
-and simplification review. Verified local integration follows.
+and simplification review, including the verified unsigned local merge.
 
 ## Completion condition
 
@@ -652,8 +652,10 @@ overlapping acquisitions, hidden captures, imported abstractions, provider/Core
 authentication, exact resources, pure locality and full verification. Both
 independent reviews and the simplification/downstream reassessment pass.
 No additional proof, existential or hook machinery is justified by this slice.
-The original 16-unit weight closes after verified local integration; it is not
-measured expenditure. Hooks still require their own proposal and authorization.
+Verified local integration closes the original 16-unit weight: 65 of the
+milestone's 100 planning units are now closed, with 35 remaining. These are
+relative scope weights, not measured expenditure. Hooks still require their
+own proposal and authorization.
 
 ### Synchronous typed hooks — forecast 9 units
 
@@ -747,6 +749,6 @@ settles sequential lexical identity, escape, and erased scope validation.
 Scoped exact evidence settles pure introduction, precedence, improvement,
 authentication, and erasure. The branch results are not current on `main`.
 The completed capture/discard checkpoint settles bounded continuation
-abandonment. Resource-scope composition now has a verified product checkpoint;
-local integration remains pending. This informative plan authorizes neither
+abandonment. Resource-scope composition now has a verified, locally integrated
+product checkpoint. This informative plan authorizes neither
 expansion nor integration into `main`.

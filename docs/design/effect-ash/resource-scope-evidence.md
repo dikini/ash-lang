@@ -1,11 +1,10 @@
 # Safe non-foreign resource scope
 
-This informative report records implementation evidence on the
-`codex/safe-resource-scope` product branch above integration baseline `387c4ef`.
-Implementation, independent reviews, full verification and transition cleanup
-are complete; verified local integration remains open.
-The branch specification is
-prospective until separate integration into `main`.
+This informative report records the safe-resource checkpoint retained on
+`integration/effect-ash-foundations` by unsigned local merge `b8a5398`, above
+integration baseline `387c4ef`. Implementation, independent reviews, full
+verification, transition cleanup and verified local integration are complete.
+The branch specification is prospective until separate integration into `main`.
 
 ## Retained boundary
 
@@ -20,7 +19,8 @@ the sealed API and syntax (`0ae5203`), acquisition typing and Core authority
 (`64647d8`), and stored dependencies and scope completion (`a841d46`). The
 complete runtime, interaction, specification and verification checkpoint is
 `fff611c`. It retains the accepted proposal, task and execution plan in Git;
-those completed transition documents are removed from the active tree.
+cleanup commit `ca3922c` removes those completed transition documents from the
+active tree. Merge `b8a5398` retains that exact product tree.
 No remote push, tag or main integration is part of this work.
 
 ## Cross-stage evidence
@@ -161,8 +161,14 @@ formatting, metadata, build, strict Clippy and warning-denied rustdoc pass.
 The parent confirms the verified source, test and specification surface stayed
 unchanged from the reviewed tree.
 Transition cleanup removes only the completed resource proposal, task and
-execution plan, with their index entries. Verified unsigned local integration
-and the clean-worktree lifecycle remain open.
+execution plan, with their index entries. Fresh verification on the unsigned
+local merge passes 1,450 top-level tests in 16 binaries, plus two reported
+resource child runs: the library and 15 resource, effect, abstraction and
+documented-example suites. The merged product tree is identical to the verified
+feature tip. The completed feature worktree and branch are removed after a
+clean-checkout and retained-ancestry check; the integration checkout is the
+continuation point. Existing main-checkout changes, remote refs and tags remain
+untouched.
 
 ## Downstream reassessment
 

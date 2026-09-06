@@ -49,7 +49,7 @@ from integration into `main`. The completed safe-cell product checkpoint adds
 acquisition-local runtime activation, sealed provider relationships, reusable
 handles and stored-dependency checking, with scope-owned release on admitted
 exits. Its [evidence](effect-ash/resource-scope-evidence.md) retains full
-verification and reviews; local integration follows. The remaining gaps are:
+verification, reviews and verified local integration. The remaining gaps are:
 
 - general resource/provider declarations and ownership-transfer mechanisms;
 - reliable cleanup across the later admitted failure and abandonment paths;

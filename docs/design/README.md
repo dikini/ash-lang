@@ -92,7 +92,8 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 - [Safe resource scope evidence](effect-ash/resource-scope-evidence.md) —
   cell ownership, dependency, activation, runtime and full verification
-  evidence; the product checkpoint is complete and local integration follows.
+  evidence; the product checkpoint is complete and locally integrated with
+  merged-checkout verification.
 - [Scoped exact evidence](effect-ash/scoped-evidence-evidence.md) — in-progress
   pure relation, method/selection interactions, and retained review corrections.
 - [Local `newtype` evidence](effect-ash/local-newtype-evidence.md) — lexical
