@@ -77,6 +77,153 @@ fn run_effect_source(name: &str, source: &str) -> ash::eval::Evaluation {
 }
 
 #[test]
+fn discard_abandons_suspended_addition_and_continues_the_clause() {
+    let evaluation = run_effect_source(
+        "discard-addition",
+        concat!(
+            "effect Ask {\nask : Unit -> Int\n}\n\n",
+            "main : Unit -> Int\n",
+            "main () = handle (perform Ask.ask () + 100) with Ask {\n",
+            "ask ignored => {\nlet () = discard\n40 + 2\n}\n}\n",
+        ),
+    );
+    assert_eq!(evaluation.value.to_string(), "42");
+    assert!(matches!(evaluation.effect_trace(), [
+        EffectTraceEvent::HandlerActivated(handler),
+        EffectTraceEvent::Request(operation),
+        EffectTraceEvent::HandlerSelected(selected),
+        EffectTraceEvent::ClauseEntered(clause, requested),
+        EffectTraceEvent::Discard(discarded),
+        EffectTraceEvent::ClauseReturned(returned),
+    ] if handler == selected && handler == clause && handler == discarded && handler == returned && operation == requested));
+}
+
+#[test]
+fn discard_preserves_surrounding_handler_work_without_running_suspended_requests() {
+    let evaluation = run_effect_source(
+        "discard-surrounding",
+        concat!(
+            "effect Ask {\nask : Unit -> Int\n}\n\n",
+            "effect Mark {\nmark : Int -> Int\n}\n\n",
+            "main : Unit -> Int\nmain () = handle ({\n",
+            "let result = handle ({\nlet _ = perform Ask.ask ()\n",
+            "perform Mark.mark 999\n}) with Ask {\n",
+            "ask ignored => {\nlet _ = discard\n40\n}\n}\n",
+            "perform Mark.mark result\n}) with Mark {\n",
+            "mark value => resume (value + 2)\n}\n",
+        ),
+    );
+    assert_eq!(evaluation.value.to_string(), "42");
+    assert!(matches!(evaluation.effect_trace(), [
+        EffectTraceEvent::HandlerActivated(outer),
+        EffectTraceEvent::HandlerActivated(inner),
+        EffectTraceEvent::Request(ask),
+        EffectTraceEvent::HandlerSelected(selected_inner),
+        EffectTraceEvent::ClauseEntered(inner_clause, requested_ask),
+        EffectTraceEvent::Discard(discarded),
+        EffectTraceEvent::ClauseReturned(inner_returned),
+        EffectTraceEvent::Request(mark),
+        EffectTraceEvent::HandlerSelected(selected_outer),
+        EffectTraceEvent::ClauseEntered(outer_clause, requested_mark),
+        EffectTraceEvent::Resume(resumed),
+        EffectTraceEvent::HandlerRestored(restored),
+        EffectTraceEvent::ClauseReturned(outer_returned),
+    ] if inner == selected_inner && inner == inner_clause && inner == discarded && inner == inner_returned
+        && outer == selected_outer && outer == outer_clause && outer == resumed && outer == restored && outer == outer_returned
+        && outer != inner && ask == requested_ask && mark == requested_mark));
+}
+
+#[test]
+fn inner_discard_leaves_the_outer_live_owner_available_to_resume() {
+    let evaluation = run_effect_source(
+        "discard-inside-live-clause",
+        concat!(
+            "effect Ask {\nask : Unit -> Int\n}\n\n",
+            "effect Mark {\nmark : Unit -> Int\n}\n\n",
+            "main : Unit -> Int\n",
+            "main () = handle (perform Ask.ask () + 100) with Ask {\n",
+            "ask ignored => {\n",
+            "let value = handle (perform Mark.mark ()) with Mark {\n",
+            "mark ignored => {\nlet _ = discard\n40\n}\n}\n",
+            "resume (value + 2)\n}\n}\n",
+        ),
+    );
+    assert_eq!(evaluation.value.to_string(), "142");
+    let completion = evaluation
+        .effect_trace()
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                EffectTraceEvent::Resume(_) | EffectTraceEvent::Discard(_)
+            )
+        })
+        .copied()
+        .collect::<Vec<_>>();
+    assert!(
+        matches!(completion.as_slice(), [EffectTraceEvent::Discard(inner), EffectTraceEvent::Resume(outer)] if inner != outer)
+    );
+}
+
+#[test]
+fn outward_discard_can_abandon_an_already_consumed_clause_boundary() {
+    let evaluation = run_effect_source(
+        "discard-consumed-clause",
+        concat!(
+            "effect Ask {\nask : Unit -> Int\n}\n\n",
+            "effect Mark {\nmark : Int -> Int\n}\n\n",
+            "main : Unit -> Int\nmain () = handle (\n",
+            "handle (perform Ask.ask ()) with Ask {\n",
+            "ask ignored => {\nlet _ = resume 0\n",
+            "let _ = perform Mark.mark 41\n999\n}\n}\n",
+            ") with Mark {\nmark value => {\nlet _ = discard\nvalue + 1\n}\n}\n",
+        ),
+    );
+    assert_eq!(evaluation.value.to_string(), "42");
+    let returned = evaluation
+        .effect_trace()
+        .iter()
+        .filter_map(|event| match event {
+            EffectTraceEvent::ClauseReturned(handler) => Some(*handler),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let discarded = evaluation
+        .effect_trace()
+        .iter()
+        .find_map(|event| match event {
+            EffectTraceEvent::Discard(handler) => Some(*handler),
+            _ => None,
+        })
+        .expect("outer handler discards");
+    assert_eq!(returned, [discarded]);
+}
+
+#[test]
+fn mixed_completion_branches_resume_or_discard_the_selected_request() {
+    for (argument, expected, resumes) in [("true", "42", 0), ("false", "101", 1)] {
+        let source = format!(
+            "effect Ask {{\nask : Bool -> Int\n}}\n\n\
+             main : Unit -> Int\n\
+             main () = handle (perform Ask.ask {argument} + 100) with Ask {{\n\
+             ask choice => match choice {{\n\
+             true => {{\nlet _ = discard\n42\n}}\n\
+             false => resume 1\n}}\n}}\n"
+        );
+        let evaluation = run_effect_source("mixed-completion", &source);
+        assert_eq!(evaluation.value.to_string(), expected);
+        assert_eq!(
+            evaluation
+                .effect_trace()
+                .iter()
+                .filter(|event| matches!(event, EffectTraceEvent::Resume(_)))
+                .count(),
+            resumes
+        );
+    }
+}
+
+#[test]
 fn handled_request_preserves_erased_newtype_values_across_resume() {
     let evaluation = run_effect_source(
         "newtype-resume",

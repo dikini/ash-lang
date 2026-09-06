@@ -23,7 +23,7 @@ check Core and reuse the explicit evaluator's moved continuation storage.
 - [x] Finish baseline verification before product edits.
 - [x] Step 1: explicit completion carriers and usage checks.
 - [x] Step 2: inferred capture summaries and independent Core checking.
-- [ ] Step 3: execution, accounting and complete adversarial corpus.
+- [x] Step 3: execution, accounting and complete adversarial corpus.
 - [ ] Step 4: specification, reviews, full gate and retained evidence.
 - [ ] Local integration and clean-checkout lifecycle after checkpoint closure.
 
@@ -254,3 +254,25 @@ resolve to their type owner. Independent review found no remaining issue.
 
 This closes the inference gate, not CP-0016. Runtime discard, the specification,
 the final full verification gate and local integration remain outstanding.
+The signed Step 2 commit attempt timed out waiting for GPG and created no
+commit. The user then authorized unsigned intermediate commits and signing
+the integration merge. The verified inference checkpoint is retained in
+`870d81b`. Runtime work continues separately; the repository signing setting
+is unchanged, and the local integration merge still requires signing.
+
+### Step 3 verified runtime checkpoint
+
+The first three runtime witnesses failed with `InvalidControlState` before the
+implementation and passed unchanged afterward. Five source tests now cover
+abandonment, clause and surrounding work, inner discard before outer resume,
+consumed boundaries, and mixed completion. Five machine tests cover exact
+quota release/reuse, atomic malformed-state rejection, nearest activation and
+32,768-frame success/failure disposal on a 64 KiB stack.
+
+The parent independently passed 1,001 library and 73 focused effect tests.
+The writer also passed all-target Clippy, formatting and diff checks.
+Independent semantic review followed by independent Rust/resource review
+approved the frozen runtime diff; each passed 23 machine and 12 runtime tests.
+The implementation adds one discard action and reuses existing continuation
+storage and iterative disposal. Specification, documentation review, full
+verification, transition cleanup and local integration remain open.

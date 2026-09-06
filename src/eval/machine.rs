@@ -239,6 +239,8 @@ pub enum Control {
     Evaluate(NodeId, Environment),
     /// Continue with a completed runtime value.
     Return(Value),
+    /// Consume a clause capability and abandon its captured control.
+    Discard(HandlerId, ResumeId),
 }
 
 /// An observational transition event that does not define semantics.
@@ -259,11 +261,13 @@ pub enum EffectTraceEvent {
     HandlerSelected(HandlerId),
     /// A selected operation clause began evaluating.
     ClauseEntered(HandlerId, OperationId),
-    /// A clause consumed its resume capability.
+    /// A clause consumed its capability by restoring captured control.
     Resume(HandlerId),
+    /// A clause consumed its capability by abandoning captured control.
+    Discard(HandlerId),
     /// A captured handler boundary was restored around resumed control.
     HandlerRestored(HandlerId),
-    /// Resumed control returned and the selected clause completed.
+    /// The selected clause completed after consuming its capability.
     ClauseReturned(HandlerId),
 }
 
@@ -561,6 +565,7 @@ impl Machine {
                     };
                     self.return_from(frame, value)?;
                 }
+                Control::Discard(handler, owner) => self.discard(handler, owner)?,
             }
         }
     }
@@ -757,6 +762,49 @@ impl Machine {
         Ok(())
     }
 
+    fn discard(&mut self, handler: HandlerId, owner: ResumeId) -> Result<(), RuntimeFailure> {
+        let boundary = self
+            .frames
+            .iter_mut()
+            .rev()
+            .find_map(|frame| match frame {
+                Frame::ClauseBoundary {
+                    handler: found_handler,
+                    owner: found_owner,
+                    continuation,
+                } if *found_handler == handler && *found_owner == owner => Some(continuation),
+                _ => None,
+            })
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let captured = boundary
+            .as_ref()
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        // Only clause boundaries can retain another hidden capability. A live
+        // nested owner forbids discard, so successful disposal needs no descent.
+        if captured.frames.iter().any(|frame| {
+            matches!(
+                frame,
+                Frame::ClauseBoundary {
+                    continuation: Some(_),
+                    ..
+                }
+            )
+        }) {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let retained = self
+            .captured_cells
+            .checked_sub(captured.frames.len())
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        // All fallible checks precede consumption and accounting release.
+        let continuation = boundary.take();
+        self.captured_cells = retained;
+        drop(continuation);
+        self.trace_effect(EffectTraceEvent::Discard(handler));
+        self.control = Some(Control::Return(Value::Unit));
+        Ok(())
+    }
+
     fn handler(&self, node: NodeId) -> Option<&crate::core::HandlerNode> {
         let ExecutableNode::Effect(expression) = self.program.node(node)? else {
             return None;
@@ -803,8 +851,9 @@ fn dispatch_entry(
                         Control::Evaluate(resume.value(), environment),
                         Frame::Resume { node },
                     ),
-                    // Validation rejects discard until capture proof and execution exist.
-                    EffectOperation::Discard(_) => return Err(RuntimeFailure::InvalidControlState),
+                    EffectOperation::Discard(discard) => {
+                        Transition::direct(Control::Discard(discard.handler(), discard.owner()))
+                    }
                 });
             }
         },
@@ -1586,6 +1635,270 @@ mod tests {
         );
     }
 
+    #[test]
+    fn sequential_discards_release_the_exact_capture_quota_for_fresh_requests() {
+        let program = effect_program(concat!(
+            "effect Ask {\nask : Unit -> Int\n}\n\n",
+            "main : Unit -> Int\nmain () = {\n",
+            "let first = handle (perform Ask.ask () + 100) with Ask {\n",
+            "ask ignored => {\nlet _ = discard\n41\n}\n}\n",
+            "handle (perform Ask.ask () + 100) with Ask {\n",
+            "ask ignored => {\nlet _ = discard\nfirst + 1\n}\n}\n}\n",
+        ));
+        assert!(matches!(
+            Machine::new_effect_with_capture_limit(&program, 1).run(),
+            Err(RuntimeFailure::CapturedControlCapacity)
+        ));
+        for _ in 0..2 {
+            let evaluation = Machine::new_effect_with_capture_limit(&program, 2)
+                .run()
+                .expect("exact quota should be reused after discard");
+            assert_eq!(evaluation.value.to_string(), "42");
+            assert_eq!(
+                evaluation
+                    .effect_trace()
+                    .iter()
+                    .filter(|event| matches!(event, EffectTraceEvent::Discard(_)))
+                    .count(),
+                2
+            );
+        }
+    }
+
+    #[test]
+    fn discard_releases_only_its_segment_and_preserves_clause_control() {
+        let handler = HandlerId::new(0);
+        let owner = ResumeId::new(0);
+        let mut machine = capture_machine(4);
+        let root = machine.program.root();
+        // One retained cell belongs to an independent outer live owner.
+        machine.captured_cells = 1;
+        let captured = machine.capture_from(0).expect("exact remaining quota");
+        machine.frames.push(Frame::ClauseBoundary {
+            handler: HandlerId::new(1),
+            owner: ResumeId::new(1),
+            continuation: Some(CapturedContinuation {
+                frames: vec![Frame::Request { node: root }],
+            }),
+        });
+        machine.frames.push(Frame::ClauseBoundary {
+            handler,
+            owner,
+            continuation: Some(captured),
+        });
+        machine.frames.push(Frame::Request { node: root });
+        machine
+            .discard(handler, owner)
+            .expect("discard should release its three cells");
+        assert_eq!(machine.captured_cells, 1);
+        assert_eq!(machine.frames.len(), 3);
+        assert!(matches!(
+            machine.frames[0],
+            Frame::ClauseBoundary {
+                continuation: Some(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            machine.frames[1],
+            Frame::ClauseBoundary {
+                continuation: None,
+                ..
+            }
+        ));
+        assert!(matches!(machine.frames[2], Frame::Request { .. }));
+        assert!(matches!(
+            machine.control,
+            Some(Control::Return(Value::Unit))
+        ));
+        assert_eq!(
+            machine.effect_trace.as_deref(),
+            Some([EffectTraceEvent::Discard(handler)].as_slice())
+        );
+        assert_eq!(
+            machine.discard(handler, owner),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        assert_eq!(machine.captured_cells, 1);
+        assert_eq!(
+            machine
+                .capture_from(2)
+                .expect("released quota can be reused")
+                .frames
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn malformed_discard_checks_owner_nested_obligations_and_accounting_before_consuming() {
+        let handler = HandlerId::new(0);
+        let owner = ResumeId::new(0);
+        for (nested, retained, found_handler, found_owner) in [
+            (true, 3, handler, owner),
+            (false, 2, handler, owner),
+            (false, 3, HandlerId::new(1), owner),
+            (false, 3, handler, ResumeId::new(1)),
+        ] {
+            let mut machine = capture_machine(4);
+            let mut captured = machine.capture_from(0).expect("capture fits");
+            if nested {
+                captured.frames[1] = Frame::ClauseBoundary {
+                    handler: HandlerId::new(1),
+                    owner: ResumeId::new(1),
+                    continuation: Some(CapturedContinuation { frames: Vec::new() }),
+                };
+            }
+            machine.captured_cells = retained;
+            machine.frames.push(Frame::ClauseBoundary {
+                handler: found_handler,
+                owner: found_owner,
+                continuation: Some(captured),
+            });
+            assert_eq!(
+                machine.discard(handler, owner),
+                Err(RuntimeFailure::InvalidControlState)
+            );
+            assert_eq!(machine.captured_cells, retained);
+            let Frame::ClauseBoundary {
+                continuation: Some(captured),
+                ..
+            } = &machine.frames[0]
+            else {
+                panic!("failed discard consumed its owner")
+            };
+            assert_eq!(captured.frames.len(), 3);
+            assert_eq!(
+                matches!(
+                    captured.frames[1],
+                    Frame::ClauseBoundary {
+                        continuation: Some(_),
+                        ..
+                    }
+                ),
+                nested
+            );
+            assert!(
+                machine
+                    .effect_trace
+                    .as_ref()
+                    .expect("effect trace")
+                    .is_empty()
+            );
+            assert!(matches!(machine.control, Some(Control::Evaluate(_, _))));
+        }
+    }
+
+    #[test]
+    fn deep_discard_success_and_malformed_failure_drop_on_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 32_768;
+                let handler = HandlerId::new(0);
+                let owner = ResumeId::new(0);
+                for live_nested in [false, true, false] {
+                    let mut machine = capture_machine(DEPTH);
+                    machine.frames.clear();
+                    let mut captured = CapturedContinuation { frames: Vec::new() };
+                    for _ in 0..DEPTH {
+                        if live_nested {
+                            captured = CapturedContinuation {
+                                frames: vec![Frame::ClauseBoundary {
+                                    handler,
+                                    owner,
+                                    continuation: Some(captured),
+                                }],
+                            };
+                        } else {
+                            captured.frames.push(Frame::ClauseBoundary {
+                                handler,
+                                owner,
+                                continuation: None,
+                            });
+                        }
+                    }
+                    if live_nested {
+                        machine.captured_cells = DEPTH;
+                    } else {
+                        machine.frames.append(&mut captured.frames);
+                        machine.capture_limit = DEPTH - 1;
+                        assert_eq!(
+                            machine.capture_from(0).expect_err("one cell short"),
+                            RuntimeFailure::CapturedControlCapacity
+                        );
+                        assert_eq!(machine.frames.len(), DEPTH);
+                        assert_eq!(machine.captured_cells, 0);
+                        machine.capture_limit = DEPTH;
+                        captured = machine.capture_from(0).expect("exact retry fits");
+                        assert_eq!(machine.captured_cells, DEPTH);
+                        assert!(machine.frames.is_empty());
+                    }
+                    machine.frames.push(Frame::ClauseBoundary {
+                        handler,
+                        owner,
+                        continuation: Some(captured),
+                    });
+                    machine.control = Some(Control::Discard(handler, owner));
+                    let result = machine.run();
+                    if live_nested {
+                        assert!(matches!(result, Err(RuntimeFailure::InvalidControlState)));
+                    } else {
+                        let evaluation =
+                            result.expect("consumed boundaries do not prohibit discard");
+                        assert!(matches!(evaluation.value, Value::Unit));
+                        assert_eq!(
+                            evaluation.effect_trace(),
+                            [
+                                EffectTraceEvent::Discard(handler),
+                                EffectTraceEvent::ClauseReturned(handler)
+                            ]
+                        );
+                    }
+                }
+            })
+            .expect("small-stack discard worker should spawn")
+            .join()
+            .expect("successful and failed discard must drop iteratively");
+    }
+
+    #[test]
+    fn discard_does_not_skip_a_consumed_nearer_activation_of_the_same_owner() {
+        let handler = HandlerId::new(0);
+        let owner = ResumeId::new(0);
+        let mut machine = capture_machine(3);
+        let captured = machine.capture_from(0).expect("capture fits");
+        machine.frames.push(Frame::ClauseBoundary {
+            handler,
+            owner,
+            continuation: Some(captured),
+        });
+        machine.frames.push(Frame::ClauseBoundary {
+            handler,
+            owner,
+            continuation: None,
+        });
+        assert_eq!(
+            machine.discard(handler, owner),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        assert_eq!(machine.captured_cells, 3);
+        assert!(matches!(
+            machine.frames[0],
+            Frame::ClauseBoundary {
+                continuation: Some(_),
+                ..
+            }
+        ));
+        assert!(
+            machine
+                .effect_trace
+                .as_ref()
+                .expect("effect trace")
+                .is_empty()
+        );
+    }
+
     struct TransitionOwner {
         feature: &'static str,
         entry: &'static str,
@@ -1698,6 +2011,12 @@ mod tests {
             entry: "dispatch_entry",
             frames: &["Frame::Resume"],
             returns: &["Machine::return_resume"],
+        },
+        TransitionOwner {
+            feature: "discard",
+            entry: "Machine::discard",
+            frames: &[],
+            returns: &[],
         },
         TransitionOwner {
             feature: "clause boundary",
@@ -1847,16 +2166,18 @@ mod tests {
     #[test]
     fn every_effect_operation_has_one_explicit_transition_owner() {
         assert_eq!(TRANSITION_OWNERSHIP.len(), 14);
-        assert_eq!(EFFECT_TRANSITION_OWNERSHIP.len(), 4);
+        assert_eq!(EFFECT_TRANSITION_OWNERSHIP.len(), 5);
         assert_eq!(
             EFFECT_TRANSITION_OWNERSHIP
                 .iter()
                 .map(|owner| owner.feature)
                 .collect::<Vec<_>>(),
-            ["handler", "request", "resume", "clause boundary"]
+            ["handler", "request", "resume", "discard", "clause boundary"]
         );
         assert!(EFFECT_TRANSITION_OWNERSHIP.iter().all(|owner| {
-            !owner.entry.is_empty() && owner.frames.len() == 1 && owner.returns.len() == 1
+            !owner.entry.is_empty()
+                && owner.frames.len() == usize::from(owner.feature != "discard")
+                && owner.returns.len() == owner.frames.len()
         }));
     }
 

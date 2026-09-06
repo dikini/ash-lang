@@ -164,8 +164,16 @@ resource tests, specification and reviewed evidence. Keep one product writer.
   narrow correction to distinguish Rust precise-capture syntax from imports;
   its new regression preserves real alias and carrier checks. Step 2's
   inference gate is complete. Runtime and whole-checkpoint closure remain.
-- Runtime discard remains unimplemented. Do not run the partial Step 2 tree
-  as a completed discard feature or integrate it.
+- Runtime discard is implemented and independently approved by semantic and
+  Rust/resource reviews. The parent passed 1,001 library and 73 focused tests;
+  both reviewers passed 23 machine and 12 runtime tests. Exact quota reuse,
+  failure atomicity and 32,768-frame teardown on a 64 KiB stack are covered.
+  Specification, documentation review and the final checkpoint gate remain
+  open; do not yet close CP-0016.
+- After the signed Step 2 attempt timed out, the user authorized unsigned
+  intermediate commits and signing the integration merge. The verified
+  inference checkpoint is retained in `870d81b`; runtime work continues in
+  separate files. The repository signing setting is unchanged.
 
 ## Verification
 
