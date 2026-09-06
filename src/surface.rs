@@ -463,12 +463,25 @@ pub struct SurfaceBlock {
 /// The closed Ash local-declaration family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceLocalDeclaration {
+    /// Exact methods supplied to the following lexical remainder.
+    Evidence(Box<SurfaceLexicalEvidence>),
     /// A sequential nonrecursive binding.
     Binding(Box<SurfaceBinding>),
     /// A simultaneous recursive binding group.
     Recursive(SurfaceRecursiveGroup),
     /// A private nominal representation declaration.
     Newtype(SurfaceTypeDeclaration),
+}
+
+/// One sequential exact interface evidence declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceLexicalEvidence {
+    /// Complete interface application.
+    pub application: SurfaceInterfaceApplication,
+    /// Supplied equations in source order.
+    pub equations: Vec<SurfaceEquation>,
+    /// Complete declaration span.
+    pub span: Span,
 }
 
 /// One simultaneous local recursive binding group.

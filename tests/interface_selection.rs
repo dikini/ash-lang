@@ -281,6 +281,14 @@ fn schedule_local_declaration<'a>(
     expressions: &mut Vec<&'a ResolvedExpr>,
 ) {
     match declaration {
+        ResolvedLocalDeclaration::Evidence(source) => {
+            expressions.extend(
+                source
+                    .method_groups
+                    .iter()
+                    .flat_map(|group| group.equations.iter().map(|equation| &equation.body)),
+            );
+        }
         ResolvedLocalDeclaration::Binding(binding) => expressions.push(&binding.initializer),
         ResolvedLocalDeclaration::Recursive(group) => {
             expressions.extend(group.members.iter().map(|member| &member.initializer));

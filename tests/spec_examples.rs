@@ -80,6 +80,39 @@ const LOCAL_NEWTYPE_ESCAPE_MODULE: &str = concat!(
     "}\n",
 );
 
+const SCOPED_EVIDENCE_MODULE: &str = concat!(
+    "interface Read<A, B> where A -> B {\n",
+    "    read : A -> B\n",
+    "}\n\n",
+    "forward<A, B> : A -> B where Read<A, B>\n",
+    "forward value = read(value)\n\n",
+    "main : Unit -> Int\n",
+    "main () = {\n",
+    "    newtype Token = Token(Int)\n",
+    "    let saved = Token(41)\n",
+    "    with Read<Token, Int> {\n",
+    "        read ignored = match saved {\n",
+    "            Token(value) => value + 1\n",
+    "        }\n",
+    "    }\n",
+    "    forward(saved)\n",
+    "}\n",
+);
+
+const SCOPED_EVIDENCE_MISSING_KEY_MODULE: &str = concat!(
+    "interface Read<A> {\n",
+    "    read : A -> Int\n",
+    "}\n\n",
+    "newtype Token = Token(Int)\n\n",
+    "main : Unit -> Int\n",
+    "main () = {\n",
+    "    with Read<Token> {\n",
+    "        read ignored = 42\n",
+    "    }\n",
+    "    read(Token(0))\n",
+    "}\n",
+);
+
 const EFFECT_MODULE: &str = concat!(
     "effect Cell {\n",
     "    read : Unit -> Int\n",
@@ -576,6 +609,43 @@ const LOCAL_NEWTYPE_RULE_FRAGMENTS: &[(&str, &str)] = &[
     ("spec/dynamic-semantics.md", "E-Local-Nominal-Scope :="),
 ];
 
+const SCOPED_EVIDENCE_RULE_FRAGMENTS: &[(&str, &str)] = &[
+    ("spec/syntax.md", "local_evidence_declaration ::="),
+    ("spec/name-resolution.md", "a `LexicalEvidenceId` combines"),
+    (
+        "spec/name-resolution.md",
+        "supplied method receives independent contextual rigid parameters",
+    ),
+    ("spec/static-semantics.md", "## Scoped exact evidence"),
+    ("spec/static-semantics.md", "Select-Lexical :="),
+    ("spec/static-semantics.md", "| Lexical(source, methods)"),
+    ("spec/static-semantics.md", "evidence.missing-local-key"),
+    ("spec/static-semantics.md", "evidence.duplicate"),
+    (
+        "spec/static-semantics.md",
+        "evidence.determination-conflict",
+    ),
+    ("spec/static-semantics.md", "evidence.missing-method"),
+    ("spec/static-semantics.md", "evidence.duplicate-method"),
+    ("spec/static-semantics.md", "evidence.extra-method"),
+    (
+        "spec/static-semantics.md",
+        "during mandatory improvement. A recursively generated complete prerequisite",
+    ),
+    (
+        "spec/elaboration.md",
+        "A lexical selection lowers to the ordinary local binder",
+    ),
+    (
+        "spec/elaboration.md",
+        "recorded capture binders, and actual binding and nominal",
+    ),
+    (
+        "spec/dynamic-semantics.md",
+        "A supplied lexical method uses ordinary nonrecursive binding",
+    ),
+];
+
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
 struct TempDirectory(PathBuf);
@@ -824,6 +894,32 @@ fn local_newtype_escape_example_has_owned_diagnostic() {
         exact_range(LOCAL_NEWTYPE_ESCAPE_MODULE, "newtype Hidden").0
     );
     assert_documented("spec/static-semantics.md", LOCAL_NEWTYPE_ESCAPE_MODULE);
+}
+
+#[test]
+fn overview_scoped_evidence_example_is_executable() {
+    assert_observation("scoped-evidence.ash", SCOPED_EVIDENCE_MODULE, "42", "Int");
+    assert_documented("spec/README.md", SCOPED_EVIDENCE_MODULE);
+    assert_observation(
+        "scoped-evidence-direct.ash",
+        &SCOPED_EVIDENCE_MODULE.replace("forward(saved)", "read(saved)"),
+        "42",
+        "Int",
+    );
+}
+
+#[test]
+fn scoped_evidence_missing_key_example_has_owned_diagnostic() {
+    let failure = run(
+        "scoped-evidence-missing-key.ash",
+        SCOPED_EVIDENCE_MISSING_KEY_MODULE,
+    )
+    .expect_err("a module nominal is not a local evidence key");
+    assert_eq!(failure.reason_code(), "evidence.missing-local-key");
+    assert_documented(
+        "spec/static-semantics.md",
+        SCOPED_EVIDENCE_MISSING_KEY_MODULE,
+    );
 }
 
 #[test]
@@ -2005,6 +2101,13 @@ fn module_newtype_normative_rule_manifest_is_complete() {
 #[test]
 fn local_newtype_normative_rule_manifest_is_complete() {
     for &(path, fragment) in LOCAL_NEWTYPE_RULE_FRAGMENTS {
+        assert_normative_fragment(path, fragment);
+    }
+}
+
+#[test]
+fn scoped_evidence_normative_rule_manifest_is_complete() {
+    for &(path, fragment) in SCOPED_EVIDENCE_RULE_FRAGMENTS {
         assert_normative_fragment(path, fragment);
     }
 }

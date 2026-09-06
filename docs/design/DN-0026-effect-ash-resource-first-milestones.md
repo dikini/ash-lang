@@ -40,13 +40,14 @@ but they do not supply effect semantics.
 
 At the post-`lib-ash` baseline from which this outline was written, the
 following capabilities were absent. The product checkpoints now implement
-module and local `newtype` and the resume-required effect kernel, as described
+module and local `newtype`, scoped exact evidence, and the resume-required
+effect kernel, as described
 by the [branch specification](../../spec/README.md). Local declarations have
 stable lexical identities and permit identity-free closure escape; they do
 not establish identities per execution. The wider milestone remains separate
 from integration into `main`. The remaining gaps are:
 
-- scoped exact evidence and runtime-established fresh identities;
+- runtime-established fresh identities;
 - resource acquisition scopes, identity-indexed resource values, ownership or
   usage checking, and deterministic cleanup;
 - runtime provider relationships and a checked foreign-provider boundary;
@@ -58,6 +59,12 @@ from integration into `main`. The remaining gaps are:
 The last item does not become an `effect-ash` dependency merely because future
 dynamic composition may reuse identities, provider relationships, or
 continuations.
+
+The pure scoped-evidence checkpoint is implemented, independently reviewed,
+and verified. Its [implementation evidence](effect-ash/scoped-evidence-evidence.md)
+records complete-header and capture authentication, resource bounds, and the
+full gate. Local milestone integration remains separate from integration into
+`main`.
 
 ## Leading boundary
 
@@ -239,14 +246,15 @@ The initial boundary therefore has these rules:
 - evidence may escape only through an independently valid abstraction. The
   initial boundary adds no existential package merely to permit escape.
 
-A later proposal must make two placements explicit: whether scoped evidence can
-supply relational improvement for an eligible known determinant key, and where
-it enters complete-goal selection relative to abstract requirements and exact
-current-implementation evidence. It must preserve the fixed root snapshot,
-single forward pass, mandatory consistency check, and separate complete-
-application selection of recursive prerequisites. Scoped evidence cannot refine
-a key, unlock a root outside the snapshot, or become a competing global
-candidate. It uses identity equality and is validated before Core construction.
+The scoped-evidence checkpoint settles these placements: it follows abstract
+requirements and exact-current evidence, precedes concrete matching, and
+participates in the existing improvement pass for identity-equal eligible keys.
+It preserves the fixed root snapshot, single forward pass, mandatory consistency
+check, and separate complete-application selection of recursive prerequisites.
+Scoped evidence cannot refine a key, unlock a root outside the snapshot, or
+become a competing global candidate. The implementation uses identity
+equality and independent linked and Core validation; it supplies no acquisition,
+provider, or proof authority.
 
 ### Keep effect requirements separate
 
@@ -423,12 +431,14 @@ row and handler rules. Their retained evidence is linked from the
 [trajectory](../trajectory.md); these results do not settle runtime acquisition
 or resource lifetime.
 
+The implemented scoped-evidence checkpoint also settles pure introduction,
+selection precedence, and improvement participation. Its first executable
+relation is `Read<Token, Int>`, tested through direct selection and constrained
+forwarding. Its retained report records authentication, verification, and the
+separate local integration boundary.
+
 - How should a fresh identity at resource acquisition relate to the existing
   stable compile-time lexical identity?
-- Does scoped exact evidence participate in fixed-snapshot improvement for an
-  eligible known determinant key, and where does it enter the abstract, exact-
-  current, and concrete complete-goal selection order?
-- Which first pure relation best tests scoped exact evidence without effects?
 - What minimum usage or lifetime rule prevents a resource-bearing closure or
   continuation from escaping its scope?
 - Which cleanup rule applies to checked discard, handler abort, subscriber

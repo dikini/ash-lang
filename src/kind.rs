@@ -4479,6 +4479,34 @@ fn check_expression_work<'a>(
         })?;
         match item {
             BodyWork::Declaration(declaration) => match declaration {
+                ResolvedLocalDeclaration::Evidence(source) => {
+                    if let Some(application) = authenticate_interface_application(
+                        &source.application,
+                        environments,
+                        budget,
+                    )? {
+                        check_interface_application_kinds(application, environments, budget)?;
+                    }
+                    budget.charge(source.method_groups.len()).map_err(|()| {
+                        KindFailure::resource(
+                            source.span,
+                            "lexical method-group kind traversal exceeded its type-work budget",
+                        )
+                    })?;
+                    for equation in source
+                        .method_groups
+                        .iter()
+                        .rev()
+                        .flat_map(|group| group.equations.iter().rev())
+                    {
+                        push_body_work(
+                            &mut work,
+                            BodyWork::Expression(&equation.body),
+                            equation.body.span,
+                            budget,
+                        )?;
+                    }
+                }
                 ResolvedLocalDeclaration::Binding(binding) => {
                     if let Some(annotation) = &binding.annotation {
                         environments.expect_value_type(annotation, budget)?;
@@ -4672,6 +4700,7 @@ fn push_body_work<'a>(
 
 fn local_declaration_span(declaration: &ResolvedLocalDeclaration) -> Span {
     match declaration {
+        ResolvedLocalDeclaration::Evidence(source) => source.span,
         ResolvedLocalDeclaration::Binding(binding) => binding.span,
         ResolvedLocalDeclaration::Recursive(group) => group.span,
         ResolvedLocalDeclaration::Newtype(_) => {
@@ -5202,6 +5231,93 @@ mod tests {
                 .expect("the exact relational kind boundary should be reusable");
             assert_eq!(exact.used(), EXACT_WORK);
         }
+    }
+
+    #[test]
+    fn lexical_kind_walk_precharges_even_empty_method_groups() {
+        let span = span();
+        let module = ModuleId::new(0);
+        let interface = InterfaceId::new(module, 0);
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new());
+        let parameter = ResolvedTypeVariable {
+            id: TypeVariableId::resolved(module, 0),
+            spelling: "A".into(),
+            kind: Kind::Type,
+            origin: Origin::Source(span),
+        };
+        for group_count in [0, 1, 64] {
+            let declaration = ResolvedLocalDeclaration::Evidence(Box::new(
+                crate::resolved::ResolvedLexicalEvidence {
+                    checked: crate::interface::LexicalEvidenceSlot::default(),
+                    id: crate::interface::LexicalEvidenceId::new(module, 0),
+                    application: interface_application(interface, 1, span),
+                    method_groups: (0..group_count)
+                        .map(|index| crate::resolved::ResolvedImplementationMethodGroup {
+                            contextual_parameters: Box::new([]),
+                            method: Some(MethodId::new(interface, index as u32)),
+                            identity: None,
+                            binder: Binder {
+                                id: BinderId::resolved(module, index as u32),
+                                spelling: "method".into(),
+                                origin: Origin::Source(span),
+                            },
+                            equations: Box::new([]),
+                            span,
+                        })
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                    span,
+                },
+            ));
+            let mut environments = KindEnvironments::new();
+            environments
+                .insert_interface(
+                    interface,
+                    std::slice::from_ref(&parameter),
+                    span,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .expect("canonical interface kind entry");
+            let ResolvedLocalDeclaration::Evidence(source) = &declaration else {
+                unreachable!();
+            };
+            let mut header_work = TypeWorkBudget::unbounded();
+            let header = authenticate_interface_application(
+                &source.application,
+                &environments,
+                &mut header_work,
+            )
+            .expect("complete header")
+            .expect("matching arity");
+            check_interface_application_kinds(header, &environments, &mut header_work)
+                .expect("valid argument kind");
+            // One declaration, the unchanged header, G groups, no equation edges.
+            let exact_work = 1 + header_work.used() + group_count;
+            let mut short = TypeWorkBudget::with_limit(exact_work - 1);
+            assert!(matches!(
+                check_expression_work(
+                    vec![BodyWork::Declaration(&declaration)],
+                    &registry,
+                    &mut environments,
+                    &mut short,
+                ),
+                Err(KindFailure::Resource(_))
+            ));
+            let mut exact = TypeWorkBudget::with_limit(exact_work);
+            check_expression_work(
+                vec![BodyWork::Declaration(&declaration)],
+                &registry,
+                &mut environments,
+                &mut exact,
+            )
+            .expect("fresh exact retry of group scheduling");
+            assert_eq!(exact.used(), exact_work);
+        }
+        let mut empty = TypeWorkBudget::with_limit(0);
+        let mut environments = KindEnvironments::new();
+        check_expression_work(Vec::new(), &registry, &mut environments, &mut empty)
+            .expect("empty predecessor performs no work");
+        assert_eq!(empty.used(), 0);
     }
 
     fn assert_valid_application_preflight_has_an_exact_retryable_boundary() {

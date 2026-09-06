@@ -639,6 +639,11 @@ struct LoweredEvidenceMethod {
 
 #[derive(Clone, Copy, Debug)]
 enum PolymorphicEvidenceProducer {
+    Lexical {
+        source: crate::interface::LexicalEvidenceId,
+        selection_node: crate::interface::EvidenceNodeId,
+        binder: BinderId,
+    },
     Abstract {
         requirement: RequirementId,
         selection_node: crate::interface::EvidenceNodeId,
@@ -666,6 +671,7 @@ struct ScopedEvidenceBinder {
 
 #[derive(Debug)]
 struct EvidenceLowering {
+    lexical_binders: HashMap<(crate::interface::LexicalEvidenceId, MethodId), ActiveEvidenceBinder>,
     interfaces: HashMap<InterfaceId, LoweredInterface>,
     interface_methods: HashMap<MethodId, LoweredInterfaceMethod>,
     global_schemes: HashMap<BinderId, LoweredScheme>,
@@ -1787,6 +1793,9 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     coverage_work: UsefulnessBudget,
     base_context: TypeContext,
     active_resumes: Vec<ActiveResume>,
+    // Addresses identify only immutably borrowed source occurrences during one
+    // module synthesis. They are never dereferenced or retained in Core.
+    lexical_capture_uses: Vec<LexicalCaptureUse>,
     expected_effect_rows: Vec<EffectRow>,
     next_handler: u32,
 }
@@ -2021,6 +2030,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
+            lexical_capture_uses: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
         }
@@ -2113,6 +2123,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             coverage_work,
             base_context,
             active_resumes: Vec::new(),
+            lexical_capture_uses: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
         })
@@ -2172,6 +2183,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
+            lexical_capture_uses: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
         };
@@ -2312,6 +2324,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
 
         let mut lowering = EvidenceLowering {
+            lexical_binders: HashMap::new(),
             interfaces,
             interface_methods,
             global_schemes: HashMap::new(),
@@ -2611,6 +2624,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
+            lexical_capture_uses: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
         })
@@ -2732,6 +2746,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         program: &ValidatedInterfaceProgram,
     ) -> Result<TypedNode, TypeError> {
+        self.lexical_capture_uses.clear();
         if self.state == ElaboratorState::Poisoned
             || self.purpose != ElaborationPurpose::FinalSynthesis
             || self.final_root.is_some()
@@ -2739,6 +2754,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             return Err(invalid_state());
         }
         let result = self.elaborate_module_program(program);
+        self.lexical_capture_uses.clear();
         match result {
             Ok(typed) => {
                 self.final_root = Some(typed.node);
@@ -2757,6 +2773,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         program: &ValidatedInterfaceProgram,
     ) -> Result<TypedNode, TypeError> {
+        self.lexical_capture_uses.clear();
         if self.state == ElaboratorState::Poisoned
             || self.purpose != ElaborationPurpose::FinalSynthesis
             || self.final_root.is_some()
@@ -2767,6 +2784,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             return Err(invalid_state());
         }
         let result = self.elaborate_module_program(program);
+        self.lexical_capture_uses.clear();
         match result {
             Ok(typed) => {
                 self.final_root = Some(typed.node);
@@ -4313,7 +4331,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
 
             let core_scheme = IterativeTypeOwner::new(Type::Forall(
                 scheme_parameters,
-                Box::new(self.clone_type(&fact.ty)?),
+                Box::new(self.pure_core_type(&fact.ty)?),
             ));
             let binder = if let Some(binder) = self.method_binders.get(&method).copied() {
                 binder
@@ -4343,7 +4361,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 core_scheme.into_inner(),
                 occurrence.origin.clone(),
             )?;
-            let core_ty = self.clone_type(&ty)?;
+            let core_ty = self.pure_core_type(&ty)?;
             node = self.builder.type_application(
                 node,
                 arguments.into_vec(),
@@ -4429,6 +4447,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     arguments.push(self.clone_type(argument)?);
                 }
                 let authentication = match selection.node(selection.root()) {
+                    Some(EvidenceNode::Lexical { source, .. }) => lowering
+                        .lexical_binders
+                        .get(&(source, method))
+                        .map(|active| (None, Some(active.binder))),
                     Some(EvidenceNode::Abstract { requirement, .. }) => lowering
                         .active_binders
                         .get(&(requirement, method))
@@ -5061,18 +5083,24 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                         })?
                 }
-                PolymorphicEvidenceProducer::Adapter { implementation, .. } => {
+                PolymorphicEvidenceProducer::Lexical { .. }
+                | PolymorphicEvidenceProducer::Adapter { .. } => {
+                    if let PolymorphicEvidenceProducer::Adapter { implementation, .. } =
+                        argument.producer
+                        && implementation.method() != target.method
+                    {
+                        return Err(invalid_state());
+                    }
                     let Some(application) = argument.adapter_application.as_ref() else {
                         return Err(invalid_state());
                     };
                     self.unify_interface_applications(target_application, application)?;
                     let current_domain = IterativeTypeOwner::new(self.zonk(domain)?);
-                    implementation.method() == target.method
-                        && self.authenticated_adapter_scheme_matches(
-                            &current_domain,
-                            &argument.ty,
-                            &canonical_method.type_parameters,
-                        )?
+                    self.authenticated_adapter_scheme_matches(
+                        &current_domain,
+                        &argument.ty,
+                        &canonical_method.type_parameters,
+                    )?
                 }
             };
             if target.method != argument.method
@@ -5103,6 +5131,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         if polymorphic || adapter_edge.is_some() {
             let application = self.zonk_interface_application(target_application)?;
             let (producer, producer_selection_node, producer_binder) = match argument.producer {
+                PolymorphicEvidenceProducer::Lexical {
+                    source,
+                    selection_node,
+                    binder,
+                } => (
+                    CoreMethodEvidenceProducer::Lexical { source },
+                    selection_node,
+                    Some(binder),
+                ),
                 PolymorphicEvidenceProducer::Abstract {
                     requirement,
                     selection_node,
@@ -5374,6 +5411,75 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         continue;
                     }
                     let methods = match selection.node(node).ok_or_else(invalid_state)? {
+                        EvidenceNode::Lexical { source, methods } => {
+                            let requested =
+                                (node == selection.root()).then_some(root_method).flatten();
+                            let mut results = Vec::new();
+                            self.type_work.charge(methods.len()).map_err(|()| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?;
+                            results.try_reserve(methods.len()).map_err(|_| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?;
+                            for method in methods {
+                                if requested.is_some_and(|requested| requested != *method) {
+                                    continue;
+                                }
+                                let active = lowering
+                                    .lexical_binders
+                                    .get(&(source, *method))
+                                    .ok_or_else(invalid_state)?;
+                                let ty = IterativeTypeOwner::new(self.clone_type(&active.ty)?);
+                                let core_ty = self.clone_type(&ty)?;
+                                let core_node = self.builder.variable(
+                                    active.binder,
+                                    core_ty,
+                                    origin.clone(),
+                                )?;
+                                let authentication = active
+                                    .application
+                                    .clone_with_budget(&mut self.type_work)
+                                    .map_err(|()| {
+                                        TypeError::Internal(
+                                            ElaborationFailure::TypeResourceExhausted,
+                                        )
+                                    })?;
+                                self.builder.authenticate_method_evidence(
+                                    core_node,
+                                    None,
+                                    None,
+                                    *method,
+                                    authentication,
+                                    MethodEvidenceAnchorRole::LexicalUse {
+                                        source,
+                                        binder: active.binder,
+                                        selection_node: node,
+                                    },
+                                    Some(occurrence),
+                                )?;
+                                results.push(LoweredEvidenceMethod {
+                                    method: *method,
+                                    node: core_node,
+                                    producer: PolymorphicEvidenceProducer::Lexical {
+                                        source,
+                                        selection_node: node,
+                                        binder: active.binder,
+                                    },
+                                    adapter_application: Some(
+                                        active
+                                            .application
+                                            .clone_with_budget(&mut self.type_work)
+                                            .map_err(|()| {
+                                            TypeError::Internal(
+                                                ElaborationFailure::TypeResourceExhausted,
+                                            )
+                                        })?,
+                                    ),
+                                    ty: ty.into_inner(),
+                                });
+                            }
+                            results
+                        }
                         EvidenceNode::Abstract {
                             requirement,
                             methods,
@@ -7053,6 +7159,59 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
+    fn rewrite_method_core_parameters(
+        &mut self,
+        checkpoint: crate::core::dialect::TypeRewriteCheckpoint,
+        replacements: &[(TypeVariableId, TypeVariableId, bool)],
+    ) -> Result<(), TypeError> {
+        let inference_solutions = &self.inference_solutions;
+        let inference_variables = &self.inference_variables;
+        let authenticated_solutions = &self.authenticated_inference_solutions;
+        let row_solutions = &self.row_inference_solutions;
+        let type_work = RefCell::new(&mut self.type_work);
+        self.builder.rewrite_types_and_rows(
+            Some(checkpoint),
+            |ty| {
+                let mut work = type_work.borrow_mut();
+                let zonked = IterativeTypeOwner::new(zonk_core_type(
+                    ty,
+                    inference_solutions,
+                    row_solutions,
+                    inference_variables,
+                    authenticated_solutions,
+                    &mut work,
+                    false,
+                )?);
+                substitute_fresh_type_variables_in_order(&zonked, replacements, &mut work)
+                    .map_err(|()| BuildError::TypeWorkExceeded)
+            },
+            |row| {
+                let mut work = type_work.borrow_mut();
+                let row = zonk_core_effect_row(
+                    row,
+                    inference_solutions,
+                    row_solutions,
+                    inference_variables,
+                    authenticated_solutions,
+                    &mut work,
+                    false,
+                )?;
+                let wrapper = IterativeTypeOwner::new(Type::function_computation(
+                    Type::Unit,
+                    ComputationType::new(Type::Unit, row),
+                ));
+                let renamed =
+                    substitute_fresh_type_variables_in_order(&wrapper, replacements, &mut work)
+                        .map_err(|()| BuildError::TypeWorkExceeded)?;
+                let Type::EffectfulFunction(_, computation) = renamed else {
+                    unreachable!()
+                };
+                Ok(computation.effects)
+            },
+        )?;
+        Ok(())
+    }
+
     fn elaborate_prepared_implementation_method(
         &mut self,
         source: &crate::resolved::ResolvedImplementationMethodGroup,
@@ -7147,61 +7306,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             &core_origin,
         )?);
         if !core_type_replacements.is_empty() {
-            let inference_solutions = &self.inference_solutions;
-            let inference_variables = &self.inference_variables;
-            let authenticated_solutions = &self.authenticated_inference_solutions;
-            let row_solutions = &self.row_inference_solutions;
-            let type_work = RefCell::new(&mut self.type_work);
-            self.builder.rewrite_types_and_rows(
-                Some(rewrite_checkpoint),
-                |ty| {
-                    let mut work = type_work.borrow_mut();
-                    let zonked = zonk_core_type(
-                        ty,
-                        inference_solutions,
-                        row_solutions,
-                        inference_variables,
-                        authenticated_solutions,
-                        &mut work,
-                        false,
-                    )?;
-                    let renamed = substitute_fresh_type_variables_in_order(
-                        &zonked,
-                        &core_type_replacements,
-                        &mut work,
-                    )
-                    .map_err(|()| BuildError::TypeWorkExceeded);
-                    discard_type_iteratively(zonked);
-                    renamed
-                },
-                |row| {
-                    let mut work = type_work.borrow_mut();
-                    let row = zonk_core_effect_row(
-                        row,
-                        inference_solutions,
-                        row_solutions,
-                        inference_variables,
-                        authenticated_solutions,
-                        &mut work,
-                        false,
-                    )?;
-                    let wrapper = Type::function_computation(
-                        Type::Unit,
-                        ComputationType::new(Type::Unit, row),
-                    );
-                    let renamed = substitute_fresh_type_variables_in_order(
-                        &wrapper,
-                        &core_type_replacements,
-                        &mut work,
-                    )
-                    .map_err(|()| BuildError::TypeWorkExceeded)?;
-                    discard_type_iteratively(wrapper);
-                    let Type::EffectfulFunction(_, computation) = renamed else {
-                        unreachable!()
-                    };
-                    Ok(computation.effects)
-                },
-            )?;
+            self.rewrite_method_core_parameters(rewrite_checkpoint, &core_type_replacements)?;
             let zonked_function_type = IterativeTypeOwner::new(self.zonk(&function.ty)?);
             let renamed_function_type = IterativeTypeOwner::new(
                 substitute_fresh_type_variables_in_order(
@@ -8198,9 +8303,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 },
                 context,
             );
-            let _active = self.active_resumes.pop().ok_or_else(invalid_state)?;
+            let active_cleanup = self.active_resumes.pop().ok_or_else(invalid_state);
             let cleanup = self.remove_pattern_binders(context, &binders);
             let checked_body = TypedNodeOwner::new(checked_body?);
+            let _active = active_cleanup?;
             cleanup?;
             output = self.union_effects(&output, &checked_body.effects, clause.span)?;
             let origin = Origin::Source(clause.span);
@@ -8267,6 +8373,598 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         })
     }
 
+    fn prepare_lexical_evidence<'a>(
+        &mut self,
+        source: &'a crate::resolved::ResolvedLexicalEvidence,
+    ) -> Result<Box<LexicalEvidenceProgress<'a>>, TypeError> {
+        if self.selection.is_some() && source.checked.get().is_some() {
+            return Err(invalid_state());
+        }
+        let interface = source.application.interface.id;
+        let (method_ids, key_positions, interface_span) = if let Some(selector) = &self.selection {
+            selector
+                .lexical_interface(interface)
+                .ok_or_else(invalid_state)?
+        } else {
+            let lowering = self.evidence_lowering.as_ref().ok_or_else(invalid_state)?;
+            let fact = lowering
+                .interfaces
+                .get(&interface)
+                .ok_or_else(invalid_state)?;
+            (
+                fact.methods.as_ref(),
+                fact.determination.as_deref(),
+                source.application.span,
+            )
+        };
+        self.constraint_work
+            .charge(
+                method_ids
+                    .len()
+                    .checked_add(key_positions.map_or(0, <[usize]>::len))
+                    .ok_or_else(constraint_resource)?,
+            )
+            .map_err(|()| constraint_resource())?;
+        let mut retained_methods = Vec::new();
+        retained_methods
+            .try_reserve(method_ids.len())
+            .map_err(|_| constraint_resource())?;
+        retained_methods.extend_from_slice(method_ids);
+        let key_positions = if let Some(positions) = key_positions {
+            let mut retained = Vec::new();
+            retained
+                .try_reserve(positions.len())
+                .map_err(|_| constraint_resource())?;
+            retained.extend_from_slice(positions);
+            Some(retained)
+        } else {
+            None
+        };
+        let method_ids = retained_methods;
+        let mut arguments = OwnedTypeBuffer(Vec::new());
+        self.type_work
+            .charge(source.application.arguments.len())
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        arguments
+            .try_reserve(source.application.arguments.len())
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for argument in &source.application.arguments {
+            arguments.push(self.clone_type(&argument.ty)?);
+        }
+        let application = InterfaceApplication::new(interface, arguments.into_boxed_slice());
+        let mut methods = Vec::new();
+        self.constraint_work
+            .charge(method_ids.len())
+            .map_err(|()| constraint_resource())?;
+        methods
+            .try_reserve(method_ids.len())
+            .map_err(|_| constraint_resource())?;
+        for id in &method_ids {
+            let (parameters, mut type_parameters, value_type, declaration_span) =
+                if let Some(selector) = &self.selection {
+                    let method = selector.method(*id).ok_or_else(invalid_state)?;
+                    self.constraint_work
+                        .charge(method.interface_parameters().len())
+                        .map_err(|()| constraint_resource())?;
+                    let mut parameters = Vec::new();
+                    parameters
+                        .try_reserve(method.interface_parameters().len())
+                        .map_err(|_| constraint_resource())?;
+                    parameters.extend(method.interface_parameters().iter().map(|(id, _)| *id));
+                    let type_parameters = clone_kinded_type_parameters_with_budget(
+                        method.type_parameters(),
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                    let value_type =
+                        clone_type_with_budget(method.value_type(), &mut self.type_work).map_err(
+                            |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
+                        )?;
+                    (
+                        parameters,
+                        type_parameters,
+                        value_type,
+                        method.declaration_span(),
+                    )
+                } else {
+                    let method = self
+                        .evidence_lowering
+                        .as_ref()
+                        .and_then(|lowering| lowering.interface_methods.get(id))
+                        .ok_or_else(invalid_state)?;
+                    self.constraint_work
+                        .charge(method.parameters.len())
+                        .map_err(|()| constraint_resource())?;
+                    let mut parameters = Vec::new();
+                    parameters
+                        .try_reserve(method.parameters.len())
+                        .map_err(|_| constraint_resource())?;
+                    parameters.extend_from_slice(&method.parameters);
+                    (
+                        parameters,
+                        clone_kinded_type_parameters_with_budget(
+                            &method.type_parameters,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?,
+                        clone_type_with_budget(&method.value_type, &mut self.type_work).map_err(
+                            |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
+                        )?,
+                        method.declaration_span,
+                    )
+                };
+            let value_type = IterativeTypeOwner::new(value_type);
+            if parameters.len() != application.arguments().len() {
+                return Err(lexical_evidence_error(
+                    InterfaceReason::ArgumentCount,
+                    source.application.span,
+                    interface_span,
+                ));
+            }
+            let mut replacements = TypeReplacementBuffer::new();
+            let replacement_count =
+                parameters
+                    .len()
+                    .checked_add(type_parameters.len())
+                    .ok_or(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted,
+                    ))?;
+            self.type_work
+                .charge(replacement_count)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            replacements
+                .try_reserve(replacement_count)
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            for (parameter, argument) in parameters.iter().zip(application.arguments()) {
+                replacements
+                    .try_insert_unique(*parameter, self.clone_type(argument)?)
+                    .map_err(|()| invalid_state())?;
+            }
+            self.constraint_work
+                .charge(source.method_groups.len())
+                .map_err(|()| constraint_resource())?;
+            if let Some(group) = source
+                .method_groups
+                .iter()
+                .find(|group| group.method == Some(*id))
+            {
+                if type_parameters.len() != group.contextual_parameters.len() {
+                    return Err(invalid_state());
+                }
+                for ((parameter, kind), contextual) in
+                    type_parameters.iter_mut().zip(&group.contextual_parameters)
+                {
+                    if !same_kind_with_budget(kind, &contextual.kind, &mut self.type_work).map_err(
+                        |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
+                    )? {
+                        return Err(invalid_state());
+                    }
+                    replacements
+                        .try_insert_unique(*parameter, Type::Variable(contextual.id))
+                        .map_err(|()| invalid_state())?;
+                    *parameter = contextual.id;
+                }
+            }
+            let ty = substitute_type_variables_with(
+                &value_type,
+                replacements.as_map(),
+                |cells| {
+                    self.type_work.charge(cells).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })
+                },
+                || TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
+            )?;
+            methods.push(LoweredInterfaceMethod {
+                interface,
+                parameters: parameters.into_boxed_slice(),
+                type_parameters: type_parameters.into_boxed_slice(),
+                value_type: ty,
+                declaration_span,
+            });
+        }
+        let mut nominals = HashSet::new();
+        for (position, argument) in application.arguments().iter().enumerate() {
+            if key_positions
+                .as_ref()
+                .is_none_or(|key| key.contains(&position))
+            {
+                collect_nominal_identities(argument, &mut nominals, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            }
+        }
+        if !nominals.iter().any(|nominal| nominal.is_lexical()) {
+            return Err(lexical_evidence_error(
+                InterfaceReason::EvidenceMissingLocalKey,
+                source.application.span,
+                source.application.span,
+            ));
+        }
+        if let Some(selector) = &self.selection
+            && let Some((reason, earlier)) = selector
+                .check_lexical_key(&application, &mut self.constraint_work)
+                .map_err(|error| selection_failure(error, Some(source.application.span)))?
+        {
+            return Err(lexical_evidence_error(
+                reason,
+                source.application.span,
+                earlier,
+            ));
+        }
+        let mut supplied = HashMap::new();
+        self.constraint_work
+            .charge(source.method_groups.len())
+            .map_err(|()| constraint_resource())?;
+        supplied
+            .try_reserve(source.method_groups.len())
+            .map_err(|_| constraint_resource())?;
+        for group in &source.method_groups {
+            let name_span = group.binder.origin.primary_span();
+            let method = group
+                .method
+                .filter(|method| method.interface() == interface)
+                .ok_or_else(|| {
+                    lexical_evidence_error(
+                        InterfaceReason::EvidenceExtraMethod,
+                        name_span,
+                        interface_span,
+                    )
+                })?;
+            if let Some(first) = supplied.insert(method, group) {
+                return Err(lexical_evidence_error(
+                    InterfaceReason::EvidenceDuplicateMethod,
+                    name_span,
+                    first.binder.origin.primary_span(),
+                ));
+            }
+        }
+        for (id, method) in method_ids.iter().zip(&methods) {
+            if !supplied.contains_key(id) {
+                return Err(lexical_evidence_error(
+                    InterfaceReason::EvidenceMissingMethod,
+                    source.application.span,
+                    method.declaration_span,
+                ));
+            }
+        }
+        let previous = self
+            .selection
+            .as_ref()
+            .and_then(EvidenceSelector::lexical_head);
+        let mut members = Vec::new();
+        let mut active = Vec::new();
+        let checked_methods = Vec::new();
+        self.constraint_work
+            .charge(method_ids.len())
+            .map_err(|()| constraint_resource())?;
+        members
+            .try_reserve(method_ids.len())
+            .map_err(|_| constraint_resource())?;
+        if self.evidence_lowering.is_some() {
+            self.constraint_work
+                .charge(method_ids.len())
+                .map_err(|()| constraint_resource())?;
+            active
+                .try_reserve(method_ids.len())
+                .map_err(|_| constraint_resource())?;
+        }
+
+        Ok(Box::new(LexicalEvidenceProgress {
+            source,
+            application,
+            method_ids,
+            methods,
+            supplied,
+            previous,
+            members,
+            active,
+            checked_methods,
+            next: 0,
+        }))
+    }
+
+    fn schedule_lexical_method<'a>(
+        &mut self,
+        progress: Box<LexicalEvidenceProgress<'a>>,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+    ) -> Result<(), TypeError> {
+        let id = progress.method_ids[progress.next];
+        let method = &progress.methods[progress.next];
+        let group = progress.supplied.get(&id).ok_or_else(invalid_state)?;
+        let rewrite_checkpoint = self.builder.type_rewrite_checkpoint();
+        let ty = IterativeTypeOwner::new(self.clone_type(&method.value_type)?);
+        let provenance = self.at_span_provenance(&ty, method.declaration_span)?;
+        let equations = self.prepare_equations(
+            &group.equations,
+            ProvenancedType {
+                ty: ty.into_inner(),
+                provenance,
+            },
+            group.span,
+            Origin::Source(group.span),
+        )?;
+        let resumes = std::mem::take(&mut self.active_resumes);
+        let capture_checkpoint = self.lexical_capture_uses.len();
+        if self.purpose == ElaborationPurpose::FinalSynthesis {
+            let owner = self.builder.lexical_capture_owner(progress.source.id, id)?;
+            let captures =
+                crate::resolved::lexical_method_capture_occurrences(group, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            self.type_work
+                .charge(captures.len())
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            self.lexical_capture_uses
+                .try_reserve(captures.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            for (ordinal, occurrence) in captures.iter().enumerate() {
+                self.lexical_capture_uses.push(LexicalCaptureUse {
+                    occurrence_address: std::ptr::from_ref(*occurrence) as usize,
+                    owner,
+                    ordinal,
+                });
+            }
+        }
+        tasks.push(ElaborationTask::Equation(
+            EquationTask::FinishLexicalMethod {
+                progress,
+                rewrite_checkpoint,
+                resumes,
+                capture_checkpoint,
+            },
+        ));
+        tasks.push(ElaborationTask::Equation(EquationTask::ContinueEquations(
+            equations,
+        )));
+        Ok(())
+    }
+
+    fn finish_lexical_method(
+        &mut self,
+        progress: &mut LexicalEvidenceProgress<'_>,
+        mut body: TypedNodeOwner,
+        rewrite_checkpoint: crate::core::dialect::TypeRewriteCheckpoint,
+    ) -> Result<(), TypeError> {
+        let LexicalEvidenceProgress {
+            application,
+            method_ids,
+            methods,
+            supplied,
+            members,
+            active,
+            checked_methods,
+            next,
+            ..
+        } = progress;
+        let id = &method_ids[*next];
+        let method = &methods[*next];
+        let group = supplied.get(id).ok_or_else(invalid_state)?;
+        let mut core_type = IterativeTypeOwner::new(self.pure_core_type(&body.ty)?);
+        if !method.type_parameters.is_empty() {
+            let mut parameters = clone_kinded_type_parameters_with_budget(
+                &method.type_parameters,
+                &mut self.type_work,
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let scheme_parameters =
+                clone_kinded_type_parameters_with_budget(&parameters, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let scheme = IterativeTypeOwner::new(Type::Forall(
+                scheme_parameters.into_boxed_slice(),
+                Box::new(self.clone_type(&body.ty)?),
+            ));
+            if self.evidence_lowering.is_some() {
+                let mut replacements = Vec::new();
+                self.type_work
+                    .charge(parameters.len())
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                replacements
+                    .try_reserve(parameters.len())
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                for (parameter, kind) in &mut parameters {
+                    let fresh = self.fresh_type_variable(kind, group.span)?;
+                    replacements.push((*parameter, fresh, matches!(kind, Kind::EffectRow)));
+                    *parameter = fresh;
+                }
+                self.rewrite_method_core_parameters(rewrite_checkpoint, &replacements)?;
+                let renamed = substitute_fresh_type_variables_in_order(
+                    &core_type,
+                    &replacements,
+                    &mut self.type_work,
+                )
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                core_type.replace(renamed);
+            }
+            let core_parameters =
+                clone_kinded_type_parameters_with_budget(&parameters, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            core_type = IterativeTypeOwner::new(Type::Forall(
+                core_parameters.into_boxed_slice(),
+                Box::new(core_type.into_inner()),
+            ));
+            let core_scheme = self.clone_type(&core_type)?;
+            let node = self.builder.type_abstraction(
+                parameters,
+                body.node,
+                core_scheme,
+                Origin::Source(group.span),
+            )?;
+            body.set_node(node);
+            body.replace_type(scheme.into_inner());
+        }
+        let binder_type = self.clone_type(&core_type)?;
+        let binder = self.builder.resolved_binder(
+            group.binder.id,
+            binder_type,
+            group.binder.origin.clone(),
+        )?;
+        if self.selection.is_some() {
+            self.constraint_work
+                .charge(1)
+                .map_err(|()| constraint_resource())?;
+            checked_methods
+                .try_reserve(1)
+                .map_err(|_| constraint_resource())?;
+            let scheme = IterativeTypeOwner::new(self.clone_type(&body.ty)?);
+            let captures = crate::resolved::lexical_method_captures(group, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            checked_methods.push(crate::interface::CheckedLexicalMethod {
+                method: *id,
+                binder: group.binder.id,
+                scheme: scheme.into_inner(),
+                captures,
+            });
+        }
+        if self.evidence_lowering.is_some() {
+            active.push((
+                *id,
+                ActiveEvidenceBinder {
+                    binder: group.binder.id,
+                    application: application.clone_with_budget(&mut self.type_work).map_err(
+                        |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
+                    )?,
+                    ty: self.clone_type(&core_type)?,
+                },
+            ));
+        }
+        members.push((binder, body.node));
+
+        *next += 1;
+        Ok(())
+    }
+
+    fn finish_lexical_evidence(
+        &mut self,
+        progress: Box<LexicalEvidenceProgress<'_>>,
+    ) -> Result<ElaboratedDeclaration, TypeError> {
+        let LexicalEvidenceProgress {
+            source,
+            application,
+            previous,
+            members,
+            active,
+            checked_methods,
+            ..
+        } = *progress;
+        if let Some(lowering) = self.evidence_lowering.as_mut() {
+            lowering
+                .lexical_binders
+                .try_reserve(active.len())
+                .map_err(|_| constraint_resource())?;
+            for (method, binder) in active {
+                lowering.lexical_binders.insert((source.id, method), binder);
+            }
+        }
+        if let Some(selector) = self.selection.as_mut() {
+            let fact_application = application
+                .clone_with_budget(&mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            selector
+                .add_lexical_source(
+                    source.id,
+                    application,
+                    source.application.span,
+                    &mut self.constraint_work,
+                )
+                .map_err(|error| selection_failure(error, Some(source.application.span)))?;
+            source
+                .checked
+                .fill(crate::interface::CheckedLexicalEvidence {
+                    id: source.id,
+                    application: fact_application,
+                    methods: checked_methods.into_boxed_slice(),
+                })
+                .map_err(|()| invalid_state())?;
+        }
+        Ok(ElaboratedDeclaration::Evidence {
+            source: source.id,
+            previous,
+            members,
+            origin: Origin::Source(source.span),
+        })
+    }
+
+    fn authenticate_lexical_capture_occurrence(
+        &mut self,
+        occurrence: &crate::resolved::ResolvedOccurrence,
+        node: NodeId,
+    ) -> Result<(), TypeError> {
+        self.type_work
+            .charge(self.lexical_capture_uses.len())
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let address = std::ptr::from_ref(occurrence) as usize;
+        for index in 0..self.lexical_capture_uses.len() {
+            let capture = self.lexical_capture_uses[index];
+            if capture.occurrence_address == address {
+                self.builder.authenticate_lexical_capture_use(
+                    node,
+                    capture.owner,
+                    capture.ordinal,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn step_equation_task<'a>(
+        &mut self,
+        task: EquationTask<'a>,
+        context: &mut TypeContext,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+        values: &mut TypedNodeBuffer,
+        declarations: &mut ElaboratedDeclarationBuffer,
+    ) -> Result<(), TypeError> {
+        match task {
+            EquationTask::LexicalEvidence(source) => {
+                let progress = self.prepare_lexical_evidence(source)?;
+                tasks.push(ElaborationTask::Equation(
+                    EquationTask::ContinueLexicalEvidence(progress),
+                ));
+            }
+            EquationTask::ContinueLexicalEvidence(progress) => {
+                if progress.next == progress.method_ids.len() {
+                    declarations.push(self.finish_lexical_evidence(progress)?);
+                } else {
+                    self.schedule_lexical_method(progress, tasks)?;
+                }
+            }
+            EquationTask::FinishLexicalMethod {
+                mut progress,
+                rewrite_checkpoint,
+                resumes,
+                capture_checkpoint,
+            } => {
+                self.active_resumes = resumes;
+                let body = values.pop().ok_or_else(invalid_state)?;
+                self.finish_lexical_method(&mut progress, body, rewrite_checkpoint)?;
+                self.lexical_capture_uses.truncate(capture_checkpoint);
+                tasks.push(ElaborationTask::Equation(
+                    EquationTask::ContinueLexicalEvidence(progress),
+                ));
+            }
+            EquationTask::ContinueEquations(progress) => {
+                if progress.next == progress.equations.len() {
+                    values.push(self.finish_equations(progress)?);
+                } else {
+                    self.schedule_equation_clause(progress, context, tasks)?;
+                }
+            }
+            EquationTask::FinishEquationClause {
+                mut progress,
+                binder_ids,
+                patterns,
+            } => {
+                let body = values.pop().ok_or_else(invalid_state)?;
+                self.finish_equation_clause(&mut progress, &binder_ids, patterns, body, context)?;
+                tasks.push(ElaborationTask::Equation(EquationTask::ContinueEquations(
+                    progress,
+                )));
+            }
+        }
+        Ok(())
+    }
+
     fn elaborate_expression_with_context<'a>(
         &mut self,
         initial: ElaborationTask<'a>,
@@ -8284,6 +8982,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut declarations = ElaboratedDeclarationBuffer(Vec::new());
         while let Some(task) = tasks.pop() {
             match task {
+                ElaborationTask::Equation(task) => {
+                    self.step_equation_task(
+                        task,
+                        context,
+                        &mut tasks,
+                        &mut values,
+                        &mut declarations,
+                    )?;
+                }
                 ElaborationTask::RetainLocalNewtype(owner) => {
                     declarations.push(ElaboratedDeclaration::Newtype(owner));
                 }
@@ -8377,6 +9084,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                         effects: EffectRow::empty(),
                                         provenance: provenance.clone(),
                                     });
+                                    self.authenticate_lexical_capture_occurrence(
+                                        occurrence,
+                                        current.node,
+                                    )?;
                                     let mut current_arguments = OwnedTypeBuffer(Vec::new());
                                     self.type_work.charge(arguments.len()).map_err(|()| {
                                         TypeError::Internal(
@@ -8519,6 +9230,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                     scheme,
                                     occurrence.origin.clone(),
                                 )?;
+                                self.authenticate_lexical_capture_occurrence(occurrence, node)?;
                                 if !arguments.is_empty() || F::EFFECTS && !row_arguments.is_empty()
                                 {
                                     let core_ty = self.pure_core_type(&ty)?;
@@ -9701,9 +10413,26 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         let mut retained_declarations = declarations.split_off(declaration_start);
         while !retained_declarations.is_empty() {
+            if let Some(ElaboratedDeclaration::Evidence { members, .. }) =
+                retained_declarations.last()
+                && let Some(lowering) = &self.evidence_lowering
+            {
+                // Each binder lookup and the final retain scan visit the backing
+                // table, including capacity from exited scopes. Precharge while
+                // the declaration buffer still owns iterative failure cleanup.
+                let work = members
+                    .len()
+                    .checked_add(1)
+                    .and_then(|scans| scans.checked_mul(lowering.lexical_binders.capacity()))
+                    .ok_or_else(constraint_resource)?;
+                self.constraint_work
+                    .charge(work)
+                    .map_err(|()| constraint_resource())?;
+            }
             let core_body_type = self.clone_type(&body.ty)?;
             let declaration = retained_declarations.pop().ok_or_else(invalid_state)?;
             match &source_declarations[retained_declarations.len()] {
+                ResolvedLocalDeclaration::Evidence(_) => {}
                 ResolvedLocalDeclaration::Binding(binding) => {
                     let mut ids = Vec::new();
                     collect_pattern_binders(&binding.pattern, &mut ids);
@@ -9723,6 +10452,57 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ResolvedLocalDeclaration::Newtype(_) => {}
             }
             let (node, initializer_effects, effect_span) = match declaration.into_inner() {
+                ElaboratedDeclaration::Evidence {
+                    source,
+                    previous,
+                    mut members,
+                    origin,
+                } => {
+                    if let Some(selector) = self.selection.as_mut() {
+                        selector.restore_lexical_head(previous);
+                    }
+                    let mut node = body.node;
+                    while let Some((binder, initializer)) = members.pop() {
+                        let binder_id = binder.id();
+                        let ty = self.clone_type(&core_body_type)?;
+                        node =
+                            self.builder
+                                .binding(binder, initializer, node, ty, origin.clone())?;
+                        if let Some(lowering) = &self.evidence_lowering {
+                            let ((_, method), active) = lowering
+                                .lexical_binders
+                                .iter()
+                                .find(|((owner, _), active)| {
+                                    *owner == source && active.binder == binder_id
+                                })
+                                .ok_or_else(invalid_state)?;
+                            let application = active
+                                .application
+                                .clone_with_budget(&mut self.type_work)
+                                .map_err(|()| {
+                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                                })?;
+                            self.builder.authenticate_method_evidence(
+                                node,
+                                None,
+                                None,
+                                *method,
+                                application,
+                                MethodEvidenceAnchorRole::LexicalOwner {
+                                    source,
+                                    binder: binder_id,
+                                },
+                                None,
+                            )?;
+                        }
+                    }
+                    if let Some(lowering) = self.evidence_lowering.as_mut() {
+                        lowering
+                            .lexical_binders
+                            .retain(|(owner, _), _| *owner != source);
+                    }
+                    (node, EffectRow::empty(), origin.primary_span())
+                }
                 ElaboratedDeclaration::Binding {
                     binder,
                     initializer,
@@ -12251,6 +13031,29 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         definition_span: Span,
         presentation: &Origin,
     ) -> Result<TypedNode, TypeError> {
+        let mut progress = self.prepare_equations(
+            equations,
+            function_type,
+            definition_span,
+            presentation.clone(),
+        )?;
+        while progress.next != progress.equations.len() {
+            let (task, binder_ids, patterns) =
+                self.prepare_equation_clause(&mut progress, context)?;
+            let body = TypedNodeOwner::new(self.elaborate_expression_with_context(task, context)?);
+            self.finish_equation_clause(&mut progress, &binder_ids, patterns, body, context)?;
+        }
+        self.finish_equations(progress)
+    }
+
+    fn prepare_equations<'a>(
+        &mut self,
+        equations: &'a [crate::resolved::ResolvedEquation],
+        function_type: ProvenancedType,
+        definition_span: Span,
+        presentation: Origin,
+    ) -> Result<Box<EquationsProgress<'a>>, TypeError> {
+        let presentation = OriginOwner::new(presentation);
         let function_type = ProvenancedTypeOwner::new(function_type);
         let Some(first) = equations.first() else {
             return Err(invalid_state());
@@ -12312,7 +13115,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             parameters.push(self.builder.binder(
                 parameter_type,
                 Origin::Generated {
-                    cause: Box::new(presentation.clone()),
+                    cause: Box::new(presentation.as_ref().clone()),
                     reason: GeneratedReason::FunctionLowering,
                 },
             )?);
@@ -12340,102 +13143,199 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         clause_bodies
             .try_reserve(equations.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let mut contains_newtype = false;
-        let mut pattern_count = 0usize;
-        for clause in equations {
-            let mut binder_ids = Vec::new();
+
+        Ok(Box::new(EquationsProgress {
+            equations,
+            function_type,
+            remainder,
+            domains,
+            parameters,
+            domain_types,
+            expected_body_effects,
+            coverage_matrix,
+            clause_bodies,
+            contains_newtype: false,
+            pattern_count: 0,
+            next: 0,
+            definition_span,
+            presentation,
+        }))
+    }
+
+    fn schedule_equation_clause<'a>(
+        &mut self,
+        mut progress: Box<EquationsProgress<'a>>,
+        context: &mut TypeContext,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+    ) -> Result<(), TypeError> {
+        let (task, binder_ids, patterns) = self.prepare_equation_clause(&mut progress, context)?;
+        tasks.push(ElaborationTask::Equation(
+            EquationTask::FinishEquationClause {
+                progress,
+                binder_ids,
+                patterns,
+            },
+        ));
+        tasks.push(task);
+        Ok(())
+    }
+
+    fn prepare_equation_clause<'a>(
+        &mut self,
+        progress: &mut EquationsProgress<'a>,
+        context: &mut TypeContext,
+    ) -> Result<(ElaborationTask<'a>, Vec<BinderId>, CorePatternBuffer), TypeError> {
+        let EquationsProgress {
+            equations,
+            remainder,
+            domains,
+            domain_types,
+            expected_body_effects,
+            coverage_matrix,
+            contains_newtype,
+            pattern_count,
+            next,
+            definition_span,
+            ..
+        } = progress;
+        let clause = &equations[*next];
+        let arity = domains.len();
+        let mut binder_ids = Vec::new();
+        self.type_work
+            .charge(arity)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut patterns = CorePatternBuffer(Vec::new());
+        patterns
+            .try_reserve(arity)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for (pattern, domain) in clause.patterns.iter().zip(domains.iter()) {
+            let checked = self.check_core_pattern(
+                pattern,
+                &domain.ty,
+                context,
+                &mut binder_ids,
+                GeneratedReason::FunctionLowering,
+            )?;
+            *contains_newtype |= checked.contains_newtype;
+            *pattern_count = pattern_count
+                .checked_add(checked.pattern_count)
+                .ok_or_else(|| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            patterns.push(checked.pattern);
+        }
+        if usefulness_with_budget(
+            coverage_matrix,
+            &patterns,
+            domain_types,
+            &self.registry,
+            &mut self.coverage_work,
+        )?
+        .is_none()
+        {
+            self.remove_pattern_binders(context, &binder_ids)?;
+            return Err(case_error(
+                TypeReason::RedundantCase,
+                clause.span,
+                "this equation clause can never be selected",
+                None,
+            ));
+        }
+        let expected_type = self.clone_type(&remainder.ty)?;
+        let has_effect_scope = !expected_body_effects.is_empty();
+        if has_effect_scope {
             self.type_work
-                .charge(arity)
+                .charge(1)
                 .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let mut patterns = CorePatternBuffer(Vec::new());
-            patterns
-                .try_reserve(arity)
+            self.expected_effect_rows
+                .try_reserve(1)
                 .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            for (pattern, domain) in clause.patterns.iter().zip(domains.iter()) {
-                let checked = self.check_core_pattern(
-                    pattern,
-                    &domain.ty,
-                    context,
-                    &mut binder_ids,
-                    GeneratedReason::FunctionLowering,
-                )?;
-                contains_newtype |= checked.contains_newtype;
-                pattern_count = pattern_count
-                    .checked_add(checked.pattern_count)
-                    .ok_or_else(|| {
-                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                    })?;
-                patterns.push(checked.pattern);
-            }
-            if usefulness_with_budget(
-                &coverage_matrix,
-                &patterns,
-                &domain_types,
-                &self.registry,
-                &mut self.coverage_work,
-            )?
-            .is_none()
-            {
-                self.remove_pattern_binders(context, &binder_ids)?;
-                return Err(case_error(
-                    TypeReason::RedundantCase,
-                    clause.span,
-                    "this equation clause can never be selected",
-                    None,
+            let expected_effects =
+                clone_effect_row_with_budget(expected_body_effects, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            self.expected_effect_rows.push(expected_effects);
+        }
+
+        let expected = ProvenancedType {
+            ty: expected_type,
+            provenance: remainder.provenance.clone(),
+        };
+        let kind = CheckKind::Definition {
+            result_cause: remainder.provenance.span().unwrap_or(*definition_span),
+        };
+        Ok((
+            ElaborationTask::Check {
+                expression: &clause.body,
+                expected,
+                kind,
+            },
+            binder_ids,
+            patterns,
+        ))
+    }
+
+    fn finish_equation_clause(
+        &mut self,
+        progress: &mut EquationsProgress<'_>,
+        binder_ids: &[BinderId],
+        patterns: CorePatternBuffer,
+        body: TypedNodeOwner,
+        context: &mut TypeContext,
+    ) -> Result<(), TypeError> {
+        let EquationsProgress {
+            equations,
+            expected_body_effects,
+            coverage_matrix,
+            clause_bodies,
+            next,
+            ..
+        } = progress;
+        let clause = &equations[*next];
+        let has_effect_scope = !expected_body_effects.is_empty();
+        self.remove_pattern_binders(context, binder_ids)?;
+        let checked_body = (|| {
+            let expected_effects = self.qualify_effect_row(expected_body_effects)?;
+            let weakened =
+                self.union_effects(&body.effects, &expected_effects, clause.body.span)?;
+            if !self.same_effect_rows(&weakened, &expected_effects)? {
+                return Err(inference_failure(
+                    TypeReason::AmbiguousEffectRow,
+                    clause.body.span,
+                    "this function body requests effects outside its declared row",
                 ));
             }
-            let expected_type = self.clone_type(&remainder.ty)?;
-            let has_effect_scope = !expected_body_effects.is_empty();
-            if has_effect_scope {
-                self.type_work
-                    .charge(1)
-                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                self.expected_effect_rows
-                    .try_reserve(1)
-                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                let expected_effects =
-                    clone_effect_row_with_budget(&expected_body_effects, &mut self.type_work)
-                        .map_err(|()| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
-                self.expected_effect_rows.push(expected_effects);
-            }
-            let body_result = self
-                .elaborate_expression_with_context(
-                    ElaborationTask::Check {
-                        expression: &clause.body,
-                        expected: ProvenancedType {
-                            ty: expected_type,
-                            provenance: remainder.provenance.clone(),
-                        },
-                        kind: CheckKind::Definition {
-                            result_cause: remainder.provenance.span().unwrap_or(definition_span),
-                        },
-                    },
-                    context,
-                )
-                .map(TypedNodeOwner::new);
-            self.remove_pattern_binders(context, &binder_ids)?;
-            let checked_body = body_result.and_then(|body| {
-                let expected_effects = self.qualify_effect_row(&expected_body_effects)?;
-                let weakened =
-                    self.union_effects(&body.effects, &expected_effects, clause.body.span)?;
-                if !self.same_effect_rows(&weakened, &expected_effects)? {
-                    return Err(inference_failure(
-                        TypeReason::AmbiguousEffectRow,
-                        clause.body.span,
-                        "this function body requests effects outside its declared row",
-                    ));
-                }
-                Ok(body)
-            });
-            if has_effect_scope && self.expected_effect_rows.pop().is_none() {
-                return Err(invalid_state());
-            }
-            let body = checked_body?;
-            coverage_matrix.push(patterns.into_vec());
-            clause_bodies.push((body.node, clause.span));
+            Ok(body)
+        })();
+        if has_effect_scope && self.expected_effect_rows.pop().is_none() {
+            return Err(invalid_state());
         }
+        let body = checked_body?;
+        coverage_matrix.push(patterns.into_vec());
+        clause_bodies.push((body.node, clause.span));
+
+        *next += 1;
+        Ok(())
+    }
+
+    fn finish_equations(
+        &mut self,
+        progress: Box<EquationsProgress<'_>>,
+    ) -> Result<TypedNode, TypeError> {
+        let EquationsProgress {
+            function_type,
+            remainder,
+            domains,
+            mut parameters,
+            domain_types,
+            mut expected_body_effects,
+            mut coverage_matrix,
+            mut clause_bodies,
+            contains_newtype,
+            mut pattern_count,
+            definition_span,
+            presentation,
+            ..
+        } = *progress;
+        let arity = domains.len();
+        let presentation = presentation.as_ref();
         if let Some(witness) = missing_witness_for_types_with_budget(
             &coverage_matrix,
             &domain_types,
@@ -14629,6 +15529,19 @@ fn constraint_resource() -> TypeError {
     TypeError::Internal(ElaborationFailure::ConstraintResourceExhausted)
 }
 
+fn lexical_evidence_error(reason: InterfaceReason, span: Span, related: Span) -> TypeError {
+    let mut diagnostic = Diagnostic::new(
+        reason,
+        SourceLabel::new(span, "this lexical evidence declaration is not admitted"),
+    );
+    if span != related {
+        diagnostic
+            .related
+            .push(SourceLabel::new(related, "the related declaration is here"));
+    }
+    TypeError::Interface(Box::new(diagnostic))
+}
+
 fn selection_failure(error: SelectionFailure, span: Option<Span>) -> TypeError {
     match error {
         SelectionFailure::Reason(reason) => {
@@ -15607,7 +16520,62 @@ impl Default for CoreElaborator<PureOperationFamily> {
     }
 }
 
+struct LexicalEvidenceProgress<'a> {
+    source: &'a crate::resolved::ResolvedLexicalEvidence,
+    application: InterfaceApplication,
+    method_ids: Vec<MethodId>,
+    methods: Vec<LoweredInterfaceMethod>,
+    supplied: HashMap<MethodId, &'a crate::resolved::ResolvedImplementationMethodGroup>,
+    previous: Option<usize>,
+    members: Vec<(TypedBinder, NodeId)>,
+    active: Vec<(MethodId, ActiveEvidenceBinder)>,
+    checked_methods: Vec<crate::interface::CheckedLexicalMethod>,
+    next: usize,
+}
+
+struct EquationsProgress<'a> {
+    equations: &'a [crate::resolved::ResolvedEquation],
+    function_type: ProvenancedTypeOwner,
+    remainder: ProvenancedTypeOwner,
+    domains: ProvenancedTypeBuffer,
+    parameters: Vec<TypedBinder>,
+    domain_types: OwnedTypeBuffer,
+    expected_body_effects: EffectRow,
+    coverage_matrix: CorePatternMatrixBuffer,
+    clause_bodies: Vec<(NodeId, Span)>,
+    contains_newtype: bool,
+    pattern_count: usize,
+    next: usize,
+    definition_span: Span,
+    presentation: OriginOwner,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LexicalCaptureUse {
+    occurrence_address: usize,
+    owner: usize,
+    ordinal: usize,
+}
+
+enum EquationTask<'a> {
+    ContinueLexicalEvidence(Box<LexicalEvidenceProgress<'a>>),
+    FinishLexicalMethod {
+        progress: Box<LexicalEvidenceProgress<'a>>,
+        rewrite_checkpoint: crate::core::dialect::TypeRewriteCheckpoint,
+        resumes: Vec<ActiveResume>,
+        capture_checkpoint: usize,
+    },
+    ContinueEquations(Box<EquationsProgress<'a>>),
+    FinishEquationClause {
+        progress: Box<EquationsProgress<'a>>,
+        binder_ids: Vec<BinderId>,
+        patterns: CorePatternBuffer,
+    },
+    LexicalEvidence(&'a crate::resolved::ResolvedLexicalEvidence),
+}
+
 enum ElaborationTask<'a> {
+    Equation(EquationTask<'a>),
     RetainLocalNewtype(NominalTypeId),
     Synthesize {
         expression: &'a ResolvedExpr,
@@ -15957,6 +16925,12 @@ impl Drop for PreparedGlobals {
 }
 
 enum ElaboratedDeclaration {
+    Evidence {
+        source: crate::interface::LexicalEvidenceId,
+        previous: Option<usize>,
+        members: Vec<(TypedBinder, NodeId)>,
+        origin: Origin,
+    },
     Binding {
         binder: TypedBinder,
         initializer: NodeId,
@@ -16919,6 +17893,7 @@ fn discard_match_progress(progress: Box<MatchProgress<'_>>) {
 
 fn discard_elaboration_task(task: ElaborationTask<'_>) {
     match task {
+        ElaborationTask::Equation(_) => {}
         ElaborationTask::RetainLocalNewtype(_)
         | ElaborationTask::Synthesize { .. }
         | ElaborationTask::AfterApplicationFunction { .. }
@@ -17013,7 +17988,10 @@ fn discard_elaborated_declaration(declaration: ElaboratedDeclaration) {
             pattern.discard_iteratively();
             discard_origin_iteratively(origin);
         }
-        ElaboratedDeclaration::Recursive {
+        ElaboratedDeclaration::Evidence {
+            members, origin, ..
+        }
+        | ElaboratedDeclaration::Recursive {
             members, origin, ..
         } => {
             for (binder, _) in members {
@@ -17122,6 +18100,11 @@ fn schedule_block<'a>(
     }
     for declaration in block.declarations.iter().rev() {
         match declaration {
+            ResolvedLocalDeclaration::Evidence(source) => {
+                tasks.push(ElaborationTask::Equation(EquationTask::LexicalEvidence(
+                    source,
+                )));
+            }
             ResolvedLocalDeclaration::Binding(binding) => {
                 let expected = binding
                     .annotation
@@ -17934,6 +18917,11 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
                 work.push(&block.result);
                 for declaration in &block.declarations {
                     match declaration {
+                        ResolvedLocalDeclaration::Evidence(source) => {
+                            work.extend(source.method_groups.iter().flat_map(|group| {
+                                group.equations.iter().map(|equation| &equation.body)
+                            }));
+                        }
                         ResolvedLocalDeclaration::Binding(binding) => {
                             work.push(&binding.initializer)
                         }
@@ -17948,6 +18936,11 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
                 work.push(&function.body.result);
                 for declaration in &function.body.declarations {
                     match declaration {
+                        ResolvedLocalDeclaration::Evidence(source) => {
+                            work.extend(source.method_groups.iter().flat_map(|group| {
+                                group.equations.iter().map(|equation| &equation.body)
+                            }));
+                        }
                         ResolvedLocalDeclaration::Binding(binding) => {
                             work.push(&binding.initializer)
                         }
@@ -19241,6 +20234,25 @@ fn resume_usage_with_budget(
                     push(&mut tasks, Task::Visit(&block.result), budget)?;
                     for declaration in block.declarations.iter().rev() {
                         match declaration {
+                            ResolvedLocalDeclaration::Evidence(source) => {
+                                for equation in source
+                                    .method_groups
+                                    .iter()
+                                    .flat_map(|group| &group.equations)
+                                {
+                                    if contains_resume_owner_with_budget(
+                                        &equation.body,
+                                        owner,
+                                        budget,
+                                    )? {
+                                        return Err(inference_failure(
+                                            TypeReason::ResumeCapture,
+                                            equation.body.span,
+                                            "a supplied method cannot capture the clause resume capability",
+                                        ));
+                                    }
+                                }
+                            }
                             ResolvedLocalDeclaration::Binding(binding) => {
                                 push(&mut tasks, Task::Visit(&binding.initializer), budget)?
                             }
@@ -19388,6 +20400,17 @@ fn block_contains_resume_owner_with_budget(
     }
     for declaration in &block.declarations {
         match declaration {
+            ResolvedLocalDeclaration::Evidence(source) => {
+                for equation in source
+                    .method_groups
+                    .iter()
+                    .flat_map(|group| &group.equations)
+                {
+                    if contains_resume_owner_with_budget(&equation.body, owner, budget)? {
+                        return Ok(true);
+                    }
+                }
+            }
             ResolvedLocalDeclaration::Binding(binding) => {
                 if contains_resume_owner_with_budget(&binding.initializer, owner, budget)? {
                     return Ok(true);
@@ -19455,6 +20478,15 @@ fn contains_resume_owner_with_budget(
                 schedule(&mut pending, &block.result, budget)?;
                 for declaration in &block.declarations {
                     match declaration {
+                        ResolvedLocalDeclaration::Evidence(source) => {
+                            for equation in source
+                                .method_groups
+                                .iter()
+                                .flat_map(|group| &group.equations)
+                            {
+                                schedule(&mut pending, &equation.body, budget)?;
+                            }
+                        }
                         ResolvedLocalDeclaration::Binding(binding) => {
                             schedule(&mut pending, &binding.initializer, budget)?;
                         }
@@ -19471,6 +20503,15 @@ fn contains_resume_owner_with_budget(
                 schedule(&mut pending, &function.body.result, budget)?;
                 for declaration in &function.body.declarations {
                     match declaration {
+                        ResolvedLocalDeclaration::Evidence(source) => {
+                            for equation in source
+                                .method_groups
+                                .iter()
+                                .flat_map(|group| &group.equations)
+                            {
+                                schedule(&mut pending, &equation.body, budget)?;
+                            }
+                        }
                         ResolvedLocalDeclaration::Binding(binding) => {
                             schedule(&mut pending, &binding.initializer, budget)?;
                         }
@@ -19533,6 +20574,16 @@ pub(crate) fn checked_program_contains_effect_syntax(
         budget: &mut TypeWorkBudget,
     ) -> Result<(), TypeError> {
         match declaration {
+            ResolvedLocalDeclaration::Evidence(source) => {
+                for equation in source
+                    .method_groups
+                    .iter()
+                    .flat_map(|group| &group.equations)
+                {
+                    schedule(work, &equation.body, budget)?;
+                }
+                Ok(())
+            }
             ResolvedLocalDeclaration::Binding(binding) => {
                 schedule(work, &binding.initializer, budget)
             }
@@ -19861,6 +20912,17 @@ fn collect_resolved_declaration<'a>(
     expressions: &mut Vec<&'a ResolvedExpr>,
 ) {
     match declaration {
+        ResolvedLocalDeclaration::Evidence(source) => {
+            for group in &source.method_groups {
+                binders.push(group.binder.id);
+                for equation in &group.equations {
+                    for pattern in &equation.patterns {
+                        collect_pattern_binders(pattern, binders);
+                    }
+                    expressions.push(&equation.body);
+                }
+            }
+        }
         ResolvedLocalDeclaration::Binding(binding) => {
             collect_pattern_binders(&binding.pattern, binders);
             expressions.push(&binding.initializer);
@@ -20386,6 +21448,7 @@ mod tests {
             let mut elaborator =
                 Elaborator::for_module(&resolved).expect("the fixture namespace should fit");
             elaborator.evidence_lowering = Some(EvidenceLowering {
+                lexical_binders: HashMap::new(),
                 interfaces: HashMap::new(),
                 interface_methods: HashMap::new(),
                 global_schemes: HashMap::new(),
@@ -20743,6 +21806,727 @@ mod tests {
             .first()
             .expect("the module fixture should retain one result body")
             .body
+    }
+
+    fn lexical_resource_fixture() -> ResolvedModule {
+        resolved_module_fixture(
+            "lexical-preparation-work.ash",
+            "interface Read<A, B> where A -> B {\nread : A -> B\n}\n",
+            "Unit",
+            "{\nnewtype N = N(Int)\nwith Read<N, Int> {\nread ignored = 42\n}\n()\n}",
+        )
+    }
+
+    #[test]
+    fn lexical_scheduling_provenance_failure_discards_deep_type_iteratively() {
+        std::thread::Builder::new()
+            .name("lexical-scheduling-provenance-failure".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved = lexical_resource_fixture();
+                let source = lexical_resource_source(&resolved);
+                let mut elaborator = lexical_resource_elaborator(&resolved, false);
+                let mut progress = elaborator
+                    .prepare_lexical_evidence(source)
+                    .expect("small method header");
+                discard_type_iteratively(std::mem::replace(
+                    &mut progress.methods[0].value_type,
+                    deep_application_type(16_384),
+                ));
+                let mut clone_work = TypeWorkBudget::unbounded();
+                let copied = IterativeTypeOwner::new(
+                    clone_type_with_budget(&progress.methods[0].value_type, &mut clone_work)
+                        .expect("deep clone is iterative"),
+                );
+                drop(copied);
+                elaborator.type_work = TypeWorkBudget::with_limit(clone_work.used());
+                let mut tasks = ElaborationTaskBuffer(Vec::new());
+                assert_eq!(
+                    elaborator.schedule_lexical_method(progress, &mut tasks),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                );
+                assert_eq!(elaborator.type_work.used(), clone_work.used());
+                assert!(tasks.is_empty());
+            })
+            .expect("small-stack scheduling worker")
+            .join()
+            .expect("failure after the deep clone must dismantle iteratively");
+    }
+
+    #[test]
+    fn lexical_polymorphic_finishing_failure_discards_pending_scheme_iteratively() {
+        std::thread::Builder::new()
+            .name("lexical-polymorphic-finishing-failure".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved = resolved_module_fixture(
+                    "lexical-polymorphic-finishing.ash",
+                    "interface Read<A> {\nread<B> : (A, B) -> B\n}\n",
+                    "Unit",
+                    "{\nnewtype N = N(Int)\nwith Read<N> {\nread (ignored, value) = value\n}\n()\n}",
+                );
+                let source = lexical_resource_source(&resolved);
+                let mut elaborator = lexical_resource_elaborator(&resolved, false);
+                let mut progress = elaborator.prepare_lexical_evidence(source).expect("header");
+                assert_eq!(progress.methods[0].type_parameters.len(), 1);
+                let body = TypedNodeOwner::new(TypedNode {
+                    node: elaborator.builder.unit(Type::Unit, Origin::Source(source.span))
+                        .expect("body node"),
+                    ty: deep_application_type(16_384),
+                    effects: EffectRow::empty(),
+                    provenance: TypeProvenance::atom(Some(source.span)),
+                });
+                elaborator.type_work = TypeWorkBudget::unbounded();
+                drop(IterativeTypeOwner::new(elaborator.pure_core_type(&body.ty).expect("projection")));
+                for _ in 0..2 {
+                    clone_kinded_type_parameters_with_budget(
+                        &progress.methods[0].type_parameters, &mut elaborator.type_work,
+                    ).expect("parameter copy");
+                }
+                drop(IterativeTypeOwner::new(elaborator.clone_type(&body.ty).expect("scheme body")));
+                let prefix = elaborator.type_work.used();
+                elaborator.type_work = TypeWorkBudget::with_limit(prefix);
+                let checkpoint = elaborator.builder.type_rewrite_checkpoint();
+                assert_eq!(
+                    elaborator.finish_lexical_method(&mut progress, body, checkpoint),
+                    Err(TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+                );
+                assert_eq!(elaborator.type_work.used(), prefix);
+                assert!(progress.members.is_empty());
+                assert!(source.checked.get().is_none());
+            })
+            .expect("small-stack finishing worker")
+            .join()
+            .expect("pending polymorphic scheme dismantles iteratively");
+    }
+
+    #[test]
+    fn lexical_capture_finishing_failure_discards_unpublished_scheme_iteratively() {
+        std::thread::Builder::new()
+            .name("lexical-capture-finishing-failure".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved = lexical_resource_fixture();
+                let source = lexical_resource_source(&resolved);
+                let mut elaborator = lexical_resource_elaborator(&resolved, false);
+                let mut progress = elaborator.prepare_lexical_evidence(source).expect("header");
+                let body = TypedNodeOwner::new(TypedNode {
+                    node: elaborator
+                        .builder
+                        .unit(Type::Unit, Origin::Source(source.span))
+                        .expect("body node"),
+                    ty: deep_application_type(16_384),
+                    effects: EffectRow::empty(),
+                    provenance: TypeProvenance::atom(Some(source.span)),
+                });
+                elaborator.type_work = TypeWorkBudget::unbounded();
+                drop(IterativeTypeOwner::new(
+                    elaborator.pure_core_type(&body.ty).expect("projection"),
+                ));
+                // Binder clone and checked-scheme clone both complete. The
+                // first capture-walk charge then fails before publication.
+                for _ in 0..2 {
+                    drop(IterativeTypeOwner::new(
+                        elaborator.clone_type(&body.ty).expect("clone"),
+                    ));
+                }
+                let prefix = elaborator.type_work.used();
+                elaborator.type_work = TypeWorkBudget::with_limit(prefix);
+                let checkpoint = elaborator.builder.type_rewrite_checkpoint();
+                assert_eq!(
+                    elaborator.finish_lexical_method(&mut progress, body, checkpoint),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                );
+                assert_eq!(elaborator.type_work.used(), prefix);
+                assert!(progress.checked_methods.is_empty());
+                assert!(progress.members.is_empty());
+                assert!(source.checked.get().is_none());
+            })
+            .expect("small-stack capture finishing worker")
+            .join()
+            .expect("unpublished checked scheme dismantles iteratively");
+    }
+
+    fn lexical_capture_resource_fixture() -> ResolvedModule {
+        resolved_module_fixture(
+            "lexical-capture-work.ash",
+            "interface Read<A> {\nread : A -> Int\n}\n",
+            "Int",
+            "{\nlet x = 20\nlet y = 22\nnewtype Token = Token(Unit)\nwith Read<Token> {\nread ignored = x + x + y\n}\nx + x + y\n}",
+        )
+    }
+
+    #[test]
+    fn lexical_capture_collection_and_routing_have_exact_retry_boundaries() {
+        let resolved = lexical_capture_resource_fixture();
+        let source = lexical_resource_source(&resolved).clone();
+        let module = resolved.module();
+        let checked = check_module(resolved).expect("capture fixture checks");
+        let linked = link_modules(vec![checked], module).expect("capture fixture links");
+        let program = crate::evidence_validation::validate_interface_evidence(linked)
+            .expect("capture catalog authenticates");
+        let prepare = || {
+            let mut elaborator =
+                Elaborator::for_module_program(&program).expect("final elaborator");
+            let progress = elaborator
+                .prepare_lexical_evidence(&source)
+                .expect("method header");
+            elaborator.type_work = TypeWorkBudget::unbounded();
+            (elaborator, progress)
+        };
+        let (mut baseline, progress) = prepare();
+        baseline.purpose = ElaborationPurpose::ModuleCheck;
+        baseline
+            .schedule_lexical_method(progress, &mut ElaborationTaskBuffer(Vec::new()))
+            .expect("ordinary scheduling without final capture collection");
+        let ordinary_work = baseline.type_work.used();
+        let captures = crate::resolved::lexical_method_capture_occurrences(
+            &source.method_groups[0],
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .expect("three capture occurrences");
+        assert_eq!(captures.len(), 3);
+        // Walker 11 + retained routes 3; each of three uses scans all 3
+        // active routes. Builder authentication owns a separate meter.
+        const COLLECTION: usize = 11 + 3;
+        const CAPTURE_WORK: usize = COLLECTION + 3 * 3;
+        let (mut short, progress) = prepare();
+        short.type_work = TypeWorkBudget::with_limit(ordinary_work + COLLECTION - 1);
+        let mut tasks = ElaborationTaskBuffer(Vec::new());
+        assert_eq!(
+            short.schedule_lexical_method(progress, &mut tasks),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        );
+        assert!(short.lexical_capture_uses.is_empty());
+        assert!(tasks.is_empty());
+        for one_short in [true, false, false] {
+            let (mut elaborator, progress) = prepare();
+            elaborator.type_work =
+                TypeWorkBudget::with_limit(ordinary_work + CAPTURE_WORK - usize::from(one_short));
+            let mut tasks = ElaborationTaskBuffer(Vec::new());
+            elaborator
+                .schedule_lexical_method(progress, &mut tasks)
+                .expect("exact collection");
+            assert_eq!(elaborator.type_work.used(), ordinary_work + COLLECTION);
+            assert_eq!(elaborator.lexical_capture_uses.len(), 3);
+            for (ordinal, occurrence) in captures.iter().enumerate() {
+                assert_eq!(
+                    elaborator.lexical_capture_uses[ordinal].occurrence_address,
+                    std::ptr::from_ref(*occurrence) as usize
+                );
+                assert_eq!(elaborator.lexical_capture_uses[ordinal].ordinal, ordinal);
+                let crate::resolved::ResolvedTermName::Global(binder) = occurrence.term else {
+                    panic!("outer captured value")
+                };
+                let node = elaborator
+                    .builder
+                    .variable(binder, Type::Int, occurrence.origin.clone())
+                    .expect("captured variable");
+                let result = elaborator.authenticate_lexical_capture_occurrence(occurrence, node);
+                if one_short && ordinal == 2 {
+                    assert_eq!(
+                        result,
+                        Err(TypeError::Internal(
+                            ElaborationFailure::TypeResourceExhausted
+                        ))
+                    );
+                } else {
+                    result.expect("exact capture routing authenticates the original occurrence");
+                }
+            }
+            if !one_short {
+                assert_eq!(elaborator.type_work.used(), ordinary_work + CAPTURE_WORK);
+            }
+            let outsider = (*captures[0]).clone();
+            let node = elaborator
+                .builder
+                .variable(
+                    program.method_evidence().lexical_owners()[0].captures[0],
+                    Type::Int,
+                    outsider.origin.clone(),
+                )
+                .expect("outside variable");
+            elaborator.type_work = TypeWorkBudget::with_limit(2);
+            assert_eq!(
+                elaborator.authenticate_lexical_capture_occurrence(&outsider, node),
+                Err(TypeError::Internal(
+                    ElaborationFailure::TypeResourceExhausted
+                ))
+            );
+            assert_eq!(elaborator.type_work.used(), 0);
+            elaborator.type_work = TypeWorkBudget::with_limit(3);
+            elaborator
+                .authenticate_lexical_capture_occurrence(&outsider, node)
+                .expect("a nonmatching occurrence still charges all active routes");
+            assert_eq!(elaborator.type_work.used(), 3);
+            elaborator.lexical_capture_uses.clear();
+            elaborator.type_work = TypeWorkBudget::with_limit(0);
+            elaborator
+                .authenticate_lexical_capture_occurrence(&outsider, node)
+                .expect("no active routes is free");
+        }
+    }
+
+    #[test]
+    fn lexical_capture_module_boundaries_clear_routes_and_poison_failed_synthesis() {
+        let resolved = lexical_capture_resource_fixture();
+        let module = resolved.module();
+        let checked = check_module(resolved).expect("capture fixture checks");
+        let linked = link_modules(vec![checked], module).expect("capture fixture links");
+        let program = crate::evidence_validation::validate_interface_evidence(linked)
+            .expect("capture catalog authenticates");
+        let mut measured = Elaborator::for_module_program(&program).expect("elaborator");
+        measured.type_work = TypeWorkBudget::unbounded();
+        measured
+            .synthesize_module_program_after_effect_scan(&program)
+            .expect("authentic final synthesis");
+        assert!(measured.lexical_capture_uses.is_empty());
+        let work = measured.type_work.used();
+        for one_short in [true, false, false] {
+            let mut elaborator =
+                Elaborator::for_module_program(&program).expect("fresh elaborator");
+            // A stale route must be cleared before the next module starts.
+            elaborator.lexical_capture_uses.push(LexicalCaptureUse {
+                occurrence_address: usize::MAX,
+                owner: usize::MAX,
+                ordinal: usize::MAX,
+            });
+            elaborator.type_work = TypeWorkBudget::with_limit(work - usize::from(one_short));
+            let result = elaborator.synthesize_module_program_after_effect_scan(&program);
+            assert!(elaborator.lexical_capture_uses.is_empty());
+            if one_short {
+                assert_eq!(
+                    result.map(|_| ()),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                );
+                assert_eq!(elaborator.state, ElaboratorState::Poisoned);
+                assert!(elaborator.final_root.is_none());
+                assert_eq!(
+                    elaborator
+                        .synthesize_module_program_after_effect_scan(&program)
+                        .map(|_| ()),
+                    Err(invalid_state())
+                );
+            } else {
+                let root = result.expect("fresh exact final synthesis");
+                assert_eq!(elaborator.type_work.used(), work);
+                elaborator
+                    .finish(root.node)
+                    .expect("successful synthesis alone publishes Core");
+            }
+        }
+    }
+
+    fn lexical_resource_source(
+        module: &ResolvedModule,
+    ) -> &crate::resolved::ResolvedLexicalEvidence {
+        let ResolvedExprKind::Block(block) = &fixture_result(module).kind else {
+            panic!("the lexical fixture must be a block");
+        };
+        block
+            .declarations
+            .iter()
+            .find_map(|declaration| {
+                if let ResolvedLocalDeclaration::Evidence(source) = declaration {
+                    Some(source.as_ref())
+                } else {
+                    None
+                }
+            })
+            .expect("the block must supply evidence")
+    }
+
+    fn lexical_resource_elaborator(module: &ResolvedModule, synthesis: bool) -> Elaborator {
+        let mut elaborator = Elaborator::for_module(module).expect("the fixture should reserve");
+        let mut constraints = InterfaceConstraintBudget::default();
+        let checked = check_interface_declarations(module, &mut constraints).expect("interface");
+        let facts = checked_interface_facts(
+            module,
+            &checked,
+            &mut elaborator.type_work,
+            &mut constraints,
+        )
+        .expect("checked interface facts");
+        if synthesis {
+            let fact = &facts[0];
+            elaborator.evidence_lowering = Some(EvidenceLowering {
+                lexical_binders: HashMap::new(),
+                interfaces: HashMap::from([(
+                    fact.id,
+                    LoweredInterface {
+                        methods: fact.methods.iter().map(|method| method.id).collect(),
+                        determination: fact.determination().map(|key| key.positions().into()),
+                    },
+                )]),
+                interface_methods: fact
+                    .methods
+                    .iter()
+                    .map(|method| {
+                        (
+                            method.id,
+                            LoweredInterfaceMethod {
+                                interface: fact.id,
+                                parameters: fact
+                                    .parameters
+                                    .iter()
+                                    .map(|parameter| parameter.id)
+                                    .collect(),
+                                type_parameters: Box::new([]),
+                                value_type: method.value_type.clone(),
+                                declaration_span: method.span,
+                            },
+                        )
+                    })
+                    .collect(),
+                global_schemes: HashMap::new(),
+                implementation_methods: HashMap::new(),
+                active_binders: HashMap::new(),
+            });
+        } else {
+            elaborator.selection = Some(
+                build_evidence_selector(
+                    module,
+                    &elaborator.registry,
+                    &[],
+                    &facts,
+                    &[],
+                    &mut elaborator.type_work,
+                    &mut constraints,
+                )
+                .expect("the selector should retain the interface"),
+            );
+        }
+        elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+        elaborator
+    }
+
+    fn assert_lexical_preparation_boundary(synthesis: bool, work: usize) {
+        let module = lexical_resource_fixture();
+        let source = lexical_resource_source(&module);
+        let mut elaborator = lexical_resource_elaborator(&module, synthesis);
+        elaborator.constraint_work = InterfaceConstraintBudget::with_limit(work - 1);
+        assert_eq!(
+            elaborator.prepare_lexical_evidence(source).map(|_| ()),
+            Err(constraint_resource())
+        );
+        assert!(source.checked.get().is_none());
+        assert!(
+            elaborator
+                .selection
+                .as_ref()
+                .is_none_or(|selector| selector.lexical_head().is_none())
+        );
+        assert!(
+            elaborator
+                .evidence_lowering
+                .as_ref()
+                .is_none_or(|lowering| lowering.lexical_binders.is_empty())
+        );
+        for fresh in [false, true] {
+            if fresh {
+                elaborator = lexical_resource_elaborator(&module, synthesis);
+            }
+            elaborator.constraint_work = InterfaceConstraintBudget::with_limit(work);
+            let progress = elaborator
+                .prepare_lexical_evidence(source)
+                .expect("the exact budget should prepare the unpublished methods");
+            assert_eq!(elaborator.constraint_work.used(), work);
+            assert_eq!(progress.methods.len(), 1);
+            assert_eq!(progress.methods[0].parameters.len(), 2);
+            assert!(progress.members.is_empty());
+            assert!(progress.active.is_empty());
+            assert!(source.checked.get().is_none());
+        }
+    }
+
+    #[test]
+    fn lexical_preparation_precharges_replacement_slots_before_cloning_arguments() {
+        for (polymorphic, synthesis) in [(false, false), (false, true), (true, false)] {
+            let resolved = if polymorphic {
+                resolved_module_fixture(
+                    "lexical-polymorphic-replacements.ash",
+                    "interface Read<A, B> where A -> B {\nread<C, D> : (A, C, D) -> B\n}\n",
+                    "Unit",
+                    "{\nnewtype N = N(Int)\nwith Read<N, Int> {\nread ignored = 42\n}\n()\n}",
+                )
+            } else {
+                lexical_resource_fixture()
+            };
+            let source = lexical_resource_source(&resolved);
+            let id = source.method_groups[0].method.expect("known method");
+            let mut elaborator = lexical_resource_elaborator(&resolved, synthesis);
+            let mut prefix = TypeWorkBudget::unbounded();
+            prefix
+                .charge(source.application.arguments.len())
+                .expect("argument slots");
+            for argument in &source.application.arguments {
+                drop(IterativeTypeOwner::new(
+                    clone_type_with_budget(&argument.ty, &mut prefix).expect("argument clone"),
+                ));
+            }
+            let (parameters, value_type) = if let Some(selector) = &elaborator.selection {
+                let method = selector.method(id).expect("selector method");
+                (method.type_parameters(), method.value_type())
+            } else {
+                let method = &elaborator
+                    .evidence_lowering
+                    .as_ref()
+                    .expect("lowering")
+                    .interface_methods[&id];
+                (method.type_parameters.as_ref(), &method.value_type)
+            };
+            clone_kinded_type_parameters_with_budget(parameters, &mut prefix)
+                .expect("method parameter copy");
+            drop(IterativeTypeOwner::new(
+                clone_type_with_budget(value_type, &mut prefix).expect("method type clone"),
+            ));
+            assert_eq!(parameters.len(), if polymorphic { 2 } else { 0 });
+            let slots = source.application.arguments.len() + parameters.len();
+            assert_eq!(slots, if polymorphic { 4 } else { 2 });
+            elaborator.type_work = TypeWorkBudget::with_limit(prefix.used() + slots - 1);
+            assert!(matches!(
+                elaborator.prepare_lexical_evidence(source),
+                Err(TypeError::Internal(
+                    ElaborationFailure::TypeResourceExhausted
+                ))
+            ));
+            assert_eq!(
+                elaborator.type_work.used(),
+                prefix.used(),
+                "replacement slots reject before argument clones, synthesis={synthesis}"
+            );
+            assert!(source.checked.get().is_none());
+
+            let mut measured = lexical_resource_elaborator(&resolved, synthesis);
+            measured.type_work = TypeWorkBudget::unbounded();
+            drop(
+                measured
+                    .prepare_lexical_evidence(source)
+                    .expect("fresh complete retry"),
+            );
+            let total = measured.type_work.used();
+            for one_short in [true, false] {
+                let mut fresh = lexical_resource_elaborator(&resolved, synthesis);
+                fresh.type_work = TypeWorkBudget::with_limit(total - usize::from(one_short));
+                let result = fresh.prepare_lexical_evidence(source);
+                if one_short {
+                    assert!(matches!(
+                        result,
+                        Err(TypeError::Internal(
+                            ElaborationFailure::TypeResourceExhausted
+                        ))
+                    ));
+                } else {
+                    drop(result.expect("fresh exact retry"));
+                    assert_eq!(fresh.type_work.used(), total);
+                }
+                assert!(source.checked.get().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn lexical_checker_preparation_charges_parameter_copies_before_publication() {
+        // M = G = K = 1, P = 2: 3M + K + P + MG + G.
+        assert_lexical_preparation_boundary(false, 8);
+    }
+
+    #[test]
+    fn lexical_synthesis_preparation_charges_parameter_and_key_copies_before_publication() {
+        // Final synthesis also reserves M active method records.
+        assert_lexical_preparation_boundary(true, 9);
+    }
+
+    #[test]
+    fn lexical_block_cleanup_charges_retained_map_capacity_at_exact_boundaries() {
+        let resolved = lexical_resource_fixture();
+        let source = lexical_resource_source(&resolved).clone();
+        let module = resolved.module();
+        let checked = check_module(resolved).expect("the lexical fixture should check");
+        let linked = link_modules(vec![checked], module).expect("the lexical fixture should link");
+        let program = crate::evidence_validation::validate_interface_evidence(linked)
+            .expect("the lexical fixture should authenticate");
+        let method = source.method_groups[0].method.expect("one supplied method");
+        let span = source.span;
+        for width in [1, 128] {
+            for one_short in [true, false, false] {
+                let mut elaborator =
+                    Elaborator::for_module_program(&program).expect("final elaborator");
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+                let application = InterfaceApplication::new(
+                    method.interface(),
+                    source
+                        .application
+                        .arguments
+                        .iter()
+                        .map(|argument| argument.ty.clone())
+                        .collect(),
+                );
+                let method_type = Type::Function(
+                    Box::new(application.arguments()[0].clone()),
+                    Box::new(Type::Int),
+                );
+                let binder = elaborator
+                    .builder
+                    .resolved_binder(
+                        source.method_groups[0].binder.id,
+                        method_type.clone(),
+                        Origin::Source(span),
+                    )
+                    .expect("binder");
+                let binder_id = binder.id();
+                let parameter = elaborator
+                    .builder
+                    .binder(application.arguments()[0].clone(), Origin::Source(span))
+                    .expect("method parameter");
+                let result = elaborator
+                    .builder
+                    .integer(
+                        crate::integer::Integer::parse_decimal("42").expect("integer"),
+                        Type::Int,
+                        Origin::Source(span),
+                    )
+                    .expect("method result");
+                let initializer = elaborator
+                    .builder
+                    .function(parameter, result, method_type.clone(), Origin::Source(span))
+                    .expect("initializer");
+                let body = elaborator
+                    .builder
+                    .unit(Type::Unit, Origin::Source(span))
+                    .expect("body");
+                let lowering = elaborator.evidence_lowering.as_mut().expect("lowering");
+                // A finished wide source leaves its backing allocation for a
+                // later narrow scope. HashMap scans visit capacity, not len.
+                for ordinal in 0..width {
+                    lowering.lexical_binders.insert(
+                        (source.id, MethodId::new(method.interface(), ordinal)),
+                        ActiveEvidenceBinder {
+                            binder: binder_id,
+                            application: application.clone(),
+                            ty: method_type.clone(),
+                        },
+                    );
+                }
+                lowering.lexical_binders.clear();
+                lowering.lexical_binders.insert(
+                    (source.id, method),
+                    ActiveEvidenceBinder {
+                        binder: binder_id,
+                        application,
+                        ty: method_type,
+                    },
+                );
+                let capacity = lowering.lexical_binders.capacity();
+                assert_eq!(lowering.lexical_binders.len(), 1);
+                assert!(capacity >= width as usize);
+                // One full lookup scan and one full retain scan.
+                let work = 2 * capacity;
+                elaborator.constraint_work =
+                    InterfaceConstraintBudget::with_limit(work - usize::from(one_short));
+                let mut declarations =
+                    ElaboratedDeclarationBuffer(vec![ElaboratedDeclaration::Evidence {
+                        source: source.id,
+                        previous: None,
+                        members: vec![(binder, initializer)],
+                        origin: Origin::Source(span),
+                    }]);
+                let result = elaborator.finish_expression_block(
+                    &[ResolvedLocalDeclaration::Evidence(Box::new(source.clone()))],
+                    0,
+                    &mut declarations,
+                    TypedNodeOwner::new(TypedNode {
+                        node: body,
+                        ty: Type::Unit,
+                        effects: EffectRow::empty(),
+                        provenance: TypeProvenance::atom(Some(span)),
+                    }),
+                    &mut TypeContext::new(),
+                    span,
+                );
+                if one_short {
+                    assert_eq!(result.map(|_| ()), Err(constraint_resource()));
+                    assert_eq!(
+                        elaborator
+                            .evidence_lowering
+                            .as_ref()
+                            .expect("lowering")
+                            .lexical_binders
+                            .len(),
+                        1
+                    );
+                } else {
+                    result.expect("the exact capacity scan charge should finish the block");
+                    assert_eq!(elaborator.constraint_work.used(), work);
+                    assert!(
+                        elaborator
+                            .evidence_lowering
+                            .as_ref()
+                            .expect("lowering")
+                            .lexical_binders
+                            .is_empty()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lexical_final_synthesis_resource_failure_poisoning_prevents_publication() {
+        let resolved = lexical_resource_fixture();
+        let module = resolved.module();
+        let checked = check_module(resolved).expect("the lexical fixture should check");
+        let linked = link_modules(vec![checked], module).expect("the lexical fixture should link");
+        let program = crate::evidence_validation::validate_interface_evidence(linked)
+            .expect("the lexical fixture should authenticate");
+        let mut measured = Elaborator::for_module_program(&program).expect("final elaborator");
+        measured.type_work = TypeWorkBudget::with_limit(usize::MAX);
+        measured.constraint_work = InterfaceConstraintBudget::with_limit(usize::MAX);
+        measured
+            .synthesize_module_program(&program)
+            .expect("measure final synthesis");
+        let work = measured.constraint_work.used();
+        assert!(work > 0);
+        let mut short = Elaborator::for_module_program(&program).expect("final elaborator");
+        let private = short
+            .builder
+            .unit(Type::Unit, Origin::Source(program.groups()[0].span()))
+            .expect("private Core");
+        short.type_work = TypeWorkBudget::with_limit(usize::MAX);
+        short.constraint_work = InterfaceConstraintBudget::with_limit(work - 1);
+        assert_eq!(
+            short.synthesize_module_program(&program).map(|_| ()),
+            Err(constraint_resource())
+        );
+        assert_eq!(short.state, ElaboratorState::Poisoned);
+        assert!(short.final_root.is_none());
+        short.constraint_work = InterfaceConstraintBudget::with_limit(work);
+        assert_eq!(
+            short.synthesize_module_program(&program).map(|_| ()),
+            Err(invalid_state())
+        );
+        assert!(matches!(
+            short.finish(private),
+            Err(ElaborationFailure::InvalidState)
+        ));
+        let mut retry = Elaborator::for_module_program(&program).expect("fresh final elaborator");
+        retry.type_work = TypeWorkBudget::with_limit(usize::MAX);
+        retry.constraint_work = InterfaceConstraintBudget::with_limit(work);
+        let root = retry
+            .synthesize_module_program(&program)
+            .expect("fresh exact synthesis");
+        assert_eq!(retry.constraint_work.used(), work);
+        retry
+            .finish(root.node)
+            .expect("only successful synthesis may publish Core");
     }
 
     #[test]
@@ -27515,6 +29299,7 @@ mod tests {
                     )
                     .expect("the evidence root should exist");
                 let mut lowering = EvidenceLowering {
+                    lexical_binders: HashMap::new(),
                     interfaces: HashMap::new(),
                     interface_methods: HashMap::from([(
                         method,
@@ -27572,6 +29357,70 @@ mod tests {
             .expect("the lowered-evidence thread should start")
             .join()
             .expect("a provenance failure must dismantle the variable type iteratively");
+    }
+
+    #[test]
+    fn lexical_selection_second_clone_failure_discards_first_type_iteratively() {
+        const DEPTH: usize = 16_384;
+        const CLONE_WORK: usize = 2 * DEPTH + 1;
+        std::thread::Builder::new()
+            .name("lexical-selection-clone-failure".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved = resolved_module_fixture("lexical-clone.ash", "", "Unit", "()");
+                let span = fixture_result(&resolved).span;
+                let module = resolved.module();
+                let interface = InterfaceId::new(module, 0);
+                let method = MethodId::new(interface, 0);
+                let source = crate::interface::LexicalEvidenceId::new(module, 0);
+                let mut selection = EvidenceSelectionBuilder::new();
+                let root = selection
+                    .push_lexical(source, &[method], &mut InterfaceConstraintBudget::default())
+                    .expect("one lexical plan node");
+                let selection = selection
+                    .finish(
+                        root,
+                        InterfaceApplication::new(interface, Box::new([Type::Unit])),
+                    )
+                    .expect("complete selection");
+                let mut lowering = EvidenceLowering {
+                    lexical_binders: HashMap::from([(
+                        (source, method),
+                        ActiveEvidenceBinder {
+                            binder: BinderId::resolved(module, 0),
+                            application: InterfaceApplication::new(
+                                interface,
+                                Box::new([Type::Unit]),
+                            ),
+                            ty: deep_application_type(DEPTH),
+                        },
+                    )]),
+                    interfaces: HashMap::new(),
+                    interface_methods: HashMap::new(),
+                    global_schemes: HashMap::new(),
+                    implementation_methods: HashMap::new(),
+                    active_binders: HashMap::new(),
+                };
+                let mut elaborator = Elaborator::for_module(&resolved).expect("namespace");
+                // Five plan/slot cells, a complete first clone, then one short
+                // for the second clone, before any Core variable is built.
+                elaborator.type_work = TypeWorkBudget::with_limit(5 + 2 * CLONE_WORK - 1);
+                assert!(matches!(
+                    elaborator.lower_evidence_selection(
+                        &selection,
+                        &mut lowering,
+                        &Origin::Source(span),
+                        None,
+                        0,
+                    ),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                ));
+            })
+            .expect("small-stack lexical selection worker")
+            .join()
+            .expect("both partial and complete deep clones dismantle iteratively");
     }
 
     #[test]
@@ -28188,6 +30037,7 @@ mod tests {
             value_type: Type::Unit,
         };
         let lowering = EvidenceLowering {
+            lexical_binders: HashMap::new(),
             interfaces: HashMap::from([(
                 interface,
                 LoweredInterface {

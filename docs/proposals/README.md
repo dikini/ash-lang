@@ -23,4 +23,4 @@ No proposed change is currently awaiting a decision.
 
 ## Accepted changes
 
-No accepted change is currently awaiting product completion.
+No accepted change currently awaits its product checkpoint.

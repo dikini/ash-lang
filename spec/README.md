@@ -48,6 +48,13 @@ requirement. A closure may capture and unwrap a local value when its exposed
 computation contains no such identity. Execution creates no fresh identity or
 scope state.
 
+A sequential local `with` supplies exact interface methods for a complete
+application whose selection key contains an active local nominal. It is not
+local implementation search. Supplied methods capture preceding ordinary values;
+the evidence is available only in the following lexical remainder. Selected
+methods lower to ordinary functions, and checked closures may retain them
+after that evidence block returns without exporting the evidence itself.
+
 An interface declares one or more ordered, fixed-kinded type parameters and an
 ordered set of method signatures. It may declare one total forward
 determination edge from a nonempty parameter key to the entire dependent
@@ -235,6 +242,40 @@ main () = make()()
 The executable test `overview_local_newtype_closure_example_is_executable`
 checks this example. Local declarations are sequential and private; they do
 not add local implementations or implicit existential packages.
+
+### Scoped exact evidence
+
+This complete module supplies the relation `Read<Token, Int>` for a local
+identity. The supplied method captures `saved`; `forward` receives its ordinary
+method function through the existing constraint mechanism. The result is
+`42 : Int`:
+
+```ash
+interface Read<A, B> where A -> B {
+    read : A -> B
+}
+
+forward<A, B> : A -> B where Read<A, B>
+forward value = read(value)
+
+main : Unit -> Int
+main () = {
+    newtype Token = Token(Int)
+    let saved = Token(41)
+    with Read<Token, Int> {
+        read ignored = match saved {
+            Token(value) => value + 1
+        }
+    }
+    forward(saved)
+}
+```
+
+The test `overview_scoped_evidence_example_is_executable` checks this example
+and the direct `read(saved)` variant. Abstract requirements and exact-current
+implementation evidence precede lexical evidence; lexical evidence precedes
+concrete implementation matching. This form introduces no resource lifetime,
+proof authority, acquisition, or existential package.
 
 ### Interfaces and selected evidence
 

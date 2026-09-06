@@ -1139,6 +1139,15 @@ pub struct ResolvedModuleProgram {
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum LinkedCarrierMutationForTest {
+    LexicalSourceIdentity,
+    LexicalApplicationArgument,
+    LexicalMethodIdentity,
+    LexicalMethodBinder,
+    LexicalEquationBinder,
+    LexicalEmptyEquations,
+    LexicalMethodOrder,
+    LexicalContextualParameter,
+    LexicalBeforeNominal,
     NominalParameterKind(usize),
     ConstructorIdentity,
     ConstructorOrdinal,
@@ -1819,6 +1828,74 @@ impl ResolvedModuleProgram {
             return false;
         };
         match mutation {
+            LinkedCarrierMutationForTest::LexicalSourceIdentity
+            | LinkedCarrierMutationForTest::LexicalApplicationArgument
+            | LinkedCarrierMutationForTest::LexicalMethodIdentity
+            | LinkedCarrierMutationForTest::LexicalMethodBinder
+            | LinkedCarrierMutationForTest::LexicalEquationBinder
+            | LinkedCarrierMutationForTest::LexicalEmptyEquations
+            | LinkedCarrierMutationForTest::LexicalMethodOrder
+            | LinkedCarrierMutationForTest::LexicalContextualParameter
+            | LinkedCarrierMutationForTest::LexicalBeforeNominal => {
+                let Some(block) = self.groups[group_index]
+                    .definitions
+                    .iter_mut()
+                    .filter_map(|definition| definition.source.as_mut())
+                    .find_map(|definition| match &mut definition.kind {
+                        ResolvedDefinitionKind::Equational(global) => global.equations.first_mut()
+                            .and_then(|equation| match &mut equation.body.kind {
+                                ResolvedExprKind::Block(block) => Some(block),
+                                _ => None,
+                            }),
+                        ResolvedDefinitionKind::InlineOperational(_) => None,
+                    })
+                else { return false; };
+                let Some(index) = block.declarations.iter().position(|declaration|
+                    matches!(declaration, ResolvedLocalDeclaration::Evidence(_)))
+                else { return false; };
+                if matches!(mutation, LinkedCarrierMutationForTest::LexicalBeforeNominal) {
+                    if index == 0 { return false; }
+                    block.declarations.swap(index - 1, index);
+                    return true;
+                }
+                let ResolvedLocalDeclaration::Evidence(source) = &mut block.declarations[index]
+                else { return false; };
+                match mutation {
+                    LinkedCarrierMutationForTest::LexicalSourceIdentity =>
+                        source.id = crate::interface::LexicalEvidenceId::new(module, u32::MAX),
+                    LinkedCarrierMutationForTest::LexicalApplicationArgument => {
+                        let Some(argument) = source.application.arguments.first_mut() else { return false; };
+                        discard_type_iteratively(std::mem::replace(&mut argument.ty, Type::Int));
+                    }
+                    LinkedCarrierMutationForTest::LexicalMethodOrder => {
+                        if source.method_groups.len() < 2 { return false; }
+                        source.method_groups.swap(0, 1);
+                    }
+                    LinkedCarrierMutationForTest::LexicalMethodIdentity => {
+                        let Some(method) = source.method_groups.first_mut() else { return false; };
+                        method.method = Some(MethodId::new(source.application.interface.id, u32::MAX));
+                    }
+                    LinkedCarrierMutationForTest::LexicalMethodBinder => {
+                        let Some(method) = source.method_groups.first_mut() else { return false; };
+                        method.binder.id = BinderId::resolved(module, u32::MAX);
+                    }
+                    LinkedCarrierMutationForTest::LexicalEquationBinder => {
+                        let Some(equation) = source.method_groups.first_mut().and_then(|group| group.equations.first_mut()) else { return false; };
+                        equation.name.binder = BinderId::resolved(module, u32::MAX);
+                    }
+                    LinkedCarrierMutationForTest::LexicalEmptyEquations => {
+                        let Some(method) = source.method_groups.first_mut() else { return false; };
+                        method.equations = Box::new([]);
+                    }
+                    LinkedCarrierMutationForTest::LexicalContextualParameter => {
+                        let Some(parameter) = source.method_groups.first_mut().and_then(|method|
+                            method.contextual_parameters.first_mut()) else { return false; };
+                        parameter.id = TypeVariableId::resolved(module, u32::MAX);
+                    }
+                    _ => unreachable!(),
+                }
+                true
+            }
             LinkedCarrierMutationForTest::NominalParameterKind(ordinal) => {
                 let Some(registry) = Arc::get_mut(&mut self.registry) else {
                     return false;
@@ -17440,6 +17517,9 @@ pub struct ResolvedImplementation {
 /// One maximal contiguous implementation method-equation group.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedImplementationMethodGroup {
+    /// Declaration-owned contextual binders for a lexical supplied method.
+    /// Module implementation methods use their existing interface binders.
+    pub contextual_parameters: Box<[ResolvedTypeVariable]>,
     /// Interface method named by the source head, when it is a method at all.
     pub method: Option<MethodId>,
     /// Identity derived from the impl and method, retained even for duplicates.
@@ -17588,12 +17668,203 @@ pub struct ResolvedBlock {
 /// The closed resolved local-declaration family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResolvedLocalDeclaration {
+    /// Exact methods available in the following block remainder.
+    Evidence(Box<ResolvedLexicalEvidence>),
     /// A sequential nonrecursive binding.
     Binding(Box<ResolvedBinding>),
     /// A simultaneous recursive binding group.
     Recursive(ResolvedRecursiveGroup),
     /// A sequential lexical nominal declaration.
     Newtype(NominalTypeId),
+}
+
+/// A resolved sequential source of exact evidence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedLexicalEvidence {
+    pub(crate) checked: crate::interface::LexicalEvidenceSlot,
+    /// Module-qualified lexical identity.
+    pub id: crate::interface::LexicalEvidenceId,
+    /// Complete application, resolved in the preceding type scope.
+    pub application: ResolvedInterfaceApplication,
+    /// Maximal contiguous method groups with ordinary hidden binders.
+    pub method_groups: Box<[ResolvedImplementationMethodGroup]>,
+    /// Complete declaration span.
+    pub span: Span,
+}
+
+/// Direct term captures of a supplied method, independent of evidence lowering.
+pub(crate) fn lexical_method_captures(
+    group: &ResolvedImplementationMethodGroup,
+    budget: &mut TypeWorkBudget,
+) -> Result<Box<[BinderId]>, ()> {
+    let occurrences = lexical_method_capture_occurrences(group, budget)?;
+    budget.charge(occurrences.len())?;
+    let mut captures = Vec::new();
+    captures.try_reserve(occurrences.len()).map_err(|_| ())?;
+    for occurrence in occurrences {
+        let ResolvedTermName::Global(binder) = occurrence.term else {
+            unreachable!();
+        };
+        captures.push(binder);
+    }
+    Ok(captures.into_boxed_slice())
+}
+
+/// The same direct-capture walk, retaining borrowed occurrence identity for final lowering.
+pub(crate) fn lexical_method_capture_occurrences<'a>(
+    group: &'a ResolvedImplementationMethodGroup,
+    budget: &mut TypeWorkBudget,
+) -> Result<Box<[&'a ResolvedOccurrence]>, ()> {
+    fn pattern_ids(
+        pattern: &ResolvedPattern,
+        bound: &mut HashSet<BinderId>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        budget.charge(1)?;
+        let mut pending = Vec::new();
+        pending.try_reserve(1).map_err(|_| ())?;
+        pending.push(pattern);
+        while let Some(pattern) = pending.pop() {
+            budget.charge(1)?;
+            match &pattern.kind {
+                ResolvedPatternKind::Binder(binder) => {
+                    bound.try_reserve(1).map_err(|_| ())?;
+                    bound.insert(binder.id);
+                }
+                ResolvedPatternKind::Tuple(elements) => {
+                    budget.charge(elements.len())?;
+                    pending.try_reserve(elements.len()).map_err(|_| ())?;
+                    pending.extend(elements);
+                }
+                ResolvedPatternKind::Constructor {
+                    payload: Some(payload),
+                    ..
+                } => pending.push(payload),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    fn block<'a>(
+        block: &'a ResolvedBlock,
+        work: &mut Vec<&'a ResolvedExpr>,
+        bound: &mut HashSet<BinderId>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        budget.charge(1)?;
+        work.try_reserve(1).map_err(|_| ())?;
+        work.push(&block.result);
+        for declaration in &block.declarations {
+            budget.charge(1)?;
+            match declaration {
+                ResolvedLocalDeclaration::Binding(binding) => {
+                    pattern_ids(&binding.pattern, bound, budget)?;
+                    work.try_reserve(1).map_err(|_| ())?;
+                    work.push(&binding.initializer);
+                }
+                ResolvedLocalDeclaration::Recursive(group) => {
+                    budget.charge(group.members.len())?;
+                    bound.try_reserve(group.members.len()).map_err(|_| ())?;
+                    work.try_reserve(group.members.len()).map_err(|_| ())?;
+                    for member in &group.members {
+                        bound.insert(member.binder.id);
+                        work.push(&member.initializer);
+                    }
+                }
+                ResolvedLocalDeclaration::Evidence(source) => {
+                    budget.charge(source.method_groups.len())?;
+                    for group in &source.method_groups {
+                        bound.try_reserve(1).map_err(|_| ())?;
+                        bound.insert(group.binder.id);
+                        budget.charge(group.equations.len())?;
+                        for equation in &group.equations {
+                            for pattern in &equation.patterns {
+                                pattern_ids(pattern, bound, budget)?;
+                            }
+                            work.try_reserve(1).map_err(|_| ())?;
+                            work.push(&equation.body);
+                        }
+                    }
+                }
+                ResolvedLocalDeclaration::Newtype(_) => {}
+            }
+        }
+        Ok(())
+    }
+    let mut bound = HashSet::new();
+    let mut captures = Vec::new();
+    let mut pending = Vec::new();
+    budget.charge(group.equations.len())?;
+    pending.try_reserve(group.equations.len()).map_err(|_| ())?;
+    for equation in &group.equations {
+        for pattern in &equation.patterns {
+            pattern_ids(pattern, &mut bound, budget)?;
+        }
+        pending.push(&equation.body);
+    }
+    while let Some(expression) = pending.pop() {
+        budget.charge(1)?;
+        pending.try_reserve(2).map_err(|_| ())?;
+        match &expression.kind {
+            ResolvedExprKind::Occurrence(occurrence) => {
+                if let ResolvedTermName::Global(_) = occurrence.term {
+                    captures.try_reserve(1).map_err(|_| ())?;
+                    captures.push(occurrence);
+                }
+            }
+            ResolvedExprKind::Tuple(elements) => {
+                budget.charge(elements.len())?;
+                pending.try_reserve(elements.len()).map_err(|_| ())?;
+                pending.extend(elements);
+            }
+            ResolvedExprKind::Apply(application) => {
+                pending.push(&application.function);
+                pending.push(&application.argument);
+            }
+            ResolvedExprKind::Add(binary)
+            | ResolvedExprKind::Multiply(binary)
+            | ResolvedExprKind::Equal(binary) => {
+                pending.push(&binary.left);
+                pending.push(&binary.right);
+            }
+            ResolvedExprKind::Block(body) => block(body, &mut pending, &mut bound, budget)?,
+            ResolvedExprKind::Function(function) => {
+                pattern_ids(&function.pattern, &mut bound, budget)?;
+                block(&function.body, &mut pending, &mut bound, budget)?;
+            }
+            ResolvedExprKind::Match(matched) => {
+                budget.charge(matched.arms.len())?;
+                pending
+                    .try_reserve(matched.arms.len().saturating_add(1))
+                    .map_err(|_| ())?;
+                pending.push(&matched.scrutinee);
+                for arm in &matched.arms {
+                    pattern_ids(&arm.pattern, &mut bound, budget)?;
+                    pending.push(&arm.body);
+                }
+            }
+            ResolvedExprKind::Perform(request) => pending.push(&request.operand),
+            ResolvedExprKind::Handle(handler) => {
+                budget.charge(handler.clauses.len())?;
+                pending
+                    .try_reserve(handler.clauses.len().saturating_add(1))
+                    .map_err(|_| ())?;
+                pending.push(&handler.body);
+                for clause in &handler.clauses {
+                    pattern_ids(&clause.pattern, &mut bound, budget)?;
+                    pending.push(&clause.body);
+                }
+            }
+            ResolvedExprKind::Resume(resume) => pending.push(&resume.value),
+            ResolvedExprKind::Integer(_)
+            | ResolvedExprKind::Boolean(_)
+            | ResolvedExprKind::Unit
+            | ResolvedExprKind::Constructor(_) => {}
+        }
+    }
+    budget.charge(captures.len())?;
+    captures.retain(|occurrence| matches!(occurrence.term, ResolvedTermName::Global(binder) if !bound.contains(&binder)));
+    Ok(captures.into_boxed_slice())
 }
 
 /// One resolved simultaneous recursive binding group.
@@ -17952,6 +18223,18 @@ fn discard_block_into_work(
     expressions.push(*block.result);
     for declaration in block.declarations {
         match declaration {
+            ResolvedLocalDeclaration::Evidence(evidence) => {
+                discard_resolved_interface_application(evidence.application);
+                for group in evidence.method_groups.into_vec() {
+                    for parameter in group.contextual_parameters.into_vec() {
+                        discard_resolved_type_variable(parameter);
+                    }
+                    discard_binder(group.binder);
+                    for equation in group.equations.into_vec() {
+                        discard_equation_into_work(equation, expressions, patterns);
+                    }
+                }
+            }
             ResolvedLocalDeclaration::Binding(binding) => {
                 let binding = *binding;
                 patterns.push(binding.pattern);
@@ -18066,6 +18349,7 @@ pub(crate) fn discard_resolved_local_declaration_iteratively(
     let span = match &declaration {
         ResolvedLocalDeclaration::Binding(binding) => binding.span,
         ResolvedLocalDeclaration::Recursive(group) => group.span,
+        ResolvedLocalDeclaration::Evidence(evidence) => evidence.span,
         ResolvedLocalDeclaration::Newtype(_) => unreachable!("handled above"),
     };
     discard_resolved_body_work(
@@ -18087,6 +18371,309 @@ pub(crate) fn discard_resolved_local_declaration_iteratively(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn capture_method_fixture() -> ResolvedImplementationMethodGroup {
+        let file = SourceFile::new("capture-work.ash", "x + x + y").expect("source");
+        let module = ModuleId::new(42_005);
+        let span = file
+            .span(ByteRange::new(0, 9).expect("range"))
+            .expect("span");
+        let occurrence = |ordinal, spelling: &str, start| ResolvedExpr {
+            kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
+                term: ResolvedTermName::Global(BinderId::resolved(module, ordinal)),
+                spelling: spelling.to_owned(),
+                origin: Origin::Source(
+                    file.span(ByteRange::new(start, start + 1).expect("range"))
+                        .expect("span"),
+                ),
+                import_span: None,
+                evidence: Box::new([]),
+            }),
+            span: file
+                .span(ByteRange::new(start, start + 1).expect("range"))
+                .expect("span"),
+        };
+        let add = |left, right| ResolvedExpr {
+            kind: ResolvedExprKind::Add(ResolvedBinaryExpr {
+                left: Box::new(left),
+                right: Box::new(right),
+                operator_span: span,
+            }),
+            span,
+        };
+        let binder = Binder {
+            id: BinderId::resolved(module, 3),
+            spelling: "read".to_owned(),
+            origin: Origin::Source(span),
+        };
+        ResolvedImplementationMethodGroup {
+            contextual_parameters: Box::new([]),
+            method: Some(MethodId::new(InterfaceId::new(module, 0), 0)),
+            identity: None,
+            binder: binder.clone(),
+            equations: Box::new([ResolvedEquation {
+                name: ResolvedEquationHead {
+                    binder: binder.id,
+                    spelling: binder.spelling,
+                    origin: binder.origin,
+                },
+                patterns: vec![ResolvedPattern {
+                    kind: ResolvedPatternKind::Binder(Binder {
+                        id: BinderId::resolved(module, 2),
+                        spelling: "ignored".to_owned(),
+                        origin: Origin::Source(span),
+                    }),
+                    span,
+                }],
+                body: add(
+                    add(occurrence(0, "x", 0), occurrence(0, "x", 4)),
+                    occurrence(1, "y", 8),
+                ),
+                span,
+            }]),
+            span,
+        }
+    }
+
+    #[test]
+    fn lexical_capture_occurrences_preserve_walk_order_and_duplicate_sites() {
+        let group = capture_method_fixture();
+        let ResolvedExprKind::Add(outer) = &group.equations[0].body.kind else {
+            panic!("outer addition");
+        };
+        let ResolvedExprKind::Add(inner) = &outer.left.kind else {
+            panic!("inner addition");
+        };
+        let expected = [&outer.right, &inner.right, &inner.left].map(|expression| {
+            let ResolvedExprKind::Occurrence(occurrence) = &expression.kind else {
+                panic!("capture occurrence");
+            };
+            occurrence
+        });
+        let captures = lexical_method_capture_occurrences(&group, &mut TypeWorkBudget::default())
+            .expect("capture walk");
+        assert_eq!(captures.len(), 3);
+        for (actual, expected) in captures.iter().zip(expected) {
+            assert!(
+                std::ptr::eq(*actual, expected),
+                "retain each original occurrence in stack traversal order"
+            );
+        }
+        let module = ModuleId::new(42_005);
+        assert_eq!(
+            lexical_method_captures(&group, &mut TypeWorkBudget::default())
+                .expect("capture binders")
+                .as_ref(),
+            &[
+                BinderId::resolved(module, 1),
+                BinderId::resolved(module, 0),
+                BinderId::resolved(module, 0)
+            ]
+        );
+    }
+
+    #[test]
+    fn lexical_capture_pattern_seed_has_an_exact_retryable_boundary() {
+        // Equation slot, pattern seed, pattern visit, five expression visits,
+        // and three occurrence-filter cells for read ignored = x + x + y.
+        const WORK: usize = 1 + 1 + 1 + 5 + 3;
+        let group = capture_method_fixture();
+        let mut short = TypeWorkBudget::with_limit(WORK - 1);
+        assert_eq!(
+            lexical_method_capture_occurrences(&group, &mut short),
+            Err(())
+        );
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(WORK);
+            assert_eq!(
+                lexical_method_capture_occurrences(&group, &mut exact)
+                    .expect("fresh exact capture walk")
+                    .len(),
+                3
+            );
+            assert_eq!(exact.used(), WORK);
+        }
+    }
+
+    #[test]
+    fn lexical_capture_binder_wrapper_has_an_exact_retryable_boundary() {
+        // The eleven-unit occurrence walk plus three retained binder IDs.
+        const WORK: usize = 11 + 3;
+        let group = capture_method_fixture();
+        assert_eq!(
+            lexical_method_captures(&group, &mut TypeWorkBudget::with_limit(WORK - 1)),
+            Err(())
+        );
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(WORK);
+            assert_eq!(
+                lexical_method_captures(&group, &mut exact)
+                    .expect("fresh exact binder capture")
+                    .len(),
+                3
+            );
+            assert_eq!(exact.used(), WORK);
+        }
+    }
+
+    fn nested_capture_method_fixture(width: usize) -> ResolvedImplementationMethodGroup {
+        let mut outer = capture_method_fixture();
+        let span = outer.span;
+        let module = ModuleId::new(42_005);
+        let interface = InterfaceId::new(module, 1);
+        let body = || ResolvedExpr {
+            kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
+                term: ResolvedTermName::Global(BinderId::resolved(module, 0)),
+                spelling: "x".to_owned(),
+                origin: Origin::Source(span),
+                import_span: None,
+                evidence: Box::new([]),
+            }),
+            span,
+        };
+        let groups = (0..width)
+            .map(|index| {
+                let binder = Binder {
+                    id: BinderId::resolved(module, 100 + index as u32),
+                    spelling: format!("nested{index}"),
+                    origin: Origin::Source(span),
+                };
+                ResolvedImplementationMethodGroup {
+                    contextual_parameters: Box::new([]),
+                    method: Some(MethodId::new(interface, index as u32)),
+                    identity: None,
+                    binder: binder.clone(),
+                    // Two disjoint, exhaustive Boolean equations per supplied method.
+                    equations: [false, true]
+                        .map(|value| ResolvedEquation {
+                            name: ResolvedEquationHead {
+                                binder: binder.id,
+                                spelling: binder.spelling.clone(),
+                                origin: binder.origin.clone(),
+                            },
+                            patterns: vec![ResolvedPattern {
+                                kind: ResolvedPatternKind::Boolean(value),
+                                span,
+                            }],
+                            body: body(),
+                            span,
+                        })
+                        .into(),
+                    span,
+                }
+            })
+            .collect();
+        outer.equations[0].body = ResolvedExpr {
+            kind: ResolvedExprKind::Block(ResolvedBlock {
+                declarations: vec![ResolvedLocalDeclaration::Evidence(Box::new(
+                    ResolvedLexicalEvidence {
+                        checked: crate::interface::LexicalEvidenceSlot::default(),
+                        id: crate::interface::LexicalEvidenceId::new(module, 1),
+                        application: ResolvedInterfaceApplication {
+                            interface: ResolvedInterfaceOccurrence {
+                                id: interface,
+                                spelling: "Nested".to_owned(),
+                                origin: Origin::Source(span),
+                            },
+                            arguments: Box::new([ResolvedType {
+                                ty: Type::Nominal(NominalTypeId::lexical(module, 0)),
+                                provenance: ResolvedTypeProvenance::new(
+                                    vec![ResolvedTypeProvenanceNode::Fact(span)],
+                                    0,
+                                ),
+                                origin: Origin::Source(span),
+                                span,
+                            }]),
+                            span,
+                        },
+                        method_groups: groups,
+                        span,
+                    },
+                ))],
+                result: Box::new(ResolvedExpr {
+                    kind: ResolvedExprKind::Unit,
+                    span,
+                }),
+                span,
+            }),
+            span,
+        };
+        outer
+    }
+
+    #[test]
+    fn lexical_capture_nested_groups_precharge_binders_before_iteration() {
+        const WIDTH: usize = 64;
+        // Outer equation/pattern, block visit/result slot, declaration visit.
+        const PREFIX: usize = 1 + 1 + 1 + 1 + 1 + 1;
+        let group = nested_capture_method_fixture(WIDTH);
+        let mut short = TypeWorkBudget::with_limit(PREFIX + WIDTH - 1);
+        assert_eq!(
+            lexical_method_capture_occurrences(&group, &mut short),
+            Err(())
+        );
+        assert_eq!(
+            short.used(),
+            PREFIX,
+            "the complete binder batch must fail before nested-group traversal"
+        );
+    }
+
+    #[test]
+    fn lexical_capture_nested_evidence_retains_each_outer_value_occurrence() {
+        for width in [1, 64] {
+            let group = nested_capture_method_fixture(width);
+            let captures =
+                lexical_method_capture_occurrences(&group, &mut TypeWorkBudget::default())
+                    .expect("all nested Boolean equations should be traversable");
+            assert_eq!(captures.len(), width * 2);
+            assert!(captures.iter().all(|occurrence| occurrence.term
+                == ResolvedTermName::Global(BinderId::resolved(ModuleId::new(42_005), 0))));
+        }
+    }
+
+    #[test]
+    fn lexical_capture_nested_equations_precharge_body_slots_before_patterns() {
+        // The six-unit outer prefix and one nested method binder.
+        const PREFIX: usize = 6 + 1;
+        let group = nested_capture_method_fixture(1);
+        let mut short = TypeWorkBudget::with_limit(PREFIX + 2 - 1);
+        assert_eq!(
+            lexical_method_capture_occurrences(&group, &mut short),
+            Err(())
+        );
+        assert_eq!(
+            short.used(),
+            PREFIX,
+            "both equation slots must be admitted before either pattern"
+        );
+    }
+
+    #[test]
+    fn lexical_capture_nested_method_walk_has_exact_fresh_retry_boundaries() {
+        for width in [1, 64] {
+            let group = nested_capture_method_fixture(width);
+            // Seven outer/result units, G binder slots, then E=2 equations per
+            // group: equation slot, pattern seed/visit, body visit, filter cell.
+            let work = 7 + width + 5 * width * 2;
+            assert_eq!(
+                lexical_method_capture_occurrences(
+                    &group,
+                    &mut TypeWorkBudget::with_limit(work - 1)
+                ),
+                Err(())
+            );
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(work);
+                let captures = lexical_method_capture_occurrences(&group, &mut exact)
+                    .expect("the full nested capture walk should fit exactly");
+                assert_eq!(exact.used(), work);
+                assert_eq!(captures.len(), width * 2);
+                assert!(captures.iter().all(|occurrence| occurrence.term
+                    == ResolvedTermName::Global(BinderId::resolved(ModuleId::new(42_005), 0))));
+            }
+        }
+    }
 
     fn canonical_representation_provenance_for_test() -> ResolvedTypeProvenance {
         let source = SourceFile::new("canonical-representation.ash", "T")
@@ -27480,6 +28067,7 @@ mod tests {
                     prerequisite_only_parameters: Box::new([]),
                     prerequisites: Box::new([]),
                     method_groups: vec![ResolvedImplementationMethodGroup {
+                        contextual_parameters: Box::new([]),
                         method: None,
                         identity: None,
                         binder: Binder {

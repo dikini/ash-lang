@@ -41,8 +41,10 @@ experimental code.
 The module-`newtype`, local-`newtype`, and resume-required kernel product
 checkpoints are combined on `integration/effect-ash-foundations`. The
 [local-newtype evidence](effect-ash/local-newtype-evidence.md) records lexical
-identity, escape, validation, and erasure. Scoped exact evidence is the next
-identity-track checkpoint. The forecast below
+identity, escape, validation, and erasure. Scoped exact evidence is implemented
+and verified on its product branch, with
+[implementation evidence](effect-ash/scoped-evidence-evidence.md) recording
+authentication, resource bounds, reviews, and the full gate. The forecast below
 retains its original relative weights; it is not an elapsed-work ledger.
 
 ## Completion condition
@@ -577,18 +579,22 @@ search, runtime-fresh identity, and existential packaging remain excluded.
 
 Prerequisite: integrated local `newtype`.
 
-The proposal must settle trusted introduction authority, identity-equal
-complete-goal matching, lexical lifetime, precedence relative to abstract,
-exact-current, and concrete evidence, participation in fixed-snapshot
-improvement, recursive-prerequisite behavior, authentication, and erasure.
-Test it first with a pure relation. Likely seams are `src/interface.rs`,
-`src/evidence.rs`, `src/evidence_validation.rs`, `src/elaborate.rs`,
-`src/resolved.rs`, and `src/core/validate.rs`.
+The implemented checkpoint supplies private sequential `with` declarations for one exact complete
+application whose selection key contains an active local nominal. Abstract and
+exact-current evidence precede the lexical source; concrete matching follows.
+The existing fixed-snapshot forward improvement and complete-goal prerequisite
+rules remain intact. The first pure `Read<Token, Int>` relation passes through
+direct and constrained calls; fifty interaction cases retain the expanded
+behavioral boundary.
 
-Evidence must reject representation-derived relations, global hijack, local
-search, wrong identity, stale scope, and forged selected evidence. Preserve one
-ordinary unification pass, one forward improvement pass, no determinant-key
-refinement, and no runtime lookup.
+The checkpoint authenticates every retained source, method, parameter, capture
+use, and actual scope, including unused declarations. Exact resource and
+predecessor checks, both independent reviews, and the full verification gate
+pass. Local integration is separate from integration into `main`.
+This grants no resource, provider, or proof authority and
+adds no local implementation search, runtime lookup, or checked discard. The
+original seven-unit forecast remains a relative planning weight, not measured
+work or a fresh implementation budget.
 
 ### Resume-required effect kernel — forecast 17 units
 
@@ -727,7 +733,8 @@ The completed module-`newtype` checkpoint resolves them for module scope. The
 completed resume-required effect-kernel checkpoint also resolves the initial
 row, handler, and one-shot control questions. The local-newtype checkpoint
 settles sequential lexical identity, escape, and erased scope validation.
-The branch results are not current on `main`. Scoped exact evidence,
-capture and checked discard, and resource-scope composition
+Scoped exact evidence settles pure introduction, precedence, improvement,
+authentication, and erasure. The branch results are not current on `main`.
+Capture and checked discard and resource-scope composition
 remain later proposal-owned questions. This informative plan authorizes none
 of them.

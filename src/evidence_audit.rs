@@ -195,6 +195,19 @@ fn push_block<'a>(
             .charge(1)
             .map_err(|()| EvidenceAuditFailure::ConstraintResource)?;
         let initializers = match declaration {
+            ResolvedLocalDeclaration::Evidence(source) => {
+                budget
+                    .charge(source.method_groups.len())
+                    .map_err(|()| EvidenceAuditFailure::ConstraintResource)?;
+                source
+                    .method_groups
+                    .iter()
+                    .try_fold(0usize, |count, group| {
+                        count
+                            .checked_add(group.equations.len())
+                            .ok_or(EvidenceAuditFailure::ConstraintResource)
+                    })?
+            }
             ResolvedLocalDeclaration::Binding(_) => 1,
             ResolvedLocalDeclaration::Recursive(group) => group.members.len(),
             ResolvedLocalDeclaration::Newtype(_) => 0,
@@ -207,6 +220,14 @@ fn push_block<'a>(
     pending.push(block.result.as_ref());
     for declaration in &block.declarations {
         match declaration {
+            ResolvedLocalDeclaration::Evidence(source) => {
+                pending.extend(
+                    source
+                        .method_groups
+                        .iter()
+                        .flat_map(|group| group.equations.iter().map(|equation| &equation.body)),
+                );
+            }
             ResolvedLocalDeclaration::Binding(binding) => pending.push(&binding.initializer),
             ResolvedLocalDeclaration::Recursive(group) => {
                 pending.extend(group.members.iter().map(|member| &member.initializer));
@@ -396,6 +417,7 @@ mod tests {
             prerequisite_only_parameters: Box::new([]),
             prerequisites: Box::new([]),
             method_groups: vec![ResolvedImplementationMethodGroup {
+                contextual_parameters: Box::new([]),
                 method: Some(method),
                 identity: Some(crate::interface::ImplMethodId::new(implementation, method)),
                 binder: Binder {
@@ -419,6 +441,68 @@ mod tests {
             .into_boxed_slice(),
             span,
         }
+    }
+
+    #[test]
+    fn lexical_block_group_scan_has_exact_atomic_work_boundaries() {
+        let span = fixture_span();
+        let module = ModuleId::new(37);
+        let binder = BinderId::resolved(module, 0);
+        let seed = occurrence(ResolvedTermName::Global(binder), Vec::new(), span);
+        let template = implementation(seed.clone(), module, span);
+        for group_count in [1, 64] {
+            for equation_count in [0, 2] {
+                let mut group = template.method_groups[0].clone();
+                group.equations =
+                    vec![group.equations[0].clone(); equation_count].into_boxed_slice();
+                let block = ResolvedBlock {
+                    declarations: vec![ResolvedLocalDeclaration::Evidence(Box::new(
+                        crate::resolved::ResolvedLexicalEvidence {
+                            checked: crate::interface::LexicalEvidenceSlot::default(),
+                            id: crate::interface::LexicalEvidenceId::new(module, 0),
+                            application: template.head.clone(),
+                            method_groups: vec![group; group_count].into_boxed_slice(),
+                            span,
+                        },
+                    ))],
+                    result: Box::new(seed.clone()),
+                    span,
+                };
+                // One declaration, G group visits, one result and GE body slots.
+                let exact_work = 2 + group_count + group_count * equation_count;
+                for limit in [group_count, exact_work - 1] {
+                    let mut pending = vec![&seed];
+                    let mut short = InterfaceConstraintBudget::with_limit(limit);
+                    assert_eq!(
+                        push_block(&mut pending, &block, &mut short),
+                        Err(EvidenceAuditFailure::ConstraintResource),
+                        "groups={group_count}, equations={equation_count}, limit={limit}"
+                    );
+                    assert_eq!(pending.len(), 1);
+                    assert!(std::ptr::eq(pending[0], &seed));
+                    if limit == group_count {
+                        assert_eq!(short.used(), 1, "reject before scanning groups");
+                    }
+                }
+                let mut pending = vec![&seed];
+                let mut exact = InterfaceConstraintBudget::with_limit(exact_work);
+                push_block(&mut pending, &block, &mut exact).expect("fresh exact retry");
+                assert_eq!(exact.used(), exact_work);
+                assert_eq!(pending.len(), 2 + group_count * equation_count);
+                assert!(std::ptr::eq(pending[1], block.result.as_ref()));
+            }
+        }
+
+        let block = ResolvedBlock {
+            declarations: Vec::new(),
+            result: Box::new(seed),
+            span,
+        };
+        let mut pending = Vec::new();
+        let mut exact = InterfaceConstraintBudget::with_limit(1);
+        push_block(&mut pending, &block, &mut exact).expect("source-free predecessor");
+        assert_eq!(exact.used(), 1);
+        assert_eq!(pending.len(), 1);
     }
 
     #[test]
