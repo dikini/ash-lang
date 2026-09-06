@@ -178,6 +178,10 @@ The complete validation authenticates:
   spelling, identity, and provenance;
 - abstract requirement ownership, declaration order, lexical scope, and
   provenance;
+- each lexical evidence source's canonical identity, complete application,
+  ordered method identities and binders, independent contextual parameters,
+  captured binders, and actual preceding lexical scope, including unused
+  sources;
 - checked global and implementation-method schemes, their ordered kinded
   head-versus-method binder partitions, selected method types, and binder
   mappings;
@@ -267,7 +271,8 @@ forall parameters.
 ```
 
 Authenticated nested schemes are valid only in generated method-evidence
-domains. If `s_j` has method parameters, its `type(s_j)` is the corresponding
+positions, including the ordinary local binding of a supplied polymorphic
+method. If `s_j` has method parameters, its `type(s_j)` is the corresponding
 declared method scheme after substituting the requirement's complete argument
 vector for the interface parameter vector:
 
@@ -311,6 +316,21 @@ source term arguments apply. An authenticated evidence variable may remain
 uninstantiated only when it is forwarded to the exact matching generated
 evidence domain of another constrained definition.
 
+A lexical selection lowers to the ordinary local binder of the supplied
+method. The declaration lowers its checked methods to nonrecursive function
+bindings around the following block remainder. Each initializer sees only the
+preceding scope and captures ordinary values there. A polymorphic method adds
+the existing ordered type abstraction; a direct occurrence applies its retained
+method arguments, and constrained forwarding uses the matching method scheme.
+Distinct declarations have distinct source and method-binder identities even
+when their complete applications or method types coincide in disjoint scopes.
+
+The source method's contextual parameters map positionally to generated Core
+parameters without capturing an enclosing method's parameters. Ordinary closed
+effect-row substitution canonicalizes the result, including reordering and
+coalescing instances made equal by substitution. These operations add no
+first-class source polymorphism or new solver pass.
+
 A concrete selection maps every ordered `ImplMethodId` through the defining
 module's checked `ImplMethodId`-to-`BinderId` mapping. A monomorphic method uses
 the existing binder occurrence and applications. A polymorphic concrete or
@@ -346,13 +366,13 @@ recursion consequently use the existing recursive binding rather than a cross-
 module group.
 
 After linked interface-evidence validation, source-only interface,
-implementation, requirement, determination, and authorization-route carriers
+implementation, lexical selection scope, requirement, determination, and authorization-route carriers
 can erase.
 Minimal immutable method-evidence authentication facts survive Core synthesis
 so independent validation can derive and check every generated evidence
-domain, occurrence, forwarding use, and adapter. Their term structure uses only
+domain, occurrence, forwarding use, adapter, and supplied local method. Their term structure uses only
 ordinary Core type abstractions, function binders, binder occurrences, type
-applications, and term applications. Method authentication facts and schemes
+applications, local bindings, and term applications. Method authentication facts and schemes
 may remain as inert validation and transformation authority in the validated
 program; the evaluator does not inspect them. Core type operations erase
 through the existing dynamic rules.
@@ -603,13 +623,22 @@ method position, occurrence `MethodId` and arguments, adapter
 exclusive incoming uses.
 Independent Core validation consumes every method-evidence authentication fact exactly once.
 
-A nested scheme is valid only at its authenticated generated evidence domain,
-an occurrence type application of the matching evidence binder, exact
-forwarding to that domain, or the matching generated adapter. It remains
-invalid in ordinary parameters or results, globals, local bindings, patterns,
-tuples, constructors, structural type applications, storage, and returns. A
+For supplied local methods, validation authenticates the source identity,
+complete application, declaration-ordered method slot and binder, contextual
+parameter mapping, recorded capture binders, and actual binding and nominal
+scope. It checks unused owners as well as selected uses. An occurrence must
+refer to its recorded source and cannot replace higher-priority evidence with
+an otherwise well-typed producer. Validation checks these retained relationships
+without selecting another candidate. Both Core transforms preserve them.
+
+A nested scheme is valid only at an authenticated generated evidence domain,
+a matching occurrence type application or exact forwarding use, a matching
+generated adapter, or an authenticated supplied-method binding and its permitted
+uses. It is invalid in ordinary parameters or results, globals, other local
+bindings, patterns, tuples, constructors, structural type applications, storage,
+and returns. A
 missing, duplicate, unconsumed, wrong-owner, wrong-position, wrong-order,
-wrong-kind, wrong-method, capture-producing, or mismatched authentication
+wrong-kind, wrong-method, type-variable-capturing, or mismatched authentication
 relation fails Core validation before evaluation.
 
 For every newtype conversion, independent validation derives the expected

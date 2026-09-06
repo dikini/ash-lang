@@ -107,10 +107,16 @@ block ::=
 local_declaration ::=
     local_binding
   | recursive_binding_group
-  | local_newtype_declaration ;
+  | local_newtype_declaration
+  | local_evidence_declaration ;
 local_newtype_declaration ::=
   "newtype" upper_identifier [ type_parameters ] "="
   upper_identifier "(" type ")" ;
+local_evidence_declaration ::=
+  "with" interface_application
+  "{" line_end
+  [ impl_equation { line_end impl_equation } [ line_end ] ]
+  "}" ;
 local_binding ::= "let" pattern [ ":" type ] "=" expression ;
 recursive_binding_group ::=
   "let" "rec" recursive_member
@@ -320,6 +326,13 @@ Braces delimit blocks, and parentheses group expressions and types. A block
 contains ordered local declarations and one result expression. An ordinary
 `let` is sequential. A `let rec` declaration is one simultaneous group; each
 following `and` member occupies another logical line.
+
+A local evidence declaration writes `with` and one complete interface
+application, followed by implementation equations. It is private and sequential:
+it has no `pub`, head parameter list, or `where` clause, and cannot occur at
+module level or inside a recursive group. Its equations reuse implementation
+equation syntax. Static semantics checks that every required method is supplied
+exactly once and that the selection key contains an active local nominal.
 
 A local `newtype` is a sequential declaration with the module form's single
 representation field. `pub` and `opaque` are not admitted in a block. The

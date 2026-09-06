@@ -1376,6 +1376,8 @@ grouped definition against its substituted required type.
 usefulness, and exhaustiveness rules to the complete method group and returns
 the pending obligations on its constrained-term occurrences. `close_and_select`
 uses the selection judgment below to fill every such occurrence in source order.
+Here and in the global judgments, that helper also uses each occurrence's
+retained lexical evidence scope, not the scope at closure time.
 
 ```sequent
 family implementation-method-checking:
@@ -1467,6 +1469,70 @@ WF-Effective-Implementations :=
   module |-implementations effective coherent
 ```
 
+## Scoped exact evidence
+
+A sequential `with Interface<arguments> { methods }` supplies one exact complete
+application. Its arguments must be explicit, well-kinded, and inference-free;
+enclosing rigid parameters are permitted. At least one active local nominal
+must occur structurally in its selection key: all arguments for an interface
+without a determination edge, or just the determinants otherwise. A local
+nominal beneath another constructor counts. Occurrence only in a dependent
+argument does not count. No head matching or representation-derived evidence
+is introduced, and module implementation coherence and orphan rules are unchanged.
+
+Two simultaneously active sources for the same interface cannot have
+identity-equal keys. Identical complete applications are `evidence.duplicate`;
+equal keys with unequal dependent tuples are `evidence.determination-conflict`.
+Disjoint scopes may supply different methods for the same nominal identity.
+Nested distinct nominal identities remain distinct keys.
+
+The declaration supplies every interface method exactly once. Contiguous
+equations form groups as in an implementation; groups may appear in any order.
+Check membership before checking bodies. Substitute the complete interface
+arguments into each required method type and check its equations with fresh,
+independent rigid method parameters in declared order and kinds. Their spellings
+do not enter the body's source type namespace. Existing pattern, coverage,
+contextual checking, and closed effect-row rules apply unchanged.
+
+Bodies see the preceding term and evidence scopes and retain the enclosing
+definition's abstract and exact-current contexts. The new source is unavailable
+in every supplied body, so it grants no implicit self or sibling selection.
+Preceding ordinary values and recursive functions may be captured. Each method
+is a resume barrier: an enclosing clause's capability cannot be captured
+(`effect.resume-capture`), while a handler inside the method owns its own
+capability. With no enclosing clause, `effect.resume-outside-clause` still owns
+the failure. Admit the source only after every supplied method checks.
+
+The source is available in the following block remainder, including bodies
+defined there. Each pending occurrence retains that original lexical scope
+through inference closure; leaving the block does not change its selection
+context or force early closure. New occurrences outside cannot select it.
+A checked closure may retain the selected ordinary method functions and their
+captures. A selected `N -> Int` method can leave an inner evidence block while
+an enclosing `N` remains active. At the nominal boundary, existing outward
+type, row, scheme, requirement, and inferred-binding escape checks still apply.
+An identity-free closure may cross that boundary. No lexical evidence fact is
+exported through a scheme, inferred requirement, summary, import, or package.
+
+This complete module is rejected with `evidence.missing-local-key`: a nominal
+introduced at module level is not an active local nominal.
+
+```ash
+interface Read<A> {
+    read : A -> Int
+}
+
+newtype Token = Token(Int)
+
+main : Unit -> Int
+main () = {
+    with Read<Token> {
+        read ignored = 42
+    }
+    read(Token(0))
+}
+```
+
 ## Constraint satisfaction and checked evidence
 
 Evidence selection uses exact nominal identities. A `newtype` representation
@@ -1486,8 +1552,10 @@ source order. For each, the first applicable source is:
 
 1. an abstract requirement with the same interface identity and identity-equal
    zonked key;
-2. the exact current implementation with that key; or
-3. the unique visible implementation whose independently freshened key
+2. the exact current implementation with that key;
+3. the lexical source with an identity-equal key in the occurrence's original
+   scope; or
+4. the unique visible implementation whose independently freshened key
    kind-preservingly first-order matches the known key.
 
 The source supplies its complete dependent tuple. Improvement is mandatory
@@ -1515,14 +1583,21 @@ been substituted to a complete application. It uses ordinary full-application
 selection and full-application active-cycle detection without snapshot
 membership.
 
-A selection candidate is freshened independently with its declared binder
+In particular, lexical `R<N, Int>` conflicts with a pending root `R<N, Bool>`
+during mandatory improvement. A recursively generated complete prerequisite
+`R<N, Bool>` instead skips that different complete lexical application and may
+use concrete evidence for `Bool`. Lexical evidence adds no key barrier to
+recursive complete-goal selection.
+
+A concrete implementation candidate is freshened independently with its declared binder
 kinds. First-order matching may substitute only that candidate's head
 parameters, must preserve their kinds, and matches the complete application.
 Matching cannot solve or refine a variable in the goal, synthesize a type
 lambda, or use higher-order unification.
 
 Selection receives the ordered abstract requirements of the current global or
-implementation, an optional current implementation, the effective
+implementation, an optional current implementation, the occurrence's lexical
+sources, the effective
 implementation environment, an active-goal set, and one resolved complete
 interface application. It does not receive the determination snapshot; the
 owning closure has already applied that gate to the pending root. Selection
@@ -1531,9 +1606,11 @@ considers sources in this order:
 1. An identity-equal complete abstract requirement from the current definition.
 2. Exact current-implementation evidence for an implementation method's rigid
    complete head.
-3. The unique matching concrete implementation in the effective environment.
+3. Identity-equal complete lexical evidence in the occurrence's original scope.
+4. The unique matching concrete implementation in the effective environment.
 
-Abstract evidence therefore shadows concrete evidence. Exact current evidence
+Abstract and exact-current evidence therefore precede lexical evidence, which
+precedes a matching generic concrete implementation. Exact current evidence
 uses the current implementation's already-abstract prerequisite evidence; it
 does not freshly instantiate the implementation or select its prerequisites
 again. The general concrete branch excludes the current implementation. A
@@ -1542,9 +1619,9 @@ It selects prerequisites recursively in declaration order.
 
 The rules below describe successful selection. `earlier_source_absent` means
 that the preceding entries in the ordered search above did not apply.
-`select_all(abstracts, current, effective, active, goals)` applies this same
+`select_all(abstracts, current, lexical, effective, active, goals)` applies this same
 selection judgment to `goals` in order with the supplied abstract, current,
-effective, and active contexts. It returns the corresponding ordered evidence
+lexical, effective, and active contexts. It returns the corresponding ordered evidence
 sequence and never consults the determination snapshot.
 
 ```sequent
@@ -1553,7 +1630,7 @@ family evidence-selection:
     goal contains no inference variable
     requirement = identity_equal_complete_requirement(abstracts, goal)
     ===>
-    abstracts; current; effective; active |- goal
+    abstracts; current; lexical; effective; active |- goal
       ⇓ Abstract(requirement, interface_methods(goal.interface))
 
   Select-Current-Implementation :=
@@ -1561,26 +1638,34 @@ family evidence-selection:
     no identity-equal complete abstract requirement exists
     current has the same interface and exact rigid complete head as goal
     ===>
-    abstracts; current; effective; active |- goal
+    abstracts; current; lexical; effective; active |- goal
       ⇓ Implementation(current, identity, abstract_prerequisites, impl_methods(current))
+
+  Select-Lexical :=
+    goal contains no inference variable
+    earlier_source_absent(abstracts, current, goal)
+    source = identity_equal_complete_source(lexical, goal)
+    ===>
+    abstracts; current; lexical; effective; active |- goal
+      ⇓ Lexical(source, interface_methods(goal.interface))
 
   Select-Concrete-Implementation :=
     goal contains no inference variable
-    earlier_source_absent(abstracts, current, goal)
+    earlier_source_absent(abstracts, current, lexical, goal)
     goal is not in active
     unique_kind_preserving_match(effective excluding current, goal)
       = implementation, substitution
     prerequisite_goals = substitute(substitution, implementation.prerequisites)
-    select_all(abstracts, current, effective, active union {goal}, prerequisite_goals)
+    select_all(abstracts, current, lexical, effective, active union {goal}, prerequisite_goals)
       = evidence
     ===>
-    abstracts; current; effective; active |- goal
+    abstracts; current; lexical; effective; active |- goal
       ⇓ Implementation(implementation, substitution, evidence, impl_methods(implementation))
 ```
 
 The matching substitution is applied to every prerequisite before recursive
 selection. Sibling prerequisite goals preserve declaration order, share the
-same abstract, exact-current, and effective environments, and keep their parent
+same abstract, exact-current, lexical, and effective environments, and keep their parent
 goal active until their ordered selections complete. The implementation-header
 containment rule ensures that substituting a complete matched head also makes
 each prerequisite free of inference variables. These recursively created goals
@@ -1615,9 +1700,10 @@ obligations at the enclosing global or implementation method. Recursive
 constrained globals reuse their declared abstract requirements and cannot gain
 polymorphic recursion.
 
-Checked selections have two recursive forms. Each root retains one complete
+Checked selections have three forms. Each root retains one complete
 interface application. An abstract selection records its requirement identity
-and ordered interface methods. An implementation selection records the stable
+and ordered interface methods. A lexical selection records its distinct
+source identity and ordered interface methods. An implementation selection records the stable
 implementation identity, its head substitution, its ordered
 prerequisite selections, and its implementation-method identities. These are
 compiler annotations, not source values or runtime dictionaries.
@@ -1625,6 +1711,7 @@ compiler annotations, not source values or runtime dictionaries.
 ```text
 EvidenceSelection =
     Abstract(requirement, methods)
+  | Lexical(source, methods)
   | Implementation(implementation, substitution, prerequisites, methods)
 ```
 
@@ -1719,6 +1806,10 @@ context is its declared requirements, its current-implementation context is
 absent, and its initial active-goal set is empty. The `selections` output does
 not denote a separate side collection; `T-Module` owns its later atomic
 publication after inference closure.
+
+The notation leaves occurrence-owned lexical contexts implicit here. Each
+pending field supplies the lexical scope retained at its own occurrence;
+`close_and_select` does not substitute the scope at closure time.
 
 ```sequent
 family global-typing:
@@ -1922,8 +2013,8 @@ constrained scheme. A nonempty row is `entry.main-effects`; no later boundary
 reclassifies it. This insertion preserves the relative order of the predecessor
 entry-shape failures. The closed `result_type` is the type observed for the
 whole program, and `main` need not be public. Every evidence obligation in a
-well-shaped `main` body must therefore select concrete evidence at its
-occurrence.
+well-shaped `main` body must therefore select concrete or scoped exact evidence
+at its occurrence; `main` supplies no abstract requirements.
 
 Semicolons in these judgments separate semantic fields and are not source
 punctuation. Resolution has already ensured global-name freshness and
@@ -1962,6 +2053,21 @@ after zonking at the declaration's outward boundary. An earlier name, kind, or
 ordinary typing failure retains its existing ownership. Linked and Core
 validation reject forged local facts and scope relations only after source
 checking succeeds.
+
+For local evidence, resolution, application arity, and positional kinds precede
+local-key admission. A missing active local nominal in the key is
+`evidence.missing-local-key`. Active-key duplicate or conflict checking follows,
+then complete method membership, then method bodies. A missing method is
+`evidence.missing-method`, a repeated group is `evidence.duplicate-method`, and
+an unrelated group is `evidence.extra-method`. Existing type, pattern, coverage,
+improvement, and resume failures keep their owners.
+
+Missing-key diagnostics label the new header. Duplicate and conflicting sources
+label that header and relate the earlier header. Missing methods label the
+header and relate the required interface method. Repeated groups label the
+repeated name and relate the earlier group name; extra groups label that name
+and relate the interface declaration. Forged checked source or selection facts
+are internal validation failures, not source diagnostics.
 
 Lexing owns the reserved effect keywords. Parsing owns malformed effect
 declarations, rows, requests, handlers, clauses, and resume forms. Resolution

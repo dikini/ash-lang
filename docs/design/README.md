@@ -90,6 +90,8 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 ### Effects and dynamic composition
 
+- [Scoped exact evidence](effect-ash/scoped-evidence-evidence.md) — in-progress
+  pure relation, method/selection interactions, and retained review corrections.
 - [Local `newtype` evidence](effect-ash/local-newtype-evidence.md) — lexical
   identity, escape, scope authentication, erasure, and exact resources for the
   local nominal checkpoint.

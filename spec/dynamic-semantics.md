@@ -105,6 +105,13 @@ abstraction and then the implementation method's complete type application.
 the recursive function binder materializes a lexical closure under the existing
 recursive-binding behavior.
 
+A supplied lexical method uses ordinary nonrecursive binding, function closure,
+and binder lookup. Its closure captures the preceding ordinary values required
+by its body. A checked closure may retain that method after the evidence block
+returns; a new occurrence outside the block cannot acquire its static evidence.
+The lexical source identity and selection scope create no runtime value,
+registry, scope frame, revocation check, or transition family.
+
 The validated Core program may retain method authentication records and method
 schemes as static authority, and a Core type application carries its retained
 method arguments in control until `E-Type-Application` erases that node.
@@ -132,7 +139,7 @@ interface-specific failure mode. Polymorphic method evidence uses ordinary
 function values and applications but adds no new evaluator value class,
 environment-entry class, frame kind, lookup class, transition class, failure
 reason, or runtime interface state. Evidence construction uses only type
-erasure, recursive binding, ordinary binder lookup and closure materialization,
+erasure, ordinary local and recursive binding, binder lookup and closure materialization,
 and the strict application transitions below. It adds no Core node and requires
 no new evaluation rule.
 Improvement is a static inference operation and does not become a lookup,

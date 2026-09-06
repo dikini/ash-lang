@@ -248,7 +248,9 @@ declaration order:
   implementation declaration;
 - an `ImplMethodId` combines its `ImplId` with the implemented `MethodId`;
 - a `RequirementId` combines its owning global `BinderId` or `ImplId` with
-  requirement declaration order; and
+  requirement declaration order;
+- a `LexicalEvidenceId` combines the defining `ModuleId` with the local
+  evidence declaration's source order; and
 - each implementation method receives a hidden `BinderId` qualified by its
   defining module.
 
@@ -268,7 +270,8 @@ implementation method head resolves its spelling to the interface's `MethodId`;
 it does not introduce a lexical term binding. The hidden binder names the
 checked method body for later compiler phases, not for Ash source.
 
-An interface application is valid only in a constraint or implementation head.
+An interface application is valid in a constraint, implementation head, or
+local evidence header.
 It retains the complete ordered argument vector. Arity and positional kinds are
 checked later; resolution does not discard a dependent argument.
 Using an interface as an ordinary value type is `resolve.type-kind`. Naming a
@@ -321,6 +324,13 @@ one method's local parameters scope over that method signature only. The
 optional determination edge resolves only parameter names from that same interface declaration.
 Its names do not introduce binders. An implementation equation does not inherit
 the interface or method-parameter spellings from the interface it implements.
+
+A local evidence method likewise does not inherit those spellings. Each
+supplied method receives independent contextual rigid parameters in its
+interface method's declared order and kinds. Their identities belong to that
+supplied method, including when methods of the same interface nest. They do
+not enter its body's source type namespace; an enclosing type name keeps its
+meaning. The local evidence header introduces no type parameters.
 
 An explicit global parameter list is an ordered bijection with the free type
 variables of the global's value type and requirements. The written order is
@@ -632,6 +642,14 @@ A local `newtype` cannot be a member of a `let rec` group. A following recursive
 term group may use its nominal name and constructor. Local nominal declarations
 do not form recursive groups.
 
+Each local `with` declaration receives its own `LexicalEvidenceId` and hidden
+method binders when resolution reaches it. It creates no source-visible term
+binding. Its method heads identify interface methods; method bodies resolve
+under the preceding term and type scopes. They may capture preceding ordinary
+values or recursive functions, but gain no self or sibling binding from the
+declaration. Checking admits the source only for the following block remainder.
+Local evidence identities and their methods are not exported or imported.
+
 A `let rec ... and ...` group allocates every member identity before resolving
 any initializer. Every initializer therefore sees all members, and all members
 remain visible in the following block remainder. A member may shadow an outer
@@ -651,7 +669,8 @@ clause's operation pattern and resume capability scope only over its body;
 `resume` outside such a scope is `effect.resume-outside-clause`. A nested
 handler's handled expression remains in the outer clause scope, while each of
 the nested handler's clauses receives its own resume scope and cannot use the
-outer capability. Nested functions and recursive members cannot capture a
+outer capability. Nested functions, recursive members, and supplied local
+evidence methods cannot capture a
 resume capability; static semantics owns the non-escape and exactly-once
 checks.
 
