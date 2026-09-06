@@ -49,6 +49,9 @@ retains its original relative weights; it is not an elapsed-work ledger.
 Capture/usage and checked discard are complete in the retained checkpoint;
 their [evidence](effect-ash/capture-discard-evidence.md) records inference,
 runtime behavior, reviews, full verification and transition cleanup.
+Safe resource scope also has a complete verified product checkpoint; its
+[evidence](effect-ash/resource-scope-evidence.md) records the retained contract
+and simplification review. Verified local integration follows.
 
 ## Completion condition
 
@@ -637,23 +640,20 @@ not need to replace the capture representation.
 
 Prerequisites: integrated scoped exact evidence and checked-discard kernel.
 
-The safe-cell scope is now accepted and under product implementation and
-verification. Its [evidence record](effect-ash/resource-scope-evidence.md)
-tracks the retained boundary and remaining reviews; the 16-unit weight is
-not closed until full verification and local integration complete.
+The complete product checkpoint provides one sealed mutable-cell API and a
+generative acquisition expression. The scope owns release; reusable handles
+carry activation identity without owning the payload. Stored dependencies and
+request-carried completion obligations separately prevent escape and unsafe
+discard. Normal completion releases the cell; capture/resume preserves it.
+Unsupported exits do not gain implicit cleanup.
 
-The proposal must define acquisition syntax, static versus runtime freshness,
-the resource value, whether a separate runtime identity witness is necessary
-and what its last use would be, exact provider evidence, identity-local effect
-discharge, usage and lifetime, value/closure/continuation escape, and the
-complete pre-cleanup exit set. Reject unsupported exits with live obligations
-rather than retroactively assuming cleanup.
-
-The corpus must separate acquisitions, cover normal/rejected/nested scopes,
-detect hidden capture, authenticate provider evidence and Core, account for
-runtime handles and retained state, and show pure-program locality. At closure,
-perform the mandatory simplification and downstream-pressure reassessment
-before planning hooks.
+The [evidence record](effect-ash/resource-scope-evidence.md) covers separate and
+overlapping acquisitions, hidden captures, imported abstractions, provider/Core
+authentication, exact resources, pure locality and full verification. Both
+independent reviews and the simplification/downstream reassessment pass.
+No additional proof, existential or hook machinery is justified by this slice.
+The original 16-unit weight closes after verified local integration; it is not
+measured expenditure. Hooks still require their own proposal and authorization.
 
 ### Synchronous typed hooks — forecast 9 units
 
@@ -747,6 +747,6 @@ settles sequential lexical identity, escape, and erased scope validation.
 Scoped exact evidence settles pure introduction, precedence, improvement,
 authentication, and erasure. The branch results are not current on `main`.
 The completed capture/discard checkpoint settles bounded continuation
-abandonment. Resource-scope composition is now an accepted product transition
-under implementation and review. This informative plan authorizes neither expansion
-nor integration into `main`.
+abandonment. Resource-scope composition now has a verified product checkpoint;
+local integration remains pending. This informative plan authorizes neither
+expansion nor integration into `main`.

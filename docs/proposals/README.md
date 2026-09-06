@@ -23,4 +23,4 @@ No proposed change is currently awaiting a decision.
 
 ## Accepted changes
 
-- [CP-0017: Safe Non-Foreign Resource Scope](CP-0017-safe-non-foreign-resource-scope.md)
+No accepted change is currently awaiting implementation.
