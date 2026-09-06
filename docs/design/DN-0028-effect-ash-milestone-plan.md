@@ -42,7 +42,7 @@ The module-`newtype`, local-`newtype`, and resume-required kernel product
 checkpoints are combined on `integration/effect-ash-foundations`. The
 [local-newtype evidence](effect-ash/local-newtype-evidence.md) records lexical
 identity, escape, validation, and erasure. Scoped exact evidence is implemented
-and verified on its product branch, with
+and locally integrated on the milestone branch, with
 [implementation evidence](effect-ash/scoped-evidence-evidence.md) recording
 authentication, resource bounds, reviews, and the full gate. The forecast below
 retains its original relative weights; it is not an elapsed-work ledger.

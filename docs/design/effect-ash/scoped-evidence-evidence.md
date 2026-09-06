@@ -3,7 +3,7 @@
 This report retains implementation and review evidence from `90f517d`, the
 combined module/local-newtype and resume-required kernel baseline. It is
 informative. Both independent reviews, the full gate, and transition artifacts
-are closed; local integration remains. The branch specification is prepared
+are closed; the checkpoint is locally integrated. The branch specification is prepared
 with the implementation. Neither this report nor milestone integration makes
 the change current on `main`.
 
@@ -17,7 +17,7 @@ The reviewed nested-body scheduling correction is retained at `bceb688`.
 Complete source/capture/header authentication and resource corrections are
 retained at `85bbe0d`.
 The specification, executable examples, and evidence are retained at `c16cd5d`.
-CP-0015, TASK-0025, and its execution plan leave the product tree after this
+CP-0015, TASK-0025, and its execution plan were removed from the product tree after this
 verified checkpoint; Git retains their transition authority and work history.
 
 Sequential private `with` declarations supply every method for one exact
@@ -68,7 +68,7 @@ acquisition, resource lifetime, or checked-discard rule.
   capture. Accepted interaction cases revalidate both Core transforms and
   preserve their values; effect cases also preserve their traces.
 - `tests/spec_examples.rs` adds the direct/forwarding example, the owned
-  missing-local-key rejection, and a normative-fragment manifest. The draft
+  missing-local-key rejection, and a normative-fragment manifest. The
   suite contains 74 tests.
 
 ## Review corrections
@@ -244,7 +244,29 @@ retain the proposal's explicit non-goals and branch-versus-main distinction.
 
 An isolated target directory with incremental compilation disabled avoids a
 corrupted pre-existing build cache. Ignored build logs are disposable and carry
-no semantic authority. Local integration is the remaining checkpoint operation.
+no semantic authority.
+
+## Local integration
+
+The explicit merge `1f691ad2282d25e18eb4732eed7b2cd36240c28d` retains exact
+feature tip `64bcf494f71d04ec38a7369fab7e11ab13032638` on
+`integration/effect-ash-foundations`. Both tips have tree
+`a5e21c0f8ed6270f9b6cc979fb5dbea50a896a45`; the merge changed no product content.
+Integration documentation now records that retained boundary. A fresh full
+`CARGO_INCREMENTAL=0 cargo xtask verify` run from the integration checkout passed
+on 2026-09-06: formatting, metadata, build, Clippy, 2,088 tests across 62 binaries,
+and rustdoc with warnings denied. Only integration-status documentation differs
+from the merged feature tree. Markdown lint, diff checks, and all 188 local
+file links in the thirteen changed Markdown files pass.
+
+After proving the feature checkout clean and its exact tip an ancestor of
+integration, `git worktree remove` removed `.worktree/scoped-exact-evidence`
+and its disposable build cache. The merged `codex/scoped-exact-evidence` branch
+was deleted. Its commits remain reachable through integration. Only
+`.worktree/effect-ash-foundations` remains under the repository's `.worktree/`.
+Main stays at `7195500b7a165f8191efa1485e1ca6f4114180fb`; its unrelated tracked
+and untracked changes, the two historical worktrees, other branch refs, remote
+refs, and tags are unchanged. No push or merge into `main` was performed.
 
 ## Remaining boundary
 
