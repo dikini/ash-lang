@@ -20,7 +20,7 @@ check Core and reuse the explicit evaluator's moved continuation storage.
 
 - [x] Reconstruct baseline, compare approaches, explain and obtain approval.
 - [x] Record accepted proposal and allocate unused task/plan IDs.
-- [ ] Finish baseline verification before product edits.
+- [x] Finish baseline verification before product edits.
 - [ ] Step 1: explicit completion carriers and usage checks.
 - [ ] Step 2: inferred capture summaries and independent Core checking.
 - [ ] Step 3: execution, accounting and complete adversarial corpus.
@@ -113,4 +113,15 @@ and module-local exact-budget tests.
 
 ## Execution record
 
-Baseline and step outcomes are pending. No completion claim is made here.
+Baseline `cargo test --workspace --all-targets` passed on 2026-09-06, exit 0,
+before the product writer began. Step 1 is active; its RED/GREEN evidence is
+pending. No checkpoint completion claim is made here.
+
+The read-only summary audit found that module checking already builds ordinary
+typed Core bodies, but currently erases its effect operations. Step 2 should
+reuse one private capture-analysis engine over those bodies and final Core,
+preserving effect nodes for the checking path that needs them. Independent
+validation means deriving facts again from final Core, not writing a second
+algorithm or trusting exported claims. A second source control-flow graph is
+unnecessary. Keep ordinary global and implementation method roots until the
+analysis finishes; missing callable evidence means unknown, not safe.

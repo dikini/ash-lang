@@ -26,10 +26,14 @@ resource tests, specification and reviewed evidence. Keep one product writer.
 
 - Design explained and accepted in the task conversation on 2026-09-06.
 - Isolated worktree prepared at the exact integration tip.
-- Baseline `cargo test --workspace --all-targets` running before product edits.
+- Baseline `cargo test --workspace --all-targets` passed with exit status 0
+  before product edits, including 979 library tests and the complete integration
+  suite. The architecture source guard took 332.76 seconds; the deep-data
+  binary took 151.65 seconds. Neither reported a failure.
 - High-reasoning read-only agent auditing summary composition; parent owns
   proposal and task preparation.
-- Product implementation has not started.
+- Step 1 product writer started after the baseline passed. Capture-summary
+  implementation and runtime discard remain pending.
 
 ## Verification
 
