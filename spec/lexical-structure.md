@@ -16,11 +16,16 @@ Resolution determines the meaning of an uppercase occurrence from its
 syntactic position and scope.
 
 The reserved words `fn`, `let`, `rec`, `and`, `type`, `newtype`, `interface`,
-`impl`, `effect`, `perform`, `handle`, `with`, `resume`, `discard`, `where`,
+`impl`, `effect`, `perform`, `handle`, `with`, `resume`, `discard`, `resource`, `where`,
 `match`, `import`, `as`, `pub`, `opaque`, `Int`, `Bool`, `Unit`, `true`, and
 `false` cannot be identifiers. The single spelling `_` is the
 wildcard token rather than an ordinary identifier; spellings such as `_tail`
 remain ordinary identifiers.
+
+`cell` is contextual in a resource acquisition and remains an ordinary
+identifier elsewhere. `builtin` is reserved as a module-root name, not as an
+identifier; [name resolution](name-resolution.md#compiler-owned-cell-module)
+defines that root's fixed import.
 
 An integer literal is either `0` or a nonzero decimal digit followed by zero or
 more decimal digits. Its value is the corresponding mathematical non-negative

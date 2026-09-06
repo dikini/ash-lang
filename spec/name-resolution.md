@@ -15,7 +15,7 @@ name child directories and a final `.ash` file. Thus `import math as Math`
 resolves `./math.ash`, while `import helpers.math as Math` resolves
 `./helpers/math.ash`.
 
-An absolute path starts at a configured named module root. For example,
+An ordinary absolute path starts at a configured named module root. For example,
 `import @std.collections.list as List` resolves `collections/list.ash` beneath
 the configured `std` root. A module reached through a named root retains that
 root as an owner for its relative descendants.
@@ -34,6 +34,31 @@ The complete dependency graph must be acyclic. A module may use only the
 dependencies named by its own imports. Checked modules are ordered with every
 dependency before its dependents. Dependency order and import source order
 select the first reported failure deterministically.
+
+### Compiler-owned cell module
+
+`@builtin.cell` denotes one compiler-owned module, without a configured root
+or filesystem source. `builtin` is a reserved root name: configuring it as a
+filesystem root fails with `invocation.reserved-root` before filesystem
+inspection. Any other path beneath that root, including `@builtin.cell.extra`,
+fails with `module.unknown-builtin`.
+
+The module exports exactly `Handle`, `Provider`, `Ops`, `read` and `write`.
+Complete imports, targeted imports, renaming and public re-exports preserve
+their defining identities. Direct and facade routes reach the same module;
+a facade creates no additional provider authority. An ordinary file named
+`cell.ash` or copied API declarations have no compiler-owned origin.
+
+A module containing a resource expression must directly import `@builtin.cell`.
+Either a complete or targeted import satisfies this requirement, independently
+of which public names the targeted import selects. Importing only a facade
+does not; resolution reports `resolve.resource-builtin-required`. Helpers that
+do not acquire a resource may use the ordinary re-exported API.
+
+`Handle` has no source-accessible constructor or pattern. Source `impl` and
+local `with` declarations cannot introduce the exact builtin `Provider`
+relation. Acquisition introduces its authenticated lexical evidence; ordinary
+name resolution or copied signatures cannot grant that authority.
 
 ## Imports and namespaces
 
@@ -315,6 +340,11 @@ A local `newtype` allocates its written type parameters in the same
 module-wide sequence when resolution reaches the declaration. These parameters
 scope only over its representation and retain their declared order and kinds.
 The nominal itself is a rigid declaration identity, not a type-variable binder.
+
+A resource acquisition allocates its identity binder in the same module-wide
+type-variable sequence after resolving its initializer. The binder has kind
+`Type` and scopes over the resource body only. It is distinct from enclosing
+type parameters and other acquisition binders, regardless of spelling.
 
 Nominal and effect parameters use their written set and order and may be
 phantom. Effect parameters scope over all operation signatures in their
@@ -646,6 +676,12 @@ constructor bindings. Both preceding name bindings are restored when the block e
 A local `newtype` cannot be a member of a `let rec` group. A following recursive
 term group may use its nominal name and constructor. Local nominal declarations
 do not form recursive groups.
+
+A resource initializer resolves in the preceding term and type scopes. The
+acquisition's identity and handle binders then enter scope together for its
+body block and may shadow earlier names. Neither binder is visible in its own
+initializer or after the resource expression. Closing the body restores the
+preceding scopes. The handle is an ordinary term binder, not a release owner.
 
 Each local `with` declaration receives its own `LexicalEvidenceId` and hidden
 method binders when resolution reaches it. It creates no source-visible term

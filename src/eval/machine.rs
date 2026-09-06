@@ -2,9 +2,16 @@
 
 use std::{error::Error, fmt, sync::Arc};
 
+#[path = "instantiation.rs"]
+mod instantiation;
+use instantiation::Instantiation;
+
 use super::{
     Closure, Value,
-    value::{ExecutableNode, ExecutableProgram, HeapCell, Location, ObservedHeap, ObservedValue},
+    value::{
+        ActivationKey, ExecutableNode, ExecutableProgram, HeapCell, Location, ObservedHeap,
+        ObservedValue,
+    },
 };
 use crate::{
     core::{
@@ -13,7 +20,7 @@ use crate::{
         ValidatedProgram,
     },
     resolved::{BinderId, ResumeId},
-    types::{EffectInstance, OperationId, same_type},
+    types::{EffectInstance, OperationId, TypeWorkBudget, same_type_with_budget},
 };
 
 /// Inspectable lexical values available while evaluating one expression.
@@ -28,12 +35,14 @@ use crate::{
 pub struct Environment {
     head: Option<Arc<EnvironmentEntry>>,
     len: usize,
+    instantiation: Instantiation,
 }
 
 struct EnvironmentEntry {
     kind: EnvironmentEntryKind,
     parent: Option<Arc<Self>>,
     visible_len: usize,
+    instantiation: Instantiation,
 }
 
 enum EnvironmentEntryKind {
@@ -56,6 +65,7 @@ enum RecursiveMemberKind {
         parameter: BinderId,
         body: NodeId,
         origin: crate::source::Origin,
+        abstraction: Option<NodeId>,
     },
     Data {
         location: Location,
@@ -83,15 +93,16 @@ impl EnvironmentEntry {
         if let Some(parent) = self.parent.take() {
             pending.push(parent);
         }
-        if let EnvironmentEntryKind::Binding {
-            value: Value::Function(closure),
-            ..
-        } = &mut self.kind
-        {
-            if let Some(captured) = closure.environment.head.take() {
+        if let EnvironmentEntryKind::Binding { value, .. } = &mut self.kind {
+            let environment = match value {
+                Value::Function(closure) => &mut closure.environment,
+                Value::Polymorphic { environment, .. } => environment,
+                _ => return,
+            };
+            if let Some(captured) = environment.head.take() {
                 pending.push(captured);
             }
-            closure.environment.len = 0;
+            environment.len = 0;
         }
     }
 }
@@ -160,16 +171,27 @@ impl Environment {
                                 parameter,
                                 body,
                                 origin,
-                            } => Value::Function(Closure {
-                                parameter: *parameter,
-                                body: *body,
-                                program: program.clone(),
-                                environment: Self {
+                                abstraction,
+                            } => {
+                                let environment = Self {
                                     head: Some(Arc::clone(entry)),
                                     len: entry.visible_len,
-                                },
-                                origin: origin.clone(),
-                            }),
+                                    instantiation: entry.instantiation.clone(),
+                                };
+                                if let Some(abstraction) = abstraction {
+                                    return Some(Value::Polymorphic {
+                                        abstraction: *abstraction,
+                                        environment,
+                                    });
+                                }
+                                Value::Function(Closure {
+                                    parameter: *parameter,
+                                    body: *body,
+                                    program: program.clone(),
+                                    environment,
+                                    origin: origin.clone(),
+                                })
+                            }
                             RecursiveMemberKind::Data { location } => Value::Location(*location),
                         });
                     }
@@ -191,8 +213,10 @@ impl Environment {
                 kind: EnvironmentEntryKind::Binding { binder, value },
                 parent: self.head.take(),
                 visible_len: len,
+                instantiation: self.instantiation.clone(),
             })),
             len,
+            instantiation: self.instantiation,
         })
     }
 
@@ -226,8 +250,10 @@ impl Environment {
                 },
                 parent: self.head.take(),
                 visible_len: len,
+                instantiation: self.instantiation.clone(),
             })),
             len,
+            instantiation: self.instantiation,
         })
     }
 }
@@ -253,6 +279,14 @@ pub enum TraceEvent {
 /// Observational effect-boundary transitions, absent from pure evaluation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EffectTraceEvent {
+    /// A scope acquired one cell under a fresh activation key.
+    ResourceAcquired(u32),
+    /// The trusted interpreter copied a cell's current integer.
+    ResourceRead(u32),
+    /// The trusted interpreter replaced a cell's integer.
+    ResourceWritten(u32),
+    /// Normal completion released one scope-owned cell.
+    ResourceReleased(u32),
     /// A lexical handler boundary became active.
     HandlerActivated(HandlerId),
     /// A request reached dynamic handler selection.
@@ -320,6 +354,8 @@ pub enum RuntimeFailure {
     HeapCapacity,
     /// A captured continuation cannot retain another control frame.
     CapturedControlCapacity,
+    /// Another live cell or fresh activation cannot be represented.
+    ResourceCapacity,
     /// A heap location is outside the current evaluation.
     InvalidLocation,
     /// Evaluation forced a recursive slot before initialization.
@@ -344,6 +380,7 @@ impl RuntimeFailure {
             Self::InvalidControlState => "runtime.invalid-control-state",
             Self::HeapCapacity => "runtime.heap-capacity",
             Self::CapturedControlCapacity => "runtime.captured-control-capacity",
+            Self::ResourceCapacity => "runtime.resource-capacity",
             Self::InvalidLocation => "runtime.invalid-location",
             Self::UninitializedLocation => "runtime.uninitialized-location",
             Self::AliasLoop => "runtime.alias-loop",
@@ -370,6 +407,7 @@ impl fmt::Display for RuntimeFailure {
             Self::InvalidControlState => "runtime machine control state is inconsistent",
             Self::HeapCapacity => "runtime heap capacity is exhausted",
             Self::CapturedControlCapacity => "runtime captured-control capacity is exhausted",
+            Self::ResourceCapacity => "runtime resource capacity is exhausted",
             Self::InvalidLocation => "runtime heap location is invalid",
             Self::UninitializedLocation => "runtime heap location is uninitialized",
             Self::AliasLoop => "runtime heap aliases form a loop",
@@ -382,6 +420,15 @@ impl Error for RuntimeFailure {}
 
 #[derive(Debug)]
 enum Frame {
+    ResourceInitializer {
+        node: NodeId,
+        environment: Environment,
+    },
+    ResourceBoundary {
+        node: NodeId,
+        key: ActivationKey,
+        cell: crate::integer::Integer,
+    },
     Bind {
         binder: BinderId,
         body: NodeId,
@@ -425,6 +472,11 @@ enum Frame {
     },
     Request {
         node: NodeId,
+        instantiation: Instantiation,
+    },
+    TypeApplication {
+        node: NodeId,
+        caller: Instantiation,
     },
     Resume {
         node: NodeId,
@@ -491,6 +543,10 @@ pub struct Machine {
     heap: Vec<HeapCell>,
     capture_limit: usize,
     captured_cells: usize,
+    instantiation_work: TypeWorkBudget,
+    resource_limit: usize,
+    live_resources: usize,
+    next_activation: u32,
 }
 
 impl Machine {
@@ -505,6 +561,10 @@ impl Machine {
             heap: Vec::new(),
             capture_limit: 0,
             captured_cells: 0,
+            instantiation_work: TypeWorkBudget::unbounded(),
+            resource_limit: 0,
+            live_resources: 0,
+            next_activation: 0,
         }
     }
 
@@ -526,6 +586,10 @@ impl Machine {
             heap: Vec::new(),
             capture_limit,
             captured_cells: 0,
+            instantiation_work: TypeWorkBudget::unbounded(),
+            resource_limit: MAX_CAPTURED_FRAME_CELLS,
+            live_resources: 0,
+            next_activation: 0,
         }
     }
 
@@ -547,6 +611,9 @@ impl Machine {
                 }
                 Control::Return(value) => {
                     let Some(frame) = self.frames.pop() else {
+                        if self.live_resources != 0 || self.captured_cells != 0 {
+                            return Err(RuntimeFailure::InvalidControlState);
+                        }
                         let heap =
                             ObservedHeap::new(Arc::clone(self.program.registry()), self.heap);
                         let value = match value {
@@ -586,10 +653,27 @@ impl Machine {
 
     fn return_from(&mut self, frame: Frame, value: Value) -> Result<(), RuntimeFailure> {
         match frame {
+            Frame::ResourceInitializer { node, environment } => {
+                self.acquire_resource(node, environment, value)?;
+            }
+            Frame::ResourceBoundary { key, .. } => {
+                self.live_resources = self
+                    .live_resources
+                    .checked_sub(1)
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                self.trace_effect(EffectTraceEvent::ResourceReleased(key.0));
+                self.control = Some(Control::Return(value));
+            }
             Frame::HandlerBoundary { .. } => {
                 self.control = Some(Control::Return(value));
             }
-            Frame::Request { node } => self.return_request(node, value)?,
+            Frame::Request {
+                node,
+                instantiation,
+            } => self.return_request(node, &instantiation, value)?,
+            Frame::TypeApplication { node, caller } => {
+                self.return_type_application(node, &caller, value)?
+            }
             Frame::Resume { node } => self.return_resume(node, value)?,
             Frame::ClauseBoundary {
                 handler,
@@ -610,7 +694,106 @@ impl Machine {
         Ok(())
     }
 
-    fn return_request(&mut self, node: NodeId, value: Value) -> Result<(), RuntimeFailure> {
+    fn acquire_resource(
+        &mut self,
+        node: NodeId,
+        mut environment: Environment,
+        value: Value,
+    ) -> Result<(), RuntimeFailure> {
+        let Value::Integer(cell) = value else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let resource = self
+            .resource(node)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let acquisition = resource.acquisition;
+        let body = resource.body();
+        let api = acquisition
+            .api()
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if !api.registry(self.program.registry()) {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let live = self
+            .live_resources
+            .checked_add(1)
+            .filter(|live| *live <= self.resource_limit)
+            .ok_or(RuntimeFailure::ResourceCapacity)?;
+        let next = self
+            .next_activation
+            .checked_add(1)
+            .ok_or(RuntimeFailure::ResourceCapacity)?;
+        let key = ActivationKey(self.next_activation);
+        self.frames
+            .try_reserve(1)
+            .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+        if let Some(trace) = &mut self.effect_trace {
+            trace
+                .try_reserve(1)
+                .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+        }
+        environment.instantiation = environment.instantiation.acquire(
+            acquisition.identity,
+            key,
+            &mut self.instantiation_work,
+        )?;
+        environment = environment.extend(acquisition.handle, Value::ResourceHandle(key))?;
+        // Publish only after every fallible preflight. The frame is the sole
+        // payload owner; handles and lexical metadata carry only its key.
+        self.frames
+            .push(Frame::ResourceBoundary { node, key, cell });
+        self.live_resources = live;
+        self.next_activation = next;
+        self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
+        self.trace_effect(EffectTraceEvent::ResourceAcquired(key.0));
+        self.control = Some(Control::Evaluate(body, environment));
+        Ok(())
+    }
+
+    fn return_type_application(
+        &mut self,
+        node: NodeId,
+        caller: &Instantiation,
+        value: Value,
+    ) -> Result<(), RuntimeFailure> {
+        let PureExprKind::Computation(PureComputation::TypeApplication(application)) =
+            pure_expression(&self.program, node)?
+        else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        match value {
+            Value::Polymorphic {
+                abstraction,
+                mut environment,
+            } => {
+                let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                    pure_expression(&self.program, abstraction)?
+                else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                environment.instantiation = environment.instantiation.apply(
+                    caller,
+                    abstraction.parameters(),
+                    application.arguments(),
+                    application.row_arguments(),
+                    &mut self.instantiation_work,
+                )?;
+                self.control = Some(Control::Evaluate(abstraction.body(), environment));
+            }
+            value @ (Value::ConstructorFunction(_) | Value::Location(_)) => {
+                self.control = Some(Control::Return(value))
+            }
+            _ => return Err(RuntimeFailure::InvalidControlState),
+        }
+        Ok(())
+    }
+
+    fn return_request(
+        &mut self,
+        node: NodeId,
+        instantiation: &Instantiation,
+        value: Value,
+    ) -> Result<(), RuntimeFailure> {
         let (effect, operation) = match self.program.node(node) {
             Some(ExecutableNode::Effect(expression)) => match &expression.kind {
                 EffectExprKind::Operation(EffectOperation::Request(request)) => {
@@ -620,16 +803,49 @@ impl Machine {
             },
             _ => return Err(RuntimeFailure::InvalidControlState),
         };
-        let selected = self
-            .frames
-            .iter()
-            .rposition(|frame| match frame {
-                Frame::HandlerBoundary { node, .. } => self
-                    .handler(*node)
-                    .is_some_and(|handler| same_effect_instance(handler.effect(), effect)),
-                _ => false,
-            })
-            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let effect = instantiation.effect(effect, &mut self.instantiation_work)?;
+        let mut selected = None;
+        for (index, frame) in self.frames.iter().enumerate().rev() {
+            self.instantiation_work
+                .charge(1)
+                .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+            if let Frame::ResourceBoundary { node, key, .. } = frame {
+                let resource = self
+                    .resource(*node)
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                let api = resource
+                    .acquisition
+                    .api()
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                if effect.effect() == api.ops() && Instantiation::activation(&effect) == Some(*key)
+                {
+                    self.trace_effect(EffectTraceEvent::Request(operation));
+                    return self.interpret_cell(index, operation, value);
+                }
+                continue;
+            }
+            let Frame::HandlerBoundary { node, environment } = frame else {
+                continue;
+            };
+            let Some(ExecutableNode::Effect(expression)) = self.program.node(*node) else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &expression.kind
+            else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            if handler.effect().effect() != effect.effect() {
+                continue;
+            }
+            let handled = environment
+                .instantiation
+                .effect(handler.effect(), &mut self.instantiation_work)?;
+            if same_effect_instance(&handled, &effect, &mut self.instantiation_work)? {
+                selected = Some(index);
+                break;
+            }
+        }
+        let selected = selected.ok_or(RuntimeFailure::InvalidControlState)?;
         self.trace_effect(EffectTraceEvent::Request(operation));
         let continuation = self.capture_from(selected)?;
         let captured = &continuation.frames;
@@ -673,6 +889,56 @@ impl Machine {
             clause_body,
             handler_environment.extend_many(bindings)?,
         ));
+        Ok(())
+    }
+
+    fn interpret_cell(
+        &mut self,
+        selected: usize,
+        operation: OperationId,
+        value: Value,
+    ) -> Result<(), RuntimeFailure> {
+        let Frame::ResourceBoundary { node, .. } = &self.frames[selected] else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let api = self
+            .resource(*node)
+            .and_then(|resource| resource.acquisition.api())
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let (handle, written) = if operation == OperationId::new(api.ops(), 0) {
+            (value, None)
+        } else if operation == OperationId::new(api.ops(), 1) {
+            let Value::Location(location) = value else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            let location = resolve_location(&self.heap, location)?;
+            let Some(HeapCell::Tuple(elements)) = self.heap.get(location) else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            let [handle, Value::Integer(written)] = elements.as_ref() else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            (handle.clone(), Some(written.clone()))
+        } else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let Frame::ResourceBoundary { key, cell, .. } = &mut self.frames[selected] else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        if !matches!(handle, Value::ResourceHandle(found) if found == *key) {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let (result, event) = if let Some(written) = written {
+            *cell = written;
+            (Value::Unit, EffectTraceEvent::ResourceWritten(key.0))
+        } else {
+            (
+                Value::Integer(cell.clone()),
+                EffectTraceEvent::ResourceRead(key.0),
+            )
+        };
+        self.trace_effect(event);
+        self.control = Some(Control::Return(result));
         Ok(())
     }
 
@@ -779,15 +1045,15 @@ impl Machine {
         let captured = boundary
             .as_ref()
             .ok_or(RuntimeFailure::InvalidControlState)?;
-        // Only clause boundaries can retain another hidden capability. A live
-        // nested owner forbids discard, so successful disposal needs no descent.
+        // Resource boundaries own cells, and live clause boundaries can hide
+        // further obligations. Reject both before consuming any retained owner.
         if captured.frames.iter().any(|frame| {
             matches!(
                 frame,
                 Frame::ClauseBoundary {
                     continuation: Some(_),
                     ..
-                }
+                } | Frame::ResourceBoundary { .. }
             )
         }) {
             return Err(RuntimeFailure::InvalidControlState);
@@ -814,16 +1080,35 @@ impl Machine {
         };
         Some(handler)
     }
+
+    fn resource(&self, node: NodeId) -> Option<&crate::core::effect::ResourceScopeNode> {
+        let ExecutableNode::Effect(expression) = self.program.node(node)? else {
+            return None;
+        };
+        let EffectExprKind::Operation(EffectOperation::Resource(resource)) = &expression.kind
+        else {
+            return None;
+        };
+        Some(resource)
+    }
 }
 
-fn same_effect_instance(left: &EffectInstance, right: &EffectInstance) -> bool {
-    left.effect() == right.effect()
-        && left.arguments().len() == right.arguments().len()
-        && left
-            .arguments()
-            .iter()
-            .zip(right.arguments())
-            .all(|(left, right)| same_type(left, right))
+fn same_effect_instance(
+    left: &EffectInstance,
+    right: &EffectInstance,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, RuntimeFailure> {
+    if left.effect() != right.effect() || left.arguments().len() != right.arguments().len() {
+        return Ok(false);
+    }
+    for (left, right) in left.arguments().iter().zip(right.arguments()) {
+        if !same_type_with_budget(left, right, work)
+            .map_err(|()| RuntimeFailure::EnvironmentCapacity)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn dispatch_entry(
@@ -839,9 +1124,16 @@ fn dispatch_entry(
             EffectExprKind::Pure(kind) => (kind, &expression.origin),
             EffectExprKind::Operation(operation) => {
                 return Ok(match operation {
+                    EffectOperation::Resource(resource) => Transition::suspend(
+                        Control::Evaluate(resource.initializer(), environment.clone()),
+                        Frame::ResourceInitializer { node, environment },
+                    ),
                     EffectOperation::Request(request) => Transition::suspend(
-                        Control::Evaluate(request.operand(), environment),
-                        Frame::Request { node },
+                        Control::Evaluate(request.operand(), environment.clone()),
+                        Frame::Request {
+                            node,
+                            instantiation: environment.instantiation,
+                        },
                     ),
                     EffectOperation::Handler(handler) => Transition::suspend(
                         Control::Evaluate(handler.body(), environment.clone()),
@@ -894,10 +1186,27 @@ fn dispatch_entry(
             Transition::direct(Control::Evaluate(scope.body(), environment))
         }
         PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
-            enter_type_abstraction(operation, environment)
+            if matches!(program, ExecutableProgram::Effect(_)) {
+                Transition::direct(Control::Return(Value::Polymorphic {
+                    abstraction: node,
+                    environment,
+                }))
+            } else {
+                enter_type_abstraction(operation, environment)
+            }
         }
         PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
-            enter_type_application(operation, environment)
+            if matches!(program, ExecutableProgram::Effect(_)) {
+                Transition::suspend(
+                    Control::Evaluate(operation.function(), environment.clone()),
+                    Frame::TypeApplication {
+                        node,
+                        caller: environment.instantiation,
+                    },
+                )
+            } else {
+                enter_type_application(operation, environment)
+            }
         }
     })
 }
@@ -1034,6 +1343,9 @@ fn enter_recursive_binding(
                 parameter: function.parameter().id(),
                 body: function.body(),
                 origin: initializer_origin,
+                abstraction: (matches!(program, ExecutableProgram::Effect(_))
+                    && erased_initializer != member.initializer())
+                .then_some(member.initializer()),
             },
             _ if member.binder().ty().outer_nominal().is_some() => {
                 let location = allocate_heap(heap, HeapCell::Uninitialized)?;
@@ -1156,7 +1468,10 @@ fn dispatch_return(
             environment,
         } => return_recursive_initialization(pending, next, body, environment, value, heap),
         Frame::HandlerBoundary { .. }
+        | Frame::ResourceInitializer { .. }
+        | Frame::ResourceBoundary { .. }
         | Frame::Request { .. }
+        | Frame::TypeApplication { .. }
         | Frame::Resume { .. }
         | Frame::ClauseBoundary { .. } => Err(RuntimeFailure::InvalidControlState),
     }
@@ -1472,6 +1787,55 @@ mod tests {
         ))
     }
 
+    #[test]
+    fn generic_execution_instantiation_work_is_exact_and_retryable() {
+        let program = effect_program(concat!(
+            "effect E<T> {\nask : Unit -> Int\n}\n",
+            "helper<T> : T -> Int ! {E<T>}\nhelper ignored = perform E<T>.ask ()\n",
+            "main : Unit -> Int\nmain () = handle (helper 0) with E<Int> {\nask ignored => resume 42\n}\n",
+        ));
+        // Application: 3. Request argument: 2 + 1. Handler search: 1.
+        // Handler argument: 2 + 1. Exact comparison: 1.
+        const REQUIRED: usize = 11;
+        let mut short = Machine::new_effect(&program);
+        short.instantiation_work = TypeWorkBudget::with_limit(REQUIRED - 1);
+        assert_eq!(
+            short.run().unwrap_err(),
+            RuntimeFailure::EnvironmentCapacity
+        );
+        for _ in 0..2 {
+            let mut exact = Machine::new_effect(&program);
+            exact.instantiation_work = TypeWorkBudget::with_limit(REQUIRED);
+            assert_eq!(exact.run().unwrap().value.to_string(), "42");
+        }
+    }
+
+    #[test]
+    fn polymorphic_environment_edges_are_disposed_iteratively() {
+        let program = sequential_effect_program();
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let mut environment = Environment::new();
+                for index in 0..32_000 {
+                    let captured = environment.clone();
+                    environment = environment
+                        .extend(
+                            BinderId::new(index),
+                            Value::Polymorphic {
+                                abstraction: program.root(),
+                                environment: captured,
+                            },
+                        )
+                        .unwrap();
+                }
+                drop(environment);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     fn effect_program(text: &str) -> ValidatedEffectProgram {
         let path = std::env::temp_dir().join(format!(
             "ash-machine-effect-budget-{}-{}.ash",
@@ -1483,10 +1847,26 @@ mod tests {
         ));
         std::fs::write(&path, text).expect("fixture should be writable");
         let graph = load_module_graph(&path, &ModuleRoots::empty()).expect("fixture should load");
-        let module = graph.module(graph.entry()).expect("entry remains loaded");
-        let checked = check_module(resolve_module(module, &[]).expect("fixture should resolve"))
-            .expect("fixture should check");
-        let linked = link_modules(vec![checked], graph.entry()).expect("fixture should link");
+        let mut checked: Vec<crate::resolved::CheckedModule> = Vec::new();
+        for module in graph.modules() {
+            let dependencies = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    crate::resolve::DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|module| module.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            checked.push(check_module(resolve_module(module, &dependencies).unwrap()).unwrap());
+        }
+        let linked = link_modules(checked, graph.entry()).expect("fixture should link");
         let linked = validate_interface_evidence(linked).expect("evidence should authenticate");
         let mut elaborator =
             EffectElaborator::for_module_program(&linked).expect("builder should start");
@@ -1510,6 +1890,385 @@ mod tests {
         program
     }
 
+    fn resource_program() -> ValidatedEffectProgram {
+        effect_program(
+            "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = resource cell<R> c = 41 {\nCell.read c\n}\n",
+        )
+    }
+
+    fn resource_node(program: &ValidatedEffectProgram) -> NodeId {
+        let mut pending = vec![program.root()];
+        while let Some(id) = pending.pop() {
+            let kind = &program.node(id).unwrap().kind;
+            if matches!(
+                kind,
+                EffectExprKind::Operation(EffectOperation::Resource(_))
+            ) {
+                return id;
+            }
+            pending.extend((0..kind.child_count()).filter_map(|index| kind.child_at(index)));
+        }
+        panic!("resource fixture has an acquisition")
+    }
+
+    fn integer(value: &str) -> Value {
+        Value::Integer(Integer::parse_decimal(value).unwrap())
+    }
+
+    #[test]
+    fn resource_capacity_is_live_exact_atomic_and_reused_with_fresh_keys() {
+        let program = resource_program();
+        let node = resource_node(&program);
+        let mut machine = Machine::new_effect(&program);
+        machine.resource_limit = 1;
+        for expected in 0..3 {
+            machine
+                .acquire_resource(node, Environment::new(), integer("41"))
+                .unwrap();
+            assert_eq!(machine.live_resources, 1);
+            assert_eq!(machine.next_activation, expected + 1);
+            let key = match machine.frames.last().unwrap() {
+                Frame::ResourceBoundary { key, .. } => *key,
+                _ => panic!("cell owner"),
+            };
+            assert_eq!(key, ActivationKey(expected));
+            let events = machine.effect_trace.clone();
+            assert_eq!(
+                machine.acquire_resource(node, Environment::new(), integer("99")),
+                Err(RuntimeFailure::ResourceCapacity)
+            );
+            assert_eq!(machine.effect_trace, events);
+            assert_eq!(machine.live_resources, 1);
+            assert_eq!(machine.next_activation, expected + 1);
+            let frame = machine.frames.pop().unwrap();
+            machine.return_from(frame, integer("42")).unwrap();
+            assert_eq!(machine.live_resources, 0);
+        }
+        assert!(machine.heap.is_empty());
+        machine.next_activation = u32::MAX;
+        assert_eq!(
+            machine.acquire_resource(node, Environment::new(), integer("41")),
+            Err(RuntimeFailure::ResourceCapacity)
+        );
+        assert!(machine.frames.is_empty());
+        assert_eq!(machine.live_resources, 0);
+    }
+
+    #[test]
+    fn full_source_resource_capacity_counts_active_and_captured_cells() {
+        for source in [
+            "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = resource cell<R> outer = 41 {\nresource cell<S> inner = 1 {\nCell.read outer + Cell.read inner\n}\n}\n",
+            "import @builtin.cell as Cell\neffect Pause {\nask : Unit -> Unit\n}\nmain : Unit -> Int\nmain () = handle (resource cell<R> c = 41 {\nlet _ = perform Pause.ask ()\nCell.read c\n}) with Pause {\nask ignored => {\nlet extra = resource cell<S> other = 1 {\nCell.read other\n}\nextra + (resume ())\n}\n}\n",
+        ] {
+            let program = effect_program(source);
+            for limit in [1, 2, 2] {
+                let mut machine = Machine::new_effect(&program);
+                machine.resource_limit = limit;
+                let result = machine.run();
+                if limit == 1 {
+                    assert!(matches!(result, Err(RuntimeFailure::ResourceCapacity)));
+                } else {
+                    let result = result.unwrap();
+                    assert_eq!(result.value.to_string(), "42");
+                    let owners = result
+                        .effect_trace()
+                        .iter()
+                        .filter(|event| {
+                            matches!(
+                                event,
+                                EffectTraceEvent::ResourceAcquired(_)
+                                    | EffectTraceEvent::ResourceReleased(_)
+                            )
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        owners,
+                        [
+                            EffectTraceEvent::ResourceAcquired(0),
+                            EffectTraceEvent::ResourceAcquired(1),
+                            EffectTraceEvent::ResourceReleased(1),
+                            EffectTraceEvent::ResourceReleased(0)
+                        ]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn full_source_reuses_capacity_with_retained_unused_handle_environment() {
+        let program = effect_program(
+            "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = {\nlet later = resource cell<R> c = 41 {\nlet copied = Cell.read c\nlet result : Unit -> Int = fn(ignored) {\ncopied + 1\n}\nresult\n}\nresource cell<S> other = 10 {\nlet _ = Cell.write (other, 99)\nlater ()\n}\n}\n",
+        );
+        for _ in 0..2 {
+            let mut machine = Machine::new_effect(&program);
+            machine.resource_limit = 1;
+            let result = machine.run().unwrap();
+            assert_eq!(result.value.to_string(), "42");
+            let owners = result
+                .effect_trace()
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event,
+                        EffectTraceEvent::ResourceAcquired(_)
+                            | EffectTraceEvent::ResourceReleased(_)
+                    )
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            assert_eq!(
+                owners,
+                [
+                    EffectTraceEvent::ResourceAcquired(0),
+                    EffectTraceEvent::ResourceReleased(0),
+                    EffectTraceEvent::ResourceAcquired(1),
+                    EffectTraceEvent::ResourceReleased(1)
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn resource_context_preflight_publishes_no_partial_acquisition() {
+        let program = resource_program();
+        let node = resource_node(&program);
+        let mut measured = Machine::new_effect(&program);
+        measured
+            .acquire_resource(node, Environment::new(), integer("41"))
+            .unwrap();
+        let work = measured.instantiation_work.used();
+        assert!(work > 0);
+        for remaining in [work - 1, work, work] {
+            let mut machine = Machine::new_effect(&program);
+            machine.instantiation_work = TypeWorkBudget::with_limit(remaining);
+            let result = machine.acquire_resource(node, Environment::new(), integer("41"));
+            if remaining < work {
+                assert_eq!(result, Err(RuntimeFailure::EnvironmentCapacity));
+                assert_eq!(machine.live_resources, 0);
+                assert_eq!(machine.next_activation, 0);
+                assert!(machine.frames.is_empty());
+                assert!(machine.effect_trace.as_ref().unwrap().is_empty());
+                assert!(matches!(machine.control, Some(Control::Evaluate(_, _))));
+            } else {
+                result.unwrap();
+                assert_eq!(machine.live_resources, 1);
+                assert_eq!(machine.next_activation, 1);
+            }
+        }
+        let mut machine = Machine::new_effect(&program);
+        let environment = Environment {
+            len: usize::MAX,
+            ..Environment::new()
+        };
+        assert_eq!(
+            machine.acquire_resource(node, environment, integer("41")),
+            Err(RuntimeFailure::EnvironmentCapacity)
+        );
+        assert_eq!(machine.live_resources, 0);
+        assert_eq!(machine.next_activation, 0);
+        assert!(machine.frames.is_empty());
+    }
+
+    #[test]
+    fn final_observation_rejects_unreleased_ownership_accounting() {
+        let program = resource_program();
+        for (live_resources, captured_cells) in [(1, 0), (0, 1)] {
+            let mut machine = Machine::new_effect(&program);
+            machine.live_resources = live_resources;
+            machine.captured_cells = captured_cells;
+            machine.control = Some(Control::Return(Value::Unit));
+            assert!(matches!(
+                machine.run(),
+                Err(RuntimeFailure::InvalidControlState)
+            ));
+        }
+    }
+
+    #[test]
+    fn captured_resource_counts_until_normal_release_and_forbids_discard() {
+        let program = resource_program();
+        let node = resource_node(&program);
+        let mut machine = Machine::new_effect(&program);
+        machine.resource_limit = 1;
+        machine
+            .acquire_resource(node, Environment::new(), integer("41"))
+            .unwrap();
+        machine.capture_limit = 0;
+        assert!(matches!(
+            machine.capture_from(0),
+            Err(RuntimeFailure::CapturedControlCapacity)
+        ));
+        assert_eq!(machine.frames.len(), 1);
+        machine.capture_limit = 1;
+        let captured = machine.capture_from(0).unwrap();
+        assert_eq!(machine.live_resources, 1);
+        assert_eq!(machine.captured_cells, 1);
+        assert_eq!(
+            machine.acquire_resource(node, Environment::new(), integer("99")),
+            Err(RuntimeFailure::ResourceCapacity)
+        );
+        let handler = HandlerId::new(0);
+        let owner = ResumeId::new(0);
+        machine.frames.push(Frame::ClauseBoundary {
+            handler,
+            owner,
+            continuation: Some(captured),
+        });
+        let before = machine.effect_trace.clone();
+        assert_eq!(
+            machine.discard(handler, owner),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        assert_eq!(machine.effect_trace, before);
+        assert_eq!(machine.live_resources, 1);
+        assert_eq!(machine.captured_cells, 1);
+        let Frame::ClauseBoundary {
+            continuation: Some(mut captured),
+            ..
+        } = machine.frames.pop().unwrap()
+        else {
+            panic!("retained capture")
+        };
+        machine.frames.append(&mut captured.frames);
+        machine.captured_cells = 0;
+        let frame = machine.frames.pop().unwrap();
+        machine.return_from(frame, integer("42")).unwrap();
+        assert_eq!(machine.live_resources, 0);
+        machine
+            .acquire_resource(node, Environment::new(), integer("42"))
+            .unwrap();
+        assert_eq!(machine.next_activation, 2);
+    }
+
+    #[test]
+    fn trusted_cell_rejects_wrong_handle_and_operation_before_mutation() {
+        let program = resource_program();
+        let node = resource_node(&program);
+        let mut machine = Machine::new_effect(&program);
+        machine
+            .acquire_resource(node, Environment::new(), integer("41"))
+            .unwrap();
+        let api = machine.resource(node).unwrap().acquisition.api().unwrap();
+        let read = OperationId::new(api.ops(), 0);
+        let write = OperationId::new(api.ops(), 1);
+        for operation in [read, write, OperationId::new(api.ops(), 2)] {
+            let value = if operation == write {
+                Value::Location(
+                    allocate_heap(
+                        &mut machine.heap,
+                        HeapCell::Tuple(Box::new([
+                            Value::ResourceHandle(ActivationKey(1)),
+                            integer("99"),
+                        ])),
+                    )
+                    .unwrap(),
+                )
+            } else {
+                Value::ResourceHandle(ActivationKey(1))
+            };
+            assert_eq!(
+                machine.interpret_cell(0, operation, value),
+                Err(RuntimeFailure::InvalidControlState)
+            );
+            assert!(
+                matches!(&machine.frames[0], Frame::ResourceBoundary { cell, .. } if cell.to_string() == "41")
+            );
+        }
+        machine
+            .interpret_cell(0, read, Value::ResourceHandle(ActivationKey(0)))
+            .unwrap();
+        assert!(
+            matches!(&machine.control, Some(Control::Return(Value::Integer(cell))) if cell.to_string() == "41")
+        );
+    }
+
+    #[test]
+    fn deep_resource_completion_and_failed_capture_disposal_use_a_small_stack() {
+        let program = resource_program();
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let node = resource_node(&program);
+                const DEPTH: usize = 32_000;
+                let mut normal = Machine::new_effect(&program);
+                normal.resource_limit = DEPTH;
+                for _ in 0..DEPTH {
+                    normal
+                        .acquire_resource(node, Environment::new(), integer("41"))
+                        .unwrap();
+                }
+                assert_eq!(normal.live_resources, DEPTH);
+                normal.control = Some(Control::Return(integer("42")));
+                let completed = normal.run().unwrap();
+                assert_eq!(completed.value.to_string(), "42");
+                assert_eq!(
+                    completed
+                        .effect_trace()
+                        .iter()
+                        .filter(|event| matches!(event, EffectTraceEvent::ResourceReleased(_)))
+                        .count(),
+                    DEPTH
+                );
+                let mut failure = Machine::new_effect(&program);
+                let mut captured = CapturedContinuation { frames: Vec::new() };
+                for key in 0..DEPTH {
+                    captured = CapturedContinuation {
+                        frames: vec![
+                            Frame::ResourceBoundary {
+                                node,
+                                key: ActivationKey(key as u32),
+                                cell: Integer::parse_decimal("41").unwrap(),
+                            },
+                            Frame::ClauseBoundary {
+                                handler: HandlerId::new(0),
+                                owner: ResumeId::new(0),
+                                continuation: Some(captured),
+                            },
+                        ],
+                    };
+                }
+                failure.frames.push(Frame::ClauseBoundary {
+                    handler: HandlerId::new(0),
+                    owner: ResumeId::new(0),
+                    continuation: Some(captured),
+                });
+                failure.live_resources = DEPTH;
+                failure.captured_cells = DEPTH * 2;
+                failure.control = Some(Control::Return(Value::Unit));
+                assert!(matches!(
+                    failure.run(),
+                    Err(RuntimeFailure::InvalidControlState)
+                ));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn resource_free_pure_execution_retains_no_resource_state() {
+        let source = SourceFile::new("pure-resource-locality", "42").unwrap();
+        let origin = Origin::Source(source.span(ByteRange::new(0, 2).unwrap()).unwrap());
+        let mut builder = CoreBuilder::new();
+        let root = builder
+            .integer(Integer::parse_decimal("42").unwrap(), Type::Int, origin)
+            .unwrap();
+        let program = validate(builder.finish(root).unwrap(), &[&source]).unwrap();
+        let machine = Machine::new(&program);
+        assert_eq!(machine.resource_limit, 0);
+        assert_eq!(machine.live_resources, 0);
+        assert_eq!(machine.next_activation, 0);
+        assert!(machine.frames.is_empty());
+        assert!(machine.effect_trace.is_none());
+        assert!(machine.heap.is_empty());
+        let evaluation = machine.run().unwrap();
+        assert_eq!(evaluation.value.to_string(), "42");
+        assert!(evaluation.effect_trace().is_empty());
+        assert_eq!(evaluation.heap.cell_count(), 0);
+    }
+
     fn capture_machine(limit: usize) -> Machine {
         let source = SourceFile::new("capture-budget.ash", "()").expect("test source");
         let origin = Origin::Source(
@@ -1528,9 +2287,10 @@ mod tests {
         )
         .expect("Core should validate");
         let mut machine = Machine::new_effect_with_capture_limit(&program, limit);
-        machine
-            .frames
-            .extend((0..3).map(|_| Frame::Request { node: root }));
+        machine.frames.extend((0..3).map(|_| Frame::Request {
+            node: root,
+            instantiation: Instantiation::default(),
+        }));
         machine
     }
 
@@ -1550,7 +2310,10 @@ mod tests {
         )
         .expect("Core should validate");
         let mut pure = Machine::new(&program);
-        pure.frames.push(Frame::Request { node: root });
+        pure.frames.push(Frame::Request {
+            node: root,
+            instantiation: Instantiation::default(),
+        });
         assert_eq!(
             pure.capture_from(0).expect_err("Pure cannot capture"),
             RuntimeFailure::CapturedControlCapacity
@@ -1575,7 +2338,10 @@ mod tests {
                 Some(Control::Evaluate(node, _)) => *node,
                 _ => unreachable!("fixture begins by evaluating its root"),
             };
-            exact.frames.push(Frame::Request { node });
+            exact.frames.push(Frame::Request {
+                node,
+                instantiation: Instantiation::default(),
+            });
             assert_eq!(
                 exact.capture_from(0).expect_err("cumulative quota is full"),
                 RuntimeFailure::CapturedControlCapacity
@@ -1678,7 +2444,10 @@ mod tests {
             handler: HandlerId::new(1),
             owner: ResumeId::new(1),
             continuation: Some(CapturedContinuation {
-                frames: vec![Frame::Request { node: root }],
+                frames: vec![Frame::Request {
+                    node: root,
+                    instantiation: Instantiation::default(),
+                }],
             }),
         });
         machine.frames.push(Frame::ClauseBoundary {
@@ -1686,7 +2455,10 @@ mod tests {
             owner,
             continuation: Some(captured),
         });
-        machine.frames.push(Frame::Request { node: root });
+        machine.frames.push(Frame::Request {
+            node: root,
+            instantiation: Instantiation::default(),
+        });
         machine
             .discard(handler, owner)
             .expect("discard should release its three cells");
@@ -1995,6 +2767,12 @@ mod tests {
 
     const EFFECT_TRANSITION_OWNERSHIP: &[TransitionOwner] = &[
         TransitionOwner {
+            feature: "resource",
+            entry: "dispatch_entry",
+            frames: &["Frame::ResourceInitializer", "Frame::ResourceBoundary"],
+            returns: &["Machine::acquire_resource", "Machine::return_from"],
+        },
+        TransitionOwner {
             feature: "handler",
             entry: "dispatch_entry",
             frames: &["Frame::HandlerBoundary"],
@@ -2166,17 +2944,29 @@ mod tests {
     #[test]
     fn every_effect_operation_has_one_explicit_transition_owner() {
         assert_eq!(TRANSITION_OWNERSHIP.len(), 14);
-        assert_eq!(EFFECT_TRANSITION_OWNERSHIP.len(), 5);
+        assert_eq!(EFFECT_TRANSITION_OWNERSHIP.len(), 6);
         assert_eq!(
             EFFECT_TRANSITION_OWNERSHIP
                 .iter()
                 .map(|owner| owner.feature)
                 .collect::<Vec<_>>(),
-            ["handler", "request", "resume", "discard", "clause boundary"]
+            [
+                "resource",
+                "handler",
+                "request",
+                "resume",
+                "discard",
+                "clause boundary"
+            ]
         );
         assert!(EFFECT_TRANSITION_OWNERSHIP.iter().all(|owner| {
             !owner.entry.is_empty()
-                && owner.frames.len() == usize::from(owner.feature != "discard")
+                && owner.frames.len()
+                    == match owner.feature {
+                        "resource" => 2,
+                        "discard" => 0,
+                        _ => 1,
+                    }
                 && owner.returns.len() == owner.frames.len()
         }));
     }
@@ -2744,6 +3534,7 @@ mod tests {
                             parameter: parameter.id(),
                             body,
                             origin: origin.clone(),
+                            abstraction: None,
                         },
                     })
                     .collect();

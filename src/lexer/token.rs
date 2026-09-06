@@ -50,6 +50,8 @@ pub enum TokenKind {
     With,
     /// The `resume` reserved word.
     Resume,
+    /// Scoped acquisition of the builtin cell resource.
+    Resource,
     /// The `discard` reserved word.
     Discard,
     /// The `import` reserved word.

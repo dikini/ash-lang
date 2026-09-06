@@ -5,20 +5,26 @@ configurations `CONFIG(heap, environment, control, continuation)`. The heap is
 fresh for one evaluation and maps numeric locations to tuples, completed
 constructors, uninitialized recursive data slots, or aliases. Tuple elements
 and constructor payloads are runtime values. The environment maps resolved term
-identities to runtime values. The continuation records the remaining strict
+identities to runtime values. Effect execution also retains lexical type/row
+instantiation in the environment, separately from term bindings. This metadata
+is not a source value. The continuation records the remaining strict
 work, including ordered lexical handler boundaries. A selected operation moves
 one suffix of that continuation into a clause-owned captured continuation. The
 suffix is moved, not copied. Its clause boundary records whether the unique
 resume capability still owns that captured control or has consumed it.
 
 Runtime values are arbitrary-precision integers, Booleans, unit, lexical
-functions, payload-constructor functions, or heap locations. A function
+functions, internal lexical polymorphic functions, payload-constructor
+functions, opaque non-owning resource handles, or heap locations. A function
 template becomes a lexical function with the recursive environment when its
 binder is looked up. A location is an internal handle, not source-level
 identity or observable mutation.
 
-Core type abstractions and applications are static evidence. They are not
-runtime values, do not extend the environment, and allocate no heap cells.
+Pure Core type abstractions and applications erase without extending the
+environment or allocating heap cells. Effect execution retains lexical
+polymorphic functions and their validated instantiation so exact operation
+identities remain meaningful across generic calls. No type or kind becomes a
+source-inspectable value, and instantiation allocates no ordinary heap cell.
 Validated newtype conversions and local nominal scopes are likewise erased
 static operations rather than values.
 
@@ -45,19 +51,22 @@ loading at runtime. The ordinary recursive-binding and application rules enter
 the linked groups and call `main`. Imports have no initialization step, and
 modules are not runtime values.
 
-## Type erasure
+## Type instantiation and erasure
 
-Entering either explicit Core type operation takes one step to its retained
-term. Validation has already checked parameter scope, argument arity, kinds,
+In Pure execution, entering either explicit Core type operation takes one step
+to its retained term. Validation has already checked parameter scope, argument
+arity, kinds,
 and substitution, so evaluation does not inspect the parameters or arguments.
 
 ```sequent
 family type-erasure-steps:
   E-Type-Abstraction :=
+    execution uses Pure Core
     ===>
     CONFIG(heap, environment, TypeAbstraction(parameters, body), continuation) -> CONFIG(heap, environment, body, continuation)
 
   E-Type-Application :=
+    execution uses Pure Core
     ===>
     CONFIG(heap, environment, TypeApplication(function, arguments), continuation) -> CONFIG(heap, environment, function, continuation)
 
@@ -72,7 +81,7 @@ family type-erasure-steps:
 
 The unchanged heap and environment make erasure observable only as progress in
 the machine. No source program can inspect a type parameter or type argument.
-Method-local type arguments erase through `E-Type-Application`.
+In Pure execution, method-local type arguments erase through `E-Type-Application`.
 `E-Newtype-Conversion` also leaves the continuation unchanged. Independent
 Core validation has already authenticated the owner, direction, child and
 result types, representation substitution, and provenance, so evaluation does
@@ -85,6 +94,61 @@ closure whose exposed computation is identity-free may retain ordinary erased
 representation values and execute its lexical code after this step's body
 returns; no runtime scope authority needs to survive with it.
 
+Effect execution instead retains a type abstraction as a lexical polymorphic
+function. Independent Core validation admits only inert values or variables,
+transparent type operations, and authenticated generated evidence adapters
+inside that abstraction, as described in [Elaboration](elaboration.md#explicit-rank-1-operations).
+Retaining these forms does not delay a source effect or source function body.
+
+A type application evaluates its function before entering the retained body.
+It saves the caller's instantiation, substitutes all ordinary type and complete
+row arguments under that caller context, and simultaneously binds the retained
+parameters in the function's definition environment. Ordinary function creation
+then captures that environment. A later call uses the closure's context, not
+the caller's current type bindings. Recursive lookup likewise materializes a
+polymorphic function from the definition context, rather than specializing a
+shared template in place. Parameterized ordinary constructors retain their
+existing constructor behavior; their type application needs no effect context.
+
+The same lexical context travels with handlers and captured control. Request
+selection compares exact effect instances after instantiating each side under
+its own context. This is neither type inference from argument values nor a
+machine-global mutable substitution. Types nested inside effect arguments,
+including higher-kinded applications and function effect rows, participate in
+the same validated substitution. Pure execution keeps the erasure rules above.
+
+These Effect-only steps make retention and instantiation explicit.
+`POLYMORPHIC` is an internal lexical function, not a type value.
+`arguments` contains the ordered ordinary type and complete row arguments.
+`instantiate_arguments` uses the saved caller context, and `bind_parameters`
+extends the definition context simultaneously without changing term bindings.
+`constructor_value` recognizes an ordinary payload-constructor function or
+nullary constructor value; these need no retained effect instantiation.
+
+```sequent
+family effect-type-steps:
+  E-Effect-Type-Abstraction :=
+    execution uses Effect Core
+    ===>
+    CONFIG(heap, environment, TypeAbstraction(parameters, body), continuation) -> CONFIG(heap, environment, POLYMORPHIC(parameters, body, environment), continuation)
+
+  E-Effect-Type-Application :=
+    execution uses Effect Core
+    ===>
+    CONFIG(heap, environment, TypeApplication(function, arguments), continuation) -> CONFIG(heap, environment, function, TYPE-ARGUMENTS(arguments, instantiation(environment)) :: continuation)
+
+  E-Effect-Type-Instantiate :=
+    instantiated = instantiate_arguments(arguments, caller_instantiation)
+    body_environment = bind_parameters(definition_environment, parameters, instantiated)
+    ===>
+    CONFIG(heap, environment_value, POLYMORPHIC(parameters, body, definition_environment), TYPE-ARGUMENTS(arguments, caller_instantiation) :: continuation) -> CONFIG(heap, body_environment, body, continuation)
+
+  E-Effect-Constructor-Instantiate :=
+    constructor_value(value)
+    ===>
+    CONFIG(heap, environment_value, value, TYPE-ARGUMENTS(arguments, caller_instantiation) :: continuation) -> CONFIG(heap, environment_value, value, continuation)
+```
+
 ## Generated interface evidence
 
 Linking preserves each checked interface selection. Linked interface-evidence
@@ -96,12 +160,13 @@ already been substituted into authenticated method types, and the evaluator
 does not inspect those relationships or make them control or state.
 An abstract evidence method becomes an ordinary function parameter. A
 polymorphic occurrence type-applies that parameter to its retained method-local
-arguments; entering the Core application uses `E-Type-Application`. A
-monomorphic concrete evidence method becomes a binder occurrence for the
+arguments; entering the Core application uses the type-instantiation behavior
+above. A monomorphic concrete evidence method becomes a binder occurrence for the
 implementation method in its defining module's recursive group. A polymorphic
 concrete or exact-current method first enters its generated adapter type
 abstraction and then the implementation method's complete type application.
-`E-Type-Abstraction` and `E-Type-Application` erase both operations. Looking up
+Pure execution erases both operations; Effect execution retains the lexical
+instantiation needed by operation identities. Looking up
 the recursive function binder materializes a lexical closure under the existing
 recursive-binding behavior.
 
@@ -114,17 +179,20 @@ registry, scope frame, revocation check, or transition family.
 
 The validated Core program may retain method authentication records and method
 schemes as static authority, and a Core type application carries its retained
-method arguments in control until `E-Type-Application` erases that node.
+method arguments in control until the type application is entered.
 The evaluator does not inspect method authentication records or method schemes.
 It does not turn an interface identity, selection record, implementation
 authorization route, method scheme, or method argument into a runtime value,
-environment entry, heap cell, frame, lookup, or transition choice.
+term binding, heap cell, interface lookup, or interface-specific transition.
+Effect type applications retain instantiation as described above; this does
+not turn method authentication or selection into runtime authority.
 
 For a generic implementation method, lowering uses the recorded head
 substitution to form an ordinary Core type application. When evaluation enters
-that Core node, `E-Type-Application` erases it to its function without inspecting
-the type arguments. The recorded substitution itself does not reach the
-evaluator. The existing strict application transitions then evaluate and apply
+that Core node, Pure execution erases it while Effect execution preserves its
+validated arguments in lexical instantiation. The recorded selection route
+itself does not reach the evaluator. The existing strict application transitions
+then evaluate and apply
 every recursively generated prerequisite method in declaration order. The
 result is the lexical method closure that accepts the source value argument. At
 a constrained-global call, the same transitions apply its evidence functions
@@ -135,13 +203,14 @@ function lookup and closure materialization.
 
 There is no runtime interface value, dictionary, interface or implementation
 registry, implementation lookup, interface dispatch, registration step, or
-interface-specific failure mode. Polymorphic method evidence uses ordinary
-function values and applications but adds no new evaluator value class,
+interface-specific failure mode. Polymorphic method evidence uses the dialect's
+ordinary function values and applications. It adds no interface-specific value,
 environment-entry class, frame kind, lookup class, transition class, failure
-reason, or runtime interface state. Evidence construction uses only type
-erasure, ordinary local and recursive binding, binder lookup and closure materialization,
-and the strict application transitions below. It adds no Core node and requires
-no new evaluation rule.
+reason, or runtime interface state. Evidence construction uses the dialect's
+ordinary type operations, local and recursive binding, binder lookup and closure
+materialization,
+and the strict application transitions below. It adds no interface-specific
+Core node or evaluation rule.
 Improvement is a static inference operation and does not become a lookup,
 transition, proof witness, effect handler, or existential package.
 
@@ -249,8 +318,11 @@ sequence and proceeds through `E-Let-Rec-Body`; its templates were installed by
 
 A polymorphic function member has one outer `TypeAbstraction` node whose
 nonempty parameter sequence contains all generalized parameters. Allocation
-follows that wrapper to install the same function template; ordinary evaluation
-still uses `E-Type-Abstraction`. No type wrapper becomes part of a closure.
+in Pure execution follows that wrapper to install the same function template;
+ordinary evaluation still uses `E-Type-Abstraction`. Effect execution retains
+the abstraction and definition instantiation with the template. Each lookup
+materializes its own lexical polymorphic function; instantiating one occurrence
+does not mutate the template or a sibling occurrence.
 
 Reaching an uninitialized cell, an alias loop, or an invalid location is an
 internal runtime failure. The static guardedness judgment makes those states
@@ -411,8 +483,9 @@ rules compute the primitive result.
 ## Effect handlers and completion
 
 `HANDLER(handler, instance, clauses, environment)` is an ordered lexical
-continuation boundary. `REQUEST(operation)` and `RESUME(handler, owner)` are
-ordinary strict frames for their operands. `CLAUSE(handler, owner, state)` is
+continuation boundary. `REQUEST(operation, instantiation)` and
+`RESUME(handler, owner)` are ordinary strict frames for their operands. The
+request retains its lexical instantiation. `CLAUSE(handler, owner, state)` is
 the selected clause boundary; its state is either `live(captured)` or
 `consumed`. The captured value owns the selected handler boundary and all
 intervening continuation entries up to the request. It contains no source
@@ -437,9 +510,12 @@ for `instance`, so ordinary body return and operation selection are the only
 reachable ways to leave the boundary.
 
 A request first evaluates its one operand. Once that operand is a value,
-`select_nearest` searches outward through continuation boundaries for the
-nearest handler whose exact effect identity and zonked type arguments equal the
-operation's instance. It returns the matching clause, the handler's saved
+`select_nearest` searches outward for the innermost accepting source-handler
+or cell boundary. The source-handler branch below requires its exact effect
+identity and instantiated type arguments to equal the operation's instance,
+with no nearer accepting cell boundary. The request saves its lexical instantiation
+before operand evaluation; each candidate uses its own saved handler context.
+It returns the matching clause, the handler's saved
 environment, an owner identity, the moved segment through that boundary, and
 the continuation outside it:
 
@@ -447,15 +523,17 @@ the continuation outside it:
 family request-steps:
   E-Perform-Operand :=
     ===>
-    CONFIG(heap, environment, perform operation operand, continuation) -> CONFIG(heap, environment, operand, REQUEST(operation) :: continuation)
+    CONFIG(heap, environment, perform operation operand, continuation) -> CONFIG(heap, environment, operand, REQUEST(operation, instantiation(environment)) :: continuation)
 
   E-Request-Select :=
-    select_nearest(continuation, instance(operation)) = clause, handler_environment, handler, owner, captured, outer
+    requested = instantiate(instance(operation), request_instantiation)
+    select_nearest(continuation, requested) = clause, handler_environment, handler, owner, captured, outer
+    no nearer cell boundary accepts requested
     clause = operation pattern => body
     match(heap, operand_value, pattern) = bindings
     clause_environment = extend(handler_environment, bindings)
     ===>
-    CONFIG(heap, environment_value, operand_value, REQUEST(operation) :: continuation) -> CONFIG(heap, clause_environment, body, CLAUSE(handler, owner, live(captured)) :: outer)
+    CONFIG(heap, environment_value, operand_value, REQUEST(operation, request_instantiation) :: continuation) -> CONFIG(heap, clause_environment, body, CLAUSE(handler, owner, live(captured)) :: outer)
 ```
 
 The move performed by `E-Request-Select` removes the selected handler and every
@@ -504,7 +582,7 @@ its surrounding control intact, and returns unit at the discard expression:
 ```sequent
 E-Discard :=
   split_owner(continuation, handler, owner) = clause_prefix, live(captured), outer
-  captured contains no other live clause capability
+  captured contains no other live clause capability or acquired resource scope
   remaining = clause_prefix ++ CLAUSE(handler, owner, consumed) :: outer
   ===>
   CONFIG(heap, environment, discard(handler, owner), continuation) -> CONFIG(heap, environment, (), remaining)
@@ -525,6 +603,89 @@ validation, evaluation reports an internal malformed-Core or machine failure.
 Ash has no source-level
 unhandled-operation, abort, exception, cancellation, or unwind result.
 
+## Scoped cell execution
+
+A resource scope owns one mutable integer payload. Its handle is an opaque,
+non-owning activation key: copying a handle, closure or environment does not
+copy the payload or its release obligation. The ordinary value heap owns no
+resource payload, including through unused entries in closure environments.
+
+Acquisition first evaluates the initializer exactly once in the preceding
+environment. Only after it returns an integer does the machine check capacity
+and prepare the new scope, handle binding and lexical instantiation. Successful
+acquisition creates a fresh activation, distinct from every earlier successful
+execution, even at the same source site. Failure publishes none of the new
+scope or authority. It is an internal failure, not a source allocation branch.
+
+The following rules describe entry and normal release. `RESOURCE_INIT` retains
+the initializer's following body and preceding environment. `CELL(a, n)` owns
+payload `n` for activation `a`. `bind_cell` binds `c` to the non-owning handle
+for `a` and binds the rigid identity `R` to `a` in lexical instantiation; it
+does not place `n` in the value heap. The acquisition premise includes all
+capacity and fallible preparation, before publication.
+
+```sequent
+family resource-boundary-steps:
+  E-Resource-Initialize :=
+    ===>
+    CONFIG(heap, environment, resource cell<R> c = initializer { body }, continuation) -> CONFIG(heap, environment, initializer, RESOURCE_INIT(R, c, body, environment) :: continuation)
+
+  E-Resource-Acquire :=
+    n is an integer
+    acquisition preparation succeeds with fresh activation a
+    bind_cell(heap, resource_environment, R, c, a) = heap_1, body_environment
+    ===>
+    CONFIG(heap, environment_value, n, RESOURCE_INIT(R, c, body, resource_environment) :: continuation) -> CONFIG(heap_1, body_environment, body, CELL(a, n) :: continuation)
+
+  E-Resource-Return :=
+    ===>
+    CONFIG(heap, environment_value, value, CELL(a, n) :: continuation) -> CONFIG(heap, environment_value, value, continuation)
+```
+
+Static checking ensures that the returning value does not depend on `a`.
+An inner return releases the inner cell before continuing inside its outer
+scope. An escaped copied integer or closure containing only copied data
+retains no cell payload after release.
+
+Requests retain their lexical type and row instantiation as described above.
+An activation binding travels through generic applications, returned closures,
+handler environments and captured control. A closure from an outer execution
+therefore continues to request its outer activation when called inside another
+execution of the same source site, including when its dependency appears only
+in operation metadata rather than a term capture. The machine does not infer
+activation from operand values or use a global substitution environment.
+
+Request selection searches source-handler and cell boundaries in ordinary
+innermost-to-outermost order. A cell boundary accepts only its authenticated
+builtin operation at its exact activation; nonmatching boundaries are passed.
+A nearer exact source handler intercepts the request by the existing handler
+rules. Its interception creates neither a handle nor provider authority.
+
+For a request selected by a cell boundary, the operand handle must equal that
+boundary's activation. `read` returns a copied payload integer and leaves the
+scope in place. `write` requires the tuple `(handle, integer)`, replaces the
+owned payload and returns `Unit`. Alias resolution and complete operand,
+operation and activation checks precede any mutation. Malformed operands or
+identity disagreement are internal failures, not source use-after-release.
+
+An outward resource-free request may capture a cell boundary. Capture moves
+the owned scope into the continuation; resume moves it back in its original
+order. Neither movement changes live-cell usage or duplicates a payload.
+Completion after resumption applies `E-Resource-Return` normally. Defensive
+discard checks retained live cells and clause capabilities before consuming
+any capture. Static checking additionally proves that discard skips no
+required resource completion outside the captured segment; execution does not
+rescan suspended source bodies to establish that proof.
+
+Cell capacity counts live owned payloads, including captured scopes, rather
+than total acquisitions. Normal release makes capacity reusable; a later
+acquisition still receives a fresh key. Deep normal completion and internal
+failure disposal release cells, captured control and environments iteratively.
+Internal disposal is not a source cleanup transition. Divergence remains
+divergence, and no abort, destructor callback, cancellation or foreign cleanup
+path is added. Resource-free Pure execution allocates no resource registry,
+resource frame or live cell.
+
 ## Observation
 
 Successful evaluation of the generated entry application retains the heap
@@ -536,6 +697,10 @@ the active rendering path renders as `<cycle>`. Removing a location from the
 active path after its subtree means shared acyclic data renders in full at each
 occurrence. Function values render as `<function>`.
 
+Successful observation retains no live resource scope or captured continuation.
+The observed heap may retain copied values and unused non-owning handle
+entries, but owns no released cell payload.
+
 A completed `newtype` value renders exactly as its representation value because
 no wrapper or constructor tag reaches the heap. The observation's separately
 retained closed result type still renders the nominal newtype spelling and its
@@ -545,7 +710,7 @@ nominal-registry lookup and adds no special newtype value case.
 
 Evaluation reports uninitialized access, alias loops, invalid locations, an
 impossible complete-pattern failure, malformed effect control, and captured-
-control capacity exhaustion as structured internal runtime failures. They are
+control or live-cell capacity exhaustion as structured internal runtime failures. They are
 not source-language error outcomes.
 
 The executable test `dynamic_cyclic_data_observation_is_finite` checks guarded

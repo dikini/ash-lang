@@ -77,6 +77,275 @@ fn run_effect_source(name: &str, source: &str) -> ash::eval::Evaluation {
 }
 
 #[test]
+fn generic_request_matches_its_concrete_caller_handler() {
+    let evaluation = run_effect_source(
+        "generic-helper",
+        concat!(
+            "effect E<T> {\nask : Unit -> Int\n}\n",
+            "helper<T> : T -> Int ! {E<T>}\nhelper ignored = perform E<T>.ask ()\n",
+            "main : Unit -> Int\nmain () = handle (helper 0) with E<Int> {\n",
+            "ask ignored => resume 42\n}\n",
+        ),
+    );
+    assert_eq!(evaluation.value.to_string(), "42");
+}
+
+#[test]
+fn generic_factory_closure_keeps_instantiation_after_return() {
+    let evaluation = run_effect_source(
+        "generic-factory",
+        concat!(
+            "effect E<T> {\nask : Unit -> Int\n}\n",
+            "factory<T> : T -> (Unit -> Int ! {E<T>})\n",
+            "factory ignored = fn(ignored) {\nperform E<T>.ask ()\n}\n",
+            "main : Unit -> Int\nmain () = {\nlet request = factory 0\n",
+            "handle (request ()) with E<Int> {\nask ignored => resume 42\n}\n}\n",
+        ),
+    );
+    assert_eq!(evaluation.value.to_string(), "42");
+}
+
+#[test]
+fn generic_instances_and_returned_closures_keep_distinct_contexts() {
+    let evaluation = run_effect_source(
+        "generic-distinct",
+        concat!(
+            "effect E<T> {\nask : Unit -> Int\n}\n",
+            "factory<T> : T -> (Unit -> Int ! {E<T>})\n",
+            "factory ignored = fn(ignored) {\nperform E<T>.ask ()\n}\n",
+            "main : Unit -> Int\nmain () = {\nlet first = factory 0\nlet second = factory true\n",
+            "handle (handle (first () + second ()) with E<Bool> {\nask ignored => resume 2\n}) with E<Int> {\nask ignored => resume 40\n}\n}\n",
+        ),
+    );
+    assert_eq!(evaluation.value.to_string(), "42");
+    let selected = evaluation
+        .effect_trace()
+        .iter()
+        .filter_map(|event| match event {
+            EffectTraceEvent::HandlerSelected(handler) => Some(handler),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(selected.len(), 2);
+    assert_ne!(selected[0], selected[1]);
+}
+
+#[test]
+fn generic_handler_uses_its_definition_context_after_capture_and_resume() {
+    let evaluation = run_effect_source(
+        "generic-handler",
+        concat!(
+            "effect E<T> {\nask : Unit -> Int\n}\n",
+            "helper<T> : T -> Int ! {E<T>}\nhelper ignored = perform E<T>.ask ()\n",
+            "run<T> : T -> Int\nrun value = handle (helper value + helper value) with E<T> {\nask ignored => resume 21\n}\n",
+            "main : Unit -> Int\nmain () = run true\n",
+        ),
+    );
+    assert_eq!(evaluation.value.to_string(), "42");
+    assert_eq!(
+        evaluation
+            .effect_trace()
+            .iter()
+            .filter(|event| matches!(event, EffectTraceEvent::HandlerRestored(_)))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn generic_higher_kinded_effect_argument_matches_exactly() {
+    let evaluation = run_effect_source(
+        "generic-higher-kind",
+        concat!(
+            "type Box<T> = Box(T)\neffect E<F : Type -> Type> {\nask : Unit -> Int\n}\n",
+            "helper<F : Type -> Type> : F<Int> -> Int ! {E<F>}\nhelper ignored = perform E<F>.ask ()\n",
+            "main : Unit -> Int\nmain () = handle (helper (Box(0))) with E<Box> {\nask ignored => resume 42\n}\n",
+        ),
+    );
+    assert_eq!(evaluation.value.to_string(), "42");
+}
+
+#[test]
+fn generic_row_bearing_function_argument_preserves_complete_row_substitution() {
+    let evaluation = run_effect_source(
+        "generic-row-argument",
+        concat!(
+            "effect Ask {\nask : Unit -> Int\n}\neffect E<T> {\nask : Unit -> Int\n}\n",
+            "helper<R : EffectRow> : (Unit -> Int ! {| R}) -> Int ! {E<Unit -> Int ! {| R}>}\n",
+            "helper ignored = perform E<Unit -> Int ! {| R}>.ask ()\n",
+            "action : Unit -> Int ! {Ask}\naction () = perform Ask.ask ()\n",
+            "main : Unit -> Int\nmain () = handle (helper action) with E<Unit -> Int ! {Ask}> {\nask ignored => resume 42\n}\n",
+        ),
+    );
+    assert_eq!(evaluation.value.to_string(), "42");
+}
+
+#[test]
+fn generic_row_forwarding_accepts_an_empty_effect_row() {
+    let evaluation = run_effect_source(
+        "generic-empty-row",
+        concat!(
+            "relay<R : EffectRow, T> : (Unit -> T ! {| R}) -> T ! {| R}\n",
+            "relay f = f ()\n",
+            "main : Unit -> Bool\nmain () = relay (fn(ignored) {\ntrue\n})\n",
+        ),
+    );
+    assert_eq!(evaluation.value.to_string(), "true");
+}
+
+#[test]
+fn generic_method_row_forwarding_accepts_an_empty_effect_row() {
+    let evaluation = run_effect_source(
+        "generic-method-empty-row",
+        concat!(
+            "relay<R : EffectRow, T> : (Unit -> T ! {| R}) -> T ! {| R}\n",
+            "relay f = f ()\n",
+            "interface Read<A> {\nread<T> : (A, T) -> T\n}\n",
+            "impl Read<Int> {\nread (ignored, extra) = relay (fn(ignored) {\nextra\n})\n}\n",
+            "main : Unit -> Bool\nmain () = read (0, true)\n",
+        ),
+    );
+    assert_eq!(evaluation.value.to_string(), "true");
+}
+
+#[test]
+fn generic_recursive_template_preserves_its_lexical_instantiation() {
+    let evaluation = run_effect_source(
+        "generic-recursive",
+        concat!(
+            "effect E<T> {\nask : Unit -> Int\n}\n",
+            "helper<T> : (T, Int) -> Int ! {E<T>}\nhelper (value, count) = match count == 5 {\n",
+            "true => perform E<T>.ask ()\nfalse => helper (value, count + 1)\n}\n",
+            "main : Unit -> Int\nmain () = handle (helper (true, 0)) with E<Bool> {\nask ignored => resume 42\n}\n",
+        ),
+    );
+    assert_eq!(evaluation.value.to_string(), "42");
+}
+
+#[test]
+fn generic_implementation_and_method_adapter_preserve_both_parameter_scopes() {
+    let evaluation = run_effect_source(
+        "generic-method-adapter",
+        concat!(
+            "type Box<T> = Box(T)\neffect E<T> {\nask : Unit -> Int\n}\n",
+            "interface Read<A> {\nread<T> : (A, T) -> Int ! {E<T>}\n}\n",
+            "helper<T> : T -> Int ! {E<T>}\nhelper ignored = perform E<T>.ask ()\n",
+            "impl<A> Read<Box<A>> {\nread (value, extra) = helper extra\n}\n",
+            "relay<A> : A -> Int ! {E<Bool>} where Read<A>\nrelay value = read (value, true)\n",
+            "main : Unit -> Int\nmain () = handle (relay (Box(0))) with E<Bool> {\nask ignored => resume 42\n}\n",
+        ),
+    );
+    assert_eq!(evaluation.value.to_string(), "42");
+}
+
+#[test]
+fn generic_method_with_nongeneric_implementation_matches_its_caller() {
+    let evaluation = run_effect_source(
+        "generic-simple-method",
+        concat!(
+            "effect E<T> {\nask : Unit -> Int\n}\n",
+            "helper<T> : T -> Int ! {E<T>}\nhelper ignored = perform E<T>.ask ()\n",
+            "interface Read<A> {\nread<T> : (A, T) -> Int ! {E<T>}\n}\n",
+            "impl Read<Int> {\nread (value, extra) = helper extra\n}\n",
+            "main : Unit -> Int\nmain () = handle (read (0, true)) with E<Bool> {\nask ignored => resume 42\n}\n",
+        ),
+    );
+    assert_eq!(evaluation.value.to_string(), "42");
+}
+
+#[test]
+fn generic_implementation_with_monomorphic_method_matches_its_caller() {
+    let evaluation = run_effect_source(
+        "generic-simple-impl",
+        concat!(
+            "type Box<T> = Box(T)\neffect E<T> {\nask : Unit -> Int\n}\n",
+            "helper<T> : T -> Int ! {E<T>}\nhelper ignored = perform E<T>.ask ()\n",
+            "interface Read<A> {\nread : A -> Int ! {E<A>}\n}\n",
+            "impl<A> Read<Box<A>> {\nread value = helper value\n}\n",
+            "main : Unit -> Int\nmain () = handle (read (Box(0))) with E<Box<Int>> {\nask ignored => resume 42\n}\n",
+        ),
+    );
+    assert_eq!(evaluation.value.to_string(), "42");
+}
+
+#[test]
+fn generic_request_operand_preserves_context_and_strict_effect_order() {
+    let evaluation = run_effect_source(
+        "generic-operand-order",
+        concat!(
+            "effect E<T> {\nask : Unit -> Int\n}\neffect Mark {\nmark : Unit -> Unit\n}\n",
+            "helper<T> : T -> Int ! {E<T>, Mark}\nhelper ignored = perform E<T>.ask (perform Mark.mark ())\n",
+            "main : Unit -> Int\nmain () = handle (handle (helper 0) with E<Int> {\nask ignored => resume 42\n}) with Mark {\nmark ignored => resume ()\n}\n",
+        ),
+    );
+    assert_eq!(evaluation.value.to_string(), "42");
+    let trace = evaluation.effect_trace();
+    let [
+        EffectTraceEvent::HandlerActivated(mark),
+        EffectTraceEvent::HandlerActivated(ask),
+        ..,
+    ] = trace
+    else {
+        panic!("two handlers");
+    };
+    let selected = trace
+        .iter()
+        .filter_map(|event| match event {
+            EffectTraceEvent::HandlerSelected(handler) => Some(handler),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(selected, [mark, ask]);
+}
+
+#[test]
+fn generic_instantiation_and_constructors_survive_both_core_transforms() {
+    use ash::core::transform::{fold_effect_literal_primitives, identity_effect_traversal};
+    let source = concat!(
+        "type Option<T> =\nNone\n| Some(T)\neffect E<T> {\nask : Unit -> Int\n}\n",
+        "factory<T> : T -> (Unit -> Int ! {E<T>})\nfactory ignored = fn(ignored) {\nperform E<T>.ask ()\n}\n",
+        "main : Unit -> Int\nmain () = {\nlet unused : Option<Bool> = None\nlet f = factory (Some(0))\n",
+        "handle (f ()) with E<Option<Int>> {\nask ignored => resume (40 + 2)\n}\n}\n",
+    );
+    let path = std::env::temp_dir().join(format!(
+        "ash-instantiation-transforms-{}-{}.ash",
+        std::process::id(),
+        SourceFile::new("transform", "").unwrap().id().value()
+    ));
+    std::fs::write(&path, source).unwrap();
+    let graph = load_module_graph(&path, &ModuleRoots::empty()).unwrap();
+    let linked =
+        validate_interface_evidence(link_modules(check_graph(&graph), graph.entry()).unwrap())
+            .unwrap();
+    let mut elaborator = EffectElaborator::for_module_program(&linked).unwrap();
+    let typed = elaborator
+        .synthesize_effect_module_program(&linked)
+        .unwrap();
+    let sources = graph
+        .modules()
+        .iter()
+        .map(|module| module.source())
+        .collect::<Vec<_>>();
+    let modules = graph
+        .modules()
+        .iter()
+        .map(|module| (module.id(), module.source().id()))
+        .collect::<Vec<_>>();
+    let mut program =
+        validate_effect_modules(elaborator.finish(typed.node).unwrap(), &sources, &modules)
+            .unwrap();
+    let expected = evaluate_effect(&program).unwrap();
+    for transform in [identity_effect_traversal, fold_effect_literal_primitives] {
+        program =
+            validate_effect_modules(transform(&program).unwrap(), &sources, &modules).unwrap();
+        let actual = evaluate_effect(&program).unwrap();
+        assert_eq!(actual.value.to_string(), "42");
+        assert_eq!(actual.effect_trace(), expected.effect_trace());
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn discard_abandons_suspended_addition_and_continues_the_clause() {
     let evaluation = run_effect_source(
         "discard-addition",

@@ -90,8 +90,17 @@ Function computations carry rows of exact, parameterized effect identities.
 exact instance. Each selected clause must consume its non-escaping continuation
 capability exactly once on every normally completing path, with `resume` or
 checked `discard`. Discard abandons the suspended segment only when inference
-proves it carries no other unfinished continuation obligation; the clause then
+proves it abandons or skips no other unfinished continuation or resource
+obligation; the clause then
 continues with `Unit`.
+
+`resource cell<R> c = initializer { body }` acquires one scoped mutable integer
+cell through the compiler-owned `@builtin.cell` API. The scope owns release;
+handles provide reusable access while it remains live. Inferred dependencies
+prevent handles, captured access and identity-indexed operations from escaping
+their owner, including through request payloads. Copied integers may escape.
+Each execution has a fresh activation, and capture/resume moves the owned
+scope without duplication. Normal completion releases it once.
 
 The source path selected for execution is the entry module. It declares exactly
 one local, monomorphic, unconstrained `main : Unit -> R`, where `R` is closed.
@@ -100,7 +109,9 @@ module definition groups and evaluates `main ()`.
 Imports, exports, aliases, and opacity are static access rules and do not remain
 as runtime operations. Interface identities, implementation identities, and
 their checking registries also erase. Selected evidence lowers to ordinary
-functions, applications, and erased type operations; evaluation has no runtime
+functions, applications, and dialect-specific type operations. Pure erases
+instantiation; Effect retains lexical instantiation for exact operation
+matching across generic calls and returned closures. Evaluation has no runtime
 module object, implementation registry, interface lookup, or handler registry.
 
 Ordinary source value positions remain rank-1.
@@ -110,8 +121,9 @@ or constructor field a polymorphic annotation; store or return an
 uninstantiated method scheme; pass one to an ordinary parameter; add implicit
 method binders or method requirements; or use polymorphic recursion.
 Core admits a nested scheme only where authenticated compiler-generated method
-evidence requires it. Every other term slot and every runtime value remains
-monomorphic.
+evidence requires it. Every other source value position remains monomorphic;
+the internal lexical polymorphic functions retained by Effect execution do not
+make schemes first-class source values.
 
 Determination adds no associated-output syntax or projection, multiple or
 partial edges, proposition or proof evidence, common universal evidence, or
@@ -130,8 +142,10 @@ patterns, exhaustive matches and equations, sequential bindings, method-only
 interfaces, explicit constraints, anonymous implementations, and pure and
 effectful expressions with single-use, non-escaping handler continuations.
 
-The effect kernel adds no providers, hooks, resource regions, automatic cleanup,
-escaping or multi-shot resume, asynchronous execution, or dynamic loading.
+Beyond the fixed sealed cell provider and acquisition form, the effect kernel
+adds no general provider or resource declarations, hooks, automatic cleanup,
+foreign resources, escaping or multi-shot resume, asynchronous execution, or
+dynamic loading.
 A linked nonempty effect row is a source rejection rather than an
 unhandled-operation runtime result.
 
@@ -430,9 +444,9 @@ The program observes:
 
 The method scheme is authenticated across both source-body-free summaries.
 Concrete evidence uses one generated adapter over the implementation method;
-its type operations erase through the existing evaluator rules. The source
-filename retained by the test corpus is `interface.ash`, but the executable
-tree stages that content as `api.ash` because `interface` is reserved in
+this Pure program erases its type operations through the existing evaluator
+rules. The source filename retained by the test corpus is `interface.ash`, but
+the executable tree stages that content as `api.ash` because `interface` is reserved in
 a module path.
 
 ### Opaque types and smart constructors

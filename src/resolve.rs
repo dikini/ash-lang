@@ -52,7 +52,7 @@ use crate::{
         same_imported_global_fact_observing_nominals_with_budget,
         same_imported_nominal_closure_with_constraint_budget,
     },
-    source::{Origin, discard_origin_iteratively},
+    source::{Origin, Span, discard_origin_iteratively},
     surface::{
         BinaryExpr, SurfaceBinding, SurfaceBlock, SurfaceConstructorDeclaration,
         SurfaceDeclarationIndex, SurfaceDefinition, SurfaceDefinitionKind,
@@ -725,6 +725,10 @@ impl Drop for ResolvedMatchArmBuffer {
 /// The semantic reason that prevented name resolution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResolveReason {
+    /// Source evidence cannot introduce the compiler-owned cell provider.
+    SealedProvider,
+    /// Resource acquisition requires a direct compiler-owned cell dependency.
+    ResourceBuiltinRequired,
     /// An occurrence has no binding in lexical scope.
     UnknownName,
     /// The equation head repeats a different name from its interface.
@@ -786,6 +790,8 @@ pub enum ResolveReason {
 impl fmt::Display for ResolveReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::SealedProvider => "resolve.sealed-provider",
+            Self::ResourceBuiltinRequired => "resolve.resource-builtin-required",
             Self::UnknownName => "resolve.unknown-name",
             Self::EquationNameMismatch => "resolve.equation-name-mismatch",
             Self::DuplicateGlobal => "resolve.duplicate-global",
@@ -1033,6 +1039,9 @@ fn resolve_module_names_with_budget(
                 )
             })?;
         direct_dependencies.extend(dependencies.iter().map(|dependency| {
+            if dependency.edge.target().is_builtin_cell() {
+                resolver.builtin_cell = Some(dependency.edge.target());
+            }
             DirectDependencyRoute::new(dependency.edge.target(), dependency.edge.import_span())
         }));
         resolver.install_imports(surface, dependencies)?;
@@ -1474,6 +1483,7 @@ fn surface_definition_name(definition: &SurfaceDefinition) -> &crate::surface::S
 
 struct Resolver {
     module: ModuleId,
+    builtin_cell: Option<ModuleId>,
     next_binder: u32,
     next_type_variable: u32,
     next_lexical_nominal: u32,
@@ -1799,6 +1809,7 @@ impl Resolver {
         Self {
             module,
             next_binder: 0,
+            builtin_cell: None,
             next_type_variable: 0,
             next_lexical_nominal: 0,
             next_lexical_evidence: 0,
@@ -3963,7 +3974,42 @@ impl Resolver {
                 }
             }
             self.retain_scheme_nominals(&method.scheme, summary, span)?;
+            for ty in method.capture.types(&mut self.type_work).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported implementation capture type scan exceeded its work budget",
+                )
+            })? {
+                self.retain_capture_type_metadata(ty, summary, span)?;
+            }
+            for effect in method.capture.effects(&mut self.type_work).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported implementation capture effect scan exceeded its work budget",
+                )
+            })? {
+                let declaration = summary.effect_by_id(effect).ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "an implementation capture graph references missing effect metadata",
+                    )
+                })?;
+                self.retain_imported_effect(declaration, span)?;
+            }
             methods.push(crate::resolved::CheckedImplementationMethodFact {
+                capture: method
+                    .capture
+                    .clone_with_budget(&mut self.type_work)
+                    .map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "imported implementation capture retention exceeded its work budget",
+                        )
+                    })?,
                 id: method.id,
                 method: method.method,
                 binder: method.binder,
@@ -4175,7 +4221,7 @@ impl Resolver {
                 "imported capture type scan exceeded its work budget",
             )
         })? {
-            self.retain_type_nominals(ty, summary, span)?;
+            self.retain_capture_type_metadata(ty, summary, span)?;
         }
         for effect in exported
             .capture
@@ -4420,6 +4466,25 @@ impl Resolver {
         summary: &ExportSummary,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
+        self.retain_type_nominals_with(scheme, summary, span, false)
+    }
+
+    fn retain_capture_type_metadata(
+        &mut self,
+        ty: &Type,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        self.retain_type_nominals_with(ty, summary, span, true)
+    }
+
+    fn retain_type_nominals_with(
+        &mut self,
+        scheme: &Type,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+        external_capture_facts: bool,
+    ) -> Result<(), ResolveError> {
         enum Task<'a> {
             Type(&'a Type),
             Sequence(std::slice::Iter<'a, Type>),
@@ -4472,6 +4537,12 @@ impl Resolver {
             };
             match ty {
                 Type::Nominal(id) => {
+                    // Only capture metadata may mention internal lexical IDs.
+                    // Keep traversing its complete types, including embedded
+                    // effect instances, but demand no ordinary fact for them.
+                    if external_capture_facts && id.is_lexical() {
+                        continue;
+                    }
                     let mut already_seen = false;
                     for retained in &seen {
                         self.type_work.charge(1).map_err(|()| {
@@ -6462,6 +6533,13 @@ impl Resolver {
 
             let result = (|| -> Result<ResolvedImplementation, ResolveError> {
                 let head = self.resolve_interface_application(&implementation.head)?;
+                if head.interface.id.module().is_builtin_cell() {
+                    return Err(error(
+                        ResolveReason::SealedProvider,
+                        implementation.span,
+                        "only resource acquisition may introduce the builtin cell provider",
+                    ));
+                }
                 let prerequisites = ResolvedRequirementBuffer(
                     self.resolve_requirements(
                         RequirementOwner::Impl(pending.id),
@@ -7999,17 +8077,187 @@ impl Resolver {
         ))
     }
 
+    fn finish_resource_expression(
+        &mut self,
+        identity: ResolvedTypeVariable,
+        handle: Binder,
+        initializer: ResolvedExpressionOwner,
+        body: ResolvedExpressionOwner,
+        span: Span,
+    ) -> Result<ResolvedExpr, ResolveError> {
+        use crate::resolved::{
+            CellAcquisition, CellApi, ResolvedEffectInstance, ResolvedPerformExpr,
+            ResolvedResourceExpr,
+        };
+        let builtin = self.builtin_cell.ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                span,
+                "resource builtin origin is missing",
+            )
+        })?;
+        let api = CellApi::for_module(builtin).ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                span,
+                "resource builtin origin is invalid",
+            )
+        })?;
+        // The fixed two-method source retains two equations, patterns, operands,
+        // effect arguments and one complete provider application.
+        self.type_work.charge(24).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource provider construction exceeded its budget",
+            )
+        })?;
+        self.constraint_work.charge(3).map_err(|()| {
+            error(
+                ResolveReason::ConstraintResourceExhausted,
+                span,
+                "resource provider construction exceeded its budget",
+            )
+        })?;
+        let provider =
+            crate::interface::LexicalEvidenceId::new(self.module, self.next_lexical_evidence);
+        self.next_lexical_evidence =
+            self.next_lexical_evidence.checked_add(1).ok_or_else(|| {
+                error(
+                    ResolveReason::BinderIdExhausted,
+                    span,
+                    "resource provider identities exhausted",
+                )
+            })?;
+        let mut groups = ResolvedImplementationMethodGroupBuffer(Vec::new());
+        groups.0.try_reserve(2).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource methods could not be reserved",
+            )
+        })?;
+        let mut method_binders = [handle.id; 2];
+        for (ordinal, spelling) in ["read", "write"].into_iter().enumerate() {
+            let binder = self.allocate_binder(spelling, span)?;
+            method_binders[ordinal] = binder.id;
+            let parameter = self.allocate_binder("value", span)?;
+            let operand = ResolvedExpr {
+                kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
+                    term: ResolvedTermName::Global(parameter.id),
+                    spelling: parameter.spelling.clone(),
+                    origin: Origin::Source(span),
+                    import_span: None,
+                    evidence: Box::new([]),
+                }),
+                span,
+            };
+            let request = ResolvedExpr {
+                kind: ResolvedExprKind::Perform(ResolvedPerformExpr {
+                    effect: ResolvedEffectInstance {
+                        instance: crate::types::EffectInstance::new(
+                            api.ops(),
+                            Box::new([Type::Variable(identity.id)]),
+                        ),
+                        origin: Origin::Source(span),
+                        span,
+                    },
+                    operation: crate::types::OperationId::new(api.ops(), ordinal as u32),
+                    spelling: spelling.to_owned(),
+                    operand: Box::new(operand),
+                    origin: Origin::Source(span),
+                }),
+                span,
+            };
+            groups.0.push(ResolvedImplementationMethodGroup {
+                contextual_parameters: Box::new([]),
+                method: Some(crate::interface::MethodId::new(
+                    api.provider(),
+                    ordinal as u32,
+                )),
+                identity: None,
+                equations: Box::new([ResolvedEquation {
+                    name: crate::resolved::ResolvedEquationHead {
+                        binder: binder.id,
+                        spelling: spelling.to_owned(),
+                        origin: Origin::Source(span),
+                    },
+                    patterns: vec![ResolvedPattern {
+                        kind: ResolvedPatternKind::Binder(parameter),
+                        span,
+                    }],
+                    body: request,
+                    span,
+                }]),
+                binder,
+                span,
+            });
+        }
+        let acquisition = CellAcquisition {
+            builtin,
+            identity: identity.id,
+            handle: handle.id,
+            provider,
+            methods: method_binders,
+            span,
+        };
+        let generated = crate::resolved::ResolvedLexicalEvidence {
+            acquisition: Some(acquisition),
+            checked: crate::interface::LexicalEvidenceSlot::default(),
+            id: provider,
+            application: crate::resolved::ResolvedInterfaceApplication {
+                interface: crate::resolved::ResolvedInterfaceOccurrence {
+                    id: api.provider(),
+                    spelling: "Provider".to_owned(),
+                    origin: Origin::Source(span),
+                },
+                arguments: Box::new([ResolvedType {
+                    ty: Type::Variable(identity.id),
+                    provenance: crate::resolved::ResolvedTypeProvenance::new(
+                        vec![crate::resolved::ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                }]),
+                span,
+            },
+            method_groups: groups.into_boxed_slice(),
+            span,
+        };
+        let body = ResolvedExpr {
+            kind: ResolvedExprKind::Block(ResolvedBlock {
+                declarations: vec![ResolvedLocalDeclaration::Evidence(Box::new(generated))],
+                result: Box::new(body.into_inner()),
+                span,
+            }),
+            span,
+        };
+        Ok(ResolvedExpr {
+            kind: ResolvedExprKind::Resource(Box::new(ResolvedResourceExpr {
+                acquisition,
+                identity,
+                handle,
+                initializer: Box::new(initializer.into_inner()),
+                body: Box::new(body),
+            })),
+            span,
+        })
+    }
+
     fn resolve_expr(&mut self, expression: &SurfaceExpr) -> Result<ResolvedExpr, ResolveError> {
         self.resolve_work(ResolveTask::VisitExpr(expression))
     }
 
     fn resolve_work<'a>(&mut self, initial: ResolveTask<'a>) -> Result<ResolvedExpr, ResolveError> {
         let scope_checkpoint = self.scopes.len();
+        let type_scope_checkpoint = self.type_scopes.len();
         let nominal_scope_checkpoint = self.lexical_nominal_scopes.len();
         let constructor_scope_checkpoint = self.lexical_constructor_scopes.len();
         let result = self.resolve_work_inner(initial);
         if result.is_err() {
             self.scopes.truncate(scope_checkpoint);
+            self.type_scopes.truncate(type_scope_checkpoint);
             self.lexical_nominal_scopes
                 .truncate(nominal_scope_checkpoint);
             self.lexical_constructor_scopes
@@ -8065,6 +8313,128 @@ impl Resolver {
                             }
                         }
                     }
+                }
+                ResolveTask::ResourceInitializer { source, span } => {
+                    let initializer = expressions.pop_owned().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            span,
+                            "resource initializer is missing",
+                        )
+                    })?;
+                    let identity =
+                        self.allocate_type_variable(&source.identity, None, Kind::Type)?;
+                    let handle = self.allocate_binder(&source.handle.text, source.handle.span)?;
+                    self.type_work.charge(4).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "resource scope retention exceeded its budget",
+                        )
+                    })?;
+                    self.lexical_method_parameters
+                        .0
+                        .try_reserve(1)
+                        .map_err(|_| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                span,
+                                "resource identity retention could not be reserved",
+                            )
+                        })?;
+                    let retained = self.clone_type_variable_for_retention(
+                        &identity,
+                        span,
+                        "resource identity retention exceeded its budget",
+                    )?;
+                    self.lexical_method_parameters.push(retained);
+                    let scope_checkpoint = self.scopes.len();
+                    let type_scope_checkpoint = self.type_scopes.len();
+                    let mut terms = HashMap::new();
+                    terms.try_reserve(1).map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "resource handle scope could not be reserved",
+                        )
+                    })?;
+                    terms.insert(
+                        handle.spelling.clone(),
+                        ResolvedTermBinding::local(ResolvedTermName::Global(handle.id)),
+                    );
+                    let mut types = HashMap::new();
+                    types.try_reserve(1).map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "resource type scope could not be reserved",
+                        )
+                    })?;
+                    types.insert(identity.spelling.clone(), identity.id);
+                    self.scopes.try_reserve(1).map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "resource scope could not be reserved",
+                        )
+                    })?;
+                    self.type_scopes.try_reserve(1).map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "resource type scope could not be reserved",
+                        )
+                    })?;
+                    self.scopes.push(terms);
+                    self.type_scopes.push(types);
+                    tasks.0.try_reserve(2).map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "resource body scheduling could not be reserved",
+                        )
+                    })?;
+                    self.type_work.charge(1).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "resource initializer ownership exceeded its type-work budget",
+                        )
+                    })?;
+                    tasks.push(ResolveTask::FinishResource {
+                        identity,
+                        handle,
+                        initializer: Box::new(initializer),
+                        scope_checkpoint,
+                        type_scope_checkpoint,
+                        span,
+                    });
+                    tasks.push(ResolveTask::VisitBlock(&source.body));
+                }
+                ResolveTask::FinishResource {
+                    identity,
+                    handle,
+                    initializer,
+                    scope_checkpoint,
+                    type_scope_checkpoint,
+                    span,
+                } => {
+                    let body = expressions.pop_owned().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            span,
+                            "resource body is missing",
+                        )
+                    })?;
+                    self.scopes.truncate(scope_checkpoint);
+                    self.type_scopes.truncate(type_scope_checkpoint);
+                    expressions.push(self.finish_resource_expression(
+                        identity,
+                        handle,
+                        *initializer,
+                        body,
+                        span,
+                    )?);
                 }
                 ResolveTask::VisitRecursiveGroup(group) => {
                     let mut first_members = HashMap::with_capacity(group.members.len());
@@ -8212,6 +8582,13 @@ impl Resolver {
                         )
                     })?;
                     let application = self.resolve_interface_application(&source.application)?;
+                    if application.interface.id.module().is_builtin_cell() {
+                        return Err(error(
+                            ResolveReason::SealedProvider,
+                            source.span,
+                            "only resource acquisition may introduce the builtin cell provider",
+                        ));
+                    }
                     let mut state = Box::new(PendingLexicalResolution {
                         source,
                         id,
@@ -8254,6 +8631,7 @@ impl Resolver {
                         }
                         if state.next == state.source.equations.len() {
                             let evidence = crate::resolved::ResolvedLexicalEvidence {
+                                acquisition: None,
                                 checked: crate::interface::LexicalEvidenceSlot::default(),
                                 id: state.id,
                                 application: state.application.take().ok_or_else(|| {
@@ -8499,6 +8877,34 @@ impl Resolver {
         expressions: &mut ResolvedExpressionBuffer,
     ) -> Result<(), ResolveError> {
         match &expression.kind {
+            SurfaceExprKind::Resource(_) if self.builtin_cell.is_none() => {
+                return Err(error(
+                    ResolveReason::ResourceBuiltinRequired,
+                    expression.span,
+                    "resource acquisition requires a direct import of @builtin.cell",
+                ));
+            }
+            SurfaceExprKind::Resource(source) => {
+                self.type_work.charge(2).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "resource resolution work exceeded its budget",
+                    )
+                })?;
+                tasks.0.try_reserve(2).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "resource resolution work could not be reserved",
+                    )
+                })?;
+                tasks.push(ResolveTask::ResourceInitializer {
+                    source,
+                    span: expression.span,
+                });
+                tasks.push(ResolveTask::VisitExpr(&source.initializer));
+            }
             SurfaceExprKind::Integer(value) => expressions.push(ResolvedExpr {
                 kind: ResolvedExprKind::Integer(value.clone()),
                 span: expression.span,
@@ -8919,6 +9325,18 @@ impl Drop for PendingLexicalResolution<'_> {
 
 enum ResolveTask<'a> {
     VisitExpr(&'a SurfaceExpr),
+    ResourceInitializer {
+        source: &'a crate::surface::SurfaceResourceExpr,
+        span: Span,
+    },
+    FinishResource {
+        identity: ResolvedTypeVariable,
+        handle: Binder,
+        initializer: Box<ResolvedExpressionOwner>,
+        scope_checkpoint: usize,
+        type_scope_checkpoint: usize,
+        span: Span,
+    },
     VisitBlock(&'a SurfaceBlock),
     VisitRecursiveGroup(&'a SurfaceRecursiveGroup),
     FinishApplication {
@@ -8997,6 +9415,8 @@ impl ResolveTask<'_> {
             Self::VisitBlock(block) => block.span,
             Self::VisitRecursiveGroup(group) => group.span,
             Self::FinishApplication { span }
+            | Self::ResourceInitializer { span, .. }
+            | Self::FinishResource { span, .. }
             | Self::FinishBinary { span, .. }
             | Self::FinishBlock { span, .. }
             | Self::FinishFunction { span, .. }
@@ -9675,6 +10095,73 @@ mod tests {
     };
 
     static IMPORT_BUDGET_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn capture_type_metadata_excludes_only_lexical_fact_demand_and_retries_exactly() {
+        let source = SourceFile::new("capture-metadata", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let module = ModuleId::new(9_093);
+        let lexical = NominalTypeId::lexical(module, 0);
+        let missing = NominalTypeId::new(module, 0);
+        let summary =
+            ExportSummary::test_fixture(module, Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let root = Type::Tuple(Box::new([Type::Nominal(lexical), Type::Int]));
+        let run = |budget| {
+            let mut resolver = Resolver::with_type_work(ModuleId::new(9_094), budget);
+            let result = resolver.retain_capture_type_metadata(&root, &summary, span);
+            assert!(resolver.imported.nominal(lexical).is_none());
+            (result, resolver.type_work.used())
+        };
+        let (result, exact) = run(TypeWorkBudget::unbounded());
+        result.unwrap();
+        assert!(exact >= 3);
+        for limit in [0, exact - 1] {
+            assert_eq!(
+                run(TypeWorkBudget::with_limit(limit)).0.unwrap_err().reason,
+                ResolveReason::TypeResourceExhausted
+            );
+        }
+        for _ in 0..2 {
+            let (result, used) = run(TypeWorkBudget::with_limit(exact));
+            result.unwrap();
+            assert_eq!(used, exact);
+        }
+        let mut resolver = Resolver::new(ModuleId::new(9_094));
+        assert_eq!(
+            resolver
+                .retain_type_nominals(&root, &summary, span)
+                .unwrap_err()
+                .reason,
+            ResolveReason::InternalState,
+            "ordinary exported types must still require nominal facts"
+        );
+        assert_eq!(
+            resolver
+                .retain_capture_type_metadata(&Type::Nominal(missing), &summary, span)
+                .unwrap_err()
+                .reason,
+            ResolveReason::InternalState,
+            "a missing ordinary capture nominal is still invalid"
+        );
+        let effect_type = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Int,
+                crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                    crate::types::EffectId::new(module, 0),
+                    Box::new([]),
+                )),
+            ),
+        );
+        assert_eq!(
+            resolver
+                .retain_capture_type_metadata(&effect_type, &summary, span)
+                .unwrap_err()
+                .reason,
+            ResolveReason::InternalState,
+            "signature-only effects still require authenticated metadata"
+        );
+    }
 
     #[test]
     fn opaque_newtype_value_scheme_retains_canonical_closure_without_constructor_access() {
@@ -11250,6 +11737,16 @@ mod tests {
             .id;
         let span = entry.surface().imports[0].span;
 
+        let mut capture_work = TypeWorkBudget::unbounded();
+        assert!(
+            exported
+                .capture
+                .same_with_budget(&exported.capture, &mut capture_work)
+                .unwrap()
+        );
+        let capture_work = capture_work.used();
+        assert!(capture_work > 0);
+
         let snapshot = |resolver: &Resolver| {
             let globals = resolver
                 .imported
@@ -11274,7 +11771,15 @@ mod tests {
             vec![(token, ImportedTypeAccess::Hidden, Vec::new())],
         );
 
-        resolver.type_work = TypeWorkBudget::with_limit(0);
+        resolver.type_work = TypeWorkBudget::with_limit(capture_work - 1);
+        resolver.constraint_work = InterfaceConstraintBudget::with_limit(DUPLICATE_CONSTRAINT_WORK);
+        let error = resolver
+            .retain_imported_global(exported, summary, span)
+            .expect_err("one missing data-summary comparison unit should reject the route");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(snapshot(&resolver), baseline);
+
+        resolver.type_work = TypeWorkBudget::with_limit(capture_work);
         resolver.constraint_work =
             InterfaceConstraintBudget::with_limit(DUPLICATE_CONSTRAINT_WORK - 1);
         let error = resolver
@@ -11285,16 +11790,16 @@ mod tests {
             resolver.constraint_work.used(),
             DUPLICATE_CONSTRAINT_WORK - 1,
         );
-        assert_eq!(resolver.type_work.used(), 0);
+        assert_eq!(resolver.type_work.used(), capture_work);
         assert_eq!(snapshot(&resolver), baseline);
 
-        resolver.type_work = TypeWorkBudget::with_limit(0);
+        resolver.type_work = TypeWorkBudget::with_limit(capture_work);
         resolver.constraint_work = InterfaceConstraintBudget::with_limit(DUPLICATE_CONSTRAINT_WORK);
         resolver
             .retain_imported_global(exported, summary, span)
             .expect("the exact duplicate comparison should retain no second closure");
         assert_eq!(resolver.constraint_work.used(), DUPLICATE_CONSTRAINT_WORK,);
-        assert_eq!(resolver.type_work.used(), 0);
+        assert_eq!(resolver.type_work.used(), capture_work);
         assert_eq!(snapshot(&resolver), baseline);
     }
 
@@ -11341,6 +11846,17 @@ mod tests {
             .next()
             .expect("the dependency should export one implementation");
         let implementation = exported.fact().id;
+        let mut capture_work = TypeWorkBudget::unbounded();
+        for method in &exported.fact().methods {
+            assert!(
+                method
+                    .capture
+                    .same_with_budget(&method.capture, &mut capture_work)
+                    .unwrap()
+            );
+        }
+        let capture_work = capture_work.used();
+        assert!(capture_work > 0);
         let token = summary
             .nominal("Token")
             .expect("the implementation head should retain its nominal")
@@ -11406,7 +11922,16 @@ mod tests {
             public_baseline.1,
             vec![(token, ImportedTypeAccess::Hidden, Vec::new())],
         );
-        duplicate.type_work = TypeWorkBudget::with_limit(0);
+        duplicate.type_work = TypeWorkBudget::with_limit(capture_work - 1);
+        duplicate.constraint_work =
+            InterfaceConstraintBudget::with_limit(PUBLIC_DUPLICATE_CONSTRAINT_WORK);
+        let error = duplicate
+            .retain_imported_implementation_fact(exported, summary, public_selection)
+            .expect_err("one missing method-summary comparison unit should reject the route");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(snapshot(&duplicate), public_baseline);
+
+        duplicate.type_work = TypeWorkBudget::with_limit(capture_work);
         duplicate.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_DUPLICATE_CONSTRAINT_WORK - 1);
         let error = duplicate
@@ -11417,10 +11942,10 @@ mod tests {
             duplicate.constraint_work.used(),
             PUBLIC_DUPLICATE_CONSTRAINT_WORK - 1,
         );
-        assert_eq!(duplicate.type_work.used(), 0);
+        assert_eq!(duplicate.type_work.used(), capture_work);
         assert_eq!(snapshot(&duplicate), public_baseline);
 
-        duplicate.type_work = TypeWorkBudget::with_limit(0);
+        duplicate.type_work = TypeWorkBudget::with_limit(capture_work);
         duplicate.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_DUPLICATE_CONSTRAINT_WORK);
         duplicate
@@ -11430,7 +11955,7 @@ mod tests {
             duplicate.constraint_work.used(),
             PUBLIC_DUPLICATE_CONSTRAINT_WORK,
         );
-        assert_eq!(duplicate.type_work.used(), 0);
+        assert_eq!(duplicate.type_work.used(), capture_work);
         assert_eq!(snapshot(&duplicate), public_baseline);
 
         let mut promotion = Resolver::new(entry.id());
@@ -11440,7 +11965,7 @@ mod tests {
         let private_baseline = snapshot(&promotion);
         assert!(private_baseline.0[0].2.is_none());
         assert!(private_baseline.4.is_empty());
-        promotion.type_work = TypeWorkBudget::with_limit(0);
+        promotion.type_work = TypeWorkBudget::with_limit(capture_work);
         promotion.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_PROMOTION_CONSTRAINT_WORK - 1);
         let error = promotion
@@ -11451,10 +11976,10 @@ mod tests {
             promotion.constraint_work.used(),
             PUBLIC_PROMOTION_CONSTRAINT_WORK - 1,
         );
-        assert_eq!(promotion.type_work.used(), 0);
+        assert_eq!(promotion.type_work.used(), capture_work);
         assert_eq!(snapshot(&promotion), private_baseline);
 
-        promotion.type_work = TypeWorkBudget::with_limit(0);
+        promotion.type_work = TypeWorkBudget::with_limit(capture_work);
         promotion.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_PROMOTION_CONSTRAINT_WORK);
         promotion
@@ -11464,7 +11989,7 @@ mod tests {
             promotion.constraint_work.used(),
             PUBLIC_PROMOTION_CONSTRAINT_WORK,
         );
-        assert_eq!(promotion.type_work.used(), 0);
+        assert_eq!(promotion.type_work.used(), capture_work);
         let promoted = snapshot(&promotion);
         assert_eq!(promoted.0.len(), 1);
         assert_eq!(promoted.1, private_baseline.1);
@@ -13270,6 +13795,7 @@ mod tests {
                     }]),
                     prerequisites: Box::new([]),
                     methods: Box::new([crate::resolved::CheckedImplementationMethodFact {
+                        capture: crate::core::capture::CaptureValueSummary::default(),
                         id: implementation_method,
                         method,
                         binder: BinderId::resolved(module, 0),

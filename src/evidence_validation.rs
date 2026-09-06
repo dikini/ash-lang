@@ -2318,6 +2318,38 @@ fn same_type_after_interface_substitution(
                 pending.push((left_codomain, right_codomain));
                 pending.push((left_domain, right_domain));
             }
+            (Type::EffectfulFunction(_, _), Type::EffectfulFunction(_, _)) => {
+                charge(budget, parameters.len(), span)?;
+                let mut replacements = HashMap::new();
+                replacements
+                    .try_reserve(parameters.len())
+                    .map_err(|_| resource(span))?;
+                let mut retained = TypeBuffer::new();
+                for argument in arguments {
+                    reserve_rebuilt_type(&mut retained, budget, span)?;
+                    let argument =
+                        clone_type_with_budget(argument, &mut |cells| charge(budget, cells, span))?;
+                    retained.push(argument);
+                }
+                for (parameter, argument) in parameters.iter().zip(retained.0.drain(..)) {
+                    replacements.insert(parameter.id, argument);
+                }
+                // Preserve method-local variables that this interface substitution
+                // does not bind; all effect arguments still participate in equality.
+                let expected = crate::types::substitute_type_variables_with(
+                    source,
+                    &replacements,
+                    |cells| charge(budget, cells, span),
+                    || resource(span),
+                );
+                for (_, ty) in replacements {
+                    discard_type_iteratively(ty);
+                }
+                let expected = IterativeTypeOwner::new(expected?);
+                if !same_type_charged(&expected, actual, budget, span)? {
+                    return Ok(false);
+                }
+            }
             _ => return Ok(false),
         }
     }
@@ -2543,6 +2575,29 @@ pub(crate) fn validate_interface_evidence_with_budget(
     drop(kind_environments);
     if has_contextual_parameters {
         for owner in method_evidence.lexical_owners() {
+            if let Some(acquisition) = owner.acquisition
+                && owner.method.declaration() == 0
+            {
+                charge(constraint_work, 1, acquisition.span)?;
+                let canonical = program
+                    .registry()
+                    .type_variable(acquisition.identity)
+                    .ok_or_else(|| unknown(acquisition.span))?;
+                binder_owners
+                    .try_reserve(1)
+                    .map_err(|_| resource(acquisition.span))?;
+                if canonical.kind != Kind::Type
+                    || acquisition.identity.module() != Some(acquisition.provider.module())
+                    || binder_owners
+                        .insert(
+                            acquisition.identity,
+                            LinkedBinderOwner::Resource(acquisition.provider),
+                        )
+                        .is_some()
+                {
+                    return Err(unknown(acquisition.span));
+                }
+            }
             let method = method_evidence
                 .method(owner.method)
                 .ok_or_else(|| unknown(program.result().span))?;
@@ -2659,8 +2714,32 @@ fn build_core_method_evidence_catalog(
         methods.len().saturating_sub(1),
         program.result().span,
     )?;
-    if methods.len() != method_count || methods.windows(2).any(|pair| pair[0].id >= pair[1].id) {
+    if methods.len() != method_count {
         return Err(invalid_root(program.result().span));
+    }
+    // Dependency order need not be identity order across module namespaces.
+    // Keep the common already-canonical path, and charge every comparison when
+    // canonicalizing a mixed builtin/source catalog before authentication.
+    if methods.windows(2).any(|pair| pair[0].id >= pair[1].id) {
+        for index in 1..methods.len() {
+            let mut cursor = index;
+            while cursor > 0 {
+                charge(constraint_work, 1, program.result().span)?;
+                if methods[cursor - 1].id <= methods[cursor].id {
+                    break;
+                }
+                methods.swap(cursor - 1, cursor);
+                cursor -= 1;
+            }
+        }
+        charge(
+            constraint_work,
+            methods.len().saturating_sub(1),
+            program.result().span,
+        )?;
+        if methods.windows(2).any(|pair| pair[0].id >= pair[1].id) {
+            return Err(invalid_root(program.result().span));
+        }
     }
     let mut implementation_owner_count = 0usize;
     for group in program.groups() {
@@ -4094,7 +4173,8 @@ fn retain_lexical_owners(
         .checked
         .get()
         .ok_or_else(|| invalid_root(source.span))?;
-    if checked.id != source.id
+    if checked.acquisition != source.acquisition
+        || checked.id != source.id
         || checked.application.interface() != source.application.interface.id
         || checked.application.arguments().len() != source.application.arguments.len()
         || checked.methods.len() != source.method_groups.len()
@@ -4253,6 +4333,7 @@ fn retain_lexical_owners(
                 .map(|parameter| parameter.id),
         );
         owners.push(crate::core::dialect::MethodEvidenceLexicalOwner {
+            acquisition: source.acquisition,
             source_parameters: source_parameters.into_boxed_slice(),
             source: source.id,
             method,
@@ -4665,6 +4746,11 @@ fn collect_method_evidence_expression_occurrences(
                 pending.extend(matched.arms.iter().rev().map(|arm| &arm.body));
                 pending.push(&matched.scrutinee);
             }
+            ResolvedExprKind::Resource(acquisition) => {
+                reserve_expressions(&mut pending, 2, constraint_work, expression.span)?;
+                pending.push(&acquisition.body);
+                pending.push(&acquisition.initializer);
+            }
             ResolvedExprKind::Perform(request) => pending.push(&request.operand),
             ResolvedExprKind::Handle(handler) => {
                 let child_count = handler.clauses.len().saturating_add(1);
@@ -4912,6 +4998,7 @@ fn authenticate_linked_constructor_payloads<'a>(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LinkedBinderOwner {
+    Resource(crate::interface::LexicalEvidenceId),
     LexicalMethod(crate::interface::LexicalEvidenceId, MethodId),
     Nominal(NominalTypeId),
     Effect(crate::types::EffectId),
@@ -5498,6 +5585,13 @@ fn validate_pending_expressions<'a, 'body>(
                     .get(index)
                     .ok_or_else(|| invalid_root(expression.span))?;
                 charge(budget, usize::from(headers_only), expression.span)?;
+                if let LinkedLocalScope::Resource(resource_scope) = local {
+                    charge(budget, 1, expression.span)?;
+                    variables
+                        .try_reserve(1)
+                        .map_err(|_| resource(expression.span))?;
+                    variables.push(resource_scope.identity.id);
+                }
                 if let LinkedLocalScope::Method(method) = local {
                     charge(budget, method.contextual_parameters.len(), expression.span)?;
                     variables
@@ -5601,6 +5695,43 @@ fn validate_pending_expressions<'a, 'body>(
                 reserve_expressions(pending, additional, budget, expression.span)?;
                 pending.extend(matched.arms.iter().rev().map(|arm| &arm.body));
                 pending.push(matched.scrutinee.as_ref());
+            }
+            ResolvedExprKind::Resource(acquisition) => {
+                let canonical = program
+                    .registry()
+                    .type_variable(acquisition.identity.id)
+                    .ok_or_else(|| invalid_root(expression.span))?;
+                charge(
+                    budget,
+                    canonical.spelling.len().saturating_add(2),
+                    expression.span,
+                )?;
+                if !acquisition.acquisition.owns(acquisition)
+                    || canonical.kind != Kind::Type
+                    || canonical.spelling != acquisition.identity.spelling
+                    || canonical.origin.primary_span() != acquisition.identity.origin.primary_span()
+                    || acquisition.acquisition.span != expression.span
+                {
+                    return Err(invalid_root(expression.span));
+                }
+                reserve_expressions(pending, 2, budget, expression.span)?;
+                resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;
+                charge(budget, 1, expression.span)?;
+                method_scopes
+                    .try_reserve(1)
+                    .map_err(|_| resource(expression.span))?;
+                let body_scope = Some(method_scopes.len());
+                method_scopes.push((LinkedLocalScope::Resource(acquisition), head.1));
+                pending.push(&acquisition.body);
+                resize_lexical_heads(
+                    &mut heads,
+                    pending.len(),
+                    (head.0, body_scope),
+                    budget,
+                    expression.span,
+                )?;
+                pending.push(&acquisition.initializer);
+                resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;
             }
             ResolvedExprKind::Perform(request) => pending.push(request.operand.as_ref()),
             ResolvedExprKind::Handle(handler) => {
@@ -7253,6 +7384,7 @@ fn validate_requirement(
 enum LinkedLocalScope<'a> {
     Method(&'a crate::resolved::ResolvedImplementationMethodGroup),
     Nominal(NominalTypeId),
+    Resource(&'a crate::resolved::ResolvedResourceExpr),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7274,6 +7406,9 @@ fn authenticate_lexical_header(
     let interface = registry
         .interface(program, checked.application.interface())
         .ok_or_else(|| unknown(source.span))?;
+    if interface.id.module().is_builtin_cell() && source.acquisition.is_none() {
+        return Err(invalid_root(source.span));
+    }
     let keys = linked_selection_key_types(
         interface,
         checked.application.arguments(),
@@ -7282,6 +7417,26 @@ fn authenticate_lexical_header(
     )?;
     let mut nominals = HashSet::new();
     let mut has_local_key = false;
+    if let Some(acquisition) = source.acquisition {
+        if checked.acquisition != Some(acquisition) || !acquisition.supplies(source) {
+            return Err(invalid_root(source.span));
+        }
+        let mut head = local_head;
+        while let Some(index) = head {
+            charge(budget, 1, source.span)?;
+            let (entry, parent) = locals.get(index).ok_or_else(|| invalid_root(source.span))?;
+            if let LinkedLocalScope::Resource(resource_scope) = entry {
+                has_local_key = acquisition.owns(resource_scope);
+                break;
+            }
+            head = *parent;
+        }
+        if !has_local_key {
+            return Err(invalid_root(source.span));
+        }
+    } else if checked.acquisition.is_some() {
+        return Err(invalid_root(source.span));
+    }
     for argument in checked.application.arguments() {
         validate_type_with_application_policy(
             argument,
@@ -8737,6 +8892,276 @@ mod tests {
         link_modules(check_graph(&graph), graph.entry()).expect("the entry fixture should link")
     }
 
+    fn published_resource_program(implementation_only: bool) -> ResolvedModuleProgram {
+        let (owner, entry) = if implementation_only {
+            (
+                "import @builtin.cell as Cell\npub interface Value<A> {\nvalue : A -> Int\n}\npub impl Value<Unit> {\nvalue ignored = resource cell<R> c = 42 {\nCell.read c\n}\n}\n",
+                "import owner (value, impl Value)\nmain : Unit -> Int\nmain () = value ()\n",
+            )
+        } else {
+            (
+                "import @builtin.cell as Cell\npub readCell : Unit -> Int\nreadCell () = resource cell<R> c = 42 {\nCell.read c\n}\n",
+                "import owner (readCell)\nmain : Unit -> Int\nmain () = readCell ()\n",
+            )
+        };
+        let fixture = ValidationFixture::create(entry);
+        fixture.write("owner.ash", owner);
+        let graph = fixture.graph();
+        let checked = check_graph(&graph);
+        let defining = checked
+            .iter()
+            .find(|module| {
+                module
+                    .schemes()
+                    .iter()
+                    .any(|scheme| scheme.spelling == "readCell")
+                    || !module.implementation_facts().is_empty()
+            })
+            .unwrap();
+        assert_eq!(defining.schemes().len(), usize::from(!implementation_only));
+        assert_eq!(
+            defining.implementation_facts().len(),
+            usize::from(implementation_only)
+        );
+        link_modules(checked, graph.entry()).unwrap()
+    }
+
+    #[test]
+    fn published_resource_linked_owners_have_exact_atomic_validation_boundaries() {
+        for implementation_only in [false, true] {
+            let run = |constraint_limit, type_limit| {
+                let mut constraints = InterfaceConstraintBudget::with_limit(constraint_limit);
+                let mut types = TypeWorkBudget::with_limit(type_limit);
+                let result = validate_interface_evidence_with_budget(
+                    published_resource_program(implementation_only),
+                    &mut constraints,
+                    &mut types,
+                );
+                (result, constraints.used(), types.used())
+            };
+            let (measured, constraints, types) = run(usize::MAX, usize::MAX);
+            let validated = measured.unwrap();
+            let owners: Vec<_> = validated
+                .method_evidence()
+                .lexical_owners()
+                .iter()
+                .filter_map(|owner| owner.acquisition.map(|acquisition| (owner, acquisition)))
+                .collect();
+            assert_eq!(
+                owners.len(),
+                2,
+                "one acquisition owns both generated methods"
+            );
+            assert_eq!(owners[0].1.identity, owners[1].1.identity);
+            assert_eq!(owners[0].1.provider, owners[1].1.provider);
+            assert_eq!(owners[0].0.method.declaration(), 0);
+            assert_eq!(owners[1].0.method.declaration(), 1);
+            // Full validation rejects a duplicate owner insertion, so success
+            // above also proves the shared R is registered only once.
+            assert_eq!(
+                run(constraints - 1, types).0.unwrap_err().reason(),
+                EvidenceValidationReason::ConstraintResourceExhausted
+            );
+            assert_eq!(
+                run(constraints, types - 1).0.unwrap_err().reason(),
+                EvidenceValidationReason::TypeResourceExhausted
+            );
+            for _ in 0..2 {
+                let (retry, used_constraints, used_types) = run(constraints, types);
+                retry.unwrap();
+                assert_eq!((used_constraints, used_types), (constraints, types));
+            }
+            let mut surplus = published_resource_program(implementation_only);
+            let module = surplus
+                .groups()
+                .iter()
+                .find(|group| {
+                    group
+                        .schemes()
+                        .iter()
+                        .any(|scheme| scheme.spelling == "readCell")
+                        || !group.implementation_facts().is_empty()
+                })
+                .unwrap()
+                .module();
+            assert!(surplus.add_surplus_registry_type_variable_for_test(module));
+            assert_eq!(
+                validate_interface_evidence(surplus).unwrap_err().reason(),
+                EvidenceValidationReason::UnknownIdentity
+            );
+        }
+        for detach in [false, true] {
+            let mut program = published_resource_program(false);
+            assert!(program.corrupt_first_direct_resource_owner_for_test(detach));
+            assert!(
+                validate_interface_evidence(program).is_err(),
+                "detached={detach} must publish no capability"
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_namespace_method_catalog_is_canonical_and_exactly_retryable() {
+        let program = published_resource_program(true);
+        let run = |constraint_limit, type_limit| {
+            let mut constraints = InterfaceConstraintBudget::with_limit(constraint_limit);
+            let mut types = TypeWorkBudget::with_limit(type_limit);
+            let result = build_core_method_evidence_catalog(&program, &mut constraints, &mut types);
+            (result, constraints.used(), types.used())
+        };
+        let (catalog, constraints, types) = run(usize::MAX, usize::MAX);
+        let catalog = catalog.unwrap();
+        assert!(
+            catalog
+                .methods()
+                .windows(2)
+                .all(|pair| pair[0].id < pair[1].id)
+        );
+        assert_eq!(catalog.methods().len(), 3);
+        assert_eq!(
+            run(constraints - 1, types).0.unwrap_err().reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted
+        );
+        assert_eq!(
+            run(constraints, types - 1).0.unwrap_err().reason(),
+            EvidenceValidationReason::TypeResourceExhausted
+        );
+        for _ in 0..2 {
+            let (retry, used_constraints, used_types) = run(constraints, types);
+            retry.unwrap();
+            assert_eq!((used_constraints, used_types), (constraints, types));
+        }
+        let mut duplicate = published_resource_program(true);
+        let builtin = duplicate
+            .groups()
+            .iter()
+            .find(|group| {
+                group.implementation_facts().is_empty() && !group.interface_facts().is_empty()
+            })
+            .unwrap()
+            .interface_facts()[0]
+            .methods[0]
+            .id;
+        let source = duplicate
+            .groups()
+            .iter()
+            .find(|group| !group.implementation_facts().is_empty())
+            .unwrap()
+            .module();
+        assert!(duplicate.replace_first_interface_method_id_for_test(source, builtin));
+        assert_eq!(
+            build_core_method_evidence_catalog(
+                &duplicate,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .unwrap_err()
+            .reason(),
+            EvidenceValidationReason::InvalidEvidenceRoot
+        );
+    }
+
+    #[test]
+    fn cell_linked_headers_authenticate_owner_and_preceding_body_scopes() {
+        // No resource CheckedModule is constructed: only the normal builtin
+        // group and an internally typed result feed this owning header pass.
+        let program = crate::elaborate::cell_resource_linked_header_fixture_for_test();
+        let registry =
+            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
+                .unwrap();
+        let ResolvedExprKind::Resource(resource_scope) = &program.result().kind else {
+            panic!("resource")
+        };
+        let run = |root: &ResolvedExpr, limit| {
+            let mut types = TypeWorkBudget::default();
+            let mut constraints = InterfaceConstraintBudget::with_limit(limit);
+            let mut environments =
+                build_linked_kind_environments(program.registry(), &mut types, root.span).unwrap();
+            let result = validate_expression(
+                &program,
+                &registry,
+                &program.groups()[0],
+                EvidenceScope {
+                    lexical_sources: &[],
+                    lexical_head: None,
+                    owner: None,
+                    variables: &[],
+                },
+                root,
+                &mut environments,
+                &mut constraints,
+                &mut types,
+                true,
+            );
+            (result, constraints.used())
+        };
+        let (positive, work) = run(program.result(), usize::MAX);
+        positive.expect("real resource body owns its generated provider and R");
+        assert_eq!(
+            run(program.result(), work - 1).0.unwrap_err().reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted
+        );
+        for _ in 0..2 {
+            run(program.result(), work).0.expect("exact header retry");
+        }
+        run(&resource_scope.initializer, usize::MAX)
+            .0
+            .expect("initializer has preceding scope");
+        assert!(
+            run(&resource_scope.body, usize::MAX).0.is_err(),
+            "detached provider body cannot mint authority"
+        );
+        for moved in [true, false] {
+            let mut changed = program.result().clone();
+            let ResolvedExprKind::Resource(changed_resource) = &mut changed.kind else {
+                unreachable!()
+            };
+            if moved {
+                crate::resolved::discard_resolved_expression_iteratively(std::mem::replace(
+                    &mut *changed_resource.initializer,
+                    (*changed_resource.body).clone(),
+                ));
+            } else {
+                changed_resource.acquisition.provider =
+                    crate::interface::LexicalEvidenceId::new(program.entry(), u32::MAX);
+            }
+            let result = run(&changed, usize::MAX).0;
+            crate::resolved::discard_resolved_expression_iteratively(changed);
+            assert!(
+                result.is_err(),
+                "moved initializer or detached owner must reject"
+            );
+        }
+        let ResolvedExprKind::Block(body) = &resource_scope.body.kind else {
+            panic!("provider wrapper")
+        };
+        let ResolvedLocalDeclaration::Evidence(source) = &body.declarations[0] else {
+            panic!("provider")
+        };
+        for variables in [&[][..], &[resource_scope.identity.id][..]] {
+            let result = authenticate_lexical_header(
+                &program,
+                &registry,
+                source,
+                EvidenceScope {
+                    lexical_sources: &[],
+                    lexical_head: None,
+                    owner: None,
+                    variables,
+                },
+                &[(LinkedLocalScope::Resource(resource_scope), None)],
+                Some(0),
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            );
+            assert_eq!(
+                result.is_ok(),
+                !variables.is_empty(),
+                "owner does not implicitly add R to preceding scope"
+            );
+        }
+    }
+
     fn unused_lexical_program() -> ResolvedModuleProgram {
         entry_program(concat!(
             "interface Choose<T> {\nchoose<A> : T -> A -> A\nkeep<B> : T -> B -> B\n}\n",
@@ -9548,6 +9973,7 @@ mod tests {
                 let checked = crate::interface::LexicalEvidenceSlot::default();
                 checked
                     .fill(crate::interface::CheckedLexicalEvidence {
+                        acquisition: None,
                         id,
                         application: InterfaceApplication::new(
                             interface,
@@ -9562,6 +9988,7 @@ mod tests {
                     })
                     .expect("checked fixture");
                 let mut source = crate::resolved::ResolvedLexicalEvidence {
+                    acquisition: None,
                     checked,
                     id,
                     span,
@@ -11296,6 +11723,81 @@ mod tests {
             .expect_err("an open row tail is invalid in a linked interface argument")
             .reason(),
             EvidenceValidationReason::InvalidEvidenceRoot
+        );
+    }
+
+    #[test]
+    fn interface_substitution_compares_effectful_methods_exactly_and_retryably() {
+        let program = entry_program(
+            "interface Read<A> {\nread : A -> A\n}\nmain : Unit -> Unit\nmain () = ()\n",
+        );
+        let parameters = &program.groups()[0].interface_facts()[0].parameters;
+        let span = program.result().span;
+        let effect = crate::types::EffectId::new(ModuleId::new(77), 0);
+        let free = TypeVariableId::generated(900);
+        let function = |argument| {
+            Type::function_computation(
+                Type::Variable(free),
+                crate::types::ComputationType::new(
+                    Type::Int,
+                    crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                        effect,
+                        Box::new([argument]),
+                    )),
+                ),
+            )
+        };
+        let source = function(Type::Variable(parameters[0].id));
+        let actual = function(Type::Bool);
+        let mut measured = InterfaceConstraintBudget::default();
+        assert!(
+            same_type_after_interface_substitution(
+                &source,
+                parameters,
+                &[Type::Bool],
+                &actual,
+                &mut measured,
+                span
+            )
+            .unwrap()
+        );
+        let exact = measured.used();
+        let error = same_type_after_interface_substitution(
+            &source,
+            parameters,
+            &[Type::Bool],
+            &actual,
+            &mut InterfaceConstraintBudget::with_limit(exact - 1),
+            span,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted
+        );
+        for _ in 0..2 {
+            assert!(
+                same_type_after_interface_substitution(
+                    &source,
+                    parameters,
+                    &[Type::Bool],
+                    &actual,
+                    &mut InterfaceConstraintBudget::with_limit(exact),
+                    span
+                )
+                .unwrap()
+            );
+        }
+        assert!(
+            !same_type_after_interface_substitution(
+                &source,
+                parameters,
+                &[Type::Int],
+                &actual,
+                &mut InterfaceConstraintBudget::default(),
+                span
+            )
+            .unwrap()
         );
     }
 

@@ -4458,6 +4458,8 @@ fn check_expression_annotations<'a>(
 #[derive(Clone, Copy)]
 enum BodyWork<'a> {
     Expression(&'a ResolvedExpr),
+    ResourceBody(&'a crate::resolved::ResolvedResourceExpr),
+    ResourceExit(&'a crate::resolved::ResolvedTypeVariable),
     Declaration(&'a ResolvedLocalDeclaration),
     LexicalNewtype(&'a crate::resolved::ResolvedNominalType),
     RecursiveMember(&'a ResolvedRecursiveMember),
@@ -4544,7 +4546,47 @@ fn check_expression_work<'a>(
                     budget,
                 )?;
             }
+            BodyWork::ResourceBody(resource) => {
+                let parameters = std::slice::from_ref(&resource.identity);
+                authenticate_owner_parameters(registry, parameters, budget)?;
+                if resource.identity.kind != Kind::Type {
+                    return Err(KindFailure::internal(
+                        span,
+                        "a resource identity must have kind Type",
+                    ));
+                }
+                environments.extend_owner_parameters(parameters, budget)?;
+                push_body_work(
+                    &mut work,
+                    BodyWork::ResourceExit(&resource.identity),
+                    span,
+                    budget,
+                )?;
+                push_body_work(
+                    &mut work,
+                    BodyWork::Expression(&resource.body),
+                    span,
+                    budget,
+                )?;
+            }
+            BodyWork::ResourceExit(identity) => {
+                environments.remove_owner_parameter_extension(std::slice::from_ref(identity));
+            }
             BodyWork::Expression(expression) => match &expression.kind {
+                ResolvedExprKind::Resource(resource) => {
+                    push_body_work(
+                        &mut work,
+                        BodyWork::ResourceBody(resource),
+                        expression.span,
+                        budget,
+                    )?;
+                    push_body_work(
+                        &mut work,
+                        BodyWork::Expression(&resource.initializer),
+                        resource.initializer.span,
+                        budget,
+                    )?;
+                }
                 ResolvedExprKind::Tuple(elements) => {
                     for element in elements.iter().rev() {
                         push_body_work(
@@ -4713,6 +4755,8 @@ fn local_declaration_span(declaration: &ResolvedLocalDeclaration) -> Span {
 fn body_work_span(item: BodyWork<'_>) -> Span {
     match item {
         BodyWork::Expression(expression) => expression.span,
+        BodyWork::ResourceBody(resource) => resource.acquisition.span,
+        BodyWork::ResourceExit(identity) => identity.origin.primary_span(),
         BodyWork::Declaration(declaration) => local_declaration_span(declaration),
         BodyWork::LexicalNewtype(nominal) => nominal.origin.primary_span(),
         BodyWork::RecursiveMember(member) => member.span,
@@ -5249,6 +5293,7 @@ mod tests {
         for group_count in [0, 1, 64] {
             let declaration = ResolvedLocalDeclaration::Evidence(Box::new(
                 crate::resolved::ResolvedLexicalEvidence {
+                    acquisition: None,
                     checked: crate::interface::LexicalEvidenceSlot::default(),
                     id: crate::interface::LexicalEvidenceId::new(module, 0),
                     application: interface_application(interface, 1, span),

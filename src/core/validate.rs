@@ -213,6 +213,8 @@ pub enum ValidationReason {
     Resume,
     /// Discard has no authenticated proof of capture safety.
     DiscardUnsafe,
+    /// A stored value crosses the boundary of its resource owner.
+    ResourceEscape,
 }
 
 impl fmt::Display for ValidationReason {
@@ -240,6 +242,7 @@ impl fmt::Display for ValidationReason {
             Self::Handler => "core.validation.handler",
             Self::Resume => "core.validation.resume",
             Self::DiscardUnsafe => "core.validation.discard-unsafe",
+            Self::ResourceEscape => "core.validation.resource-escape",
         })
     }
 }
@@ -540,6 +543,9 @@ struct ScopeRequirement {
 type ScopeRequirements = HashMap<ScopeRequirementKey, ScopeRequirement>;
 
 pub(super) trait ScopeFamily: CoreOperationFamily {
+    fn resource_scope(_kind: &Self::Kind) -> Option<&super::effect::ResourceScopeNode> {
+        None
+    }
     fn resume_capability(
         _kind: &Self::Kind,
     ) -> Option<(super::effect::HandlerId, crate::resolved::ResumeId)> {
@@ -564,6 +570,14 @@ pub(super) trait ScopeFamily: CoreOperationFamily {
 impl ScopeFamily for PureOperationFamily {}
 
 impl ScopeFamily for super::effect::EffectOperationFamily {
+    fn resource_scope(kind: &Self::Kind) -> Option<&super::effect::ResourceScopeNode> {
+        match kind {
+            super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Resource(
+                resource,
+            )) => Some(resource),
+            _ => None,
+        }
+    }
     fn resume_capability(
         kind: &Self::Kind,
     ) -> Option<(super::effect::HandlerId, crate::resolved::ResumeId)> {
@@ -600,6 +614,11 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
         child: usize,
         visit: &mut dyn FnMut(BinderId),
     ) {
+        if child == 1
+            && let Some(resource) = Self::resource_scope(kind)
+        {
+            visit(resource.handle.id());
+        }
         let super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Handler(
             handler,
         )) = kind
@@ -656,6 +675,17 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .try_reserve(module_sources.len())
             .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
         for (module, source) in module_sources.iter().copied() {
+            if let Some(api) = crate::resolved::CellApi::for_module(module) {
+                if !api.registry(&program.registry) {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                for ordinal in 0..2 {
+                    let id = crate::interface::MethodId::new(api.provider(), ordinal);
+                    if program.method_evidence.method(id).is_none() {
+                        return Err(ValidationError::new(ValidationReason::Registry, None));
+                    }
+                }
+            }
             if !validator.sources.contains_key(&source)
                 || relation.insert(module, source).is_some()
                 || !mapped_sources.insert(source)
@@ -1226,6 +1256,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut previous_interface_parameters = None;
         for method in catalog.methods() {
             self.charge_type_work(method.interface_parameters.len().saturating_add(1))?;
+            if let Some(api) = crate::resolved::CellApi::for_module(method.id.interface().module())
+                && !api.method(
+                    method.id,
+                    &method.interface_parameters,
+                    &method.parameters,
+                    &method.value_type,
+                )
+            {
+                return Err(ValidationError::new(ValidationReason::NodeType, None));
+            }
             if previous_method.is_some_and(|previous| previous >= method.id)
                 || method.interface_parameters.is_empty()
             {
@@ -1292,10 +1332,49 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         };
 
         for owner in catalog.implementation_owners() {
+            if owner.application.interface().module().is_builtin_cell() {
+                return Err(ValidationError::new(ValidationReason::NodeType, None));
+            }
             validate_application(self, owner.implementation.method(), &owner.application)?;
         }
         self.charge_type_work(catalog.lexical_owners().len())?;
         for owner in catalog.lexical_owners() {
+            if owner.application.interface().module().is_builtin_cell() {
+                let acquisition = owner
+                    .acquisition
+                    .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, None))?;
+                let api = acquisition
+                    .api()
+                    .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, None))?;
+                let ordinal = usize::try_from(owner.method.declaration())
+                    .map_err(|_| ValidationError::new(ValidationReason::NodeType, None))?;
+                if owner.source != acquisition.provider
+                    || owner.method.interface() != api.provider()
+                    || acquisition.methods.get(ordinal) != Some(&owner.binder)
+                    || !owner.source_parameters.is_empty()
+                    || !owner.captures.is_empty()
+                    || !matches!(owner.application.arguments(), [Type::Variable(identity)] if *identity == acquisition.identity)
+                {
+                    return Err(ValidationError::new(ValidationReason::NodeType, None));
+                }
+                let mut found = false;
+                for node in &self.program.nodes {
+                    self.charge_type_work(1)?;
+                    if let Some(resource) = F::resource_scope(&node.kind)
+                        && resource.acquisition == acquisition
+                    {
+                        if found {
+                            return Err(ValidationError::new(ValidationReason::NodeType, None));
+                        }
+                        found = true;
+                    }
+                }
+                if !found {
+                    return Err(ValidationError::new(ValidationReason::NodeType, None));
+                }
+            } else if owner.acquisition.is_some() {
+                return Err(ValidationError::new(ValidationReason::NodeType, None));
+            }
             self.charge_type_work(catalog.methods().len())?;
             validate_application(self, owner.method, &owner.application)?;
         }
@@ -3032,7 +3111,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             .program
                             .method_evidence
                             .method(prerequisite.method)
-                            .is_some()
+                            .is_some_and(|method| !method.parameters.is_empty())
                         {
                             self.charge_type_work(anchors.len())?;
                             if !anchors.values().any(|candidate| {
@@ -3595,6 +3674,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
         let mut previous_nominal_end = None;
         for (index, nominal) in registry.nominals().iter().enumerate() {
+            if let Some(api) = crate::resolved::CellApi::for_module(nominal.id.module())
+                && (nominal.id != api.handle() || !api.registry(registry))
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
             let index = u32::try_from(index)
                 .map_err(|_| ValidationError::new(ValidationReason::Registry, None))?;
             let Some(module) = registry_module else {
@@ -3870,6 +3954,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
         for nominal in registry.nominals() {
             let module = nominal.id.module();
+            if let Some(api) = crate::resolved::CellApi::for_module(module)
+                && (nominal.id != api.handle() || !api.registry(registry))
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
             let Some(source) = relation.get(&module).copied() else {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             };
@@ -4234,7 +4323,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         module_sources: Option<&HashMap<ModuleId, SourceId>>,
         parameter_owners: &mut RegistryParameterOwners,
     ) -> Result<(), ValidationError> {
-        let mut previous_effect: Option<crate::types::EffectId> = None;
+        let mut next_declaration = HashMap::<ModuleId, u32>::new();
+        self.charge_type_work(self.program.registry.effects().len())?;
+        next_declaration
+            .try_reserve(self.program.registry.effects().len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
         for effect in self.program.registry.effects() {
             self.charge_type_work(
                 effect
@@ -4245,6 +4338,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
             )?;
             let module = effect.id.module();
+            if let Some(api) = crate::resolved::CellApi::for_module(module)
+                && (!api.effect(effect) || !api.registry(&self.program.registry))
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
             let expected_source = module_sources
                 .and_then(|relation| relation.get(&module).copied())
                 .or_else(|| {
@@ -4255,15 +4353,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             if expected_source != Some(effect.origin.primary_span().source()) {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
-            let ordered = match previous_effect {
-                None => effect.id.declaration() == 0,
-                Some(previous) if previous.module() == module => previous
-                    .declaration()
-                    .checked_add(1)
-                    .is_some_and(|next| next == effect.id.declaration()),
-                Some(previous) => previous.module() < module && effect.id.declaration() == 0,
-            };
-            if !ordered
+            // Linked registries retain dependency-ordered module groups, not
+            // the total order of module namespaces. Declaration order remains
+            // exact within each defining module.
+            self.charge_type_work(1)?;
+            let expected = next_declaration.entry(module).or_insert(0);
+            if effect.id.declaration() != *expected
                 || effect.operations.is_empty()
                 || !valid_upper_spelling(&effect.spelling)
                 || !origin_depth_within_limit(&effect.origin)
@@ -4271,7 +4366,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
-            previous_effect = Some(effect.id);
+            *expected = expected
+                .checked_add(1)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
             self.validate_origin(&effect.origin, self.program.root)?;
             let mut parameter_ids = HashSet::new();
             let mut parameter_spellings = HashSet::new();
@@ -5597,6 +5694,26 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut definitions = HashMap::new();
         let mut consumed_rows = 0_usize;
         for (index, node) in self.program.nodes.iter().enumerate() {
+            if let Some(resource) = F::resource_scope(&node.kind) {
+                let id = node_id(self.program.arena, index)?;
+                self.charge_type_work(1)?;
+                let parameter = resource.acquisition.identity;
+                let canonical = self
+                    .program
+                    .registry
+                    .type_variable(parameter)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+                if canonical.kind != Kind::Type
+                    || nominal_parameter_owners.contains_key(&parameter)
+                    || definitions.contains_key(&parameter)
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                }
+                definitions
+                    .try_reserve(1)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+                definitions.insert(parameter, (&canonical.kind, id));
+            }
             let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
                 F::pure(&node.kind)
             else {
@@ -5796,6 +5913,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 return Ok(());
             }
             PureValue::Constructor(constructor) => {
+                if constructor.constructor().owner().module().is_builtin_cell() {
+                    return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                }
                 let Some(info) = self.program.registry.constructor(constructor.constructor())
                 else {
                     return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
@@ -6606,6 +6726,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     constructor,
                     payload,
                 } => {
+                    if constructor.owner().module().is_builtin_cell() {
+                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                    }
                     let Some((owner, arity)) =
                         self.nominal_application_head_and_arity(expected.as_type())?
                     else {
@@ -6804,12 +6927,17 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         let child = F::child_at(&node.kind, child_index).ok_or_else(|| {
                             ValidationError::new(ValidationReason::TypeScope, Some(id))
                         })?;
-                        let child_free = self.take_type_scope_requirements(
+                        let mut child_free = self.take_type_scope_requirements(
                             &mut requirements,
                             &mut remaining_uses,
                             child,
                             id,
                         )?;
+                        if child_index == 1
+                            && let Some(resource) = F::resource_scope(&node.kind)
+                        {
+                            child_free.remove(&resource.acquisition.identity);
+                        }
                         self.merge_type_scope_requirements(&mut free, child_free)?;
                     }
                     match F::pure(&node.kind) {
@@ -6911,7 +7039,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     }
                     let mut metadata_error = None;
                     F::visit_operation_type_metadata(&node.kind, &mut |metadata| {
-                        if metadata_error.is_some() {
+                        // The resource handle's exact type is authenticated at
+                        // its node; its sole variable is owned by that node.
+                        if metadata_error.is_some() || F::resource_scope(&node.kind).is_some() {
                             return;
                         }
                         metadata_error = match metadata {
@@ -7750,9 +7880,22 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             &authenticated_method_evidence,
         )?;
         let has_discard = self.validate_effect_nodes(&type_binders)?;
+        self.validate_effect_abstraction_shapes(&authenticated_method_evidence)?;
         self.validate_scopes()?;
         self.validate_type_scopes()?;
-        if !has_discard {
+        let mut has_resource = false;
+        for node in &self.program.nodes {
+            self.charge_type_work(1)?;
+            if matches!(
+                &node.kind,
+                super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Resource(
+                    _
+                ))
+            ) {
+                has_resource = true;
+            }
+        }
+        if !has_discard && !has_resource {
             return Ok(());
         }
         let mut capture_work = TypeWorkBudget::with_limit(
@@ -7775,6 +7918,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             }
             super::capture::Failure::Invalid => {
                 ValidationError::new(ValidationReason::Handler, None)
+            }
+            super::capture::Failure::Escape { .. } => {
+                ValidationError::new(ValidationReason::ResourceEscape, None)
             }
             super::capture::Failure::Unsafe(unsafe_discard) => ValidationError::new(
                 ValidationReason::DiscardUnsafe,
@@ -7988,6 +8134,123 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         Ok(())
     }
 
+    fn resource_outward_row(
+        &self,
+        body: &EffectRow,
+        acquisition: crate::resolved::CellAcquisition,
+        id: NodeId,
+    ) -> Result<EffectRow, ValidationError> {
+        let api = acquisition
+            .api()
+            .ok_or_else(|| ValidationError::new(ValidationReason::EffectIdentity, Some(id)))?;
+        self.charge_type_work(2)?;
+        let instance =
+            EffectInstance::new(api.ops(), Box::new([Type::Variable(acquisition.identity)]));
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let result = body.remove_exact_with_budget(&instance, &mut budget);
+        self.charge_type_work(budget.used())?;
+        match result.map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))? {
+            Ok(row) => Ok(row),
+            Err(crate::types::EffectRowError::Missing) => {
+                self.union_effect_rows_charged(&EffectRow::empty(), body, id)
+            }
+            Err(_) => Err(ValidationError::new(ValidationReason::EffectRow, Some(id))),
+        }
+    }
+
+    fn validate_resource_node(
+        &self,
+        id: NodeId,
+        node: &super::dialect::StoredNode<super::effect::EffectOperationFamily>,
+        resource: &super::effect::ResourceScopeNode,
+    ) -> Result<(), ValidationError> {
+        let authority = resource.acquisition;
+        let api = authority
+            .api()
+            .ok_or_else(|| ValidationError::new(ValidationReason::EffectIdentity, Some(id)))?;
+        let initializer = self.node(resource.initializer)?;
+        let body = self.node(resource.body)?;
+        if authority.handle != resource.handle.id()
+            || authority.handle.module() != Some(authority.provider.module())
+            || authority.identity.module() != Some(authority.provider.module())
+            || Some(authority.span) != node.origin.as_ref().map(Origin::primary_span)
+            || !matches!(resource.handle.ty(), Type::Application(head, argument) if **head == Type::Nominal(api.handle()) && **argument == Type::Variable(authority.identity))
+            || !self.same_type_charged(&initializer.ty, &Type::Int)?
+            || !self.same_type_charged(&body.ty, &node.ty)?
+        {
+            return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+        }
+        let outward = self.resource_outward_row(&body.effects, authority, id)?;
+        let expected = self.union_effect_rows_charged(&initializer.effects, &outward, id)?;
+        if !self.same_effect_row_charged(&node.effects, &expected, id)? {
+            return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+        }
+        if authority.methods[0] == authority.methods[1] {
+            return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+        }
+        for (ordinal, binder) in authority.methods.iter().enumerate() {
+            self.charge_type_work(self.program.method_evidence.lexical_owners().len())?;
+            let mut owner_count = 0;
+            for owner in self.program.method_evidence.lexical_owners() {
+                if owner.acquisition == Some(authority)
+                    && owner.binder == *binder
+                    && owner.method
+                        == crate::interface::MethodId::new(api.provider(), ordinal as u32)
+                {
+                    owner_count += 1;
+                }
+            }
+            if owner_count != 1 {
+                return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+            }
+            let mut definition_count = 0;
+            for stored in &self.program.nodes {
+                self.charge_type_work(1)?;
+                let Some(PureExprKind::Computation(PureComputation::Bind(binding))) =
+                    super::effect::EffectOperationFamily::pure(&stored.kind)
+                else {
+                    continue;
+                };
+                if binding.binder().id() != *binder {
+                    continue;
+                }
+                definition_count += 1;
+                let Some(PureExprKind::Value(PureValue::Function(function))) =
+                    super::effect::EffectOperationFamily::pure(
+                        &self.node(binding.initializer())?.kind,
+                    )
+                else {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                };
+                let super::effect::EffectExprKind::Operation(
+                    super::effect::EffectOperation::Request(request),
+                ) = &self.node(function.body())?.kind
+                else {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                };
+                let Some(PureExprKind::Variable(operand)) =
+                    super::effect::EffectOperationFamily::pure(&self.node(request.operand())?.kind)
+                else {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                };
+                if request.operation() != OperationId::new(api.ops(), ordinal as u32)
+                    || request.effect().effect() != api.ops()
+                    || !matches!(request.effect().arguments(), [Type::Variable(identity)] if *identity == authority.identity)
+                    || operand.binder() != function.parameter().id()
+                    || binding.binder().origin().primary_span() != authority.span
+                {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+            }
+            if definition_count != 1 {
+                return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+            }
+        }
+        Ok(())
+    }
+
     fn validate_effect_nodes(
         &mut self,
         type_binders: &CoreTypeBinders<'_>,
@@ -8013,6 +8276,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     self.validate_pure_effect_row(id, node)?;
                 }
                 EffectExprKind::Pure(_) => self.validate_pure_effect_row(id, node)?,
+                EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
+                    self.validate_resource_node(id, node, resource)?;
+                }
                 EffectExprKind::Operation(EffectOperation::Request(request)) => {
                     self.validate_effect_instance(&request.effect, type_binders, id)?;
                     let (domain, result) = self.effect_signature(
@@ -8089,6 +8355,70 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             ));
         }
         Ok(has_discard)
+    }
+
+    fn validate_effect_abstraction_shapes(
+        &self,
+        authenticated: &HashSet<NodeId>,
+    ) -> Result<(), ValidationError> {
+        let resource = || ValidationError::new(ValidationReason::Resource, None);
+        let mut adapters = HashSet::new();
+        self.charge_type_work(self.program.method_evidence_anchors.len())?;
+        for anchor in &self.program.method_evidence_anchors {
+            if matches!(anchor.role, MethodEvidenceAnchorRole::Adapter { .. })
+                && authenticated.contains(&anchor.node)
+            {
+                self.charge_type_work(1)?;
+                adapters.try_reserve(1).map_err(|_| resource())?;
+                adapters.insert(anchor.node);
+            }
+        }
+        let mut inert = HashSet::new();
+        let mut pending = Vec::new();
+        for (index, node) in self.program.nodes.iter().enumerate() {
+            self.charge_type_work(1)?;
+            let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
+                super::effect::EffectOperationFamily::pure(&node.kind)
+            else {
+                continue;
+            };
+            let root = node_id(self.program.arena, index)?;
+            if adapters.contains(&root) {
+                continue;
+            }
+            let mut current = abstraction.body();
+            loop {
+                self.charge_type_work(1)?;
+                if inert.contains(&current) {
+                    break;
+                }
+                self.charge_type_work(1)?;
+                pending.try_reserve(1).map_err(|_| resource())?;
+                pending.push(current);
+                match super::effect::EffectOperationFamily::pure(&self.node(current)?.kind) {
+                    Some(
+                        PureExprKind::Value(PureValue::Function(_) | PureValue::Constructor(_))
+                        | PureExprKind::Variable(_)
+                        | PureExprKind::Computation(PureComputation::TypeAbstraction(_)),
+                    ) => break,
+                    Some(PureExprKind::Computation(PureComputation::TypeApplication(
+                        application,
+                    ))) => current = application.function(),
+                    _ => {
+                        return Err(ValidationError::new(
+                            ValidationReason::TypeOperation,
+                            Some(root),
+                        ));
+                    }
+                }
+            }
+            // Each shared suffix enters this cache once; graph validation has
+            // already excluded cycles. Nested abstractions are checked separately.
+            self.charge_type_work(pending.len())?;
+            inert.try_reserve(pending.len()).map_err(|_| resource())?;
+            inert.extend(pending.drain(..));
+        }
+        Ok(())
     }
 
     fn validate_pure_effect_row(
@@ -8253,6 +8583,18 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                                 row
                             }
                         },
+                        EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
+                            let outward = self.resource_outward_row(
+                                child_row(resource.body)?,
+                                resource.acquisition,
+                                id,
+                            )?;
+                            self.union_effect_rows_charged(
+                                child_row(resource.initializer)?,
+                                &outward,
+                                id,
+                            )?
+                        }
                         EffectExprKind::Operation(EffectOperation::Request(request)) => {
                             let requested =
                                 self.singleton_effect_row_charged(request.effect(), id)?;
@@ -8467,6 +8809,510 @@ fn node_id(arena: super::dialect::ArenaId, index: usize) -> Result<NodeId, Valid
 
 #[cfg(test)]
 mod tests {
+    fn cell_core_fixture() -> (
+        super::super::effect::UnvalidatedEffectProgram,
+        Vec<crate::source::SourceFile>,
+    ) {
+        use super::super::dialect::{
+            MethodEvidenceAnchor, MethodEvidenceAnchorRole, MethodEvidenceCatalog,
+            MethodEvidenceExpectation, MethodEvidenceExpectedRole, MethodEvidenceLexicalOwner,
+            MethodEvidenceMethod,
+        };
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (mut core, module, sources, registry) =
+            crate::elaborate::cell_resource_core_fixture_for_test();
+        core.registry = registry;
+        let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+            &core.nodes[core.root.index().unwrap()].kind
+        else {
+            panic!("resource root")
+        };
+        let authority = resource.acquisition;
+        let interface = module
+            .imported_facts()
+            .interface(authority.api().unwrap().provider())
+            .unwrap();
+        let methods = interface
+            .methods
+            .iter()
+            .map(|method| MethodEvidenceMethod {
+                id: method.id,
+                interface_parameters: interface
+                    .parameters
+                    .iter()
+                    .map(|parameter| parameter.id)
+                    .collect(),
+                parameters: method
+                    .type_parameters
+                    .iter()
+                    .map(|parameter| (parameter.id, parameter.kind.clone()))
+                    .collect(),
+                value_type: method.value_type.clone(),
+            })
+            .collect();
+        let owners: Vec<_> = authority
+            .methods
+            .iter()
+            .enumerate()
+            .map(|(ordinal, binder)| MethodEvidenceLexicalOwner {
+                acquisition: Some(authority),
+                source_parameters: Box::new([]),
+                source: authority.provider,
+                method: crate::interface::MethodId::new(interface.id, ordinal as u32),
+                binder: *binder,
+                application: crate::interface::InterfaceApplication::new(
+                    interface.id,
+                    Box::new([crate::types::Type::Variable(authority.identity)]),
+                ),
+                captures: Box::new([]),
+            })
+            .collect();
+        let expectations = owners
+            .iter()
+            .enumerate()
+            .map(|(owner, row)| MethodEvidenceExpectation {
+                occurrence: None,
+                method: row.method,
+                role: MethodEvidenceExpectedRole::LexicalOwner { owner },
+            })
+            .collect();
+        let anchors = owners.iter().enumerate().map(|(expectation, row)| {
+            let index = core.nodes.iter().position(|node| matches!(super::super::effect::EffectOperationFamily::pure(&node.kind), Some(super::PureExprKind::Computation(super::PureComputation::Bind(binding))) if binding.binder().id() == row.binder)).unwrap();
+            MethodEvidenceAnchor { node: super::node_id(core.arena, index).unwrap(), owner: None, requirement: None, method: row.method,
+                application: row.application.clone_with_budget(&mut crate::types::TypeWorkBudget::default()).unwrap(), role: MethodEvidenceAnchorRole::LexicalOwner { source: row.source, binder: row.binder }, occurrence: None, expectation }
+        }).collect();
+        let mut catalog = MethodEvidenceCatalog::new(
+            methods,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            expectations,
+        );
+        catalog.set_lexical_owners(owners);
+        core.method_evidence = std::sync::Arc::new(catalog);
+        core.method_evidence_anchors = anchors;
+        (core, sources)
+    }
+
+    #[test]
+    fn cell_core_structure_validates_and_executes() {
+        let (core, sources) = cell_core_fixture();
+        let refs = sources.iter().collect::<Vec<_>>();
+        let relation = core
+            .registry
+            .type_variables()
+            .map(|parameter| {
+                (
+                    parameter.id.module().unwrap(),
+                    parameter.origin.primary_span().source(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let mut validator = super::Validator::new_modules(&core, &refs, &relation)
+            .expect("resource module origins");
+        validator.run_effect().expect("resource static proof");
+        let program = super::super::validate_effect_modules(core, &refs, &relation).unwrap();
+        assert_eq!(
+            crate::eval::evaluate_effect(&program)
+                .unwrap()
+                .value
+                .to_string(),
+            "42"
+        );
+    }
+
+    #[test]
+    fn cell_core_reconstructs_hidden_closure_escape_before_the_execution_gate() {
+        use super::super::{
+            binding::BindingNode,
+            effect::{EffectExprKind, EffectOperation},
+            function::FunctionNode,
+            variable::{TypedBinder, VariableNode},
+        };
+        let (mut core, sources) = cell_core_fixture();
+        let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+            &core.nodes[core.root.index().unwrap()].kind
+        else {
+            panic!("resource root")
+        };
+        let handle = resource.handle.clone();
+        let mut leaf = resource.body;
+        let mut bindings = Vec::new();
+        while let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) =
+            &core.nodes[leaf.index().unwrap()].kind
+        {
+            bindings.push(leaf);
+            leaf = binding.body();
+        }
+        assert!(
+            !bindings.is_empty(),
+            "trusted provider bindings remain inside the scope"
+        );
+        let dialect = core.nodes[leaf.index().unwrap()].dialect;
+        let effects = core.nodes[leaf.index().unwrap()].effects.clone();
+        let origin = core.nodes[leaf.index().unwrap()].origin.clone().unwrap();
+        let variable = node_id(core.arena, core.nodes.len()).unwrap();
+        core.nodes.push(StoredNode {
+            ty: handle.ty().clone(),
+            kind: EffectExprKind::Pure(PureExprKind::Variable(VariableNode::new(handle.id()))),
+            dialect,
+            effects: effects.clone(),
+            origin: Some(origin.clone()),
+        });
+        let body = node_id(core.arena, core.nodes.len()).unwrap();
+        core.nodes.push(StoredNode {
+            kind: EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                BindingNode::new(
+                    TypedBinder::new(
+                        core.arena,
+                        BinderId::generated(u32::MAX - 1),
+                        handle.ty().clone(),
+                        origin.clone(),
+                    ),
+                    variable,
+                    leaf,
+                ),
+            ))),
+            ty: Type::Int,
+            dialect,
+            effects: effects.clone(),
+            origin: Some(origin.clone()),
+        });
+        let closure = node_id(core.arena, core.nodes.len()).unwrap();
+        let closure_type = Type::Function(Box::new(Type::Unit), Box::new(Type::Int));
+        core.nodes.push(StoredNode {
+            ty: closure_type.clone(),
+            kind: EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(
+                FunctionNode::new(
+                    TypedBinder::new(
+                        core.arena,
+                        BinderId::generated(u32::MAX),
+                        Type::Unit,
+                        origin.clone(),
+                    ),
+                    body,
+                ),
+            ))),
+            dialect,
+            effects,
+            origin: Some(origin),
+        });
+        for node in bindings {
+            let node = &mut core.nodes[node.index().unwrap()];
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) =
+                &node.kind
+            else {
+                unreachable!()
+            };
+            let replacement = BindingNode::new(
+                binding.binder().clone(),
+                binding.initializer(),
+                if binding.body() == leaf {
+                    closure
+                } else {
+                    binding.body()
+                },
+            );
+            node.kind = EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                replacement,
+            )));
+            node.ty = closure_type.clone();
+        }
+        core.nodes[core.root.index().unwrap()].ty = closure_type;
+        assert_eq!(
+            cell_core_reason(&core, &sources, 0).0,
+            Some(ValidationReason::ResourceEscape)
+        );
+    }
+
+    #[test]
+    fn cell_core_requires_both_provider_owners_even_for_constant_body() {
+        let (mut core, sources) = cell_core_fixture();
+        core.method_evidence = Arc::new(super::super::dialect::MethodEvidenceCatalog::new(
+            core.method_evidence.methods().to_vec(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ));
+        core.method_evidence_anchors = Box::new([]);
+        assert_eq!(
+            cell_core_reason(&core, &sources, 0).0,
+            Some(ValidationReason::NodeType)
+        );
+    }
+
+    fn cell_core_reason(
+        core: &super::super::effect::UnvalidatedEffectProgram,
+        sources: &[SourceFile],
+        used: usize,
+    ) -> (Option<ValidationReason>, usize) {
+        let refs = sources.iter().collect::<Vec<_>>();
+        let relation = core
+            .registry
+            .type_variables()
+            .map(|parameter| {
+                (
+                    parameter.id.module().unwrap(),
+                    parameter.origin.primary_span().source(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let mut validator =
+            super::Validator::new_modules(core, &refs, &relation).expect("module origins");
+        validator.type_work.set(used);
+        let reason = validator.run_effect().err().map(|error| error.reason());
+        (reason, validator.type_work.get())
+    }
+
+    #[test]
+    fn cell_core_rejects_a_well_typed_replacement_provider_computation() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (mut core, sources) = cell_core_fixture();
+        let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+            &core.nodes[core.root.index().unwrap()].kind
+        else {
+            panic!("resource")
+        };
+        let integer = resource.initializer;
+        let function_index = core
+            .nodes
+            .iter()
+            .position(|node| {
+                matches!(
+                    &node.kind,
+                    EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(_)))
+                )
+            })
+            .unwrap();
+        let EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(function))) =
+            &core.nodes[function_index].kind
+        else {
+            unreachable!()
+        };
+        let request = function.body();
+        let parameter = function.parameter().clone();
+        let added = node_id(core.arena, core.nodes.len()).unwrap();
+        core.nodes.push(StoredNode {
+            dialect: core.nodes[request.index().unwrap()].dialect,
+            ty: Type::Int,
+            effects: core.nodes[request.index().unwrap()].effects.clone(),
+            origin: core.nodes[request.index().unwrap()].origin.clone(),
+            kind: EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Primitive(
+                crate::core::primitive::PrimitiveNode::new(
+                    crate::core::Primitive::Add,
+                    request,
+                    integer,
+                ),
+            ))),
+        });
+        core.nodes[function_index].kind = EffectExprKind::Pure(PureExprKind::Value(
+            PureValue::Function(FunctionNode::new(parameter, added)),
+        ));
+        assert_eq!(
+            cell_core_reason(&core, &sources, 0).0,
+            Some(ValidationReason::NodeType)
+        );
+    }
+
+    #[test]
+    fn cell_core_rejects_detached_brand_provider_and_source_authority() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for corruption in 0..5 {
+            let (mut core, sources) = cell_core_fixture();
+            let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+                &mut core.nodes[core.root.index().unwrap()].kind
+            else {
+                panic!("resource")
+            };
+            match corruption {
+                0 => resource.acquisition.identity = crate::types::TypeVariableId::generated(999),
+                1 => {
+                    resource.acquisition.provider = crate::interface::LexicalEvidenceId::new(
+                        resource.acquisition.provider.module(),
+                        u32::MAX,
+                    )
+                }
+                2 => resource.acquisition.builtin = resource.acquisition.handle.module().unwrap(),
+                3 => {
+                    resource.acquisition.span =
+                        sources[0].span(ByteRange::new(0, 1).unwrap()).unwrap()
+                }
+                4 => resource.acquisition.handle = resource.acquisition.methods[0],
+                _ => unreachable!(),
+            }
+            let reason = cell_core_reason(&core, &sources, 0).0;
+            assert_ne!(reason, None, "corruption {corruption}");
+            assert_ne!(
+                reason,
+                Some(ValidationReason::Resource),
+                "corruption {corruption}"
+            );
+        }
+    }
+
+    #[test]
+    fn cell_core_rejects_a_request_with_the_wrong_operation_fact() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (mut core, sources) = cell_core_fixture();
+        let request = core
+            .nodes
+            .iter_mut()
+            .find_map(|node| match &mut node.kind {
+                EffectExprKind::Operation(EffectOperation::Request(request)) => Some(request),
+                _ => None,
+            })
+            .unwrap();
+        request.operation = crate::types::OperationId::new(request.effect.effect(), u32::MAX);
+        assert_ne!(cell_core_reason(&core, &sources, 0).0, None);
+    }
+
+    #[test]
+    fn effect_core_rejects_inference_atoms_in_resource_request_metadata() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (mut core, sources) = cell_core_fixture();
+        let request = core
+            .nodes
+            .iter_mut()
+            .find_map(|node| match &mut node.kind {
+                EffectExprKind::Operation(EffectOperation::Request(request)) => Some(request),
+                _ => None,
+            })
+            .unwrap();
+        request.effect = crate::types::EffectInstance::new(
+            request.effect.effect(),
+            Box::new([Type::Inference(crate::types::InferenceVariableId::new(0))]),
+        );
+        assert_eq!(
+            cell_core_reason(&core, &sources, 0).0,
+            Some(ValidationReason::TypeScope)
+        );
+    }
+
+    #[test]
+    fn cell_core_validation_work_is_exact_and_retryable() {
+        let (core, sources) = cell_core_fixture();
+        let (reason, work) = cell_core_reason(&core, &sources, 0);
+        assert_eq!(reason, None);
+        assert_eq!(
+            cell_core_reason(&core, &sources, CORE_VALIDATION_TYPE_WORK_LIMIT - work + 1).0,
+            Some(ValidationReason::Resource)
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                cell_core_reason(&core, &sources, CORE_VALIDATION_TYPE_WORK_LIMIT - work).0,
+                None
+            );
+        }
+    }
+
+    fn validated_cell_transform_fixture() -> (
+        super::super::effect::ValidatedEffectProgram,
+        Vec<SourceFile>,
+    ) {
+        let (core, sources) = cell_core_fixture();
+        assert_eq!(cell_core_reason(&core, &sources, 0).0, None);
+        let refs = sources.iter().collect::<Vec<_>>();
+        let relation = core
+            .registry
+            .type_variables()
+            .map(|parameter| {
+                (
+                    parameter.id.module().unwrap(),
+                    parameter.origin.primary_span().source(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let validated = super::super::validate_effect_modules(core, &refs, &relation).unwrap();
+        assert_eq!(
+            crate::eval::evaluate_effect(&validated)
+                .unwrap()
+                .value
+                .to_string(),
+            "42"
+        );
+        (validated, sources)
+    }
+
+    #[test]
+    fn cell_complete_transforms_revalidate_and_execute_the_full_relation() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        type Transform = fn(
+            &super::super::effect::ValidatedEffectProgram,
+        ) -> Result<
+            super::super::effect::UnvalidatedEffectProgram,
+            crate::core::transform::TransformError,
+        >;
+        let (program, sources) = validated_cell_transform_fixture();
+        let EffectExprKind::Operation(EffectOperation::Resource(original)) =
+            &program.node(program.root()).unwrap().kind
+        else {
+            panic!("resource")
+        };
+        for (fold, transform) in [
+            (
+                false,
+                crate::core::transform::identity_effect_traversal as Transform,
+            ),
+            (
+                true,
+                crate::core::transform::fold_effect_literal_primitives as Transform,
+            ),
+        ] {
+            let mut rebuilt: super::super::effect::UnvalidatedEffectProgram =
+                transform(&program).expect("complete resource transform");
+            assert_eq!(cell_core_reason(&rebuilt, &sources, 0).0, None);
+            let refs = sources.iter().collect::<Vec<_>>();
+            let relation = rebuilt
+                .registry
+                .type_variables()
+                .map(|parameter| {
+                    (
+                        parameter.id.module().unwrap(),
+                        parameter.origin.primary_span().source(),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let executable = super::super::validate_effect_modules(
+                transform(&program).unwrap(),
+                &refs,
+                &relation,
+            )
+            .unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&executable)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "42"
+            );
+            if fold {
+                assert!(rebuilt.nodes.len() < program.node_count());
+            }
+            let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+                &mut rebuilt.nodes[rebuilt.root.index().unwrap()].kind
+            else {
+                panic!("resource")
+            };
+            assert_eq!(resource.acquisition, original.acquisition);
+            assert_eq!(resource.handle.ty(), original.handle.ty());
+            resource.acquisition.methods.swap(0, 1);
+            assert_ne!(cell_core_reason(&rebuilt, &sources, 0).0, None);
+        }
+    }
+
     use super::*;
     use crate::{
         core::{
@@ -8531,6 +9377,448 @@ mod tests {
         program: UnvalidatedProgram,
         module_sources: Vec<(ModuleId, SourceId)>,
         globals: HashMap<String, (BinderId, Box<[crate::types::TypeVariableId]>)>,
+    }
+
+    #[test]
+    fn builtin_cell_core_requires_the_complete_method_catalogue() {
+        for remove_catalogue in [false, true] {
+            let directory = LinkedValidationDirectory::create();
+            let entry = directory.write(
+                "entry.ash",
+                "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = 42\n",
+            );
+            let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+            let linked =
+                link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+            let linked = validate_linked_facts_for_test(linked).unwrap();
+            let mut elaborator =
+                crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+            let typed = elaborator
+                .synthesize_effect_module_program(&linked)
+                .unwrap();
+            let mut program = elaborator.finish(typed.node).unwrap();
+            if remove_catalogue {
+                program.method_evidence = Arc::default();
+            }
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let relation = graph
+                .modules()
+                .iter()
+                .map(|module| (module.id(), module.source().id()))
+                .collect::<Vec<_>>();
+            let result = super::validate_effect_modules_family(program, &sources, &relation);
+            if remove_catalogue {
+                assert_eq!(result.unwrap_err().reason, ValidationReason::Registry);
+            } else {
+                result.unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn resource_row_relay_reconstructs_exact_contexts_after_both_rebuilds() {
+        let directory = LinkedValidationDirectory::create();
+        directory.write("helper.ash", "import @builtin.cell as Cell\npub reader<R> : Cell.Handle<R> -> (Unit -> Int ! {Cell.Ops<R>}) where Cell.Provider<R>\nreader value = fn(ignored) {\nCell.read value\n}\npub relay<E : EffectRow, A> : ((Unit -> Int ! {| E}), A) -> Int ! {| E}\nrelay (action, ignored) = action ()\n");
+        let entry = directory.write("entry.ash", "import @builtin.cell as Cell\nimport helper (reader, relay)\nmain : Unit -> Int\nmain () = resource cell<R> c = 21 {\nlet get = reader c\nresource cell<S> other = 999 {\nrelay (get, true) + get ()\n}\n}\n");
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+        let linked = crate::evidence_validation::validate_interface_evidence(linked).unwrap();
+        let mut elaborator =
+            crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let program = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let mut measured = Validator::new_modules(&program, &sources, &relation).unwrap();
+        measured.run_effect().unwrap();
+        let work = measured.type_work.get();
+        for remaining in [work - 1, work, work] {
+            let mut retry = Validator::new_modules(&program, &sources, &relation).unwrap();
+            retry
+                .type_work
+                .set(CORE_VALIDATION_TYPE_WORK_LIMIT - remaining);
+            assert_eq!(
+                retry.run_effect().err().map(|error| error.reason()),
+                if remaining < work {
+                    Some(ValidationReason::Resource)
+                } else {
+                    None
+                }
+            );
+        }
+        let validated =
+            super::super::validate_effect_modules(program, &sources, &relation).unwrap();
+        assert_eq!(
+            crate::eval::evaluate_effect(&validated)
+                .unwrap()
+                .value
+                .to_string(),
+            "42"
+        );
+        for fold in [false, true] {
+            let rebuilt = if fold {
+                crate::core::transform::fold_effect_literal_primitives(&validated).unwrap()
+            } else {
+                crate::core::transform::identity_effect_traversal(&validated).unwrap()
+            };
+            let executable =
+                super::super::validate_effect_modules(rebuilt, &sources, &relation).unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&executable)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "42"
+            );
+        }
+    }
+
+    #[test]
+    fn published_resource_core_reconstructs_dependencies_after_every_rebuild() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for payload in [false, true] {
+            let directory = LinkedValidationDirectory::create();
+            let (header, result, entry) = if payload {
+                (
+                    "pub effect Send {\nsend : (Unit -> Int) -> Unit\n}\npub make : Unit -> Int ! {Send}\n",
+                    "let _ = perform Send.send constant\n42",
+                    "import owner (make, Send)\nmain : Unit -> Int\nmain () = handle (make ()) with Send {\nsend ignored => resume ()\n}\n",
+                )
+            } else {
+                (
+                    "pub make : Unit -> (Unit -> Int)\n",
+                    "constant",
+                    "import owner (make)\nmain : Unit -> Int\nmain () = {\nlet later = make ()\nlater ()\n}\n",
+                )
+            };
+            directory.write("owner.ash", &format!("import @builtin.cell as Cell\n{header}make () = resource cell<R> c = 41 {{\nlet hidden : Unit -> Int = fn(ignored) {{\nlet held = c\n40 + 2\n}}\nlet constant : Unit -> Int = fn(ignored) {{\n40 + 2\n}}\n{result}\n}}\n"));
+            let entry = directory.write("entry.ash", entry);
+            let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+            let linked =
+                link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+            let linked = crate::evidence_validation::validate_interface_evidence(linked).unwrap();
+            let mut elaborator =
+                crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+            let typed = elaborator
+                .synthesize_effect_module_program(&linked)
+                .unwrap();
+            let program = elaborator.finish(typed.node).unwrap();
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let relation = graph
+                .modules()
+                .iter()
+                .map(|module| (module.id(), module.source().id()))
+                .collect::<Vec<_>>();
+            let reason = |program: &super::super::effect::UnvalidatedEffectProgram| {
+                Validator::new_modules(program, &sources, &relation)
+                    .unwrap()
+                    .run_effect()
+                    .err()
+                    .map(|error| error.reason())
+            };
+            assert_eq!(reason(&program), None);
+            let mut measured = Validator::new_modules(&program, &sources, &relation).unwrap();
+            measured.run_effect().unwrap();
+            let work = measured.type_work.get();
+            for remaining in [work - 1, work, work] {
+                let mut retry = Validator::new_modules(&program, &sources, &relation).unwrap();
+                retry
+                    .type_work
+                    .set(CORE_VALIDATION_TYPE_WORK_LIMIT - remaining);
+                assert_eq!(
+                    retry.run_effect().err().map(|error| error.reason()),
+                    if remaining < work {
+                        Some(ValidationReason::Resource)
+                    } else {
+                        None
+                    }
+                );
+            }
+            let validated =
+                super::super::validate_effect_modules(program, &sources, &relation).unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&validated)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "42"
+            );
+            for fold in [false, true] {
+                let mut rebuilt = if fold {
+                    crate::core::transform::fold_effect_literal_primitives(&validated).unwrap()
+                } else {
+                    crate::core::transform::identity_effect_traversal(&validated).unwrap()
+                };
+                assert_eq!(reason(&rebuilt), None);
+                let executable = if fold {
+                    crate::core::transform::fold_effect_literal_primitives(&validated).unwrap()
+                } else {
+                    crate::core::transform::identity_effect_traversal(&validated).unwrap()
+                };
+                let executable =
+                    super::super::validate_effect_modules(executable, &sources, &relation).unwrap();
+                assert_eq!(
+                    crate::eval::evaluate_effect(&executable)
+                        .unwrap()
+                        .value
+                        .to_string(),
+                    "42"
+                );
+                let resource_index = rebuilt
+                    .nodes
+                    .iter()
+                    .position(|node| {
+                        matches!(
+                            node.kind,
+                            EffectExprKind::Operation(EffectOperation::Resource(_))
+                        )
+                    })
+                    .unwrap();
+                let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+                    &rebuilt.nodes[resource_index].kind
+                else {
+                    unreachable!()
+                };
+                let acquisition = resource.acquisition;
+                for swapped_methods in [false, true] {
+                    let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+                        &mut rebuilt.nodes[resource_index].kind
+                    else {
+                        unreachable!()
+                    };
+                    if swapped_methods {
+                        resource.acquisition.methods.swap(0, 1);
+                    } else {
+                        resource.acquisition.provider = crate::interface::LexicalEvidenceId::new(
+                            acquisition.provider.module(),
+                            u32::MAX,
+                        );
+                    }
+                    assert_eq!(
+                        reason(&rebuilt),
+                        Some(ValidationReason::NodeType),
+                        "fold={fold}, swapped={swapped_methods}"
+                    );
+                    let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+                        &mut rebuilt.nodes[resource_index].kind
+                    else {
+                        unreachable!()
+                    };
+                    resource.acquisition = acquisition;
+                }
+                let resource = rebuilt
+                    .nodes
+                    .iter()
+                    .find_map(|node| match &node.kind {
+                        EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
+                            Some(resource)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let mut current = resource.body;
+                let mut hidden = None;
+                while let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                    binding,
+                ))) = &rebuilt.nodes[current.index().unwrap()].kind
+                {
+                    let span = binding.binder().origin().primary_span();
+                    let source = sources
+                        .iter()
+                        .find(|source| source.id() == span.source())
+                        .unwrap();
+                    if &source.text()[span.range().start() as usize..span.range().end() as usize]
+                        == "hidden"
+                    {
+                        hidden = Some(binding.binder().id());
+                    }
+                    current = binding.body();
+                }
+                if payload {
+                    current = rebuilt
+                        .nodes
+                        .iter()
+                        .find_map(|node| match &node.kind {
+                            EffectExprKind::Operation(EffectOperation::Request(request))
+                                if rebuilt.nodes[request.operand.index().unwrap()].ty
+                                    == Type::Function(
+                                        Box::new(Type::Unit),
+                                        Box::new(Type::Int),
+                                    ) =>
+                            {
+                                Some(request.operand)
+                            }
+                            _ => None,
+                        })
+                        .expect("outward callable payload");
+                }
+                assert!(matches!(
+                    rebuilt.nodes[current.index().unwrap()].kind,
+                    EffectExprKind::Pure(PureExprKind::Variable(_))
+                ));
+                rebuilt.nodes[current.index().unwrap()].kind =
+                    EffectExprKind::Pure(PureExprKind::Variable(
+                        crate::core::variable::VariableNode::new(hidden.expect("hidden binder")),
+                    ));
+                assert_eq!(
+                    reason(&rebuilt),
+                    Some(ValidationReason::ResourceEscape),
+                    "fold={fold}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_module_effect_ordinals_remain_exact_and_retryable() {
+        let directory = LinkedValidationDirectory::create();
+        let entry = directory.write("entry.ash", "import @builtin.cell as Cell\neffect First {\nfirst : Unit -> Unit\n}\neffect Second {\nsecond : Unit -> Unit\n}\nmain : Unit -> Unit\nmain () = ()\n");
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+        let linked = crate::evidence_validation::validate_interface_evidence(linked).unwrap();
+        let mut elaborator =
+            crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let mut program = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let mapping = relation.iter().copied().collect::<HashMap<_, _>>();
+        let run = |program: &super::super::effect::UnvalidatedEffectProgram, remaining| {
+            let validator = Validator::new_modules(program, &sources, &relation).unwrap();
+            validator
+                .type_work
+                .set(CORE_VALIDATION_TYPE_WORK_LIMIT - remaining);
+            let result = validator.validate_effect_registry(Some(&mapping), &mut HashMap::new());
+            (
+                result,
+                validator.type_work.get() - (CORE_VALIDATION_TYPE_WORK_LIMIT - remaining),
+            )
+        };
+        let (result, work) = run(&program, CORE_VALIDATION_TYPE_WORK_LIMIT);
+        result.unwrap();
+        assert_eq!(
+            run(&program, work - 1).0.unwrap_err().reason(),
+            ValidationReason::Resource
+        );
+        for _ in 0..2 {
+            let (result, used) = run(&program, work);
+            result.unwrap();
+            assert_eq!(used, work);
+        }
+        let registry = program.registry.as_ref().clone();
+        for mutation in 0..3 {
+            let mut effects = registry.effects().to_vec();
+            let first = effects
+                .iter()
+                .position(|effect| effect.spelling == "First")
+                .unwrap();
+            let second = effects
+                .iter()
+                .position(|effect| effect.spelling == "Second")
+                .unwrap();
+            match mutation {
+                0 => effects[second] = effects[first].clone(),
+                1 => {
+                    effects.remove(first);
+                }
+                2 => effects.swap(first, second),
+                _ => unreachable!(),
+            }
+            program.registry = Arc::new(registry.clone().with_effects(effects));
+            assert_eq!(
+                run(&program, CORE_VALIDATION_TYPE_WORK_LIMIT)
+                    .0
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Registry,
+                "mutation={mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn builtin_handle_constructor_and_pattern_are_rejected_independently() {
+        let directory = LinkedValidationDirectory::create();
+        let entry = directory.write(
+            "entry.ash",
+            "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = 42\n",
+        );
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let checked = checked_linked_validation_graph(&graph);
+        let registry = Arc::clone(checked[0].registry());
+        let constructor = registry.constructors()[0].id;
+        let parameter = registry.nominal_parameters(constructor.owner()).unwrap()[0].id;
+        let ty = Type::Application(
+            Box::new(Type::Nominal(constructor.owner())),
+            Box::new(Type::Variable(parameter)),
+        );
+        let origin = registry.constructors()[0].origin.clone();
+        let mut builder = CoreBuilder::with_registry(registry);
+        let scheme = Type::Forall(Box::new([(parameter, Kind::Type)]), Box::new(ty.clone()));
+        let root = builder
+            .constructor(constructor, scheme, origin.clone())
+            .unwrap();
+        let program = builder.finish(root).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let validator = Validator::new(&program, &sources);
+        let node = validator.node(root).unwrap();
+        let PureExprKind::Value(value) = &node.kind else {
+            unreachable!()
+        };
+        assert_eq!(
+            validator
+                .validate_value(root, node, value)
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Registry
+        );
+        let pattern = CorePattern::new(
+            ty.clone(),
+            origin,
+            CorePatternKind::Constructor {
+                constructor,
+                payload: None,
+            },
+        );
+        assert_eq!(
+            validator
+                .validate_pattern(&pattern, &ty, root)
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Pattern
+        );
     }
 
     impl LinkedCoreValidationFixture {
@@ -9052,6 +10340,133 @@ mod tests {
             producer_binder: None,
             producer,
         };
+    }
+
+    #[test]
+    fn catalogued_monomorphic_nested_sources_survive_effect_rebuilds() {
+        let directory = LinkedValidationDirectory::create();
+        let entry = directory.write("entry.ash", concat!(
+            "type Wrap<A> = Wrap(A)\n",
+            "interface Leaf<A> {\nleaf : A -> A\n}\n",
+            "interface Base<A> {\nbase : A -> A\n}\n",
+            "interface Convert<A> {\nconvert<B> : (A, B) -> A\n}\n",
+            "impl Leaf<Int> {\nleaf value = value\n}\n",
+            "impl<A> Base<Wrap<A>> where Leaf<A> {\nbase (Wrap value) = Wrap (leaf value)\n}\n",
+            "impl<A> Convert<Wrap<Wrap<A>>> where Base<Wrap<A>> {\nconvert (Wrap value, ignored) = Wrap (base value)\n}\n",
+            "effect Ask {\nask : Unit -> Int\n}\n",
+            "main : Unit -> Wrap<Wrap<Int>>\nmain () = handle {\nlet _ = perform Ask.ask ()\nconvert (Wrap (Wrap (40 + 2)), true)\n} with Ask {\nask ignored => resume 0\n}\n",
+        ));
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+        let linked = validate_linked_facts_for_test(linked).unwrap();
+        let mut elaborator =
+            crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let program = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let validated =
+            super::validate_effect_modules_family(program, &sources, &relation).unwrap();
+        let identity = crate::core::transform::identity_effect_traversal(&validated).unwrap();
+        let identity =
+            super::validate_effect_modules_family(identity, &sources, &relation).unwrap();
+        let folded = crate::core::transform::fold_effect_literal_primitives(&identity).unwrap();
+        super::validate_effect_modules_family(folded, &sources, &relation).unwrap();
+    }
+
+    #[test]
+    fn catalogued_monomorphic_nested_sources_reject_same_typed_global_leaves() {
+        for rebuild in 0..3 {
+            let fixture = LinkedCoreValidationFixture::compile(
+                "pub seed : Unit -> Unit\nseed value = value\n",
+                concat!(
+                    "type Wrap<A> = Wrap(A)\n",
+                    "interface Leaf<A> {\nleaf : A -> A\n}\n",
+                    "interface Base<A> {\nbase : A -> A\n}\n",
+                    "interface Convert<A> {\nconvert<B> : (A, B) -> A\n}\n",
+                    "impl Leaf<Int> {\nleaf value = value\n}\n",
+                    "impl<A> Base<Wrap<A>> where Leaf<A> {\nbase (Wrap value) = Wrap (leaf value)\n}\n",
+                    "impl<A> Convert<Wrap<Wrap<A>>> where Base<Wrap<A>> {\nconvert (Wrap value, ignored) = Wrap (base value)\n}\n",
+                    "fake : Int -> Int\nfake value = value\n",
+                    "main : Unit -> Wrap<Wrap<Int>>\nmain () = {\nlet _ = fake 0\nconvert (Wrap (Wrap 42), true)\n}\n",
+                ),
+                &[],
+            );
+            let LinkedCoreValidationFixture {
+                directory,
+                graph,
+                mut program,
+                module_sources,
+                globals: _,
+            } = fixture;
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            Validator::new_modules(&program, &sources, &module_sources)
+                .unwrap()
+                .validate_method_evidence_authority()
+                .expect("catalogued monomorphic leaf uses concrete source authentication");
+            if rebuild != 0 {
+                let validated = validate_modules(program, &sources, &module_sources).unwrap();
+                program = if rebuild == 1 {
+                    identity_traversal(&validated).unwrap()
+                } else {
+                    fold_literal_primitives(&validated).unwrap()
+                };
+            }
+            let leaf = program
+                .method_evidence
+                .concrete_sources()
+                .iter()
+                .find(|source| {
+                    source.head_arguments.is_empty()
+                        && source.prerequisites.is_empty()
+                        && program
+                            .method_evidence
+                            .method(source.implementation.method())
+                            .is_some_and(|method| method.parameters.is_empty())
+                })
+                .expect("nested leaf remains catalogued and monomorphic")
+                .binder;
+            let leaf_index = program
+                .nodes
+                .iter()
+                .position(|node| {
+                    matches!(node.kind,
+                PureExprKind::Variable(variable) if variable.binder() == leaf)
+                })
+                .unwrap();
+            let fake_index = program.nodes.iter().position(|node| matches!(node.kind,
+                PureExprKind::Variable(variable) if matches!(variable.binder(), BinderId::Resolved { .. })
+                    && crate::types::same_type(&node.ty, &program.nodes[leaf_index].ty))).unwrap();
+            let leaf_kind = program.nodes[leaf_index].kind.clone();
+            program.nodes[leaf_index].kind = program.nodes[fake_index].kind.clone();
+            program.nodes[fake_index].kind = leaf_kind;
+            let authority = Validator::new_modules(&program, &sources, &module_sources)
+                .unwrap()
+                .validate_method_evidence_authority()
+                .expect_err(
+                    "exact concrete-source authentication rejects the ordinary global leaf",
+                );
+            assert_eq!(authority.reason, ValidationReason::ApplicationType);
+            assert!(
+                validate_modules(program, &sources, &module_sources).is_err(),
+                "rebuild {rebuild} must retain exact leaf identity"
+            );
+            drop(directory);
+        }
     }
 
     #[test]
@@ -15995,6 +17410,68 @@ mod tests {
             .expect_err("a forged complete row argument must be rejected");
         assert_eq!(error.reason(), ValidationReason::TypeOperation);
         assert_eq!(error.node(), Some(application));
+    }
+
+    #[test]
+    fn effect_abstraction_shape_scan_caches_shared_suffixes_with_exact_work() {
+        const DEPTH: usize = 4096;
+        const ROOTS: usize = 32;
+        let file = source();
+        let node_origin = origin(&file);
+        let mut builder = crate::core::EffectCoreBuilder::with_effect_registry(Arc::new(
+            crate::resolved::ResolvedRegistry::default(),
+        ));
+        let unit = builder.unit(Type::Unit, node_origin.clone()).unwrap();
+        let parameter = builder.binder(Type::Unit, node_origin.clone()).unwrap();
+        let ty = Type::Function(Box::new(Type::Unit), Box::new(Type::Unit));
+        let mut body = builder
+            .function(parameter, unit, ty.clone(), node_origin.clone())
+            .unwrap();
+        for _ in 0..DEPTH {
+            body = builder
+                .type_application(body, vec![Type::Unit], ty.clone(), node_origin.clone())
+                .unwrap();
+        }
+        let mut root = body;
+        for index in 0..ROOTS {
+            let parameter = crate::types::TypeVariableId::generated(index as u32);
+            root = builder
+                .type_abstraction(
+                    vec![(parameter, Kind::Type)],
+                    body,
+                    Type::Forall(Box::new([(parameter, Kind::Type)]), Box::new(ty.clone())),
+                    node_origin.clone(),
+                )
+                .unwrap();
+        }
+        let program = builder.finish(root).unwrap();
+        let measured = Validator::new(&program, &[&file]);
+        measured
+            .validate_effect_abstraction_shapes(&HashSet::new())
+            .unwrap();
+        let required = measured.type_work.get();
+        assert_eq!(required, 4 * DEPTH + 2 * ROOTS + 4);
+        let short = Validator::new(&program, &[&file]);
+        short
+            .type_work
+            .set(CORE_VALIDATION_TYPE_WORK_LIMIT - required + 1);
+        assert_eq!(
+            short
+                .validate_effect_abstraction_shapes(&HashSet::new())
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Resource
+        );
+        for _ in 0..2 {
+            let exact = Validator::new(&program, &[&file]);
+            exact
+                .type_work
+                .set(CORE_VALIDATION_TYPE_WORK_LIMIT - required);
+            exact
+                .validate_effect_abstraction_shapes(&HashSet::new())
+                .unwrap();
+            assert_eq!(exact.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+        }
     }
 
     #[test]

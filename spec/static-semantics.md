@@ -1100,7 +1100,8 @@ binder and cannot be placed in a tuple, constructor, argument, result,
 local binding, scheme, or stored function body.
 
 Discard permission is distinct from duplication permission. Ordinary values
-and their stored closure captures are unrestricted. The hidden continuation
+and their stored closure captures are duplicable, subject to the resource
+lifetime rules below. The hidden continuation
 capability is nonduplicable and nonescaping. A captured segment cannot be
 discarded while it carries another clause's live capability, including an
 obligation nested inside another captured segment. A consumed capability adds
@@ -1124,7 +1125,7 @@ coincide; a proof cannot assume they remain distinct. Handler matching after
 specialization must retain that possibility. Recursive analysis must finish
 before publishing a permission. An unknown higher-order callee or open row
 rejects discard when the relevant request's obligations cannot be proved
-absent; this uncertainty alone does not reject resume-only code. There are no
+absent; this uncertainty alone does not reject resource-free resume-only code. There are no
 source capture annotations or capture-polymorphic function types.
 
 An unsafe or unproved discard has type-phase reason `effect.discard-unsafe`,
@@ -1144,6 +1145,105 @@ consumption and barriers. `written_duplicate_effect_row_has_exact_reason_code`
 checks `effect.duplicate`, while
 `effect_examples_have_exact_observations_and_reasons` checks the complete
 handled example plus `entry.main-effects` and `effect.resume-not-consumed`.
+
+## Scoped cells and resource dependencies
+
+The compiler-owned `@builtin.cell` module supplies one sealed API. The import
+alias is chosen by the program; the following names denote the defining
+identities, not privileged source spellings.
+
+| Name | Contract |
+| --- | --- |
+| `Handle<R>` | Opaque type constructor of kind `Type -> Type`; cell access, with no source constructor. |
+| `Provider<R>` | Exact sealed interface relation introduced only by acquisition. |
+| `Ops<R>` | Effect with `read : Handle<R> -> Int` and `write : (Handle<R>, Int) -> Unit`. |
+| `read` | Method `Handle<R> -> Int ! {Ops<R>}` requiring `Provider<R>`. |
+| `write` | Method `(Handle<R>, Int) -> Unit ! {Ops<R>}` requiring `Provider<R>`. |
+
+In `resource cell<R> c = initializer { body }`, the initializer checks as `Int`
+in the preceding scope. Its effects remain outward. The body checks with a
+fresh rigid kind-`Type` identity `R`, ordinary value `c : Handle<R>`, exact
+`Provider<R>` evidence and a local interpreter for `Ops<R>`. The resource
+expression has the body's value type. Its outward row is the union of the
+initializer row and the body row after removing exactly `Ops<R>`; other
+instances remain outward. Ordinary kind, type, row and structural continuation
+checks precede resource dependency checking.
+
+The identity cannot unify with an enclosing abstract parameter or another
+acquisition's identity. The result type, outward row, escaping schemes and
+retained evidence must not expose it. Source `impl` and `with` cannot supply
+the sealed provider relation, but ordinary generic requirements may require
+and forward it. Its generated methods request the exact cell effect; ordinary
+exact source handlers retain lexical precedence without acquiring authority
+to construct a handle or introduce provider evidence.
+
+The scope owns release. A handle is duplicable access, not a separate release
+owner. Aliases, aggregate fields, constructor transport, ordinary and imported
+helpers, and repeated calls of capturing closures are permitted while their
+owner remains live. Reading copies an `Int`; writing changes the cell and
+returns `Unit`. Neither operation transfers ownership.
+
+Inference tracks stored resource dependencies separately from request-carried
+continuation obligations. These dependencies include actual retained handles,
+callable captures, selected evidence methods and resource-indexed operation
+metadata. They propagate through aliases, patterns, aggregate projections,
+helpers, factories, recursive groups and polymorphic type and row
+instantiation. An identity-free function result type does not erase a stored
+dependency. An unused implementation environment entry does not by itself
+make a constant closure resource-dependent.
+
+A normally returning resource body must produce a value with no dependency on
+the closing acquisition. An inner scope may return a dependency on a still-live
+outer acquisition. Copied integers and closures retaining only those copies
+may escape. Dependencies follow selected fields and actual calls; unrelated
+fields and uncalled methods do not become dependencies merely because their
+types match. Strict expressions publish a result only if their required
+children complete normally.
+
+The same rule covers operation operands. A source handler outside an
+acquisition cannot receive a value dependent on that acquisition, even if the
+resource body's eventual result is dependency-free. This applies to hidden
+closure and evidence dependencies as well as explicit handles. Each owner is
+checked separately: an outer-dependent payload may cross an unrelated inner
+scope to a handler still inside its owner. The trusted interpreter at its own
+resource boundary is an admitted recipient. Resource-free payloads may cross
+to outer handlers, which may resume the captured scope.
+
+Capture retains the resource scope's completion obligation. Discard is unsafe
+if it abandons that scope or skips its required completion, including when the
+affected owner lies outside the immediate captured segment. Discard confined
+inside a resource scope remains permitted when all surrounding completion
+obligations are preserved. Normal completion releases inner scopes before
+outer scopes. Divergence remains divergence; checking does not prove eventual
+release or introduce a cleanup path.
+
+Resource analysis runs even without a discard expression. It is finite and
+conservative: unknown relevant higher-order behavior rejects escape or
+abandonment when absence of a dependency cannot be proved. Known helper,
+closure, import and row abstractions retain their inferred relationships;
+they are not rejected merely for crossing an abstraction boundary. There are
+no source lifetime, borrow or capture-polymorphism annotations.
+
+A resource escape reports `type.resource-escape` at the escaping expression,
+with acquisition and causal capture/call labels where known. Unsafe discard
+keeps `effect.discard-unsafe` and relates the live resource obligation.
+Ordinary syntax, resolution, kind, type and row failures retain precedence.
+Invalid retained origin, identity, owner or provider facts are internal
+validation failures, not alternative source authority.
+
+Resource binder retention, inferred value and control relationships, exact
+row contexts, summary admission and escape queries charge their existing
+owning syntax, module, constraint, type, Core-construction and Core-validation
+ledgers. Every proportional scan and retained collection charges before its
+work or retention, including nullary effect instances and row lacks facts.
+Exhaustion publishes no partial checked module or permission; ownership and
+failure disposal are iterative, and a fresh sufficient budget permits retry.
+
+This mechanism adds no general resource declarations, manual release,
+acquisition/destructor callbacks, ownership transfer, existential package,
+foreign resource, abort, exception, cancellation, suspension or general
+cleanup. Local `newtype` keeps its separate erasure and escape rules; it does
+not acquire a resource or its sealed authority.
 
 ## Interfaces and constrained schemes
 

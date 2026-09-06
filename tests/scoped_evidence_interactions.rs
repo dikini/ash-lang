@@ -1161,6 +1161,125 @@ main () = match check(Box(42)) {
 }
 
 #[test]
+fn exported_generic_factory_keeps_nested_lexical_nominals_through_public_routes() {
+    for entry in [
+        "import factory (make)\nmain : Unit -> Int\nmain () = make(42)()\n",
+        "import facade (build)\nmain : Unit -> Int\nmain () = build(42)()\n",
+        "import left as Left\nimport right as Right\nmain : Unit -> Int\nmain () = Left.build(20)() + Right.build(22)()\n",
+    ] {
+        let fixture = Fixture::new(entry);
+        let directory = fixture.0.parent().unwrap();
+        fs::write(
+            directory.join("factory.ash"),
+            r#"effect Hidden {
+    ask : Unit -> Int
+}
+pub make<A> : A -> (Unit -> A)
+make value = {
+    let unused : Unit -> Int !{Hidden} = fn(ignored) {
+        42
+    }
+    newtype Outer = Outer(A)
+    newtype Inner = Inner(Outer)
+    let saved = Inner(Outer(value))
+    fn(ignored) {
+        match saved {
+            Inner(Outer(result)) => result
+        }
+    }
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            directory.join("facade.ash"),
+            "pub import factory (make as build)\n",
+        )
+        .unwrap();
+        fs::write(directory.join("left.ash"), "pub import facade (build)\n").unwrap();
+        fs::write(directory.join("right.ash"), "pub import facade (build)\n").unwrap();
+        let observation = ash::driver::run_path(ash::driver::RunConfiguration {
+            entry: fixture.0.clone(),
+            roots: ModuleRoots::empty(),
+        })
+        .expect("the factory's internal lexical types must stay in its capture graph");
+        assert_eq!(observation.value_display(), "42");
+    }
+}
+
+#[test]
+fn imported_implementation_factory_keeps_its_lexical_capture_types() {
+    let fixture = Fixture::new(
+        "import factory (Factory, create, impl Factory)\nmain : Unit -> Int\nmain () = create()()\n",
+    );
+    fs::write(
+        fixture.0.parent().unwrap().join("factory.ash"),
+        r#"effect Hidden {
+    ask : Unit -> Int
+}
+pub interface Factory<A> {
+    create : A -> (Unit -> Int)
+}
+pub impl Factory<Unit> {
+    create () = {
+        let unused : Unit -> Int !{Hidden} = fn(ignored) {
+            42
+        }
+        newtype Token = Token(Int)
+        let saved = Token(42)
+        fn(ignored) {
+            match saved {
+                Token(value) => value
+            }
+        }
+    }
+}
+"#,
+    )
+    .unwrap();
+    let observation = ash::driver::run_path(ash::driver::RunConfiguration {
+        entry: fixture.0.clone(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect("implementation capture metadata must preserve internal lexical types");
+    assert_eq!(observation.value_display(), "42");
+}
+
+#[test]
+fn lexical_factory_wrapper_does_not_hide_a_resource_dependency() {
+    let fixture = Fixture::new("import factory (make)\nmain : Unit -> Int\nmain () = make()()\n");
+    fs::write(
+        fixture.0.parent().unwrap().join("factory.ash"),
+        r#"import @builtin.cell as Cell
+pub make : Unit -> (Unit -> Int)
+make () = resource cell<R> c = 42 {
+    newtype Saved = Saved(Unit -> Int)
+    let get : Unit -> Int = fn(ignored) {
+        handle (Cell.read c) with Cell.Ops<R> {
+            read value => resume 42
+            write value => resume ()
+        }
+    }
+    let saved = Saved(get)
+    let later : Unit -> Int = fn(ignored) {
+        match saved {
+            Saved(get) => get()
+        }
+    }
+    later
+}
+"#,
+    )
+    .unwrap();
+    let failure = ash::driver::run_path(ash::driver::RunConfiguration {
+        entry: fixture.0.clone(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect_err("internal lexical types must not erase retained resource ownership");
+    assert_eq!(failure.reason_code(), "type.resource-escape");
+}
+
+#[test]
 fn exported_factory_transfers_a_closure_without_interface_evidence() {
     let fixture = Fixture::new("import factory (make)\nmain : Unit -> Int\nmain () = make()()\n");
     fs::write(

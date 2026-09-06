@@ -543,6 +543,37 @@ pub(crate) struct PendingEvidencePublication {
 }
 
 impl PendingEvidencePublication {
+    pub(crate) fn capture_selection(
+        &self,
+        slot: usize,
+        method: Option<MethodId>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(&EvidenceSelection, usize), SelectionFailure> {
+        budget
+            .charge(self.occurrences.len())
+            .map_err(|()| SelectionFailure::TypeResource)?;
+        let occurrence = self
+            .occurrences
+            .iter()
+            .find(|occurrence| {
+                occurrence
+                    .slot
+                    .as_ref()
+                    .is_some_and(|candidate| candidate.storage_id() == slot)
+            })
+            .ok_or(SelectionFailure::InvalidState)?;
+        if occurrence.checked_method != method {
+            return Err(SelectionFailure::InvalidState);
+        }
+        Ok((
+            occurrence
+                .selection
+                .as_ref()
+                .ok_or(SelectionFailure::InvalidState)?,
+            occurrence.method_arguments.len(),
+        ))
+    }
+
     pub(crate) fn contains_expected(
         &self,
         slot: &crate::interface::EvidenceSlot,
@@ -727,6 +758,11 @@ impl EvidenceSelector {
         constraint_work: &mut InterfaceConstraintBudget,
         type_work: &mut TypeWorkBudget,
     ) -> Result<(), SelectionFailure> {
+        if let Some(api) = crate::resolved::CellApi::for_module(fact.id.module())
+            && !api.interface(fact)
+        {
+            return Err(SelectionFailure::InvalidState);
+        }
         if fact.parameters.is_empty() {
             return Err(SelectionFailure::InvalidState);
         }
@@ -967,6 +1003,9 @@ impl EvidenceSelector {
         type_work: &mut TypeWorkBudget,
     ) -> Result<(), SelectionFailure> {
         let fact = &imported.fact;
+        if fact.interface().module().is_builtin_cell() {
+            return Err(SelectionFailure::InvalidState);
+        }
         if self.implementation_indices.contains_key(&fact.id) {
             return Err(SelectionFailure::InvalidState);
         }
@@ -1110,6 +1149,7 @@ impl EvidenceSelector {
             .charge(resolved.prerequisites.len().saturating_add(1))
             .map_err(|()| SelectionFailure::ConstraintResource)?;
         if resolved.id != checked.id
+            || checked.interface().module().is_builtin_cell()
             || resolved.head.interface.id != checked.interface()
             || resolved.head.arguments.len() != checked.arguments().len()
             || !resolved.prerequisite_only_parameters.is_empty()
@@ -7015,6 +7055,7 @@ mod tests {
                     }]
                     .into_boxed_slice(),
                     methods: vec![CheckedImplementationMethodFact {
+                        capture: crate::core::capture::CaptureValueSummary::default(),
                         id: implementation_method,
                         method,
                         binder: method_binder,

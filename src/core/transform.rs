@@ -38,6 +38,9 @@ impl TransformFamily for PureOperationFamily {
 
 impl TransformFamily for EffectOperationFamily {
     fn collect_operation_binders(kind: &Self::Kind, binders: &mut Vec<crate::resolved::BinderId>) {
+        if let EffectExprKind::Operation(EffectOperation::Resource(resource)) = kind {
+            binders.push(resource.handle.id());
+        }
         if let EffectExprKind::Operation(EffectOperation::Handler(handler)) = kind {
             for clause in handler.clauses() {
                 binders.extend(clause.pattern().binder_iter().map(|binder| binder.id()));
@@ -56,6 +59,25 @@ impl TransformFamily for EffectOperationFamily {
         let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
         let effects = builder.clone_effect_row_for_rebuild(expression.effects())?;
         match operation {
+            EffectOperation::Resource(resource) => {
+                let handle_type = builder.clone_type_for_rebuild(resource.handle.ty())?;
+                let handle = builder.resolved_binder(
+                    resource.handle.id(),
+                    handle_type,
+                    resource.handle.origin().clone(),
+                )?;
+                builder.resource_scope(
+                    Box::new(super::effect::ResourceScopeNode {
+                        acquisition: resource.acquisition,
+                        handle,
+                        initializer: remap(remapped, resource.initializer)?,
+                        body: remap(remapped, resource.body)?,
+                    }),
+                    ty.into_inner(),
+                    effects,
+                    expression.origin.clone(),
+                )
+            }
             EffectOperation::Request(node) => {
                 let effect = clone_effect_instance(builder, node.effect())?;
                 builder.request(

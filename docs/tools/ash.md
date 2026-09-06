@@ -22,6 +22,14 @@ distinct. The executable canonicalizes configured roots and loaded sources,
 rejects targets outside their owning roots, and loads each canonical source
 once.
 
+`import @builtin.cell as Cell` loads the compiler-owned cell API without a
+`--root` option or filesystem lookup. `builtin` cannot be configured as a root:
+`--root builtin=path` reports `invocation.reserved-root` before inspecting
+configured paths. Only `@builtin.cell` exists beneath this root; another path
+reports `module.unknown-builtin`. Ordinary aliases, targeted imports and
+facade re-exports preserve the API's identity, but a module that acquires a
+resource must directly import `@builtin.cell`.
+
 ## Complete module-tree example
 
 Given this tree:
@@ -139,6 +147,24 @@ Its exact standard output is also `42 : Int` followed by a newline. Effect rows
 are checked computation requirements, not an additional success-output field;
 the executable prints the resulting value and its ordinary value type.
 
+The executable test `resource_cell_documentation_example_has_exact_cli_output`
+checks this complete resource program:
+
+```ash
+import @builtin.cell as Cell
+
+main : Unit -> Int
+main () = resource cell<R> c = 41 {
+    let _ = Cell.write (c, 42)
+    Cell.read c
+}
+```
+
+Run it with `ash entry.ash`, without a builtin root option. It prints
+`42 : Int` followed by a newline and releases the cell before observation.
+Handles and captured cell access cannot escape the scope; the returned integer
+is an ordinary copy.
+
 Global functions have module-wide recursive scope. The executable test
 `tool_recursive_example_has_exact_cli_observation` runs this mutually recursive
 module, in which the earlier equational definition refers forward to the later
@@ -190,8 +216,10 @@ Its exact standard output is:
 
 The global signature quantifies `A` implicitly. Each use of `id` and `Some`
 instantiates its outer scheme. The unannotated local anonymous function is the
-only local initializer form that generalizes. These type operations are erased
-before producing runtime values.
+only local initializer form that generalizes. Pure execution erases these type
+operations. Effect execution retains lexical instantiation so a generic
+operation request matches the corresponding concrete handler; no type becomes
+a source-inspectable runtime value.
 
 Declaration parameters may state monomorphic kinds. `Type -> Type` admits a
 unary type constructor such as bare `Option`; omitted kind annotations remain
@@ -238,9 +266,9 @@ Its exact standard output is:
 ```
 
 Selected interface evidence flows as ordinary function values and applications.
-It adds no new runtime value class or interface-specific state. Kinds and scheme
-instantiation add no runtime state; the existing evaluator erases their Core
-type operations before producing the observation. They add no CLI
+It adds no interface-specific runtime state. Pure execution erases scheme
+instantiation; Effect execution retains ordinary lexical type/row instantiation
+for exact operation matching. Neither adds a source-inspectable type value, CLI
 configuration, runtime lookup, or output field.
 
 ### Method-local type parameters
@@ -306,8 +334,8 @@ The exact output is:
 
 Method parameters add no command-line option, runtime configuration, registry,
 dispatch, or output field. Their schemes and authentication records are
-compiler facts; generated type operations erase through the existing evaluator
-rules.
+compiler facts. Pure execution erases generated type operations; Effect
+execution retains lexical instantiation without a runtime interface registry.
 
 An absent method parameter list keeps the predecessor meaning: it binds no
 method-local parameter. This complete module is rejected with
@@ -395,7 +423,8 @@ a stable reason code followed by a plain-text explanation and causal source
 labels.
 
 Source-caused loading failures include `module.unknown-root`,
-`module.not-found`, `module.path-escape`, and `module.import-cycle`. The primary
+`module.not-found`, `module.path-escape`, `module.unknown-builtin`, and
+`module.import-cycle`. The primary
 label identifies the import that caused the failure. Syntax, resolution,
 access, interface, implementation, constraint, type, pattern, coverage, and
 entry-contract rejections also use status `1`. Interface-related source reasons
@@ -481,6 +510,13 @@ The effect machine reports cumulative captured-control exhaustion as
 `runtime.captured-control-capacity`. Reaching an impossible request or resume
 state after validated Core is `runtime.invalid-control-state`. Both are
 runtime-internal status-`2` failures, not source outcomes.
+
+Resource-dependent escape reports `type.resource-escape` with status `1` and
+labels the escaping expression and known acquisition/capture causes. Discard
+that abandons or skips resource completion reports `effect.discard-unsafe`.
+The effect machine's live-cell capacity failure is `runtime.resource-capacity`,
+an internal status-`2` failure. It publishes no partial acquisition. There is
+no source-level allocation-failure branch or use-after-release outcome.
 
 An output write or flush failure also exits with status `2` and attempts to
 report `internal.output-write` on standard error. Standard-output bytes accepted

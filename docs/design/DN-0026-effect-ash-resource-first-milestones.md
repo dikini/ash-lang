@@ -45,12 +45,15 @@ effect kernel, as described
 by the [branch specification](../../spec/README.md). Local declarations have
 stable lexical identities and permit identity-free closure escape; they do
 not establish identities per execution. The wider milestone remains separate
-from integration into `main`. The remaining gaps are:
+from integration into `main`. The completed safe-cell product checkpoint adds
+acquisition-local runtime activation, sealed provider relationships, reusable
+handles and stored-dependency checking, with scope-owned release on admitted
+exits. Its [evidence](effect-ash/resource-scope-evidence.md) retains full
+verification and reviews; local integration follows. The remaining gaps are:
 
-- runtime-established fresh identities;
-- resource acquisition scopes, identity-indexed resource values, ownership or
-  usage checking, and deterministic cleanup;
-- runtime provider relationships and a checked foreign-provider boundary;
+- general resource/provider declarations and ownership-transfer mechanisms;
+- reliable cleanup across the later admitted failure and abandonment paths;
+- a checked foreign-provider boundary;
 - runtime hook registration, publication, and registration lifetimes;
 - suspension, asynchronous hook execution, concurrency, cancellation, and
   replay-safe multi-shot continuations; and

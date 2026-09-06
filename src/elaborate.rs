@@ -118,6 +118,9 @@ pub enum TypeReason {
     NewtypeRecursiveRepresentation,
     /// A local nominal identity occurs in the outward computation.
     LocalNominalEscape,
+    /// A resource-owned rigid identity occurs outside its acquisition.
+    ResourceEscape,
+    /// Stored resource dependency proof is not available in this increment.
     /// An effect-row union has no unqualified principal result.
     AmbiguousEffectRow,
     /// A handler body does not request the exact handled instance.
@@ -343,6 +346,7 @@ impl fmt::Display for TypeReason {
                 formatter.write_str("newtype.recursive-representation")
             }
             Self::LocalNominalEscape => formatter.write_str("type.local-nominal-escape"),
+            Self::ResourceEscape => formatter.write_str("type.resource-escape"),
             Self::AmbiguousEffectRow => formatter.write_str("effect.row-union-ambiguous"),
             Self::MissingHandledEffect => formatter.write_str("effect.handler-missing-input"),
             Self::HandlerCoverage => formatter.write_str("effect.handler-coverage"),
@@ -1786,6 +1790,8 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     row_inference_solutions: RowInferenceSolutionMap,
     authenticated_inference_solutions: HashSet<InferenceVariableId>,
     deferred_local_nominal_escapes: Vec<(NominalTypeId, InferenceVariableId, Span)>,
+    deferred_resource_escapes: Vec<(TypeVariableId, InferenceVariableId, Span, Span)>,
+    active_acquisitions: Vec<crate::resolved::CellAcquisition>,
     monomorphic_recursive: HashSet<BinderId>,
     current_implementation_method: Option<CurrentImplementationMethod>,
     method_binders: HashMap<MethodId, BinderId>,
@@ -1799,6 +1805,10 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     // Addresses identify only immutably borrowed source occurrences during one
     // module synthesis. They are never dereferenced or retained in Core.
     lexical_capture_uses: Vec<LexicalCaptureUse>,
+    method_capture_uses: Vec<(NodeId, usize, MethodId)>,
+    method_capture_binders: Vec<(crate::interface::LexicalEvidenceId, MethodId, BinderId)>,
+    global_capture_uses: Vec<(NodeId, RequirementId, usize)>,
+    implementation_capture_roots: Vec<(BinderId, NodeId)>,
     expected_effect_rows: Vec<EffectRow>,
     next_handler: u32,
 }
@@ -1924,6 +1934,9 @@ impl CoreLoweringFamily for EffectOperationFamily {
         operation: EffectOperation,
     ) -> Result<NodeId, BuildError> {
         match operation {
+            EffectOperation::Resource(resource) => {
+                builder.resource_scope(resource, ty, effects, origin)
+            }
             EffectOperation::Request(request) => {
                 let (effect, operation, operand) = request.into_parts();
                 builder.request(effect, operation, operand, ty, effects, origin)
@@ -2041,6 +2054,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_solutions: RowInferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
+            deferred_resource_escapes: Vec::new(),
+            active_acquisitions: Vec::new(),
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
             method_binders: HashMap::new(),
@@ -2052,6 +2067,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
             lexical_capture_uses: Vec::new(),
+            method_capture_uses: Vec::new(),
+            method_capture_binders: Vec::new(),
+            global_capture_uses: Vec::new(),
+            implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
         }
@@ -2134,6 +2153,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_solutions: RowInferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
+            deferred_resource_escapes: Vec::new(),
+            active_acquisitions: Vec::new(),
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
             method_binders: HashMap::new(),
@@ -2145,6 +2166,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             base_context,
             active_resumes: Vec::new(),
             lexical_capture_uses: Vec::new(),
+            method_capture_uses: Vec::new(),
+            method_capture_binders: Vec::new(),
+            global_capture_uses: Vec::new(),
+            implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
         })
@@ -2194,6 +2219,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_solutions: RowInferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
+            deferred_resource_escapes: Vec::new(),
+            active_acquisitions: Vec::new(),
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
             method_binders: HashMap::new(),
@@ -2205,6 +2232,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
             lexical_capture_uses: Vec::new(),
+            method_capture_uses: Vec::new(),
+            method_capture_binders: Vec::new(),
+            global_capture_uses: Vec::new(),
+            implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
         };
@@ -2635,6 +2666,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_solutions: RowInferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
+            deferred_resource_escapes: Vec::new(),
+            active_acquisitions: Vec::new(),
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
             method_binders: HashMap::new(),
@@ -2646,6 +2679,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
             lexical_capture_uses: Vec::new(),
+            method_capture_uses: Vec::new(),
+            method_capture_binders: Vec::new(),
+            global_capture_uses: Vec::new(),
+            implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
         })
@@ -2767,7 +2804,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         program: &ValidatedInterfaceProgram,
     ) -> Result<TypedNode, TypeError> {
-        self.lexical_capture_uses.clear();
+        self.clear_capture_uses();
         if self.state == ElaboratorState::Poisoned
             || self.purpose != ElaborationPurpose::FinalSynthesis
             || self.final_root.is_some()
@@ -2775,7 +2812,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             return Err(invalid_state());
         }
         let result = self.elaborate_module_program(program);
-        self.lexical_capture_uses.clear();
+        self.clear_capture_uses();
         match result {
             Ok(typed) => {
                 self.final_root = Some(typed.node);
@@ -2794,7 +2831,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         program: &ValidatedInterfaceProgram,
     ) -> Result<TypedNode, TypeError> {
-        self.lexical_capture_uses.clear();
+        self.clear_capture_uses();
         if self.state == ElaboratorState::Poisoned
             || self.purpose != ElaborationPurpose::FinalSynthesis
             || self.final_root.is_some()
@@ -2805,7 +2842,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             return Err(invalid_state());
         }
         let result = self.elaborate_module_program(program);
-        self.lexical_capture_uses.clear();
+        self.clear_capture_uses();
         match result {
             Ok(typed) => {
                 self.final_root = Some(typed.node);
@@ -2918,8 +2955,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             span: module.span(),
         };
         self.elaborate_result(&result, &mut context)?;
-        if F::EFFECTS {
-            self.zonk_builder_types().map_err(TypeError::Internal)?;
+        let publication = self.prepare_evidence_publication()?;
+        self.zonk_builder_types().map_err(TypeError::Internal)?;
+        if self.capture_publication_required(module, checked_schemes)? {
             self.type_work
                 .charge(globals.len())
                 .map_err(|()| type_resource())?;
@@ -2932,25 +2970,47 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .iter()
                     .map(|global| (global.binder.id(), global.initializer)),
             );
+            self.type_work
+                .charge(self.implementation_capture_roots.len())
+                .map_err(|()| type_resource())?;
+            roots
+                .try_reserve(self.implementation_capture_roots.len())
+                .map_err(|_| type_resource())?;
+            roots.extend_from_slice(&self.implementation_capture_roots);
             let mut imports = Vec::new();
             for global in module.imported_facts().globals() {
                 self.type_work.charge(1).map_err(|()| type_resource())?;
                 imports.try_reserve(1).map_err(|_| type_resource())?;
                 imports.push((global.binder, &global.capture));
             }
+            for implementation in module.imported_facts().implementations() {
+                for method in &implementation.fact.methods {
+                    self.type_work.charge(1).map_err(|()| type_resource())?;
+                    imports.try_reserve(1).map_err(|_| type_resource())?;
+                    imports.push((method.binder, &method.capture));
+                }
+            }
+            let (method_routes, method_adapters) =
+                self.capture_method_routes(&publication, module, &facts.0)?;
             let captures = crate::core::capture::check_builder(
                 &self.builder,
                 &roots,
                 &imports,
                 F::capture_operation,
+                &method_routes,
+                &method_adapters,
                 &mut self.type_work,
             )
-            .map_err(capture_failure)?;
-            if roots.len() != checked_schemes.len() {
+            .map_err(|failure| capture_failure(failure, &mut self.type_work))?;
+            if globals.len() != checked_schemes.len() || captures.len() != roots.len() {
                 return Err(invalid_state());
             }
-            for (((binder, _), capture), scheme) in
-                roots.iter().zip(captures).zip(checked_schemes.iter_mut())
+            let mut captures = captures.into_iter();
+            for (((binder, _), capture), scheme) in roots
+                .iter()
+                .take(globals.len())
+                .zip(captures.by_ref())
+                .zip(checked_schemes.iter_mut())
             {
                 self.type_work.charge(1).map_err(|()| type_resource())?;
                 if scheme.binder != *binder {
@@ -2958,9 +3018,51 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 }
                 scheme.capture = capture;
             }
+            for fact in &mut facts.0 {
+                for method in &mut fact.methods {
+                    self.type_work.charge(1).map_err(|()| type_resource())?;
+                    method.capture = captures.next().ok_or_else(invalid_state)?;
+                }
+            }
+            if captures.next().is_some() {
+                return Err(invalid_state());
+            }
         }
-        let publication = self.prepare_evidence_publication()?;
         Ok((facts.into_boxed_slice(), publication))
+    }
+
+    fn capture_publication_required(
+        &mut self,
+        module: &ResolvedModule,
+        schemes: &[CheckedGlobalScheme],
+    ) -> Result<bool, TypeError> {
+        // Effect bodies still need their local proofs, and implementation
+        // methods may carry dependencies independently of exported globals.
+        if F::EFFECTS || !self.implementation_capture_roots.is_empty() {
+            return Ok(true);
+        }
+        self.type_work
+            .charge(schemes.len())
+            .map_err(|()| type_resource())?;
+        let mut required = false;
+        for scheme in schemes {
+            let Some(candidate) = module.export_candidate().term(&scheme.spelling) else {
+                continue;
+            };
+            if candidate.source == crate::resolved::CandidateFactSource::Local {
+                if candidate.binder != scheme.binder
+                    || scheme.binder.module() != Some(module.module())
+                {
+                    return Err(invalid_state());
+                }
+                required = true;
+            } else if candidate.binder == scheme.binder {
+                return Err(invalid_state());
+            }
+        }
+        // A private Pure module has no portable-summary consumer. Whenever
+        // one exists, retain the complete graph, including private helpers.
+        Ok(required)
     }
 
     fn check_implementation_body(
@@ -3149,7 +3251,31 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 method.type_parameters(),
                 &checked_body.ty,
             )?;
+            let mut root = checked_body.node;
+            let parameters = F::project_parameters(&scheme.type_parameters, &mut self.type_work)
+                .map_err(|()| type_resource())?;
+            if !parameters.is_empty() {
+                let body_type = self.pure_core_type(&checked_body.ty)?;
+                let abstraction_type = retain_implementation_capture_type(
+                    body_type,
+                    &parameters,
+                    &mut self.type_work,
+                )?;
+                root = self.builder.type_abstraction(
+                    parameters,
+                    root,
+                    abstraction_type,
+                    presentation.clone(),
+                )?;
+            }
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            self.implementation_capture_roots
+                .try_reserve(1)
+                .map_err(|_| type_resource())?;
+            self.implementation_capture_roots
+                .push((checked_method.binder, root));
             method_facts.push(CheckedImplementationMethodFact {
+                capture: crate::core::capture::CaptureValueSummary::default(),
                 id: checked_method.id,
                 method: checked_method.method,
                 binder: checked_method.binder,
@@ -3395,6 +3521,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     }
 
     fn zonk_builder_types(&mut self) -> Result<(), ElaborationFailure> {
+        self.zonk_builder_types_since(None, true)
+    }
+
+    fn zonk_builder_types_since(
+        &mut self,
+        checkpoint: Option<crate::core::dialect::TypeRewriteCheckpoint>,
+        strict: bool,
+    ) -> Result<(), ElaborationFailure> {
         if self.builder.requires_type_rewrite() {
             let solutions = &self.inference_solutions;
             let inference_variables = &self.inference_variables;
@@ -3402,7 +3536,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let row_solutions = &self.row_inference_solutions;
             let type_work = RefCell::new(&mut self.type_work);
             self.builder.rewrite_types_and_rows(
-                None,
+                checkpoint,
                 |ty| {
                     zonk_core_type(
                         ty,
@@ -3411,7 +3545,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         inference_variables,
                         authenticated_solutions,
                         &mut type_work.borrow_mut(),
-                        true,
+                        strict,
                     )
                 },
                 |row| {
@@ -3422,7 +3556,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         inference_variables,
                         authenticated_solutions,
                         &mut type_work.borrow_mut(),
-                        true,
+                        strict,
                     )
                 },
             )?;
@@ -4135,6 +4269,289 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
+    fn clear_capture_uses(&mut self) {
+        self.lexical_capture_uses.clear();
+        self.method_capture_uses.clear();
+        self.method_capture_binders.clear();
+        self.global_capture_uses.clear();
+        self.implementation_capture_roots.clear();
+    }
+
+    fn capture_method_routes(
+        &mut self,
+        publication: &PendingEvidencePublication,
+        module: &ResolvedModule,
+        facts: &[CheckedImplementationFact],
+    ) -> Result<
+        (
+            Vec<crate::core::capture::MethodUse>,
+            Vec<crate::core::capture::MethodAdapter>,
+        ),
+        TypeError,
+    > {
+        use crate::core::capture::MethodUse;
+        let mut routes = Vec::new();
+        let mut adapters = Vec::new();
+        for index in 0..self.method_capture_uses.len() {
+            let (node, slot, method) = self.method_capture_uses[index];
+            let (selection, arguments) = publication
+                .capture_selection(slot, Some(method), &mut self.type_work)
+                .map_err(|failure| selection_failure(failure, None))?;
+            let targets = self.capture_selection_targets(
+                selection,
+                Some(method),
+                module,
+                facts,
+                &mut adapters,
+            )?;
+            let [(selected, target)] = targets.as_slice() else {
+                return Err(invalid_state());
+            };
+            if *selected != method {
+                return Err(invalid_state());
+            }
+            routes.try_reserve(1).map_err(|_| type_resource())?;
+            routes.push(MethodUse {
+                node,
+                target: *target,
+                method,
+                requirement: None,
+                arguments,
+            });
+        }
+        for index in 0..self.global_capture_uses.len() {
+            let (node, requirement, slot) = self.global_capture_uses[index];
+            let (selection, _) = publication
+                .capture_selection(slot, None, &mut self.type_work)
+                .map_err(|failure| selection_failure(failure, None))?;
+            for (method, target) in
+                self.capture_selection_targets(selection, None, module, facts, &mut adapters)?
+            {
+                routes.try_reserve(1).map_err(|_| type_resource())?;
+                routes.push(MethodUse {
+                    node,
+                    target,
+                    method,
+                    requirement: Some(requirement),
+                    arguments: 0,
+                });
+            }
+        }
+        Ok((routes, adapters))
+    }
+
+    fn capture_selection_targets(
+        &mut self,
+        selection: &EvidenceSelection,
+        requested: Option<MethodId>,
+        module: &ResolvedModule,
+        facts: &[CheckedImplementationFact],
+        adapters: &mut Vec<crate::core::capture::MethodAdapter>,
+    ) -> Result<Vec<(MethodId, crate::core::capture::MethodTarget)>, TypeError> {
+        use crate::core::capture::{MethodAdapter, MethodTarget};
+        let mut pending = Vec::new();
+        self.type_work
+            .charge(selection.node_count())
+            .map_err(|()| type_resource())?;
+        pending
+            .try_reserve(selection.node_count())
+            .map_err(|_| type_resource())?;
+        pending.push((selection.root(), false));
+        let mut values: HashMap<crate::interface::EvidenceNodeId, Vec<(MethodId, MethodTarget)>> =
+            HashMap::new();
+        values
+            .try_reserve(selection.node_count())
+            .map_err(|_| type_resource())?;
+        while let Some((node, build)) = pending.pop() {
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            if values.contains_key(&node) {
+                continue;
+            }
+            let selected = selection.node(node).ok_or_else(invalid_state)?;
+            if !build && let EvidenceNode::Implementation { prerequisites, .. } = selected {
+                self.type_work
+                    .charge(prerequisites.len() + 1)
+                    .map_err(|()| type_resource())?;
+                pending
+                    .try_reserve(prerequisites.len() + 1)
+                    .map_err(|_| type_resource())?;
+                pending.push((node, true));
+                pending.extend(prerequisites.iter().rev().map(|node| (*node, false)));
+                continue;
+            }
+            let mut targets = Vec::new();
+            let wanted = (node == selection.root()).then_some(requested).flatten();
+            match selected {
+                EvidenceNode::Lexical { methods, .. } | EvidenceNode::Abstract { methods, .. } => {
+                    self.type_work
+                        .charge(methods.len())
+                        .map_err(|()| type_resource())?;
+                    targets
+                        .try_reserve(methods.len())
+                        .map_err(|_| type_resource())?;
+                    for &method in methods {
+                        if wanted.is_some_and(|wanted| wanted != method) {
+                            continue;
+                        }
+                        let target = match selected {
+                            EvidenceNode::Lexical { source, .. } => {
+                                self.type_work
+                                    .charge(self.method_capture_binders.len())
+                                    .map_err(|()| type_resource())?;
+                                MethodTarget::Binder(
+                                    self.method_capture_binders
+                                        .iter()
+                                        .find(|(owner, candidate, _)| {
+                                            *owner == source && *candidate == method
+                                        })
+                                        .ok_or_else(invalid_state)?
+                                        .2,
+                                )
+                            }
+                            EvidenceNode::Abstract { requirement, .. } => {
+                                MethodTarget::Abstract(requirement)
+                            }
+                            _ => return Err(invalid_state()),
+                        };
+                        targets.push((method, target));
+                    }
+                }
+                EvidenceNode::Implementation {
+                    implementation,
+                    substitution,
+                    prerequisites,
+                    methods,
+                } => {
+                    let mut owner = None;
+                    for fact in facts.iter().chain(
+                        module
+                            .imported_facts()
+                            .implementations()
+                            .map(|imported| &imported.fact),
+                    ) {
+                        self.type_work.charge(1).map_err(|()| type_resource())?;
+                        if fact.id == implementation {
+                            owner = Some(fact);
+                            break;
+                        }
+                    }
+                    let owner = owner.ok_or_else(invalid_state)?;
+                    if owner.prerequisites.len() != prerequisites.len() {
+                        return Err(invalid_state());
+                    }
+                    self.type_work
+                        .charge(methods.len())
+                        .map_err(|()| type_resource())?;
+                    targets
+                        .try_reserve(methods.len())
+                        .map_err(|_| type_resource())?;
+                    for &method in methods {
+                        if wanted.is_some_and(|wanted| wanted != method.method()) {
+                            continue;
+                        }
+                        self.type_work
+                            .charge(owner.methods.len())
+                            .map_err(|()| type_resource())?;
+                        let fact = owner
+                            .methods
+                            .iter()
+                            .find(|fact| fact.id == method)
+                            .ok_or_else(invalid_state)?;
+                        if method.implementation() != implementation
+                            || fact.head_type_parameter_count != substitution.len()
+                            || fact.scheme.type_parameters.len() < substitution.len()
+                        {
+                            return Err(invalid_state());
+                        }
+                        let mut adapter = MethodAdapter {
+                            binder: fact.binder,
+                            head_arguments: Vec::new(),
+                            method_parameters: fact.scheme.type_parameters.len()
+                                - substitution.len(),
+                            prerequisites: Vec::new(),
+                            source: fact.span,
+                        };
+                        self.type_work
+                            .charge(substitution.len())
+                            .map_err(|()| type_resource())?;
+                        adapter
+                            .head_arguments
+                            .try_reserve(substitution.len())
+                            .map_err(|_| type_resource())?;
+                        for ((parameter, _), actual) in
+                            fact.scheme.type_parameters.iter().zip(substitution)
+                        {
+                            if *parameter != actual.parameter() {
+                                return Err(invalid_state());
+                            }
+                            adapter
+                                .head_arguments
+                                .push(self.clone_type(actual.argument())?);
+                        }
+                        for (requirement, node) in owner.prerequisites.iter().zip(prerequisites) {
+                            let supplied = values.get(node).ok_or_else(invalid_state)?;
+                            self.type_work
+                                .charge(supplied.len())
+                                .map_err(|()| type_resource())?;
+                            adapter
+                                .prerequisites
+                                .try_reserve(supplied.len())
+                                .map_err(|_| type_resource())?;
+                            adapter.prerequisites.extend(
+                                supplied
+                                    .iter()
+                                    .map(|(method, target)| (requirement.id, *method, *target)),
+                            );
+                        }
+                        self.type_work.charge(1).map_err(|()| type_resource())?;
+                        adapters.try_reserve(1).map_err(|_| type_resource())?;
+                        let target = MethodTarget::Adapter {
+                            value: adapters.len(),
+                            binder: fact.binder,
+                        };
+                        adapters.push(adapter);
+                        targets.push((method.method(), target));
+                    }
+                }
+            }
+            values.insert(node, targets);
+        }
+        values.remove(&selection.root()).ok_or_else(invalid_state)
+    }
+
+    fn record_capture_global(
+        &mut self,
+        binder: BinderId,
+        node: NodeId,
+        occurrence: &crate::resolved::ResolvedOccurrence,
+    ) -> Result<(), TypeError> {
+        if self.purpose != ElaborationPurpose::ModuleCheck || occurrence.evidence.is_empty() {
+            return Ok(());
+        }
+        let scheme = self
+            .selection
+            .as_ref()
+            .and_then(|selection| selection.scheme(binder))
+            .ok_or_else(invalid_state)?;
+        if scheme.requirements.len() != occurrence.evidence.len() {
+            return Err(invalid_state());
+        }
+        self.type_work
+            .charge(occurrence.evidence.len())
+            .map_err(|()| type_resource())?;
+        self.global_capture_uses
+            .try_reserve(occurrence.evidence.len())
+            .map_err(|_| type_resource())?;
+        self.global_capture_uses.extend(
+            scheme
+                .requirements
+                .iter()
+                .zip(&occurrence.evidence)
+                .map(|(requirement, slot)| (node, requirement.id, slot.storage_id())),
+        );
+        Ok(())
+    }
+
     fn prepare_evidence_publication(&mut self) -> Result<PendingEvidencePublication, TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck {
             return Err(invalid_state());
@@ -4436,6 +4853,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 core_ty,
                 occurrence.origin.clone(),
             )?;
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            self.method_capture_uses
+                .try_reserve(1)
+                .map_err(|_| type_resource())?;
+            self.method_capture_uses
+                .push((node, occurrence.evidence[0].storage_id(), method));
             let TypeFact {
                 ty: fact_ty,
                 provenance,
@@ -7271,10 +7694,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 let renamed =
                     substitute_fresh_type_variables_in_order(&wrapper, replacements, &mut work)
                         .map_err(|()| BuildError::TypeWorkExceeded)?;
-                let Type::EffectfulFunction(_, computation) = renamed else {
-                    unreachable!()
-                };
-                Ok(computation.effects)
+                match renamed {
+                    Type::Function(_, _) => Ok(EffectRow::empty()),
+                    Type::EffectfulFunction(_, computation) => Ok(computation.effects),
+                    other => {
+                        discard_type_iteratively(other);
+                        Err(BuildError::InvalidPayload)
+                    }
+                }
             },
         )?;
         Ok(())
@@ -7965,6 +8392,94 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
+    fn defer_resource_escape(
+        &mut self,
+        owner: TypeVariableId,
+        ty: &Type,
+        span: Span,
+        acquisition: Span,
+    ) -> Result<(), TypeError> {
+        let variables =
+            collect_unsolved_inference(ty, &mut self.type_work).map_err(|()| type_resource())?;
+        self.type_work
+            .charge(variables.len().checked_mul(4).ok_or_else(type_resource)?)
+            .map_err(|()| type_resource())?;
+        self.deferred_resource_escapes
+            .try_reserve(variables.len())
+            .map_err(|_| type_resource())?;
+        self.deferred_resource_escapes.extend(
+            variables
+                .into_iter()
+                .map(|variable| (owner, variable, span, acquisition)),
+        );
+        Ok(())
+    }
+
+    fn check_deferred_resource_escapes(&mut self) -> Result<(), TypeError> {
+        let mut escaped = None;
+        for index in 0..self.deferred_resource_escapes.len() {
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            let (owner, variable, span, acquisition) = self.deferred_resource_escapes[index];
+            let is_row = self
+                .inference_variables
+                .fact(variable, &mut self.type_work)
+                .map_err(inference_registry_error)?
+                .kind
+                == Kind::EffectRow;
+            let ty = if is_row {
+                self.type_work.charge(4).map_err(|()| type_resource())?;
+                let row = self.zonk_effect_row(&EffectRow::open(
+                    EffectRowVariable::inference(variable),
+                    Box::new([]),
+                ))?;
+                IterativeTypeOwner::new(Type::function_computation(
+                    Type::Unit,
+                    ComputationType::new(Type::Unit, row),
+                ))
+            } else {
+                IterativeTypeOwner::new(self.zonk(&Type::Inference(variable))?)
+            };
+            if type_contains_variable(&ty, owner, &mut self.constraint_work)
+                .map_err(|()| constraint_resource())?
+                && escaped.is_none_or(|(previous, _): (Span, Span)| {
+                    span.range().start() < previous.range().start()
+                })
+            {
+                escaped = Some((span, acquisition));
+            }
+        }
+        if let Some((span, acquisition)) = escaped {
+            return Err(self.resource_escape_failure(
+                span,
+                acquisition,
+                "this outward inference contains a resource identity",
+            ));
+        }
+        self.deferred_resource_escapes.clear();
+        Ok(())
+    }
+
+    fn resource_escape_failure(
+        &mut self,
+        span: Span,
+        acquisition: Span,
+        message: &str,
+    ) -> TypeError {
+        if self.constraint_work.charge(1).is_err() {
+            return constraint_resource();
+        }
+        let mut diagnostic =
+            Diagnostic::new(TypeReason::ResourceEscape, SourceLabel::new(span, message));
+        if diagnostic.related.try_reserve_exact(1).is_err() {
+            return constraint_resource();
+        }
+        diagnostic.related.push(SourceLabel::new(
+            acquisition,
+            "this resource is acquired here",
+        ));
+        TypeError::Source(Box::new(diagnostic))
+    }
+
     fn elaborate_result(
         &mut self,
         result_expression: &ResolvedExpr,
@@ -7978,6 +8493,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             context,
         )?);
         self.check_deferred_local_nominal_escapes()?;
+        self.check_deferred_resource_escapes()?;
         let (zonked_result, result_is_ambiguous) = self.zonk_with_status(&result.ty)?;
         let zonked_result = IterativeTypeOwner::new(zonked_result);
         if result_is_ambiguous {
@@ -8118,12 +8634,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         ))
     }
 
-    fn synthesize_perform(
+    fn schedule_perform<'a>(
         &mut self,
-        request: &crate::resolved::ResolvedPerformExpr,
+        request: &'a crate::resolved::ResolvedPerformExpr,
         span: Span,
-        context: &mut TypeContext,
-    ) -> Result<TypedNode, TypeError> {
+        tasks: &mut ElaborationTaskBuffer<'a>,
+    ) -> Result<(), TypeError> {
         let (domain, result) = self.operation_signature(
             &request.effect.instance,
             request.operation,
@@ -8131,19 +8647,36 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         )?;
         let domain = IterativeTypeOwner::new(domain);
         let result = IterativeTypeOwner::new(result);
-        let expected_domain = self.clone_type(&domain)?;
+        let expected_domain = IterativeTypeOwner::new(self.clone_type(&domain)?);
         let expected_provenance = self.at_span_provenance(&domain, request.effect.span)?;
-        let operand = TypedNodeOwner::new(self.elaborate_expression_with_context(
-            ElaborationTask::Check {
-                expression: &request.operand,
-                expected: ProvenancedType {
-                    ty: expected_domain,
-                    provenance: expected_provenance,
-                },
-                kind: CheckKind::General,
+        self.type_work.charge(3).map_err(|()| type_resource())?;
+        tasks.0.try_reserve(2).map_err(|_| type_resource())?;
+        tasks.push(ElaborationTask::FinishPerform(Box::new(PerformProgress {
+            request,
+            span,
+            result,
+        })));
+        tasks.push(ElaborationTask::Check {
+            expression: &request.operand,
+            expected: ProvenancedType {
+                ty: expected_domain.into_inner(),
+                provenance: expected_provenance,
             },
-            context,
-        )?);
+            kind: CheckKind::General,
+        });
+        Ok(())
+    }
+
+    fn finish_perform(
+        &mut self,
+        progress: PerformProgress<'_>,
+        operand: TypedNodeOwner,
+    ) -> Result<TypedNode, TypeError> {
+        let PerformProgress {
+            request,
+            span,
+            result,
+        } = progress;
         let requested = EffectRow::singleton(
             clone_effect_instance_with_budget(&request.effect.instance, &mut self.type_work)
                 .map_err(|error| TypeError::Internal(error.into()))?,
@@ -8292,12 +8825,179 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         })
     }
 
+    fn enter_resource_body(
+        &mut self,
+        resource: &crate::resolved::ResolvedResourceExpr,
+        context: &mut TypeContext,
+    ) -> Result<TypedBinder, TypeError> {
+        self.constraint_work
+            .charge(1)
+            .map_err(|()| constraint_resource())?;
+        if !F::EFFECTS || !resource.acquisition.owns(resource) {
+            return Err(invalid_state());
+        }
+        let api = resource.acquisition.api().ok_or_else(invalid_state)?;
+        self.type_work
+            .charge(5)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        context
+            .binders
+            .try_reserve(1)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        self.active_acquisitions
+            .try_reserve(1)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let handle_type = IterativeTypeOwner::new(Type::Application(
+            Box::new(Type::Nominal(api.handle())),
+            Box::new(Type::Variable(resource.identity.id)),
+        ));
+        let handle_provenance =
+            self.at_span_provenance(&handle_type, resource.handle.origin.primary_span())?;
+        let handle_fact = self.clone_type(&handle_type)?;
+        if context.insert_with_provenance(resource.handle.id, handle_fact, handle_provenance)? {
+            return Err(invalid_state());
+        }
+        self.active_acquisitions.push(resource.acquisition);
+        self.builder
+            .resolved_binder(
+                resource.handle.id,
+                handle_type.into_inner(),
+                resource.handle.origin.clone(),
+            )
+            .map_err(Into::into)
+    }
+
+    fn finish_resource(
+        &mut self,
+        progress: ResourceProgress<'_>,
+        body: TypedNodeOwner,
+        context: &mut TypeContext,
+    ) -> Result<TypedNode, TypeError> {
+        let ResourceProgress {
+            resource,
+            span,
+            initializer,
+            handle,
+        } = progress;
+        if self.active_acquisitions.pop() != Some(resource.acquisition) {
+            return Err(invalid_state());
+        }
+        context.remove_and_discard(resource.handle.id);
+        let api = resource.acquisition.api().ok_or_else(invalid_state)?;
+        // Precharge the fixed instance, outward-row type wrapper, and boxed
+        // resource operation before constructing their owned metadata.
+        self.type_work
+            .charge(6)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let body_effects = self.zonk_effect_row(&body.effects)?;
+        let instance =
+            EffectInstance::new(api.ops(), Box::new([Type::Variable(resource.identity.id)]));
+        let outward = match body_effects
+            .remove_exact_with_budget(&instance, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+        {
+            Ok(row) => row,
+            Err(crate::types::EffectRowError::Missing) => body_effects,
+            Err(_) => {
+                return Err(inference_failure(
+                    TypeReason::AmbiguousEffectRow,
+                    span,
+                    "this resource body has an ambiguous outward effect row",
+                ));
+            }
+        };
+        let ty = IterativeTypeOwner::new(self.zonk(&body.ty)?);
+        let effects = self.union_effects(&initializer.effects, &outward, span)?;
+        let row_type = IterativeTypeOwner::new(Type::function_computation(
+            Type::Unit,
+            ComputationType::new(Type::Unit, self.core_effect_row(&effects)?),
+        ));
+        // The provider wrapper contains the original user computation. Its
+        // immediate row belongs to that body, while its value comes from the
+        // final result expression of any forwarding source blocks.
+        self.constraint_work
+            .charge(1)
+            .map_err(|()| constraint_resource())?;
+        let ResolvedExprKind::Block(wrapper) = &resource.body.kind else {
+            return Err(invalid_state());
+        };
+        let computation_span = wrapper.result.span;
+        let mut escaping = &*wrapper.result;
+        loop {
+            self.constraint_work
+                .charge(1)
+                .map_err(|()| constraint_resource())?;
+            let ResolvedExprKind::Block(block) = &escaping.kind else {
+                break;
+            };
+            escaping = &block.result;
+        }
+        let escape_span = escaping.span;
+        for (outward_type, outward_span) in [(&*ty, escape_span), (&*row_type, computation_span)] {
+            self.defer_resource_escape(resource.identity.id, outward_type, outward_span, span)?;
+            if type_contains_variable(
+                outward_type,
+                resource.identity.id,
+                &mut self.constraint_work,
+            )
+            .map_err(|()| constraint_resource())?
+            {
+                return Err(self.resource_escape_failure(
+                    outward_span,
+                    span,
+                    "this outward computation contains the resource identity",
+                ));
+            }
+        }
+        self.type_work
+            .charge(context.binders.capacity())
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for fact in context.binders.values() {
+            let fact_type = IterativeTypeOwner::new(self.zonk(&fact.ty)?);
+            self.defer_resource_escape(
+                resource.identity.id,
+                &fact_type,
+                fact.provenance.span().unwrap_or(escape_span),
+                span,
+            )?;
+            if type_contains_variable(&fact_type, resource.identity.id, &mut self.constraint_work)
+                .map_err(|()| constraint_resource())?
+            {
+                return Err(self.resource_escape_failure(
+                    fact.provenance.span().unwrap_or(escape_span),
+                    span,
+                    "an enclosing binding contains the resource identity",
+                ));
+            }
+        }
+        let core_type = IterativeTypeOwner::new(self.clone_type(&ty)?);
+        let core_effects = self.core_effect_row(&effects)?;
+        let node = self.push_effect_core(
+            core_type.into_inner(),
+            core_effects,
+            Origin::Source(span),
+            EffectOperation::Resource(Box::new(crate::core::effect::ResourceScopeNode::new(
+                resource.acquisition,
+                handle,
+                initializer.node,
+                body.node,
+            ))),
+        )?;
+        Ok(TypedNode {
+            node,
+            ty: ty.into_inner(),
+            effects,
+            provenance: body.provenance.clone(),
+        })
+    }
+
     fn synthesize_handler(
         &mut self,
         handler: &crate::resolved::ResolvedHandleExpr,
         span: Span,
         context: &mut TypeContext,
     ) -> Result<TypedNode, TypeError> {
+        let rewrite_checkpoint = self.builder.type_rewrite_checkpoint();
         let body = TypedNodeOwner::new(self.elaborate_expression_with_context(
             ElaborationTask::Synthesize {
                 expression: &handler.body,
@@ -8444,6 +9144,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ));
         }
 
+        // Clause checking can solve generic effect arguments in nested handler
+        // callbacks. Re-inference reads stored callable types, so normalize
+        // this suffix first while preserving genuinely unresolved variables.
+        self.zonk_builder_types_since(Some(rewrite_checkpoint), false)
+            .map_err(TypeError::Internal)?;
+        output = zonk_core_effect_row(
+            &output,
+            &self.inference_solutions,
+            &self.row_inference_solutions,
+            &self.inference_variables,
+            &self.authenticated_inference_solutions,
+            &mut self.type_work,
+            false,
+        )?;
         let ty = result_type.into_inner();
         let core_ty = self.pure_core_type(&ty)?;
         self.type_work
@@ -8687,7 +9401,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             }
         }
-        if !nominals.iter().any(|nominal| nominal.is_lexical()) {
+        let acquired = if let Some(owner) = source.acquisition {
+            self.constraint_work
+                .charge(2)
+                .map_err(|()| constraint_resource())?;
+            if self.active_acquisitions.last() != Some(&owner) || !owner.supplies(source) {
+                return Err(invalid_state());
+            }
+            true
+        } else {
+            false
+        };
+        if !acquired && !nominals.iter().any(|nominal| nominal.is_lexical()) {
             return Err(lexical_evidence_error(
                 InterfaceReason::EvidenceMissingLocalKey,
                 source.application.span,
@@ -8839,6 +9564,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         rewrite_checkpoint: crate::core::dialect::TypeRewriteCheckpoint,
     ) -> Result<(), TypeError> {
         let LexicalEvidenceProgress {
+            source,
             application,
             method_ids,
             methods,
@@ -8912,6 +9638,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             group.binder.origin.clone(),
         )?;
         if self.selection.is_some() {
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            self.method_capture_binders
+                .try_reserve(1)
+                .map_err(|_| type_resource())?;
+            self.method_capture_binders
+                .push((source.id, *id, group.binder.id));
             self.constraint_work
                 .charge(1)
                 .map_err(|()| constraint_resource())?;
@@ -8983,6 +9715,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             source
                 .checked
                 .fill(crate::interface::CheckedLexicalEvidence {
+                    acquisition: source.acquisition,
                     id: source.id,
                     application: fact_application,
                     methods: checked_methods.into_boxed_slice(),
@@ -9077,7 +9810,96 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
+    // Keep effect-only progress and result staging out of the shared
+    // expression dispatcher's fixed host-stack frame.
+    #[expect(
+        clippy::boxed_local,
+        reason = "unboxing in the caller enlarges the shared expression dispatcher's stack frame"
+    )]
+    fn step_perform_completion(
+        &mut self,
+        progress: Box<PerformProgress<'_>>,
+        values: &mut TypedNodeBuffer,
+    ) -> Result<(), TypeError> {
+        let operand = values.pop().ok_or_else(invalid_state)?;
+        values.push(self.finish_perform(*progress, operand)?);
+        Ok(())
+    }
+
+    fn schedule_resource<'a>(
+        &mut self,
+        resource: &'a crate::resolved::ResolvedResourceExpr,
+        span: Span,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+    ) -> Result<(), TypeError> {
+        self.type_work.charge(2).map_err(|()| type_resource())?;
+        tasks.0.try_reserve(2).map_err(|_| type_resource())?;
+        tasks.push(ElaborationTask::ResourceBody { resource, span });
+        tasks.push(ElaborationTask::Check {
+            expression: &resource.initializer,
+            expected: ProvenancedType {
+                ty: Type::Int,
+                provenance: TypeProvenance::atom(Some(resource.initializer.span)),
+            },
+            kind: CheckKind::General,
+        });
+        Ok(())
+    }
+
+    fn step_resource_body<'a>(
+        &mut self,
+        resource: &'a crate::resolved::ResolvedResourceExpr,
+        span: Span,
+        context: &mut TypeContext,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+        values: &mut TypedNodeBuffer,
+    ) -> Result<(), TypeError> {
+        let initializer = values.pop().ok_or_else(invalid_state)?;
+        self.type_work.charge(3).map_err(|()| type_resource())?;
+        tasks.0.try_reserve(2).map_err(|_| type_resource())?;
+        let handle = self.enter_resource_body(resource, context)?;
+        tasks.push(ElaborationTask::FinishResource(Box::new(
+            ResourceProgress {
+                resource,
+                span,
+                initializer,
+                handle,
+            },
+        )));
+        tasks.push(ElaborationTask::Synthesize {
+            expression: &resource.body,
+            cause: None,
+        });
+        Ok(())
+    }
+
+    fn step_resource_completion(
+        &mut self,
+        progress: Box<ResourceProgress<'_>>,
+        context: &mut TypeContext,
+        values: &mut TypedNodeBuffer,
+    ) -> Result<(), TypeError> {
+        let body = values.pop().ok_or_else(invalid_state)?;
+        values.push(self.finish_resource(*progress, body, context)?);
+        Ok(())
+    }
+
     fn elaborate_expression_with_context<'a>(
+        &mut self,
+        initial: ElaborationTask<'a>,
+        context: &mut TypeContext,
+    ) -> Result<TypedNode, TypeError> {
+        let checkpoint = self.active_acquisitions.len();
+        let result = self.elaborate_expression_work(initial, context);
+        while self.active_acquisitions.len() > checkpoint {
+            if let Some(acquisition) = self.active_acquisitions.pop() {
+                context.remove_and_discard(acquisition.handle);
+            }
+        }
+        result
+    }
+
+    fn elaborate_expression_work<'a>(
         &mut self,
         initial: ElaborationTask<'a>,
         context: &mut TypeContext,
@@ -9094,6 +9916,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut declarations = ElaboratedDeclarationBuffer(Vec::new());
         while let Some(task) = tasks.pop() {
             match task {
+                ElaborationTask::FinishPerform(progress) => {
+                    self.step_perform_completion(progress, &mut values)?;
+                }
+                ElaborationTask::ResourceBody { resource, span } => {
+                    self.step_resource_body(resource, span, context, &mut tasks, &mut values)?;
+                }
+                ElaborationTask::FinishResource(progress) => {
+                    self.step_resource_completion(progress, context, &mut values)?;
+                }
                 ElaborationTask::Equation(task) => {
                     self.step_equation_task(
                         task,
@@ -9363,6 +10194,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                         )
                                     }?;
                                 }
+                                self.record_capture_global(binder, node, occurrence)?;
                                 values.push(TypedNode {
                                     node,
                                     ty: ty.into_inner(),
@@ -9577,9 +10409,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             &mut self.type_work,
                         )?;
                     }
+                    ResolvedExprKind::Resource(resource) => {
+                        self.schedule_resource(resource, current.span, &mut tasks)?;
+                    }
                     ResolvedExprKind::Perform(request) => {
-                        let typed = self.synthesize_perform(request, current.span, context)?;
-                        values.push(typed);
+                        self.schedule_perform(request, current.span, &mut tasks)?;
                     }
                     ResolvedExprKind::Handle(handler) => {
                         let typed = self.synthesize_handler(handler, current.span, context)?;
@@ -15836,6 +16670,13 @@ where
                 pending.push(domain);
             }
             Type::EffectfulFunction(domain, codomain) => {
+                let rows = codomain.effects();
+                budget.charge(
+                    rows.known().len().saturating_add(
+                        rows.tail()
+                            .map_or(0, |tail| tail.lacks().len().saturating_add(1)),
+                    ),
+                )?;
                 if let Some(crate::types::EffectRowVariable::Rigid(variable)) =
                     codomain.tail_variable()
                     && visit(variable, budget)?
@@ -16191,6 +17032,12 @@ pub(crate) fn check_module_with_budget(
         for imported in resolved.imported_facts().globals() {
             type_work.charge(1).map_err(|()| type_resource())?;
             effects |= imported.capture.is_retained();
+        }
+        for implementation in resolved.imported_facts().implementations() {
+            for method in &implementation.fact.methods {
+                type_work.charge(1).map_err(|()| type_resource())?;
+                effects |= method.capture.is_retained();
+            }
         }
     }
     if effects {
@@ -16748,6 +17595,12 @@ enum EquationTask<'a> {
 }
 
 enum ElaborationTask<'a> {
+    FinishPerform(Box<PerformProgress<'a>>),
+    ResourceBody {
+        resource: &'a crate::resolved::ResolvedResourceExpr,
+        span: Span,
+    },
+    FinishResource(Box<ResourceProgress<'a>>),
     Equation(EquationTask<'a>),
     RetainLocalNewtype(NominalTypeId),
     Synthesize {
@@ -17124,6 +17977,19 @@ enum ElaboratedDeclaration {
         origin: Origin,
     },
     Newtype(NominalTypeId),
+}
+
+struct ResourceProgress<'a> {
+    resource: &'a crate::resolved::ResolvedResourceExpr,
+    span: Span,
+    initializer: TypedNodeOwner,
+    handle: TypedBinder,
+}
+
+struct PerformProgress<'a> {
+    request: &'a crate::resolved::ResolvedPerformExpr,
+    span: Span,
+    result: IterativeTypeOwner,
 }
 
 struct ElaborationTaskBuffer<'a>(Vec<ElaborationTask<'a>>);
@@ -18067,6 +18933,9 @@ fn discard_match_progress(progress: Box<MatchProgress<'_>>) {
 fn discard_elaboration_task(task: ElaborationTask<'_>) {
     match task {
         ElaborationTask::Equation(_) => {}
+        ElaborationTask::ResourceBody { .. }
+        | ElaborationTask::FinishResource(_)
+        | ElaborationTask::FinishPerform(_) => {}
         ElaborationTask::RetainLocalNewtype(_)
         | ElaborationTask::Synthesize { .. }
         | ElaborationTask::AfterApplicationFunction { .. }
@@ -18880,7 +19749,10 @@ fn zonk_core_effect_row(
 ) -> Result<EffectRow, BuildError> {
     let row =
         clone_effect_row_with_budget(row, type_work).map_err(|()| BuildError::TypeWorkExceeded)?;
-    let wrapper = Type::function_computation(Type::Unit, ComputationType::new(Type::Unit, row));
+    let wrapper = IterativeTypeOwner::new(Type::function_computation(
+        Type::Unit,
+        ComputationType::new(Type::Unit, row),
+    ));
     let zonked = zonk_core_type(
         &wrapper,
         solutions,
@@ -18890,11 +19762,14 @@ fn zonk_core_effect_row(
         type_work,
         strict,
     )?;
-    discard_type_iteratively(wrapper);
-    let Type::EffectfulFunction(_, computation) = zonked else {
-        unreachable!()
-    };
-    Ok(computation.effects)
+    match zonked {
+        Type::Function(_, _) => Ok(EffectRow::empty()),
+        Type::EffectfulFunction(_, computation) => Ok(computation.effects),
+        other => {
+            discard_type_iteratively(other);
+            Err(BuildError::InvalidPayload)
+        }
+    }
 }
 
 fn resolved_build_error(error: ResolvedBuildFailure) -> TypeError {
@@ -19127,6 +20002,10 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
             ResolvedExprKind::Match(match_expression) => {
                 work.push(&match_expression.scrutinee);
                 work.extend(match_expression.arms.iter().map(|arm| &arm.body));
+            }
+            ResolvedExprKind::Resource(resource) => {
+                work.push(&resource.body);
+                work.push(&resource.initializer);
             }
             ResolvedExprKind::Perform(request) => work.push(&request.operand),
             ResolvedExprKind::Handle(handler) => {
@@ -19386,6 +20265,20 @@ fn validate_and_charge_public_monotype(
 fn clone_type_with_budget(ty: &Type, budget: &mut TypeWorkBudget) -> Result<Type, ()> {
     charge_type_cells(ty, budget)?;
     Ok(ty.clone())
+}
+
+fn retain_implementation_capture_type(
+    body_type: Type,
+    parameters: &[(TypeVariableId, Kind)],
+    budget: &mut TypeWorkBudget,
+) -> Result<Type, TypeError> {
+    let body_type = IterativeTypeOwner::new(body_type);
+    let quantified = clone_kinded_type_parameters_with_budget(parameters, budget)
+        .map_err(|()| type_resource())?;
+    Ok(Type::Forall(
+        quantified.into_boxed_slice(),
+        Box::new(body_type.into_inner()),
+    ))
 }
 
 fn retain_method_occurrence_parameters(
@@ -20322,12 +21215,42 @@ fn inference_failure(reason: TypeReason, span: Span, message: &str) -> TypeError
     )))
 }
 
-fn capture_failure(failure: crate::core::capture::Failure) -> TypeError {
+fn capture_failure(
+    failure: crate::core::capture::Failure,
+    budget: &mut TypeWorkBudget,
+) -> TypeError {
     use crate::core::capture::Failure;
     match failure {
         Failure::Invalid => invalid_state(),
         Failure::Resource => type_resource(),
+        Failure::Escape {
+            source,
+            acquisition,
+        } => {
+            if budget.charge(2).is_err() {
+                return type_resource();
+            }
+            let mut diagnostic = Diagnostic::new(
+                TypeReason::ResourceEscape,
+                SourceLabel::new(
+                    source,
+                    "this value retains a dependency on the closing resource",
+                ),
+            );
+            if diagnostic.related.try_reserve_exact(1).is_err() {
+                return type_resource();
+            }
+            diagnostic.related.push(SourceLabel::new(
+                acquisition,
+                "this resource is acquired here",
+            ));
+            TypeError::Source(Box::new(diagnostic))
+        }
         Failure::Unsafe(unsafe_discard) => {
+            let related_count = 1 + usize::from(unsafe_discard.owner.is_some());
+            if budget.charge(1 + related_count).is_err() {
+                return type_resource();
+            }
             let mut diagnostic = Diagnostic::new(
                 TypeReason::DiscardUnsafe,
                 SourceLabel::new(
@@ -20335,15 +21258,24 @@ fn capture_failure(failure: crate::core::capture::Failure) -> TypeError {
                     "discard requires proof that the captured continuation has no unfinished obligations",
                 ),
             );
+            if diagnostic.related.try_reserve_exact(related_count).is_err() {
+                return type_resource();
+            }
             diagnostic.related.push(SourceLabel::new(
                 unsafe_discard.request,
                 "this request or call can capture the continuation",
             ));
             if let Some(owner) = unsafe_discard.owner {
-                diagnostic.related.push(SourceLabel::new(
-                    owner,
-                    "this clause still has an unfinished completion capability",
-                ));
+                let (owner, message) = match owner {
+                    crate::core::capture::CompletionOwner::Clause(span) => (
+                        span,
+                        "this clause still has an unfinished completion capability",
+                    ),
+                    crate::core::capture::CompletionOwner::Resource(span) => {
+                        (span, "this resource still requires scope completion")
+                    }
+                };
+                diagnostic.related.push(SourceLabel::new(owner, message));
             }
             TypeError::Source(Box::new(diagnostic))
         }
@@ -20475,6 +21407,10 @@ fn resume_usage_with_budget(
                 ResolvedExprKind::Match(matched) => {
                     push(&mut tasks, Task::BeginMatch(&matched.arms), budget)?;
                     push(&mut tasks, Task::Visit(&matched.scrutinee), budget)?;
+                }
+                ResolvedExprKind::Resource(resource) => {
+                    push(&mut tasks, Task::Visit(&resource.body), budget)?;
+                    push(&mut tasks, Task::Visit(&resource.initializer), budget)?;
                 }
                 ResolvedExprKind::Perform(request) => {
                     push(&mut tasks, Task::Visit(&request.operand), budget)?;
@@ -20672,6 +21608,10 @@ fn contains_resume_owner_with_budget(
                 if discard.owner == Some(owner) {
                     return Ok(true);
                 }
+            }
+            ResolvedExprKind::Resource(resource) => {
+                schedule(&mut pending, &resource.body, budget)?;
+                schedule(&mut pending, &resource.initializer, budget)?;
             }
             ResolvedExprKind::Tuple(elements) => {
                 for element in elements {
@@ -20939,7 +21879,8 @@ pub(crate) fn checked_program_contains_effect_syntax(
 
     while let Some(expression) = work.pop() {
         match &expression.kind {
-            ResolvedExprKind::Perform(_)
+            ResolvedExprKind::Resource(_)
+            | ResolvedExprKind::Perform(_)
             | ResolvedExprKind::Handle(_)
             | ResolvedExprKind::Resume(_)
             | ResolvedExprKind::Discard(_) => return Ok(true),
@@ -21103,6 +22044,11 @@ fn collect_expression_binders(binders: &mut Vec<BinderId>, mut expressions: Vec<
                     expressions.push(&arm.body);
                 }
             }
+            ResolvedExprKind::Resource(resource) => {
+                binders.push(resource.handle.id);
+                expressions.push(&resource.body);
+                expressions.push(&resource.initializer);
+            }
             ResolvedExprKind::Perform(request) => expressions.push(&request.operand),
             ResolvedExprKind::Handle(handler) => {
                 expressions.push(&handler.body);
@@ -21172,6 +22118,21 @@ fn collect_pattern_binders(
             | crate::resolved::ResolvedPatternKind::Unit => {}
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn cell_resource_core_fixture_for_test() -> (
+    crate::core::effect::UnvalidatedEffectProgram,
+    ResolvedModule,
+    Vec<crate::source::SourceFile>,
+    Arc<ResolvedRegistry>,
+) {
+    tests::cell_resource_core_fixture()
+}
+
+#[cfg(test)]
+pub(crate) fn cell_resource_linked_header_fixture_for_test() -> ResolvedModuleProgram {
+    tests::cell_resource_linked_header_fixture()
 }
 
 #[cfg(test)]
@@ -21960,6 +22921,546 @@ mod tests {
         assert_eq!(wrapper.interface.name.spelling, "main");
         assert_eq!(wrapper.equations.len(), 1);
         resolved
+    }
+
+    fn cell_resource_fixture(result: &str) -> ResolvedModule {
+        cell_resource_fixture_sources(result).0
+    }
+
+    fn cell_resource_fixture_sources(
+        result: &str,
+    ) -> (
+        ResolvedModule,
+        Vec<SourceFile>,
+        Arc<ResolvedRegistry>,
+        Vec<CheckedModule>,
+    ) {
+        let text =
+            format!("import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = {result}\n");
+        cell_module_fixture_sources(&text)
+    }
+
+    fn cell_module_fixture_sources(
+        text: &str,
+    ) -> (
+        ResolvedModule,
+        Vec<SourceFile>,
+        Arc<ResolvedRegistry>,
+        Vec<CheckedModule>,
+    ) {
+        let file = ModuleFixtureFile::write("cell-resource-typed.ash", text);
+        let graph = load_module_graph(&file.0, &ModuleRoots::empty()).expect("resource graph");
+        let mut checked = Vec::<CheckedModule>::new();
+        for loaded in graph.modules() {
+            let dependencies = loaded
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    crate::resolve::DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|module| module.module() == edge.target())
+                            .expect("dependency")
+                            .exports(),
+                    )
+                    .expect("exports")
+                })
+                .collect::<Vec<_>>();
+            let module = resolve_module(loaded, &dependencies).expect("resource resolution");
+            if loaded.id() == graph.entry() {
+                let registry = ResolvedRegistry::combine_checked(
+                    &checked,
+                    &mut TypeWorkBudget::default(),
+                    &mut InterfaceConstraintBudget::default(),
+                )
+                .expect("complete builtin registry")
+                .with_additional_type_variables(
+                    module
+                        .registry()
+                        .type_variables()
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                );
+                return (
+                    module,
+                    graph
+                        .modules()
+                        .iter()
+                        .map(|module| module.source().clone())
+                        .collect(),
+                    Arc::new(registry),
+                    checked,
+                );
+            }
+            checked.push(check_module(module).expect("builtin checks"));
+        }
+        panic!("entry module");
+    }
+
+    fn cell_resource_elaborator(module: &ResolvedModule) -> CoreElaborator<EffectOperationFamily> {
+        let mut elaborator = CoreElaborator::<EffectOperationFamily>::for_module(module)
+            .expect("resource elaborator");
+        elaborator.purpose = ElaborationPurpose::ModuleCheck;
+        elaborator.selection = Some(
+            build_evidence_selector(
+                module,
+                &elaborator.registry,
+                &[],
+                &[],
+                &[],
+                &mut elaborator.type_work,
+                &mut elaborator.constraint_work,
+            )
+            .expect("builtin selector"),
+        );
+        elaborator
+    }
+
+    pub(crate) fn cell_resource_core_fixture() -> (
+        crate::core::effect::UnvalidatedEffectProgram,
+        ResolvedModule,
+        Vec<SourceFile>,
+        Arc<ResolvedRegistry>,
+    ) {
+        let (module, sources, registry, _) =
+            cell_resource_fixture_sources("resource cell<R> c = (40 + 1) {\n42\n}");
+        let mut elaborator = cell_resource_elaborator(&module);
+        let mut context = elaborator.base_context.clone();
+        let typed = elaborator
+            .elaborate_expression_with_context(
+                ElaborationTask::Synthesize {
+                    expression: fixture_result(&module),
+                    cause: None,
+                },
+                &mut context,
+            )
+            .expect("resource typed structure");
+        let core = elaborator
+            .builder
+            .finish(typed.node)
+            .expect("resource arena");
+        (core, module, sources, registry)
+    }
+
+    // Only the builtin becomes a checked group. The resource result is typed
+    // internal input for linked header tests, never a published module.
+    pub(crate) fn cell_resource_linked_header_fixture() -> ResolvedModuleProgram {
+        let (module, _, registry, checked) =
+            cell_resource_fixture_sources("resource cell<R> c = 41 {\n42\n}");
+        let mut elaborator = cell_resource_elaborator(&module);
+        let mut context = elaborator.base_context.clone();
+        drop(TypedNodeOwner::new(
+            elaborator
+                .elaborate_expression_with_context(
+                    ElaborationTask::Synthesize {
+                        expression: fixture_result(&module),
+                        cause: None,
+                    },
+                    &mut context,
+                )
+                .expect("structurally typed resource header input"),
+        ));
+        let groups = checked
+            .into_iter()
+            .map(|module| {
+                module
+                    .into_group(&mut InterfaceConstraintBudget::default())
+                    .unwrap()
+            })
+            .collect();
+        ResolvedModuleProgram::new(
+            registry,
+            groups,
+            module.module(),
+            fixture_result(&module).clone(),
+        )
+    }
+
+    #[test]
+    fn resource_typed_structure_preserves_initializer_and_exact_body_row() {
+        for source in [
+            "resource cell<R> c = 41 {\nCell.read c\n}",
+            "resource cell<A> a = 41 {\nresource cell<B> b = (Cell.read a) {\nCell.read b\n}\n}",
+        ] {
+            let module = cell_resource_fixture(source);
+            let mut elaborator = cell_resource_elaborator(&module);
+            let mut context = elaborator.base_context.clone();
+            let typed = elaborator
+                .elaborate_expression_with_context(
+                    ElaborationTask::Synthesize {
+                        expression: fixture_result(&module),
+                        cause: None,
+                    },
+                    &mut context,
+                )
+                .expect("resource typed structure");
+            assert_eq!(typed.ty, Type::Int);
+            assert!(typed.effects.is_empty());
+            let _core = elaborator
+                .builder
+                .finish(typed.node)
+                .expect("resource arena");
+        }
+    }
+
+    #[test]
+    fn resource_elaboration_work_is_exact_retryable_and_restores_scope_on_failure() {
+        fn run(limit: Option<(usize, bool)>) -> (Result<(), TypeError>, usize, usize, usize) {
+            let module = cell_resource_fixture(
+                "resource cell<A> a = 41 {\nresource cell<B> b = (Cell.read a) {\nCell.read b\n}\n}",
+            );
+            let mut elaborator = cell_resource_elaborator(&module);
+            elaborator.type_work = TypeWorkBudget::with_limit(
+                limit
+                    .filter(|(_, constraints)| !constraints)
+                    .map_or(usize::MAX, |(limit, _)| limit),
+            );
+            elaborator.constraint_work = InterfaceConstraintBudget::with_limit(
+                limit
+                    .filter(|(_, constraints)| *constraints)
+                    .map_or(usize::MAX, |(limit, _)| limit),
+            );
+            let mut context = elaborator.base_context.clone();
+            let result = elaborator
+                .elaborate_expression_with_context(
+                    ElaborationTask::Synthesize {
+                        expression: fixture_result(&module),
+                        cause: None,
+                    },
+                    &mut context,
+                )
+                .map(|typed| drop(TypedNodeOwner::new(typed)));
+            (
+                result,
+                elaborator.type_work.used(),
+                elaborator.constraint_work.used(),
+                elaborator.active_acquisitions.len(),
+            )
+        }
+        let (result, types, constraints, scopes) = run(None);
+        result.expect("calibration");
+        assert_eq!(scopes, 0);
+        for (work, constraints) in [(types, false), (constraints, true)] {
+            let (short, _, _, scopes) = run(Some((work - 1, constraints)));
+            assert!(short.is_err());
+            assert_eq!(scopes, 0);
+            for _ in 0..2 {
+                let (exact, _, _, scopes) = run(Some((work, constraints)));
+                exact.expect("fresh exact retry");
+                assert_eq!(scopes, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn perform_scheduling_keeps_cloned_domain_owned_across_exact_failures() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 256;
+                const DOMAIN_CELLS: usize = 2 * DEPTH + 1;
+                let source =
+                    SourceFile::new("perform-owned-domain.ash", "perform E.send ()").unwrap();
+                let span = source
+                    .span(ByteRange::new(0, source.text().len() as u32).unwrap())
+                    .unwrap();
+                let effect = crate::types::EffectId::new(ModuleId::from(source.id()), 0);
+                let operation = crate::types::OperationId::new(effect, 0);
+                let registry = Arc::new(ResolvedRegistry::default().with_effects(vec![
+                    crate::resolved::ResolvedEffectDeclaration {
+                        id: effect,
+                        public: false,
+                        spelling: "E".into(),
+                        parameters: Box::new([]),
+                        operations: Box::new([crate::resolved::ResolvedEffectOperation {
+                            id: operation,
+                            spelling: "send".into(),
+                            annotation: ResolvedType {
+                                ty: Type::Function(
+                                    Box::new(nested_function_type(DEPTH)),
+                                    Box::new(Type::Unit),
+                                ),
+                                provenance: ResolvedTypeProvenance::new(
+                                    vec![ResolvedTypeProvenanceNode::Fact(span)],
+                                    0,
+                                ),
+                                origin: Origin::Source(span),
+                                span,
+                            },
+                            origin: Origin::Source(span),
+                            span,
+                        }]),
+                        origin: Origin::Source(span),
+                        span,
+                    },
+                ]));
+                let request = crate::resolved::ResolvedPerformExpr {
+                    effect: crate::resolved::ResolvedEffectInstance {
+                        instance: EffectInstance::new(effect, Box::new([])),
+                        origin: Origin::Source(span),
+                        span,
+                    },
+                    operation,
+                    spelling: "send".into(),
+                    operand: Box::new(ResolvedExpr {
+                        kind: ResolvedExprKind::Unit,
+                        span,
+                    }),
+                    origin: Origin::Source(span),
+                };
+                let run = |limit| {
+                    let mut elaborator = EffectElaborator::new();
+                    elaborator.registry = Arc::clone(&registry);
+                    elaborator.type_work = TypeWorkBudget::with_limit(limit);
+                    let mut tasks = ElaborationTaskBuffer(Vec::new());
+                    crate::types::reset_type_discard_observation();
+                    let result = elaborator.schedule_perform(&request, span, &mut tasks);
+                    let work = elaborator.type_work.used();
+                    drop(tasks);
+                    let visits = crate::types::type_discard_visits();
+                    (result, work, visits)
+                };
+                let (result, exact, complete_visits) = run(usize::MAX);
+                result.unwrap();
+                for limit in [exact - 3 - DOMAIN_CELLS, exact - 3, exact - 1] {
+                    let (result, used, visits) = run(limit);
+                    assert!(matches!(
+                        result,
+                        Err(TypeError::Internal(
+                            ElaborationFailure::TypeResourceExhausted
+                        ))
+                    ));
+                    assert!(used <= limit);
+                    assert_eq!(
+                        visits, complete_visits,
+                        "complete domain clone must be dismantled at boundary {limit}"
+                    );
+                }
+                for _ in 0..2 {
+                    let (result, used, visits) = run(exact);
+                    result.unwrap();
+                    assert_eq!(used, exact);
+                    assert_eq!(visits, complete_visits);
+                }
+                crate::resolved::discard_resolved_expression_iteratively(ResolvedExpr {
+                    kind: ResolvedExprKind::Perform(request),
+                    span,
+                });
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn resource_finish_keeps_cloned_result_owned_across_exact_row_failure() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                fn run(limit: usize) -> (Result<(), TypeError>, usize, usize) {
+                    const DEPTH: usize = crate::core::dialect::CORE_PAYLOAD_DEPTH_LIMIT - 2;
+                    let module = cell_resource_fixture("resource cell<R> c = 41 {\n42\n}");
+                    let ResolvedExprKind::Resource(resource) = &fixture_result(&module).kind else {
+                        panic!("resource")
+                    };
+                    let span = resource.acquisition.span;
+                    let mut elaborator = cell_resource_elaborator(&module);
+                    let mut context = elaborator.base_context.clone();
+                    let initializer = TypedNodeOwner::new(
+                        elaborator
+                            .elaborate_expression_with_context(
+                                ElaborationTask::Synthesize {
+                                    expression: &resource.initializer,
+                                    cause: None,
+                                },
+                                &mut context,
+                            )
+                            .unwrap(),
+                    );
+                    let handle = elaborator
+                        .enter_resource_body(resource, &mut context)
+                        .unwrap();
+                    let parameter = elaborator
+                        .builder
+                        .binder(nested_function_type(DEPTH), Origin::Source(span))
+                        .unwrap();
+                    let unit = elaborator
+                        .builder
+                        .unit(Type::Unit, Origin::Source(span))
+                        .unwrap();
+                    let ty = IterativeTypeOwner::new(Type::Function(
+                        Box::new(nested_function_type(DEPTH)),
+                        Box::new(Type::Unit),
+                    ));
+                    let core_type = elaborator.clone_type(&ty).unwrap();
+                    let node = elaborator
+                        .builder
+                        .function(parameter, unit, core_type, Origin::Source(span))
+                        .unwrap();
+                    let provenance = elaborator.at_span_provenance(&ty, span).unwrap();
+                    let body = TypedNodeOwner::new(TypedNode {
+                        node,
+                        ty: ty.into_inner(),
+                        effects: EffectRow::empty(),
+                        provenance,
+                    });
+                    elaborator.type_work = TypeWorkBudget::with_limit(limit);
+                    crate::types::reset_type_discard_observation();
+                    let result = elaborator
+                        .finish_resource(
+                            ResourceProgress {
+                                resource,
+                                span,
+                                initializer,
+                                handle,
+                            },
+                            body,
+                            &mut context,
+                        )
+                        .map(|typed| drop(TypedNodeOwner::new(typed)));
+                    let used = elaborator.type_work.used();
+                    drop(context);
+                    drop(elaborator);
+                    (result, used, crate::types::type_discard_visits())
+                }
+                let (result, exact, complete_visits) = run(usize::MAX);
+                result.unwrap();
+                let (result, used, visits) = run(exact - 1);
+                assert!(matches!(
+                    result,
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                ));
+                assert_eq!(
+                    used,
+                    exact - 1,
+                    "the empty-row clone must be the failing unit"
+                );
+                assert_eq!(
+                    visits, complete_visits,
+                    "the final cloned result must be dismantled iteratively"
+                );
+                for _ in 0..2 {
+                    let (result, used, visits) = run(exact);
+                    result.unwrap();
+                    assert_eq!(used, exact);
+                    assert_eq!(visits, complete_visits);
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn resource_escape_scan_precharges_nullary_row_labels() {
+        let module = cell_resource_fixture("resource cell<R> c = 41 {\n42\n}");
+        let ty = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Unit,
+                crate::types::EffectRow::closed(
+                    (0..64)
+                        .map(|index| {
+                            crate::types::EffectInstance::new(
+                                crate::types::EffectId::new(module.module(), index),
+                                Box::new([]),
+                            )
+                        })
+                        .collect(),
+                ),
+            ),
+        );
+        let mut budget = InterfaceConstraintBudget::with_limit(63);
+        assert!(visit_type_variables(&ty, &mut budget, |_, _| Ok(false)).is_err());
+        let mut measured = InterfaceConstraintBudget::default();
+        assert!(!visit_type_variables(&ty, &mut measured, |_, _| Ok(false)).unwrap());
+        let work = measured.used();
+        for limit in [work - 1, work, work] {
+            let mut budget = InterfaceConstraintBudget::with_limit(limit);
+            assert_eq!(
+                visit_type_variables(&ty, &mut budget, |_, _| Ok(false)).is_ok(),
+                limit == work
+            );
+        }
+    }
+
+    fn assert_resource_escape_result_labels(result: &str) {
+        let module = cell_resource_fixture(&format!("resource cell<R> c = 41 {{\n{result}\n}}"));
+        let expression = fixture_result(&module);
+        let ResolvedExprKind::Resource(resource) = &expression.kind else {
+            panic!("resource")
+        };
+        let mut escaping = &*resource.body;
+        while let ResolvedExprKind::Block(block) = &escaping.kind {
+            escaping = &block.result;
+        }
+        let mut elaborator = cell_resource_elaborator(&module);
+        let mut context = elaborator.base_context.clone();
+        let error = elaborator
+            .elaborate_expression_with_context(
+                ElaborationTask::Synthesize {
+                    expression,
+                    cause: None,
+                },
+                &mut context,
+            )
+            .unwrap_err();
+        let TypeError::Source(diagnostic) = error else {
+            panic!("resource diagnostic")
+        };
+        assert_eq!(diagnostic.reason, TypeReason::ResourceEscape);
+        assert_eq!(diagnostic.primary.span(), escaping.span, "{result}");
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(diagnostic.related[0].span(), resource.acquisition.span);
+    }
+
+    #[test]
+    fn resource_escape_diagnostic_labels_result_and_acquisition() {
+        assert_resource_escape_result_labels("c");
+    }
+
+    #[test]
+    fn resource_escape_diagnostic_labels_latent_row_result_and_acquisition() {
+        assert_resource_escape_result_labels(
+            "{\nlet read_later : Unit -> Int ! {Cell.Ops<R>} = fn(ignored) {\nCell.read c\n}\nread_later\n}",
+        );
+    }
+
+    #[test]
+    fn resource_escape_rechecks_an_outward_inference_solved_after_scope_exit() {
+        let module = cell_resource_fixture("resource cell<R> c = 41 {\n42\n}");
+        let ResolvedExprKind::Resource(resource) = &fixture_result(&module).kind else {
+            panic!("resource")
+        };
+        let mut elaborator = cell_resource_elaborator(&module);
+        let inferred = elaborator
+            .fresh_inference(&Kind::Type, resource.acquisition.span)
+            .unwrap();
+        elaborator
+            .defer_resource_escape(
+                resource.identity.id,
+                &inferred,
+                resource.handle.origin.primary_span(),
+                resource.acquisition.span,
+            )
+            .unwrap();
+        elaborator
+            .unify(&inferred, &Type::Variable(resource.identity.id))
+            .unwrap();
+        let error = elaborator.check_deferred_resource_escapes().unwrap_err();
+        let TypeError::Source(diagnostic) = error else {
+            panic!("resource diagnostic")
+        };
+        assert_eq!(diagnostic.reason, TypeReason::ResourceEscape);
+        assert_eq!(
+            diagnostic.primary.span(),
+            resource.handle.origin.primary_span()
+        );
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(diagnostic.related[0].span(), resource.acquisition.span);
     }
 
     #[test]
@@ -22832,6 +24333,168 @@ mod tests {
     }
 
     #[test]
+    fn pure_capture_publication_demand_scan_is_exact_atomic_and_retryable() {
+        for public in [false, true] {
+            for width in [1, 64] {
+                let mut declarations = String::new();
+                for ordinal in 0..width {
+                    let visibility = if public && ordinal + 1 == width {
+                        "pub "
+                    } else {
+                        ""
+                    };
+                    declarations.push_str(&format!(
+                        "{visibility}value{ordinal} : Unit -> Int\nvalue{ordinal} () = 42\n"
+                    ));
+                }
+                let module =
+                    resolved_module_fixture("capture-demand.ash", &declarations, "Int", "42");
+                let mut elaborator = Elaborator::for_module(&module).unwrap();
+                let mut schemes = elaborator
+                    .checked_module_schemes(module.definitions())
+                    .unwrap();
+                let exact = schemes.len();
+                for limit in [0, exact - 1] {
+                    elaborator.type_work = TypeWorkBudget::with_limit(limit);
+                    assert!(matches!(
+                        elaborator.capture_publication_required(&module, &schemes),
+                        Err(TypeError::Internal(
+                            ElaborationFailure::TypeResourceExhausted
+                        ))
+                    ));
+                    assert_eq!(elaborator.type_work.used(), 0);
+                }
+                for _ in 0..2 {
+                    elaborator.type_work = TypeWorkBudget::with_limit(exact);
+                    assert_eq!(
+                        elaborator
+                            .capture_publication_required(&module, &schemes)
+                            .unwrap(),
+                        public
+                    );
+                    assert_eq!(elaborator.type_work.used(), exact);
+                }
+                if public {
+                    let last = schemes.len() - 2;
+                    schemes[last].binder = schemes[last + 1].binder;
+                    elaborator.type_work = TypeWorkBudget::with_limit(exact);
+                    assert_eq!(
+                        elaborator.capture_publication_required(&module, &schemes),
+                        Err(invalid_state()),
+                        "a public spelling cannot substitute a different local binder"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pure_capture_publication_retains_private_helpers_for_public_consumers() {
+        let module = resolved_module_fixture(
+            "public-pure-capture.ash",
+            "hidden : Unit -> Int\nhidden () = 42\npub exposed : Unit -> Int\nexposed () = hidden ()\n",
+            "Int",
+            "exposed ()",
+        );
+        let checked = check_module(module).unwrap();
+        for scheme in checked.schemes() {
+            assert_ne!(
+                scheme.capture,
+                crate::core::capture::CaptureValueSummary::default()
+            );
+        }
+        let module = resolved_module_fixture(
+            "method-pure-capture.ash",
+            "interface Read<A> {\nread : A -> Int\n}\nimpl Read<Unit> {\nread () = 42\n}\n",
+            "Int",
+            "read ()",
+        );
+        let checked = check_module(module).unwrap();
+        assert_ne!(
+            checked.implementation_facts()[0].methods[0].capture,
+            crate::core::capture::CaptureValueSummary::default(),
+            "implementation methods demand summaries without a public global"
+        );
+    }
+
+    #[test]
+    fn private_pure_module_keeps_unused_capture_summaries_empty() {
+        let resolved = resolved_module_fixture(
+            "private-pure-capture.ash",
+            "hidden : Unit -> Int\nhidden () = 42\n",
+            "Int",
+            "hidden ()",
+        );
+        let checked = check_module(resolved).expect("the private pure module checks");
+        assert_eq!(checked.schemes().len(), 2);
+        for scheme in checked.schemes() {
+            assert_eq!(
+                scheme.capture,
+                crate::core::capture::CaptureValueSummary::default(),
+                "a private pure module has no portable-summary consumer"
+            );
+        }
+    }
+
+    #[test]
+    fn capture_failure_keeps_staged_implementation_selections_private() {
+        for hidden in [true, false] {
+            let second = if hidden {
+                "resource cell<R> c = 41 {\nlet later : Unit -> Int = fn(ignored) {\nhandle (Cell.read c) with Cell.Ops<R> {\nread value => resume 42\nwrite value => resume ()\n}\n}\nlater\n}"
+            } else {
+                "fn(ignored) {\n42\n}"
+            };
+            let source = format!(
+                "import @builtin.cell as Cell\npub interface Read<A> {{\nread : A -> Int\n}}\npub type Box<A> = Box(A)\npub interface Two<A> {{\nfirst : A -> (Unit -> Int)\nsecond : A -> (Unit -> Int)\n}}\npub impl<A> Two<Box<A>> where Read<A> {{\nfirst (Box value) = fn(ignored) {{\nread value\n}}\nsecond (Box value) = {second}\n}}\n"
+            );
+            let resolved = cell_module_fixture_sources(&source).0;
+            assert!(resolved.definitions().is_empty());
+            let first = &resolved.implementations()[0].method_groups[0].equations[0].body;
+            let ResolvedExprKind::Function(function) = &first.kind else {
+                panic!("first method closure")
+            };
+            let ResolvedExprKind::Apply(application) = &function.body.result.kind else {
+                panic!("selected method call")
+            };
+            let ResolvedExprKind::Occurrence(occurrence) = &application.function.kind else {
+                panic!("selected occurrence")
+            };
+            let [slot] = occurrence.evidence.as_ref() else {
+                panic!("one prerequisite slot")
+            };
+            let handle = slot.handle();
+            let result = check_module(resolved);
+            if hidden {
+                assert!(
+                    matches!(result, Err(TypeError::Source(ref diagnostic)) if diagnostic.reason == TypeReason::ResourceEscape),
+                    "{result:?}"
+                );
+                assert!(
+                    handle.selection().is_none(),
+                    "capture failure must not fill an earlier staged slot"
+                );
+            } else {
+                let checked = result.expect("fresh corrected method-only module publishes");
+                assert!(handle.selection().is_some());
+                let [implementation] = checked.implementation_facts() else {
+                    panic!("one implementation")
+                };
+                assert_eq!(implementation.methods.len(), 2);
+                assert!(
+                    implementation
+                        .methods
+                        .iter()
+                        .all(|method| method.capture.is_retained())
+                );
+                assert_ne!(
+                    implementation.methods[0].capture,
+                    implementation.methods[1].capture
+                );
+            }
+        }
+    }
+
+    #[test]
     fn module_failure_publishes_no_earlier_occurrence_selection() {
         let resolved = resolved_module_fixture(
             "atomic-occurrence-publication.ash",
@@ -22868,6 +24531,66 @@ mod tests {
             handle.selection().is_none(),
             "an earlier choice must remain private when a later body rejects the module"
         );
+    }
+
+    #[test]
+    fn resource_module_publication_has_exact_fresh_budgets_and_private_pending_slots() {
+        let source = "import @builtin.cell as Cell\npub interface Read<A> {\nread : A -> Int\n}\npub type Box<A> = Box(A)\npub interface Two<A> {\nfirst : A -> (Unit -> Int)\nsecond : A -> (Unit -> Int)\n}\npub impl<A> Two<Box<A>> where Read<A> {\nfirst (Box value) = fn(ignored) {\nread value\n}\nsecond (Box value) = resource cell<R> c = 41 {\nlet copied = Cell.read c\nlet later : Unit -> Int = fn(ignored) {\ncopied + 1\n}\nlater\n}\n}\n";
+        let run = |type_limit, constraint_limit| {
+            let resolved = cell_module_fixture_sources(source).0;
+            assert!(resolved.definitions().is_empty());
+            let first = &resolved.implementations()[0].method_groups[0].equations[0].body;
+            let ResolvedExprKind::Function(function) = &first.kind else {
+                panic!("first closure")
+            };
+            let ResolvedExprKind::Apply(application) = &function.body.result.kind else {
+                panic!("selected call")
+            };
+            let ResolvedExprKind::Occurrence(occurrence) = &application.function.kind else {
+                panic!("selected occurrence")
+            };
+            let handle = occurrence.evidence[0].handle();
+            let mut types = TypeWorkBudget::with_limit(type_limit);
+            let mut constraints = InterfaceConstraintBudget::with_limit(constraint_limit);
+            let result = check_module_with_budget(
+                resolved,
+                &mut types,
+                &mut UsefulnessBudget::default(),
+                &mut constraints,
+            );
+            (
+                result,
+                types.used(),
+                constraints.used(),
+                handle.selection().is_some(),
+            )
+        };
+        let (measured, types, constraints, published) = run(usize::MAX, usize::MAX);
+        let checked = measured.unwrap();
+        assert!(published);
+        assert_eq!(checked.implementation_facts()[0].methods.len(), 2);
+        assert!(
+            checked.implementation_facts()[0]
+                .methods
+                .iter()
+                .all(|method| method.capture.is_retained())
+        );
+        let (short, _, _, published) = run(types - 1, constraints);
+        assert_eq!(short.unwrap_err(), type_resource());
+        assert!(!published);
+        // With no globals/imported implementations, the final constraint cell
+        // reserves this one implementation after capture proof and export
+        // freezing, immediately before pending evidence publication.
+        let (short, _, used, published) = run(types, constraints - 1);
+        assert_eq!(short.unwrap_err(), constraint_resource());
+        assert_eq!(used, constraints - 1);
+        assert!(!published);
+        for _ in 0..2 {
+            let (retry, used_types, used_constraints, published) = run(types, constraints);
+            retry.unwrap();
+            assert!(published);
+            assert_eq!((used_types, used_constraints), (types, constraints));
+        }
     }
 
     #[test]
@@ -23137,9 +24860,20 @@ mod tests {
 
     #[test]
     fn one_type_budget_spans_all_checked_modules() {
+        let measured = resolved_module_fixture("measured.ash", "", "Unit", "()");
+        let mut measured_work = TypeWorkBudget::unbounded();
+        check_module_with_budget(
+            measured,
+            &mut measured_work,
+            &mut UsefulnessBudget::default(),
+            &mut InterfaceConstraintBudget::default(),
+        )
+        .expect("one complete module, including its data summary, should fit");
+        let exact = measured_work.used();
+        assert!(exact > 0);
         let first = resolved_module_fixture("first.ash", "", "Unit", "()");
         let second = resolved_module_fixture("second.ash", "", "Unit", "()");
-        let mut type_work = TypeWorkBudget::with_limit(60);
+        let mut type_work = TypeWorkBudget::with_limit(exact);
         let mut coverage_work = UsefulnessBudget::default();
         let mut constraint_work = InterfaceConstraintBudget::default();
 
@@ -23150,6 +24884,7 @@ mod tests {
             &mut constraint_work,
         )
         .expect("the first module should fit the shared type budget");
+        assert_eq!(type_work.used(), exact);
         let failure = check_module_with_budget(
             second,
             &mut type_work,
@@ -24900,6 +26635,54 @@ mod tests {
             .expect("the exact retained match cost should fit");
         assert_eq!(typed.ty, Type::Int);
         assert_eq!(exact.type_work.charge(1), Err(()));
+    }
+
+    #[test]
+    fn implementation_capture_abstraction_failure_is_stack_safe_and_retryable() {
+        const CHILD: &str = "ASH_IMPLEMENTATION_CAPTURE_TYPE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "elaborate::tests::implementation_capture_abstraction_failure_is_stack_safe_and_retryable", "--nocapture"])
+                .env(CHILD, "1")
+                .output().unwrap();
+            assert!(
+                output.status.success(),
+                "method abstraction child failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 10_000;
+                let parameters = [(TypeVariableId::new(0), Kind::Type)];
+                let run = |budget: &mut TypeWorkBudget| {
+                    let mut body = Type::Unit;
+                    for _ in 0..DEPTH {
+                        body = Type::Function(Box::new(Type::Unit), Box::new(body));
+                    }
+                    retain_implementation_capture_type(body, &parameters, budget)
+                        .map(IterativeTypeOwner::new)
+                };
+                let mut measured = TypeWorkBudget::unbounded();
+                drop(run(&mut measured).unwrap());
+                let mut short = TypeWorkBudget::with_limit(measured.used() - 1);
+                assert!(matches!(
+                    run(&mut short),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                ));
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(measured.used());
+                    drop(run(&mut exact).unwrap());
+                    assert_eq!(exact.used(), measured.used());
+                }
+            })
+            .unwrap()
+            .join()
+            .expect("deep method abstraction teardown must fit 64 KiB");
     }
 
     #[test]
@@ -31038,6 +32821,107 @@ mod tests {
         retry.type_work = TypeWorkBudget::with_limit(exact);
         assert_eq!(retry.zonk_with_status(&wide), Ok(zonked));
         assert_eq!(retry.type_work.used(), exact);
+    }
+
+    #[test]
+    fn core_effect_row_wrapper_is_exact_retryable_and_disposed_on_deep_failure() {
+        std::thread::Builder::new()
+            .name("core-row-wrapper-owner".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut argument = Type::Unit;
+                for _ in 0..32_000 {
+                    argument = Type::Application(Box::new(Type::Unit), Box::new(argument));
+                }
+                let row = EffectRow::singleton(crate::types::EffectInstance::new(
+                    crate::types::EffectId::new(ModuleId::new(0), 0),
+                    Box::new([argument]),
+                ));
+                let mut clone_work = TypeWorkBudget::unbounded();
+                drop(clone_effect_row_with_budget(&row, &mut clone_work).unwrap());
+                let zonk = |work: &mut TypeWorkBudget| {
+                    zonk_core_effect_row(
+                        &row,
+                        &HashMap::new(),
+                        &HashMap::new(),
+                        &InferenceVariableRegistry::default(),
+                        &HashSet::new(),
+                        work,
+                        false,
+                    )
+                };
+                // The clone is retained when the first wrapper-zonk charge fails.
+                assert_eq!(
+                    zonk(&mut TypeWorkBudget::with_limit(clone_work.used())),
+                    Err(BuildError::TypeWorkExceeded),
+                );
+                let mut measured = TypeWorkBudget::unbounded();
+                drop(zonk(&mut measured).unwrap());
+                assert_eq!(
+                    zonk(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+                    Err(BuildError::TypeWorkExceeded),
+                );
+                let mut exact = TypeWorkBudget::with_limit(measured.used());
+                drop(zonk(&mut exact).unwrap());
+                assert_eq!(exact.used(), measured.used());
+            })
+            .expect("the Core row wrapper thread should start")
+            .join()
+            .expect("Core row wrappers must be dropped iteratively");
+    }
+
+    #[test]
+    fn nonstrict_handler_suffix_normalization_has_an_exact_fresh_retry_boundary() {
+        let span = row_test_span("handler-suffix-normalization.ash");
+        let prepare = || {
+            let mut elaborator = CoreElaborator::<EffectOperationFamily>::new();
+            let unresolved = elaborator.fresh_inference(&Kind::Type, span).unwrap();
+            let solved = elaborator.fresh_inference(&Kind::Type, span).unwrap();
+            elaborator.unify(&solved, &Type::Int).unwrap();
+            let checkpoint = elaborator.builder.type_rewrite_checkpoint();
+            elaborator
+                .builder
+                .unit(unresolved, Origin::Source(span))
+                .unwrap();
+            elaborator
+                .builder
+                .unit(solved, Origin::Source(span))
+                .unwrap();
+            elaborator.type_work = TypeWorkBudget::unbounded();
+            (elaborator, checkpoint)
+        };
+        let (mut measured, checkpoint) = prepare();
+        measured
+            .zonk_builder_types_since(Some(checkpoint), false)
+            .unwrap();
+        let exact = measured.type_work.used();
+        assert!(exact > 0);
+        assert!(
+            measured.builder.requires_type_rewrite(),
+            "nonstrict normalization must retain unresolved identities"
+        );
+        let (mut short, checkpoint) = prepare();
+        short.type_work = TypeWorkBudget::with_limit(exact - 1);
+        assert_eq!(
+            short.zonk_builder_types_since(Some(checkpoint), false),
+            Err(ElaborationFailure::TypeResourceExhausted)
+        );
+        assert!(short.final_root.is_none());
+        assert!(short.selection.is_none());
+        // Suffix rewriting is progressive: discard the failed elaborator,
+        // then retry a fresh owner rather than publishing its partial builder.
+        drop(short);
+        let (mut retry, checkpoint) = prepare();
+        retry.type_work = TypeWorkBudget::with_limit(exact);
+        retry
+            .zonk_builder_types_since(Some(checkpoint), false)
+            .unwrap();
+        assert_eq!(retry.type_work.used(), exact);
+        retry.type_work = TypeWorkBudget::unbounded();
+        assert!(
+            retry.zonk_builder_types().is_err(),
+            "strict final admission still rejects the unresolved identity"
+        );
     }
 
     #[test]

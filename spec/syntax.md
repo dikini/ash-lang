@@ -135,6 +135,9 @@ handler_expression ::=
 handler_clause ::= identifier pattern "=>" expression ;
 resume_expression ::= "resume" expression ;
 discard_expression ::= "discard" ;
+resource_expression ::=
+  "resource" "cell" "<" upper_identifier ">" identifier
+  "=" primary_expression block ;
 
 expression ::=
     block
@@ -142,6 +145,7 @@ expression ::=
   | match_expression
   | handler_expression
   | resume_expression
+  | resource_expression
   | equality_expression ;
 equality_expression ::= additive_expression [ "==" additive_expression ] ;
 additive_expression ::=
@@ -372,6 +376,15 @@ name, one pattern, and one expression body. `resume` consumes one expression;
 `discard` is a nullary primary expression. Name resolution and static semantics
 restrict both completion forms to their owning operation clause.
 
+A resource expression acquires one cell. It writes exactly one uppercase
+identity binder, one ordinary value binder, one primary-expression initializer
+and a block body. Neither binder has a parameter list or annotation, and the
+value binder is not a pattern or wildcard. `cell` is the only admitted resource
+kind. A non-primary initializer, such as `40 + 1` or `make ()`, must be
+parenthesized. The initializer precedes the binders' scope; both binders are
+visible only in the body. There is no resource declaration or first-class
+acquisition function.
+
 The executable test `syntax_local_recursive_group_example_is_executable`
 checks a complete entry module containing a two-member recursive group. The
 second function retains a reference back to the first without calling it, so
@@ -407,6 +420,10 @@ their operand extends to the handler delimiter or the end of the surrounding
 expression. A handled or resumed expression must be parenthesized to serve as
 an application or infix operand. Therefore `resume x + y` resumes with `x + y`,
 while `(resume x) + y` resumes with `x` and then adds `y`.
+
+A resource expression ends at its body block. Like a block, it must be
+parenthesized to serve as an application or infix operand. The primary
+initializer rule does not make the complete resource expression primary.
 
 `!` attaches to the complete computation codomain immediately to its left after
 parentheses are applied. Thus `A -> B -> C ! {E}` is a pure call from `A` that

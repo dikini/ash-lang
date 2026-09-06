@@ -266,6 +266,10 @@ fn occurrences_in_expressions(
                 expressions.extend(matched.arms.iter().map(|arm| &arm.body));
             }
             ResolvedExprKind::Perform(request) => expressions.push(&request.operand),
+            ResolvedExprKind::Resource(resource) => {
+                expressions.push(&resource.initializer);
+                expressions.push(&resource.body);
+            }
             ResolvedExprKind::Handle(handler) => {
                 expressions.push(&handler.body);
                 expressions.extend(handler.clauses.iter().map(|clause| &clause.body));

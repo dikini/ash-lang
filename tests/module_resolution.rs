@@ -101,6 +101,53 @@ fn local_binder_numbers_are_qualified_by_their_defining_module() {
 }
 
 #[test]
+fn selected_opaque_identity_agrees_with_a_helpers_hidden_signature_closure() {
+    let tree = TempTree::create();
+    tree.write(
+        "base.ash",
+        "pub opaque type Token<R> = Hidden\npub interface Read<R> {\nread : Token<R> -> Int\n}\n",
+    );
+    tree.write("helper.ash", "import base as Base\npub forward<R> : Base.Token<R> -> Int where Base.Read<R>\nforward value = Base.read value\n");
+    tree.write("facade.ash", "pub import helper (forward)\n");
+    for imports in [
+        "import base (Token)\nimport facade (forward)\n",
+        "import facade (forward)\nimport base (Token)\n",
+    ] {
+        let entry = tree.write(
+            "entry.ash",
+            &format!("{imports}main : Unit -> Int\nmain () = 42\n"),
+        );
+        assert_eq!(
+            run_path(RunConfiguration {
+                entry,
+                roots: ModuleRoots::empty()
+            })
+            .expect("route visibility is not defining metadata")
+            .value_display(),
+            "42"
+        );
+    }
+    for (source, reason) in [
+        (
+            "import base (Token)\nimport facade (forward)\nmain : Unit -> Int\nmain () = Hidden\n",
+            "resolve.unknown-constructor",
+        ),
+        (
+            "import facade (forward)\ninspect : Token<Int> -> Int\ninspect value = 42\nmain : Unit -> Int\nmain () = 42\n",
+            "kind.not-applicable",
+        ),
+    ] {
+        let entry = tree.write("entry.ash", source);
+        let failure = run_path(RunConfiguration {
+            entry,
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        assert_eq!(failure.reason_code(), reason, "{failure:?}");
+    }
+}
+
+#[test]
 fn resolved_modules_are_declarations_only() {
     let tree = TempTree::create();
     let graph = load(&tree, "main : Unit -> Int\nmain () = 42\n", &[]);

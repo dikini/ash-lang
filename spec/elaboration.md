@@ -49,6 +49,14 @@ operations with their exact effect, operation, handler, and resume-owner
 identities. A row tail
 or effect argument is zonked before a checked summary or Core node is retained.
 
+A resource expression lowers to one Effect `Resource` carrier with an
+initializer and body. It retains the acquisition's identity binder, handle
+binder, exact builtin API relation, generated provider methods and causal
+origin. The initializer remains outside the acquired scope. The body receives
+the authenticated lexical provider, whose ordinary method functions request
+the corresponding `Ops<R>` operations. This is not a generic provider registry
+or an ordinary source `with` declaration. Pure Core admits no resource carrier.
+
 Resolution has already replaced source type spellings with stable nominal and
 type-parameter identities. Elaboration may introduce inference variables while
 checking, but it solves and removes every inference variable before constructing
@@ -241,9 +249,13 @@ Pure Core families. Effect Core adds only these operation-family nodes:
 - each clause retains its operation identity, checked irrefutable pattern,
   body, handler identity, and one resume-owner identity;
 - `Resume(handler, owner, value)` remains a clause-scoped Core operation rather
-  than a value or function; and
+  than a value or function;
 - `Discard(handler, owner)` is a clause-scoped, childless operation with value
-  type `Unit` and empty immediate row.
+  type `Unit` and empty immediate row; and
+- `Resource(acquisition, handle, initializer, body)` retains the authenticated
+  builtin relation, evaluates the initializer outside the acquired scope, and
+  removes exactly its `Ops<R>` instance from the body row before union with
+  the initializer row.
 
 Effect and operation declarations remain authenticated registry facts. Core
 contains no provider choice or runtime effect registration. Lowering does not
@@ -265,7 +277,8 @@ type arguments. Their two ordered slices follow the abstraction's one ordered
 parameter vector by kind. Pure Core type applications retain no row arguments.
 Effect Core validation checks argument cardinality, kind, scope, and complete
 result substitution; transforms preserve or rebuild the same arguments before
-revalidation, and evaluation erases the type application directly.
+revalidation. Effect execution retains the complete row instantiation in the
+function's lexical context for exact operation matching.
 
 ## Interface-evidence lowering
 
@@ -386,8 +399,9 @@ domain, occurrence, forwarding use, adapter, and supplied local method. Their te
 ordinary Core type abstractions, function binders, binder occurrences, type
 applications, local bindings, and term applications. Method authentication facts and schemes
 may remain as inert validation and transformation authority in the validated
-program; the evaluator does not inspect them. Core type operations erase
-through the existing dynamic rules.
+program; the evaluator does not inspect them. Pure Core type operations erase;
+Effect execution retains their lexical instantiation for exact effect matching,
+without inspecting method authentication records.
 Determination adds no Core node, type binder, evidence method, evaluator value,
 or interface-specific operation. Complete substituted types and the existing
 method-evidence relationships are sufficient after the determinant-position
@@ -415,6 +429,16 @@ substitution into the scheme body. The Core operation is not a curried sequence
 of unary expression operations.
 Parameterized constructors use the same Core instantiation form as
 polymorphic value names.
+
+Effect Core independently checks that every type-abstraction body is an inert
+function/constructor value or variable, a transparent type-operation wrapper,
+or an authenticated generated method adapter whose checked applications only
+construct evidence functions. Each nested abstraction satisfies the same
+check. Arbitrary applications, bindings, aggregates, handlers and requests do
+not qualify merely because their immediate row is empty. This invariant
+matches source generalization and generated evidence; it permits execution to
+retain the lexical abstraction until instantiation without delaying source
+effects. Pure Core keeps its existing erasure and validation boundary.
 
 A newtype constructor occurrence lowers to an ordinary unary function whose body is a wrap conversion.
 For a parameterized declaration, the function uses fresh generated type
@@ -482,8 +506,9 @@ Core transformations preserve or rebuild type abstractions, type applications,
 binder kinds, ordered identities and arguments, structural types, origins, and
 every method-evidence authentication relationship. The transformed program
 passes fresh independent validation before use. The dynamic semantics erase
-the type operations. They produce no runtime kind or type value and change
-neither evaluation order nor heap contents.
+Pure type operations and retain Effect instantiation in lexical execution
+context. Neither produces a source-inspectable kind or type value, changes
+strict source evaluation order, or allocates an ordinary heap cell.
 
 ## Function presentations
 
@@ -601,6 +626,9 @@ rejects every effect operation. Effect Core validation independently checks:
   and one shared handler result and output row;
 - each resume's handler and owner, input and result types, and output row;
 - each discard's handler and owner, `Unit` type, empty row and inferred safety;
+- each resource's builtin origin, unique acquisition identity and handle,
+  sealed provider and operation relation, initializer scope and `Int` type,
+  body scope, exact row discharge and result contract;
 - exactly-once structural completion through resume or discard, and barriers
   against escape into functions, recursive members, supplied methods, or nested
   clauses;
@@ -617,6 +645,22 @@ Capture validation independently derives request obligations from the actual
 linked Core control after ordinary validation. It does not trust an elaborator
 permission or imported summary in place of that derivation. A transformed
 program must re-establish the same safety property.
+
+Resource validation also reconstructs stored value and callable dependencies
+and resource-completion obligations from actual linked Core, even when there
+is no discard. It checks closing results, operation payloads crossing each
+owner and skipped completion, including restored control. Retained imported
+facts and elaborator results do not replace this independent derivation.
+Identity and folding transforms rebuild resource children and authentication
+facts and return to the same full check before execution. Forged builtin
+origins, identity/handle/provider relations, lexical owners, dependencies or
+rows cannot authorize evaluation.
+
+Static acquisition identities remain distinct from runtime activation keys.
+Core carries the former and contains no preallocated activation or mutable
+cell. Dynamic lexical instantiation binds each executed acquisition to a fresh
+activation; it cannot introduce an inference variable into validated Core or
+feed execution metadata back into source typing.
 
 For every resolved global with a nonempty outer binder list, validation
 requires its `TypeAbstraction` to be the immediate initializer of exactly one
@@ -697,7 +741,8 @@ binder, node, term-scope, and type-scope passes. It is neither reset between
 passes nor supplemented by a separate kind allowance. Core validation applies
 once to the whole linked Core program, including every module group and the
 generated entry application. Effect instances, rows, operations, clauses,
-resume owners, handler scopes, capture metadata and capture queries charge
+resume owners, handler scopes, resource relations, stored dependencies,
+capture metadata and capture queries charge
 that same ledger before retention or
 traversal. Failure of this boundary is an internal compiler failure, not a
 source-language typing result.

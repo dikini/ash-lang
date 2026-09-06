@@ -135,12 +135,13 @@ impl ObservedValue {
                     active.remove(&location);
                 }
                 Task::Value(value) => match value {
+                    Value::ResourceHandle(_) => output.push_str("<resource-handle>"),
                     Value::Integer(value) => output.push_str(&value.to_string()),
                     Value::Boolean(value) => output.push_str(if value { "true" } else { "false" }),
                     Value::Unit => output.push_str("()"),
-                    Value::Function(_) | Value::ConstructorFunction(_) => {
-                        output.push_str("<function>")
-                    }
+                    Value::Function(_)
+                    | Value::Polymorphic { .. }
+                    | Value::ConstructorFunction(_) => output.push_str("<function>"),
                     Value::Location(location) => tasks.push(Task::Location(location)),
                     Value::Data(value) => output.push_str(&value.render()),
                 },
@@ -271,6 +272,8 @@ impl fmt::Debug for Closure {
 /// have no equality operation or observable identity.
 #[derive(Clone, Debug)]
 pub enum Value {
+    /// An opaque, non-owning access key for a live resource activation.
+    ResourceHandle(ActivationKey),
     /// An arbitrary-precision mathematical integer.
     Integer(Integer),
     /// A Boolean value.
@@ -279,6 +282,13 @@ pub enum Value {
     Unit,
     /// A lexical unary function and its captured Ash environment.
     Function(Closure),
+    /// Internal lexical construction retained until validated Effect instantiation.
+    Polymorphic {
+        /// The admitted abstraction in the current executable arena.
+        abstraction: NodeId,
+        /// Its immutable lexical definition environment.
+        environment: Environment,
+    },
     /// A payload constructor awaiting its one ordinary argument.
     ConstructorFunction(ConstructorId),
     /// An internal heap location used while the machine is running.
@@ -290,13 +300,20 @@ pub enum Value {
 impl fmt::Display for Value {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ResourceHandle(_) => formatter.write_str("<resource-handle>"),
             Self::Integer(value) => value.fmt(formatter),
             Self::Boolean(value) => value.fmt(formatter),
             Self::Unit => formatter.write_str("()"),
             Self::Function(_) => formatter.write_str("<function>"),
+            Self::Polymorphic { .. } => formatter.write_str("<function>"),
             Self::ConstructorFunction(_) => formatter.write_str("<function>"),
             Self::Location(_) => formatter.write_str("<location>"),
             Self::Data(value) => value.fmt(formatter),
         }
     }
 }
+
+/// An evaluator-created activation identity with no public constructor.
+/// It carries no cell payload or ownership edge.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActivationKey(pub(super) u32);

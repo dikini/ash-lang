@@ -116,6 +116,11 @@ where
                 pending.push(matched.scrutinee.as_ref());
                 pending.extend(matched.arms.iter().map(|arm| &arm.body));
             }
+            ResolvedExprKind::Resource(resource) => reserve_and_extend(
+                &mut pending,
+                [resource.initializer.as_ref(), resource.body.as_ref()],
+                budget,
+            )?,
             ResolvedExprKind::Perform(request) => pending.push(&request.operand),
             ResolvedExprKind::Handle(handler) => {
                 reserve_and_extend(
@@ -459,6 +464,7 @@ mod tests {
                 let block = ResolvedBlock {
                     declarations: vec![ResolvedLocalDeclaration::Evidence(Box::new(
                         crate::resolved::ResolvedLexicalEvidence {
+                            acquisition: None,
                             checked: crate::interface::LexicalEvidenceSlot::default(),
                             id: crate::interface::LexicalEvidenceId::new(module, 0),
                             application: template.head.clone(),

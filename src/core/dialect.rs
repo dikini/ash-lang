@@ -81,6 +81,7 @@ pub(crate) struct MethodEvidenceCatalog {
 #[derive(Debug)]
 #[cfg_attr(test, derive(Clone))]
 pub(crate) struct MethodEvidenceLexicalOwner {
+    pub(crate) acquisition: Option<crate::resolved::CellAcquisition>,
     pub(crate) source_parameters: Box<[TypeVariableId]>,
     pub(crate) source: crate::interface::LexicalEvidenceId,
     pub(crate) method: MethodId,
@@ -1446,6 +1447,14 @@ pub trait CoreOperationFamily: Clone + Copy + fmt::Debug + Eq + PartialEq + 'sta
         _visit: &mut dyn FnMut(OperationTypeMetadata<'a>),
     ) {
     }
+    /// Rewrites operation-owned types through admitted, fallible callbacks.
+    fn rewrite_operation_type_metadata(
+        _kind: &mut Self::Kind,
+        _rewrite: &mut dyn FnMut(&Type) -> Result<Type, BuildError>,
+        _charge: &mut dyn FnMut(usize) -> Result<(), BuildError>,
+    ) -> Result<(), BuildError> {
+        Ok(())
+    }
     /// Stores an admitted row in this family's per-node carrier.
     fn store_effects(effects: EffectRow) -> Self::Effects;
     /// Borrows the semantic row represented by the family carrier.
@@ -2509,7 +2518,12 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        let admitted_arms = admit_match_arms(arms, &mut self.type_work, &self.inference_binders);
+        let admitted_arms = admit_match_arms(
+            arms,
+            &mut self.type_work,
+            &self.inference_binders,
+            F::ALLOWS_EFFECTFUL_TYPES,
+        );
         let admitted_result =
             admit_payloads(ty, origin, &mut self.type_work, F::ALLOWS_EFFECTFUL_TYPES);
         match (admitted_arms, admitted_result) {
@@ -2833,8 +2847,12 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         &mut self,
         arm: CoreMatchArm,
     ) -> Result<CoreMatchArm, BuildError> {
-        let (arm, requires_type_rewrite) =
-            admit_match_arm(arm, &mut self.type_work, &self.inference_binders)?;
+        let (arm, requires_type_rewrite) = admit_match_arm(
+            arm,
+            &mut self.type_work,
+            &self.inference_binders,
+            F::ALLOWS_EFFECTFUL_TYPES,
+        )?;
         self.requires_type_rewrite |= requires_type_rewrite;
         Ok(arm)
     }
@@ -3114,6 +3132,35 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         for node in nodes {
             let rewritten = rewrite_admitted!(&node.ty)?;
             replace_type_iteratively(&mut node.ty, rewritten);
+            if let Some(rewrite_row) = rewrite_row.as_deref_mut()
+                && !F::effect_row(&node.effects).is_empty()
+            {
+                let effects = rewrite_row(F::effect_row(&node.effects))?;
+                charge_effect_row_cells(&effects, rewrite_type_work)
+                    .map_err(|()| BuildError::TypeWorkExceeded)?;
+                node.effects = F::store_effects(effects);
+            }
+            {
+                let work = std::cell::RefCell::new(&mut *rewrite_type_work);
+                F::rewrite_operation_type_metadata(
+                    &mut node.kind,
+                    &mut |ty| {
+                        let rewritten = rewrite(ty)?;
+                        let (rewritten, contains_inference) = admit_rewritten_type(
+                            rewritten,
+                            &mut work.borrow_mut(),
+                            F::ALLOWS_EFFECTFUL_TYPES,
+                        )?;
+                        rewritten_requires_type_rewrite |= contains_inference;
+                        Ok(rewritten)
+                    },
+                    &mut |cells| {
+                        work.borrow_mut()
+                            .charge(cells)
+                            .map_err(|()| BuildError::TypeWorkExceeded)
+                    },
+                )?;
+            }
             let Some(kind) = F::pure_mut(&mut node.kind) else {
                 continue;
             };
@@ -3563,12 +3610,13 @@ fn admit_match_arms(
     arms: Vec<CoreMatchArm>,
     type_work: &mut TypeWorkBudget,
     inference_binders: &HashSet<BinderId>,
+    allow_effectful: bool,
 ) -> Result<(Vec<CoreMatchArm>, bool), BuildError> {
     let mut admitted = Vec::new();
     let mut requires_type_rewrite = false;
     let mut remaining = arms.into_iter();
     while let Some(arm) = remaining.next() {
-        match admit_match_arm(arm, type_work, inference_binders) {
+        match admit_match_arm(arm, type_work, inference_binders, allow_effectful) {
             Ok((arm, pattern_rewrite)) => {
                 requires_type_rewrite |= pattern_rewrite;
                 admitted.push(arm);
@@ -3589,9 +3637,10 @@ fn admit_match_arm(
     arm: CoreMatchArm,
     type_work: &mut TypeWorkBudget,
     inference_binders: &HashSet<BinderId>,
+    allow_effectful: bool,
 ) -> Result<(CoreMatchArm, bool), BuildError> {
     let (pattern, body, origin) = arm.into_parts();
-    let pattern = admit_pattern(pattern, type_work, inference_binders);
+    let pattern = admit_pattern(pattern, type_work, inference_binders, allow_effectful);
     let origin = admit_origin(origin);
     match (pattern, origin) {
         (Ok((pattern, pattern_rewrite)), Ok(origin)) => {
@@ -3613,6 +3662,7 @@ fn admit_pattern(
     pattern: CorePattern,
     type_work: &mut TypeWorkBudget,
     inference_binders: &HashSet<BinderId>,
+    allow_effectful: bool,
 ) -> Result<(CorePattern, bool), BuildError> {
     let mut work = vec![PatternAdmissionTask::Visit(pattern, 0)];
     let mut tokens = Vec::new();
@@ -3630,7 +3680,7 @@ fn admit_pattern(
                 }
                 let CorePattern { ty, origin, kind } = pattern;
                 let (ty, origin, pattern_rewrite) =
-                    match admit_payloads(ty, origin, type_work, false) {
+                    match admit_payloads(ty, origin, type_work, allow_effectful) {
                         Ok(payloads) => payloads,
                         Err(error) => {
                             discard_pattern_kind(kind);
@@ -4412,6 +4462,7 @@ mod tests {
             .collect(),
         );
         catalog.set_lexical_owners(vec![MethodEvidenceLexicalOwner {
+            acquisition: None,
             source_parameters: Box::new([]),
             source: crate::interface::LexicalEvidenceId::new(ModuleId::new(0), 0),
             method,
@@ -5511,10 +5562,50 @@ mod tests {
         reset_pattern_admission_peaks();
 
         assert_eq!(
-            admit_pattern(pattern, &mut budget, &HashSet::new()),
+            admit_pattern(pattern, &mut budget, &HashSet::new(), false),
             Err(BuildError::TypeWorkExceeded)
         );
         assert!(pattern_admission_pending_peak() <= 3);
+    }
+
+    #[test]
+    fn pattern_effect_allowance_preserves_pure_rejection_and_exact_work() {
+        let source = SourceFile::new("callback-pattern.ash", "()").unwrap();
+        let origin = generated_origin(&source, 0);
+        let callback = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Int,
+                EffectRow::singleton(crate::types::EffectInstance::new(
+                    crate::types::EffectId::new(crate::module::ModuleId::new(0), 0),
+                    Box::new([]),
+                )),
+            ),
+        );
+        let pattern = CorePattern::new(callback, origin, CorePatternKind::Wildcard);
+        assert!(matches!(
+            admit_pattern(
+                pattern.clone(),
+                &mut TypeWorkBudget::default(),
+                &HashSet::new(),
+                false
+            ),
+            Err(BuildError::InvalidPayload)
+        ));
+        let mut measured = TypeWorkBudget::unbounded();
+        admit_pattern(pattern.clone(), &mut measured, &HashSet::new(), true).unwrap();
+        assert!(matches!(
+            admit_pattern(
+                pattern.clone(),
+                &mut TypeWorkBudget::with_limit(measured.used() - 1),
+                &HashSet::new(),
+                true
+            ),
+            Err(BuildError::TypeWorkExceeded)
+        ));
+        let mut retry = TypeWorkBudget::with_limit(measured.used());
+        admit_pattern(pattern, &mut retry, &HashSet::new(), true).unwrap();
+        assert_eq!(retry.used(), measured.used());
     }
 
     #[test]
@@ -5537,7 +5628,7 @@ mod tests {
         reset_pattern_admission_peaks();
 
         assert_eq!(
-            admit_match_arms(vec![arm; WIDTH], &mut budget, &HashSet::new()),
+            admit_match_arms(vec![arm; WIDTH], &mut budget, &HashSet::new(), false),
             Err(BuildError::TypeWorkExceeded)
         );
         assert!(match_arm_retained_capacity_peak() <= ALLOWANCE);
