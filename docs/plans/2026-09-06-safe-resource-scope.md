@@ -54,7 +54,9 @@ re-review it. Only the parent commits reviewed checkpoints.
 
 **Files:** `src/eval/machine.rs`, `src/eval/value.rs`, a small dedicated
 effect-instantiation module only if it simplifies ownership, and
-`tests/effect_runtime.rs`. The parent updates relevant dynamic/spec wording.
+`tests/effect_runtime.rs`. The narrow Effect abstraction-form invariant also
+uses `src/core/validate.rs` and `tests/effect_core.rs`. The parent updates
+relevant dynamic/spec wording.
 
 1. Retain the confirmed generic-helper and returned-closure regressions. The
    smallest complete program has `helper<T> : T -> Int ! {E<T>}`, performs
@@ -67,6 +69,13 @@ effect-instantiation module only if it simplifies ownership, and
    and handler instances under saved handler context. Do not weaken exact
    equality, inspect runtime argument values to infer types, or use a mutable
    global substitution. Pure type operations remain erased.
+   Independently admit only inert function/constructor values or variables,
+   transparent type-operation wrappers, or already-authenticated generated
+   method-adapter abstraction bodies in Effect Core. This matches source
+   lowering and permits retained lexical abstractions without deferring source
+   effects. A merely empty row is insufficient. Ordinary polymorphic
+   constructors retain their existing behavior. Test rejected unproved Core
+   forms and both transforms; do not add a general aggregate specializer.
 3. Add distinct Int/Bool requests, higher-kinded arguments, row-bearing function
    arguments, factory closures called after return, nested type applications,
    generic recursion and generic implementation/method adapters. Preserve

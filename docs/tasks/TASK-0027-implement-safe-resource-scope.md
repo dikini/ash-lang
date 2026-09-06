@@ -57,6 +57,14 @@ runtime request selection. A generic `E<T>` helper under `E<Int>` fails with
 pass. Returned requesting closures fail similarly. CP-0017 explicitly corrects
 this prerequisite and the corresponding blanket type-erasure wording.
 
+Source-generated type abstractions contain inert values, transparent type
+operations or authenticated method adapters, but Effect Core previously
+admitted arbitrary bodies. Delaying those
+arbitrary bodies could delay effects. Step 1 therefore independently enforces
+the actual lowered forms before retaining lexical abstractions. This preserves
+source order and avoids a general runtime aggregate-specialization mechanism;
+Pure Core and source generalization are unchanged.
+
 Ordinary closure environments retain unused preceding bindings, while ordinary
 heap cells persist into observation. Resource payload ownership must therefore
 stay with the acquired scope; non-owning access handles must not extend it.

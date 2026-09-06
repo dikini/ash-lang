@@ -116,6 +116,19 @@ control. A request uses its own lexical instantiation; a handler uses its saved
 lexical instantiation. No machine-global substitution or runtime-value-based
 type inference is permitted. Pure execution retains its existing erasure.
 
+Effect Core independently restricts type-abstraction bodies to the forms
+produced by source lowering: an inert function/constructor value or variable,
+transparent type-operation wrappers around such forms, or an authenticated
+generated method adapter whose checked applications only construct evidence
+functions. Each nested abstraction satisfies the same independent check.
+An empty immediate effect row alone is not this proof. This internal invariant
+allows execution to retain the lexical abstraction until instantiation without
+delaying source effects. Parameterized ordinary constructors retain their
+existing constructor behavior; Pure Core is unchanged. Arbitrary effectful or
+aggregate-computing Core abstractions are not admitted by this Effect lowering
+boundary. This is not a source generalization restriction: source already
+generalizes function definitions and eligible anonymous-function bindings.
+
 The same execution context binds a resource identity to its activation.
 An outer operation-bearing closure called during a nested execution of the
 same acquisition site still addresses the outer identity. This applies when
@@ -247,6 +260,9 @@ No main merge, remote push or milestone tag.
 
 - Generic effect requests and returned closures match concrete caller handlers;
   distinct instantiations remain separate, including rows and method adapters.
+- Independent Effect Core checking rejects unproved type-abstraction bodies;
+  admitted functions, constructors and authenticated adapters survive both
+  transforms without changing strict source effect order or Pure erasure.
 - Builtin imports, renaming and facade export retain origin; fake source APIs,
   forbidden roots and forged provider facts do not gain authority.
 - Direct read/write, repeated access, aliases, generic/imported helpers,
