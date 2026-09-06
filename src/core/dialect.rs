@@ -147,6 +147,10 @@ pub(crate) enum MethodEvidenceOwner {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MethodEvidenceExpectedRole {
+    LexicalCaptureUse {
+        owner: usize,
+        ordinal: usize,
+    },
     LexicalOwner {
         owner: usize,
     },
@@ -640,6 +644,26 @@ pub(super) fn method_evidence_anchor_matches_expectation(
     type_work.charge(1)?;
     match (expected.role, role) {
         (
+            MethodEvidenceExpectedRole::LexicalCaptureUse { owner, ordinal },
+            MethodEvidenceAnchorRole::LexicalCaptureUse {
+                owner: actual_owner,
+                ordinal: actual_ordinal,
+            },
+        ) => {
+            let Some(expected) = catalog.lexical_owners.get(owner) else {
+                return Ok(false);
+            };
+            Ok(owner == actual_owner
+                && ordinal == actual_ordinal
+                && ordinal < expected.captures.len()
+                && requirement.is_none()
+                && same_interface_application_with_budget(
+                    &expected.application,
+                    application,
+                    type_work,
+                )?)
+        }
+        (
             MethodEvidenceExpectedRole::LexicalOwner { owner: index },
             MethodEvidenceAnchorRole::LexicalOwner { source, binder },
         ) => {
@@ -1049,6 +1073,10 @@ fn selection_contains(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MethodEvidenceAnchorRole {
+    LexicalCaptureUse {
+        owner: usize,
+        ordinal: usize,
+    },
     LexicalOwner {
         source: crate::interface::LexicalEvidenceId,
         binder: BinderId,
@@ -1091,6 +1119,7 @@ const fn method_evidence_anchor_identity_work(role: MethodEvidenceAnchorRole) ->
         MethodEvidenceAnchorRole::Adapter { .. } => 1,
         MethodEvidenceAnchorRole::AdapterEdge { .. } => 4,
         MethodEvidenceAnchorRole::ImplementationOwner { .. }
+        | MethodEvidenceAnchorRole::LexicalCaptureUse { .. }
         | MethodEvidenceAnchorRole::LexicalOwner { .. }
         | MethodEvidenceAnchorRole::LexicalUse { .. }
         | MethodEvidenceAnchorRole::Domain { .. }
@@ -2083,6 +2112,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
                 (role, occurrence),
                 (MethodEvidenceAnchorRole::ImplementationOwner { .. }, None)
                     | (MethodEvidenceAnchorRole::LexicalOwner { .. }, None)
+                    | (MethodEvidenceAnchorRole::LexicalCaptureUse { .. }, None)
                     | (MethodEvidenceAnchorRole::Domain { .. }, None)
                     | (
                         MethodEvidenceAnchorRole::Instantiation { .. }
@@ -2215,6 +2245,59 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         });
         self.consumed_method_evidence[expectation] = true;
         Ok(())
+    }
+
+    pub(crate) fn lexical_capture_owner(
+        &mut self,
+        source: crate::interface::LexicalEvidenceId,
+        method: MethodId,
+    ) -> Result<usize, BuildError> {
+        self.type_work
+            .charge(self.method_evidence.lexical_owners.len())
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        self.method_evidence
+            .lexical_owners
+            .iter()
+            .position(|owner| owner.source == source && owner.method == method)
+            .ok_or(BuildError::InvalidPayload)
+    }
+
+    pub(crate) fn authenticate_lexical_capture_use(
+        &mut self,
+        node: NodeId,
+        owner: usize,
+        ordinal: usize,
+    ) -> Result<(), BuildError> {
+        self.type_work
+            .charge(1)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        let row = self
+            .method_evidence
+            .lexical_owners
+            .get(owner)
+            .ok_or(BuildError::InvalidPayload)?;
+        let binder = row
+            .captures
+            .get(ordinal)
+            .ok_or(BuildError::InvalidPayload)?;
+        if !self.nodes.get(node.index()?).and_then(|node| F::pure(&node.kind))
+            .is_some_and(|kind| matches!(kind, PureExprKind::Variable(variable) if variable.binder() == *binder)) {
+            return Err(BuildError::InvalidPayload);
+        }
+        let method = row.method;
+        let application = row
+            .application
+            .clone_with_budget(&mut self.type_work)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        self.authenticate_method_evidence(
+            node,
+            None,
+            None,
+            method,
+            application,
+            MethodEvidenceAnchorRole::LexicalCaptureUse { owner, ordinal },
+            None,
+        )
     }
 
     /// Reserves the complete resolver-assigned binder namespace.
@@ -4294,6 +4377,154 @@ mod tests {
         }
     }
 
+    fn lexical_capture_catalog() -> MethodEvidenceCatalog {
+        let interface = InterfaceId::new(ModuleId::new(0), 0);
+        let method = MethodId::new(interface, 0);
+        let parameter = TypeVariableId::Resolved {
+            module: ModuleId::new(0),
+            local: 0,
+        };
+        let mut catalog = MethodEvidenceCatalog::new(
+            vec![MethodEvidenceMethod {
+                id: method,
+                interface_parameters: Box::new([parameter]),
+                parameters: Box::new([]),
+                value_type: Type::Function(
+                    Box::new(Type::Variable(parameter)),
+                    Box::new(Type::Int),
+                ),
+            }],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            std::iter::once(MethodEvidenceExpectation {
+                occurrence: None,
+                method,
+                role: MethodEvidenceExpectedRole::LexicalOwner { owner: 0 },
+            })
+            .chain((0..3).map(|ordinal| MethodEvidenceExpectation {
+                occurrence: None,
+                method,
+                role: MethodEvidenceExpectedRole::LexicalCaptureUse { owner: 0, ordinal },
+            }))
+            .collect(),
+        );
+        catalog.set_lexical_owners(vec![MethodEvidenceLexicalOwner {
+            source_parameters: Box::new([]),
+            source: crate::interface::LexicalEvidenceId::new(ModuleId::new(0), 0),
+            method,
+            binder: resolved_id(0),
+            application: InterfaceApplication::new(
+                interface,
+                Box::new([Type::Nominal(NominalTypeId::new(ModuleId::new(0), 0))]),
+            ),
+            captures: Box::new([resolved_id(1), resolved_id(2), resolved_id(2)]),
+        }]);
+        catalog
+    }
+
+    #[test]
+    fn lexical_capture_owner_lookup_charges_the_full_owner_table() {
+        for width in [1, 64] {
+            let mut catalog = lexical_capture_catalog();
+            let first = catalog.lexical_owners[0].clone();
+            for index in 1..width {
+                let mut owner = first.clone();
+                owner.source =
+                    crate::interface::LexicalEvidenceId::new(ModuleId::new(0), index as u32);
+                catalog.lexical_owners.push(owner);
+            }
+            let mut builder: CoreBuilder = CoreBuilder::with_registry_and_method_evidence(
+                Arc::new(ResolvedRegistry::default()),
+                Arc::new(catalog),
+            )
+            .expect("capture catalog");
+            builder.type_work = TypeWorkBudget::with_limit(width - 1);
+            assert_eq!(
+                builder.lexical_capture_owner(first.source, first.method),
+                Err(BuildError::TypeWorkExceeded)
+            );
+            assert_eq!(builder.type_work.used(), 0);
+            for _ in 0..2 {
+                builder.type_work = TypeWorkBudget::with_limit(width);
+                assert_eq!(
+                    builder.lexical_capture_owner(first.source, first.method),
+                    Ok(0)
+                );
+                assert_eq!(builder.type_work.used(), width);
+            }
+        }
+    }
+
+    #[test]
+    fn lexical_capture_authentication_is_exact_atomic_and_retryable() {
+        let source = SourceFile::new("capture-anchor.ash", "()").expect("source");
+        let catalog = Arc::new(lexical_capture_catalog());
+        // Four expectations retain two builder carriers each, including 2C
+        // for the three capture expectations.
+        assert_eq!(
+            CoreBuilder::with_registry_method_evidence_and_type_work(
+                Arc::new(ResolvedRegistry::default()),
+                Arc::clone(&catalog),
+                TypeWorkBudget::with_limit(7),
+            )
+            .expect_err("one missing carrier unit"),
+            BuildError::TypeWorkExceeded
+        );
+        let prepare = || {
+            let mut builder = CoreBuilder::with_registry_method_evidence_and_type_work(
+                Arc::new(ResolvedRegistry::default()),
+                Arc::clone(&catalog),
+                TypeWorkBudget::with_limit(8),
+            )
+            .expect("exact carriers");
+            assert_eq!(builder.type_work.used(), 8);
+            builder.type_work = TypeWorkBudget::unbounded();
+            let nodes = catalog.lexical_owners[0]
+                .captures
+                .iter()
+                .map(|binder| {
+                    builder
+                        .variable(*binder, Type::Int, generated_origin(&source, 0))
+                        .expect("exact captured variable")
+                })
+                .collect::<Vec<_>>();
+            (builder, nodes)
+        };
+        for fresh in 0..2 {
+            let (mut builder, nodes) = prepare();
+            // Binder 1 + clone 2 + method lookup 1 + expectation scan 4
+            // + matching application 2 + retained anchor 8 + admission 1;
+            // each reached expectation adds lookup 6 + dispatch 1.
+            for ordinal in [2, 0, 1] {
+                let reached = match ordinal {
+                    2 => 4,
+                    _ => 2,
+                };
+                let work = 19 + builder.method_evidence_anchors.len() + 7 * reached;
+                let prior = builder.method_evidence_anchors.len();
+                let consumed = builder.consumed_method_evidence.clone();
+                builder.type_work = TypeWorkBudget::with_limit(work - 1);
+                assert_eq!(
+                    builder.authenticate_lexical_capture_use(nodes[ordinal], 0, ordinal),
+                    Err(BuildError::TypeWorkExceeded),
+                    "fresh {fresh}, ordinal {ordinal}"
+                );
+                assert_eq!(builder.method_evidence_anchors.len(), prior);
+                assert_eq!(builder.consumed_method_evidence, consumed);
+                builder.type_work = TypeWorkBudget::with_limit(work);
+                builder
+                    .authenticate_lexical_capture_use(nodes[ordinal], 0, ordinal)
+                    .expect("exact capture authentication");
+                assert_eq!(builder.type_work.used(), work);
+                assert_eq!(builder.method_evidence_anchors.len(), prior + 1);
+                assert!(builder.consumed_method_evidence[ordinal + 1]);
+            }
+        }
+    }
+
     #[test]
     fn method_evidence_anchor_authenticates_a_complete_ordered_application() {
         let source = SourceFile::new("vector-method-anchor.ash", "()").expect("test source");
@@ -4452,6 +4683,40 @@ mod tests {
             .expect("the small-stack Core application worker should start")
             .join()
             .expect("rejected complete applications should dismantle iteratively");
+    }
+
+    #[test]
+    fn lexical_capture_late_application_admission_failure_is_atomic_on_a_small_stack() {
+        std::thread::Builder::new()
+            .name("deep-lexical-capture-application".to_owned())
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("deep-capture.ash", "()").expect("source");
+                let mut catalog = lexical_capture_catalog();
+                let interface = catalog.lexical_owners[0].method.interface();
+                catalog.lexical_owners[0].application = InterfaceApplication::new(
+                    interface,
+                    Box::new([function_type(CORE_PAYLOAD_DEPTH_LIMIT + 1)]),
+                );
+                let mut builder: CoreBuilder = CoreBuilder::with_registry_and_method_evidence(
+                    Arc::new(ResolvedRegistry::default()),
+                    Arc::new(catalog),
+                )
+                .expect("catalog carriers");
+                let node = builder
+                    .variable(resolved_id(1), Type::Int, generated_origin(&source, 0))
+                    .expect("capture node");
+                builder.type_work = TypeWorkBudget::unbounded();
+                assert_eq!(
+                    builder.authenticate_lexical_capture_use(node, 0, 0),
+                    Err(BuildError::TypeDepthExceeded)
+                );
+                assert!(builder.method_evidence_anchors.is_empty());
+                assert_eq!(builder.consumed_method_evidence, [false; 4]);
+            })
+            .expect("small-stack worker")
+            .join()
+            .expect("late cloned-application failure and catalog disposal are iterative");
     }
 
     #[test]

@@ -141,6 +141,222 @@ Return semantic gaps to CP-0015; a scope expansion requires user direction.
   and Clippy, formatting, and diff checks. Both independent reviews have no
   outstanding scheduling findings. Tamper, capture-use authentication, and
   remaining exact resource ledgers are next.
+- Scheduling is retained at `bceb688`. Authentication tests then exposed an
+  unused source moved before its nominal declaration and concrete evidence
+  replacing an identical complete lexical source at root and prerequisite
+  positions. The precedence witness now passes while preserving the
+  different-dependent prerequisite fallback. Scope and exact capture-use
+  authentication remain open. Reordering intact supplied method groups is a
+  valid positive control, not a reason to add source-order metadata.
+- Scope authentication must inspect every local nominal in the complete
+  application, including dependent arguments absent from method types. The
+  bounded implementation choice is a scope-only reuse of the existing ordered
+  traversal after catalog construction, gated by nonempty lexical owners.
+  This avoids changing source-free stage ordering or adding persistent source
+  flags. Its exact charges and failure/retry behavior still require evidence.
+- The linked header-scope pass now rejects both moved-source witnesses,
+  including the dependent nominal absent from method types. The root freshly
+  reran all 48 interactions, the 512 KiB nested-body test, and the historical
+  256 KiB type-depth predecessor; all passed. The architecture inventory
+  observed exactly one new borrowed type-bearing field,
+  `LinkedLocalScope::Method`, and passed after its explicit entry was added.
+  Core scope, capture-use authentication, and final resource probes remain open.
+- The Core dependent-header scope mutation now rejects after extending the
+  existing lexical binding scope check to its complete application. Exact
+  capture-use testing has an observed failure: retargeting one occurrence in
+  `x + x + y` to `y` survives validation because both binders remain captured.
+  This requires authenticating each recorded capture use, not only membership.
+- The broader architecture run found the scheduling carrier
+  `LexicalEvidenceProgress` missing from the separate method/scope manifest.
+  Its explicit entry fixes the focused test without changing scanner rules.
+  The source-closed type-field manifest was already complete.
+- The full architecture run finished with 29 passing tests and two failures.
+  Besides the corrected manifest omission, the narrow-owner guard rejects
+  `replacement_types.0.drain` in `retain_lexical_owners`. The writer must route
+  that transfer through the buffer's owner-aware API while retaining ordered
+  transfer and iterative cleanup; do not relax the guard.
+- The transfer now uses existing `pop_owned` with reversed parameter traversal
+  after checking arity. The root reran the source-reading narrow-owner guard;
+  it passes without a new API or exemption. The new abstract/current lexical
+  replacement tests also pass with unowned lexical positive controls.
+- Per-use capture authentication now makes the exact-binder regression pass.
+  The root freshly reran 2 vertical, 48 interaction, and 6 syntax cases, both
+  stack regressions, and the source-closed type-field inventory: all 59 passed.
+  Missing/retargeted annotation cases, complete authentication review, resource
+  accounting, and the full gate remain open.
+- Full authentication review found a same-owner capture collision: two
+  ordinals could point to one surviving variable while another use changed.
+  Mutation 5 reproduced it. A charged transient `(owner, node)` set rejects
+  collisions while preserving nested cross-owner sharing; all three capture
+  tests and both independent reviews closed that finding.
+- Three selector ingress probes now pin source retention at six constraint
+  units, owned pending retention at `5 + has_head`, and the conditional cloned
+  fixture at `14 + has_head` plus four type-work units. Depths zero, one, and
+  256 preserve constant head cost, rollback, retry, and original occurrence
+  scope. All 61 selector tests pass; no production charge correction was needed.
+- A clean isolated build after restart passes all 74 executable specification
+  tests. The previous cache had zero-length compiled metadata, not a source
+  failure. Subsequent verification uses `CARGO_INCREMENTAL=0` and the isolated
+  target under `target/scoped-evidence-verify.vSnCfz`.
+- The broader Core suite passes 116 tests. The linked suite initially passed
+  122 and exposed the unused `LexicalEquationBinder` mutation. A second probe
+  confirmed that an empty retained equation group was also accepted. The
+  unconditional declaration check now charges and validates every group's
+  nonempty, binder-consistent equation list; all 123 linked tests pass. The
+  depth-16,384/256 KiB cleanup fixture now supplies a valid nonempty group and
+  explicitly proves that its failure still follows deep replacement retention.
+- Both independent reviewers closed the unused-equation correction. The
+  elaborator ledger then exposed missing parameter-copy, determinant-copy,
+  and retained-map-capacity charges. Three failing probes now pass, together
+  with a public synthesis failure/poisoning control and all 178 elaborator
+  tests. Preparation costs eight constraint units in checking and nine in
+  synthesis for the one-method `Read<N, Int>` fixture; cleanup charges
+  `(M + 1)C` for `M` members and map capacity `C`, before consuming its buffered
+  declaration. This bounded ledger change is under independent review; linked
+  and capture ledgers, complete-diff review, and the full gate remain open.
+- The complete semantic review required independent Core mutations for lexical
+  source identities, full applications, method slots/binders, and contextual
+  parameter mappings. The root added those tests, then reproduced two distinct
+  missing generic-context cases: hoisting an unused `R<N, A>` source outside
+  `run<A>` incorrectly passes Core validation when `A` occurs only in the
+  header; a valid `with Read<N, A>` inside a generic implementation incorrectly
+  fails final Core with `NodeType`. The new 49th interaction and rigid-header
+  mutation are observed failing witnesses, not verified completion.
+- A fresh architecture run passed 30 of 31 tests, including both type-field
+  inventories and the narrow iterative-owner guard. Its remaining failure was
+  the missing explicit private-validator allowlist entry for
+  `method_evidence_subtree_contains`. The entry now names that existing static
+  authentication helper; scanner rules and runtime inventories are unchanged.
+  The focused rerun passes.
+- The linked ledger correction passes all 128 linked and 49 interface tests.
+  It charges method/equation scans and catalog width, reuses the charged block
+  shape pass, and preserves the eight-unit source-free predecessor. New probes
+  pin lexical node work at 16, owner retention at `30 + 2T`, the header pass at
+  50 constraint/three type units, zero header work without sources, and plan
+  ingress at `1 + M`. Both independent reviews closed this bounded ledger.
+- All three initial contextual-parameter mutations are genuine Core failures:
+  empty count, cross-owner ID reuse, and a bijective cross-owner swap are
+  accepted. The test now checks every mutation before reporting failures so
+  an earlier failure cannot mask another. A same-kind parameter-order mutation
+  is also prepared. Separately, capture-walker audit found uncharged pattern
+  seed allocation and nested method/equation retention; these remain bounded
+  corrections under the existing type-work budget.
+- The two-parameter fixture confirms cross-owner duplicate, bijective swap,
+  and within-method same-kind order mutations are accepted. The single-parameter
+  empty-count witness remains a separate test so incidental rejection in a
+  wider method does not remove it. A fresh high-reasoning agent now owns the
+  three Core-context repairs; a separate agent prepares only disjoint capture
+  ledger tests. The one-product-writer constraint remains in force.
+- The generic-implementation interaction and rigid-header hoist regression now
+  pass focused runs. A 50th interaction preserves a valid unused header whose
+  dependent mentions its enclosing implementation parameter but neither its
+  method type nor nominal representation does. Root review required retaining
+  the original source-free catalog stage order while supplementing existing
+  implementation-owner records only for lexical-header dependencies. That
+  adjustment, contextual-parameter authentication, and full re-review remain
+  active; these focused results are not a completed checkpoint.
+- All five focused Core tests now pass, including the single-parameter count,
+  duplicate/swap/order mutations and full nominal/rigid header scope. Core
+  authentication checks existing registry provenance and canonical parameter
+  order rather than equating source IDs with generated Core IDs. The complete
+  Core and linked suites and all 50 interactions are running, and semantic
+  re-review is active. Naming the existing `MethodEvidenceLexicalOwner` row in
+  the new private validator helper exposed one further explicit allowlist
+  omission; its focused RED is retained and the narrow entry is added.
+- Final context-fix runs pass 121 Core tests, 129 linked tests, all 50
+  interactions, the small-stack predecessor, and all-target checking. Semantic
+  review closes the three findings. It also investigated a coordinated rewrite
+  of otherwise unobserved source placeholders and diagnostic origins, then
+  withdrew that candidate: it preserved freshness, kinds, generated types, and
+  actual scope relations. No universal provenance-authentication requirement or
+  mechanism is added. The unsupported negative is removed; its investigation
+  log remains distinct from required evidence. Bounded quality/resource review
+  of the context fixes also closes without findings. Exact helper probes pin
+  header dependency detection at seven constraint units and contextual parameter
+  authentication at eleven type units. The explicit private-helper allowlist
+  rerun passes. The capture ledger is now the sole product-writing task; its
+  seven prepared walker probes retain two valid positives and five resource
+  failures before correction.
+
+The capture walker's three missing precharges are corrected. Saved final output
+confirms 17 focused capture tests, 118 resolved tests, 180 elaborator tests,
+192 Core tests, and 50 interactions pass. Capture expectation retention's
+existing `C` precharge was inspected; no additional decomposition was added.
+
+Complete-diff review separately found four recursive type-disposal error paths:
+lexical selection lowering, scheduling before provenance ownership, finishing
+the polymorphic scheme, and cloning a checked scheme before fallible capture
+collection. It also found missing new scan charges in resolution, evidence
+auditing, kind checking, and Core lexical prerequisites, plus unreserved
+replacement-map retention and infallible copied-ID allocation in lexical
+preparation. These remain open pending focused corrections and review. No new
+runtime mechanism, production limit, or semantic rule is required. All three
+subagents reached the account usage limit after the capture writer released
+ownership. The root continues local corrections; independent review remains
+required before integration.
+
+The root reproduced and corrected four of those findings. Evidence auditing
+now precharges group width before its checked equation-count fold; its fixture
+costs `2 + G + GE`, preserves pending entries on one-short failure, and succeeds
+on fresh exact retry. Kind traversal charges `G` before visiting even empty
+groups, in addition to the unchanged header and equation-edge costs. Two
+depth-16,384 tests first aborted on a 256 KiB stack: scheduling failed after
+cloning a method type but before provenance ownership, and lexical selection
+failed during its second clone while retaining the first. Immediate use of
+`IterativeTypeOwner` corrects both; lexical result storage also reserves
+fallibly under its existing charge. The fresh full library run passes 973 tests
+(`target/resource-audit-kind-type-owners-unit-green.log`). Formatting, diff
+checks, and Markdown lint pass. A fresh interaction run also passes all 50 cases
+(`target/resource-audit-kind-type-owners-interactions.log`). These corrections
+await independent review.
+
+The next local correction covers both `finish_lexical_method` disposal sites.
+Separate depth-16,384/256 KiB witnesses first abort while disposing a pending
+polymorphic scheme or an unpublished checked-scheme field. Both now use the
+existing iterative owner through the subsequent fallible work, preserving
+checking order and charges. Preparation now reserves copied-ID vectors
+fallibly under their previous constraint charges and precharges/reserves
+`P + Q` replacement-map slots per method, where `P` counts interface parameters
+and `Q` method-local parameters. Its failing probe previously consumed an
+argument-clone unit before detecting a one-short replacement-slot budget.
+Eleven focused elaborator tests pass after these corrections; the expanded
+polymorphic-slot case is included in the pending full library run.
+
+Resolver lookup now precharges the full local interface table and canonical
+method table; imported lookup charges only the canonical method table because
+its interface lookup is indexed. Registry retention precharges its separate
+parameter buffer before reservation. The local exact formula is
+`I + M + 2P + 2C`, with `C` the existing parameter-clone cost; imported lookup
+omits `I`. The local width/parameter probe passes, and imported cases are added.
+Core's concrete lexical-prerequisite arm now charges `L + M` before its owner
+and method scans. Its smallest failing witness used eleven units instead of
+thirteen. All known code findings have corrections, and the fresh full library
+run passes 978 tests (`target/resource-final-known-fixes-unit.log`), including
+the imported lookup and polymorphic-slot cases. All-target Clippy passes with
+warnings denied (`target/resource-final-known-fixes-clippy.log`); formatting,
+diff checks, and Markdown lint pass. All eight affected targets passed in
+`target/resource-final-known-fixes-integration.log`: 31 architecture, 32 data/ADT,
+six interface-resource, 20 local-newtype, two vertical, 50 interaction, six
+syntax, and 74 executable-specification tests (221 total).
+
+The independent whole-diff code/resource review closed with no remaining
+Critical or Important findings. Final semantic review found one additional
+Core omission: an unused dependent header argument could change from `Int` to
+an unapplied type constructor when its matching owner anchor changed with it.
+The regression confirms acceptance before correction
+(`target/unused-header-kind-red-confirmed.log`). Lexical owners now reuse the
+existing complete-application kind checker, with owner/method scan precharges.
+The unchanged valid header and exact/one-short/retry checks are retained.
+The corrected tree passes all 979 library tests. A separate fresh run passes
+the final eleven-unit exact/one-short/retry assertions. Both reviewers closed
+the correction and their complete-diff reviews. The requirement audit found no
+missing evidence category; admission-order combinations not individually
+isolated in tests were checked directly in the stage ordering. The full gate
+passed on 2026-09-06 in `target/scoped-evidence-final-verify.log`: formatting,
+metadata, build, Clippy, 2,088 tests across 62 binaries, and rustdoc with warnings
+denied. Markdown lint, diff checks, and all 194 local file links in the changed
+Markdown passed. Specification/report retention, artifact closure, local
+integration, and cleanup remain.
 
 ## Verification
 

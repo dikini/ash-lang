@@ -1107,6 +1107,60 @@ main () = run(42)
 }
 
 #[test]
+fn lexical_application_retains_an_enclosing_implementation_parameter() {
+    assert_execution(
+        r#"type Box<A> = Box(A)
+interface Read<I, O> where I -> O {
+    read : I -> O
+}
+interface Check<A> {
+    check : A -> A
+}
+impl<A> Check<Box<A>> {
+    check (Box(value)) = {
+        newtype N = N(Unit)
+        with Read<N, A> {
+            read ignored = value
+        }
+        Box(read(N(())))
+    }
+}
+main : Unit -> Int
+main () = match check(Box(42)) {
+    Box(value) => value
+}
+"#,
+    );
+}
+
+#[test]
+fn unused_lexical_header_retains_an_enclosing_implementation_dependent() {
+    assert_execution(
+        r#"type Box<A> = Box(A)
+interface Inspect<I, O> where I -> O {
+    inspect : I -> Int
+}
+interface Check<A> {
+    check : A -> A
+}
+impl<A> Check<Box<A>> {
+    check (Box(value)) = {
+        newtype N = N(Unit)
+        with Inspect<N, A> {
+            inspect ignored = 0
+        }
+        Box(value)
+    }
+}
+main : Unit -> Int
+main () = match check(Box(42)) {
+    Box(value) => value
+}
+"#,
+    );
+}
+
+#[test]
 fn exported_factory_transfers_a_closure_without_interface_evidence() {
     let fixture = Fixture::new("import factory (make)\nmain : Unit -> Int\nmain () = make()()\n");
     fs::write(

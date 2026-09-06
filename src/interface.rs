@@ -3397,6 +3397,49 @@ mod tests {
     }
 
     #[test]
+    fn lexical_plan_ingress_preserves_prior_nodes_at_exact_atomic_boundaries() {
+        let module = ModuleId::new(47);
+        let interface = InterfaceId::new(module, 0);
+        let source = LexicalEvidenceId::new(module, 0);
+        let methods = [MethodId::new(interface, 0), MethodId::new(interface, 1)];
+        let mut builder = EvidenceSelectionBuilder::new();
+        let prior = builder
+            .push_lexical(source, &methods, &mut InterfaceConstraintBudget::default())
+            .expect("the preceding node should fit");
+        const WORK: usize = 1 + 2;
+        assert_eq!(
+            builder.push_lexical(
+                source,
+                &methods,
+                &mut InterfaceConstraintBudget::with_limit(WORK - 1)
+            ),
+            Err(())
+        );
+        assert_eq!(builder.node_count(), 1);
+        let mut exact = InterfaceConstraintBudget::with_limit(WORK);
+        let root = builder
+            .push_lexical(source, &methods, &mut exact)
+            .expect("the exact budget should retry the unpublished node");
+        assert_eq!(exact.used(), WORK);
+        let selection = builder
+            .finish(
+                root,
+                InterfaceApplication::new(interface, Box::new([Type::Int])),
+            )
+            .expect("the plan should retain both nodes");
+        assert_eq!(selection.node_count(), 2);
+        for node in [prior, root] {
+            assert_eq!(
+                selection.node(node),
+                Some(EvidenceNode::Lexical {
+                    source,
+                    methods: &methods
+                })
+            );
+        }
+    }
+
+    #[test]
     fn implementation_evidence_retains_ordered_substitution_prerequisites_and_methods() {
         let module = ModuleId::new(53);
         let interface = InterfaceId::new(module, 0);

@@ -9212,6 +9212,246 @@ mod tests {
             .expect("exact pending budget");
     }
 
+    fn lexical_ingress_fixture(depth: usize) -> (EvidenceSelector, InterfaceApplication, Span) {
+        let (interface, method, _) = ids();
+        let module = interface.module();
+        let mut selector = EvidenceSelector::new();
+        selector.add_interface_parameters_with_determination_raw(
+            interface,
+            vec![TypeVariableId::new(0), TypeVariableId::new(1)],
+            Some(DeterminationKey::new(Box::new([0]))),
+            vec![(method, Type::Unit)],
+        );
+        let span = selector.interface_entry(interface).expect("interface").span;
+        for index in 0..depth {
+            selector
+                .add_lexical_source(
+                    LexicalEvidenceId::new(module, index as u32),
+                    InterfaceApplication::new(
+                        interface,
+                        Box::new([
+                            Type::Nominal(NominalTypeId::lexical(module, index as u32)),
+                            Type::Int,
+                        ]),
+                    ),
+                    span,
+                    &mut InterfaceConstraintBudget::default(),
+                )
+                .expect("the distinct lexical source should fit");
+        }
+        let application = InterfaceApplication::new(
+            interface,
+            Box::new([
+                Type::Nominal(NominalTypeId::lexical(module, depth as u32)),
+                Type::Int,
+            ]),
+        );
+        (selector, application, span)
+    }
+
+    #[test]
+    fn lexical_source_ingress_has_an_exact_atomic_retry_boundary() {
+        // Source and parent records, then charge_type(N) + charge_type(Int).
+        const WORK: usize = 2 + 2 + 2;
+        for depth in [0, 1, 256] {
+            let (mut selector, application, span) = lexical_ingress_fixture(depth);
+            let source = LexicalEvidenceId::new(application.interface().module(), depth as u32);
+            let old_head = selector.lexical_head();
+            let mut short = InterfaceConstraintBudget::with_limit(WORK - 1);
+            assert_eq!(
+                selector.add_lexical_source(source, application.clone(), span, &mut short),
+                Err(SelectionFailure::ConstraintResource),
+            );
+            assert_eq!(selector.lexical_sources.len(), depth);
+            assert_eq!(selector.lexical_head(), old_head);
+
+            let mut exact = InterfaceConstraintBudget::with_limit(WORK);
+            selector
+                .add_lexical_source(source, application.clone(), span, &mut exact)
+                .expect("the exact budget should retry the unpublished source");
+            assert_eq!(exact.used(), WORK);
+            assert_eq!(selector.lexical_sources.len(), depth + 1);
+            assert_eq!(selector.lexical_head(), Some(depth));
+            let retained = &selector.lexical_sources[depth];
+            assert_eq!(retained.id, source);
+            assert_eq!(retained.parent, old_head);
+            assert_eq!(retained.application, application);
+        }
+    }
+
+    #[test]
+    fn owned_pending_ingress_retains_one_scope_head_at_exact_atomic_boundaries() {
+        for depth in [0, 1, 256] {
+            for retry in [false, true] {
+                let (mut selector, application, span) = lexical_ingress_fixture(depth);
+                let head = selector.lexical_head();
+                // Pending record, optional scope index, and both retained type walks.
+                let work = 1 + usize::from(head.is_some()) + 2 + 2;
+                let slot = EvidenceSlot::empty();
+                // Keep an earlier pending occurrence to check append atomicity too.
+                selector
+                    .push_owned_obligation(
+                        application.clone(),
+                        SelectionSite::plain(EvidenceSlot::empty().handle(), span),
+                        &mut InterfaceConstraintBudget::default(),
+                    )
+                    .expect("the existing occurrence should fit");
+                let marker = selector.pending_marker();
+                if retry {
+                    assert_eq!(
+                        selector.push_owned_obligation(
+                            application.clone(),
+                            SelectionSite::plain(slot.handle(), span),
+                            &mut InterfaceConstraintBudget::with_limit(work - 1),
+                        ),
+                        Err(SelectionFailure::ConstraintResource),
+                    );
+                    assert_eq!(selector.pending.len(), marker.pending_len);
+                    assert_eq!(selector.pending_determined_count, marker.determined_count);
+                    assert_eq!(selector.pending[0].lexical_head, head);
+                    assert_eq!(selector.lexical_head(), head);
+                    assert_eq!(selector.lexical_sources.len(), depth);
+                    assert!(slot.selection().is_none());
+                }
+                let mut exact = InterfaceConstraintBudget::with_limit(work);
+                selector
+                    .push_owned_obligation(
+                        application.clone(),
+                        SelectionSite::plain(slot.handle(), span),
+                        &mut exact,
+                    )
+                    .expect("the exact budget should retain one occurrence");
+                assert_eq!(exact.used(), work);
+                assert_eq!(selector.pending.len(), marker.pending_len + 1);
+                assert_eq!(
+                    selector.pending_determined_count,
+                    marker.determined_count + 1
+                );
+                assert_eq!(selector.lexical_sources.len(), depth);
+                assert_eq!(
+                    selector.pending[marker.pending_len].application,
+                    application
+                );
+
+                selector
+                    .add_lexical_source(
+                        LexicalEvidenceId::new(application.interface().module(), depth as u32),
+                        application,
+                        span,
+                        &mut InterfaceConstraintBudget::default(),
+                    )
+                    .expect("the later traversal source should fit");
+                assert_eq!(selector.lexical_head(), Some(depth));
+                assert_eq!(selector.pending[marker.pending_len].lexical_head, head);
+                selector.restore_lexical_head(None);
+                assert_eq!(selector.pending[marker.pending_len].lexical_head, head);
+                assert!(slot.selection().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn cloned_pending_ingress_retains_one_scope_head_at_exact_atomic_dual_boundaries() {
+        // The predecessor conditional-method fixture costs 12 constraint units
+        // for Int; a complete <N, Int> adds one two-unit retained type walk.
+        const BASE_WORK: usize = 12 + 2;
+        // Two aligned application cells and two leaf clones.
+        const TYPE_WORK: usize = 2 + 2;
+        for depth in [0, 1, 256] {
+            for failure in [
+                None,
+                Some(SelectionFailure::ConstraintResource),
+                Some(SelectionFailure::TypeResource),
+            ] {
+                let (mut selector, application, span) = lexical_ingress_fixture(depth);
+                let head = selector.lexical_head();
+                let work = BASE_WORK + usize::from(head.is_some());
+                let metadata = || {
+                    MethodObligationMetadata::new(
+                        MethodId::new(application.interface(), 0),
+                        Box::new([Type::Bool]),
+                        Some(MethodRigidityCondition::new(
+                            Box::new([Type::Bool]),
+                            MethodRigiditySite::application(span, span, span),
+                        )),
+                    )
+                    .with_checked_value_type(Type::Unit)
+                };
+                let slot = EvidenceSlot::empty();
+                selector
+                    .push_cloned_obligation(
+                        &application,
+                        metadata(),
+                        SelectionSite::plain(EvidenceSlot::empty().handle(), span),
+                        &mut InterfaceConstraintBudget::default(),
+                        &mut TypeWorkBudget::default(),
+                    )
+                    .expect("the existing method occurrence should fit");
+                let marker = selector.pending_marker();
+                if let Some(failure) = failure {
+                    assert_eq!(
+                        selector.push_cloned_obligation(
+                            &application,
+                            metadata(),
+                            SelectionSite::plain(slot.handle(), span),
+                            &mut InterfaceConstraintBudget::with_limit(
+                                work - usize::from(failure == SelectionFailure::ConstraintResource)
+                            ),
+                            &mut TypeWorkBudget::with_limit(
+                                TYPE_WORK - usize::from(failure == SelectionFailure::TypeResource)
+                            ),
+                        ),
+                        Err(failure),
+                    );
+                    assert_eq!(selector.pending.len(), marker.pending_len);
+                    assert_eq!(selector.pending_determined_count, marker.determined_count);
+                    assert_eq!(selector.pending_method_rigidity_count, 1);
+                    assert_eq!(selector.pending[0].lexical_head, head);
+                    assert_eq!(selector.lexical_head(), head);
+                    assert_eq!(selector.lexical_sources.len(), depth);
+                    assert!(slot.selection().is_none());
+                }
+                let mut exact = InterfaceConstraintBudget::with_limit(work);
+                let mut types = TypeWorkBudget::with_limit(TYPE_WORK);
+                selector
+                    .push_cloned_obligation(
+                        &application,
+                        metadata(),
+                        SelectionSite::plain(slot.handle(), span),
+                        &mut exact,
+                        &mut types,
+                    )
+                    .expect("fresh exact budgets should retain the method occurrence");
+                assert_eq!(exact.used(), work);
+                assert_eq!(types.used(), TYPE_WORK);
+                assert_eq!(selector.pending.len(), marker.pending_len + 1);
+                assert_eq!(
+                    selector.pending_determined_count,
+                    marker.determined_count + 1
+                );
+                assert_eq!(selector.pending_method_rigidity_count, 2);
+                assert_eq!(selector.lexical_sources.len(), depth);
+                let pending = &selector.pending[marker.pending_len];
+                assert_eq!(pending.application, application);
+                assert_eq!(pending.method_arguments.as_ref(), &[Type::Bool]);
+                assert_eq!(pending.checked_value_type, Some(Type::Unit));
+                selector
+                    .add_lexical_source(
+                        LexicalEvidenceId::new(application.interface().module(), depth as u32),
+                        application,
+                        span,
+                        &mut InterfaceConstraintBudget::default(),
+                    )
+                    .expect("the later traversal source should fit");
+                assert_eq!(selector.lexical_head(), Some(depth));
+                assert_eq!(selector.pending[marker.pending_len].lexical_head, head);
+                selector.restore_lexical_head(None);
+                assert_eq!(selector.pending[marker.pending_len].lexical_head, head);
+                assert!(slot.selection().is_none());
+            }
+        }
+    }
+
     #[test]
     fn closing_obligation_transfer_has_an_exact_preallocation_boundary() {
         const WIDTH: usize = 128;

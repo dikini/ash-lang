@@ -1793,6 +1793,9 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     coverage_work: UsefulnessBudget,
     base_context: TypeContext,
     active_resumes: Vec<ActiveResume>,
+    // Addresses identify only immutably borrowed source occurrences during one
+    // module synthesis. They are never dereferenced or retained in Core.
+    lexical_capture_uses: Vec<LexicalCaptureUse>,
     expected_effect_rows: Vec<EffectRow>,
     next_handler: u32,
 }
@@ -2027,6 +2030,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
+            lexical_capture_uses: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
         }
@@ -2119,6 +2123,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             coverage_work,
             base_context,
             active_resumes: Vec::new(),
+            lexical_capture_uses: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
         })
@@ -2178,6 +2183,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
+            lexical_capture_uses: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
         };
@@ -2618,6 +2624,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
+            lexical_capture_uses: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
         })
@@ -2739,6 +2746,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         program: &ValidatedInterfaceProgram,
     ) -> Result<TypedNode, TypeError> {
+        self.lexical_capture_uses.clear();
         if self.state == ElaboratorState::Poisoned
             || self.purpose != ElaborationPurpose::FinalSynthesis
             || self.final_root.is_some()
@@ -2746,6 +2754,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             return Err(invalid_state());
         }
         let result = self.elaborate_module_program(program);
+        self.lexical_capture_uses.clear();
         match result {
             Ok(typed) => {
                 self.final_root = Some(typed.node);
@@ -2764,6 +2773,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         program: &ValidatedInterfaceProgram,
     ) -> Result<TypedNode, TypeError> {
+        self.lexical_capture_uses.clear();
         if self.state == ElaboratorState::Poisoned
             || self.purpose != ElaborationPurpose::FinalSynthesis
             || self.final_root.is_some()
@@ -2774,6 +2784,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             return Err(invalid_state());
         }
         let result = self.elaborate_module_program(program);
+        self.lexical_capture_uses.clear();
         match result {
             Ok(typed) => {
                 self.final_root = Some(typed.node);
@@ -5407,6 +5418,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             self.type_work.charge(methods.len()).map_err(|()| {
                                 TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                             })?;
+                            results.try_reserve(methods.len()).map_err(|_| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?;
                             for method in methods {
                                 if requested.is_some_and(|requested| requested != *method) {
                                     continue;
@@ -5415,7 +5429,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                     .lexical_binders
                                     .get(&(source, *method))
                                     .ok_or_else(invalid_state)?;
-                                let ty = self.clone_type(&active.ty)?;
+                                let ty = IterativeTypeOwner::new(self.clone_type(&active.ty)?);
                                 let core_ty = self.clone_type(&ty)?;
                                 let core_node = self.builder.variable(
                                     active.binder,
@@ -5461,7 +5475,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                             )
                                         })?,
                                     ),
-                                    ty,
+                                    ty: ty.into_inner(),
                                 });
                             }
                             results
@@ -8368,28 +8382,45 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         let interface = source.application.interface.id;
         let (method_ids, key_positions, interface_span) = if let Some(selector) = &self.selection {
-            let (methods, key, span) = selector
+            selector
                 .lexical_interface(interface)
-                .ok_or_else(invalid_state)?;
-            self.constraint_work
-                .charge(methods.len() + key.map_or(0, <[usize]>::len))
-                .map_err(|()| constraint_resource())?;
-            (methods.to_vec(), key.map(<[usize]>::to_vec), span)
+                .ok_or_else(invalid_state)?
         } else {
             let lowering = self.evidence_lowering.as_ref().ok_or_else(invalid_state)?;
             let fact = lowering
                 .interfaces
                 .get(&interface)
                 .ok_or_else(invalid_state)?;
-            self.constraint_work
-                .charge(fact.methods.len())
-                .map_err(|()| constraint_resource())?;
             (
-                fact.methods.to_vec(),
-                fact.determination.as_deref().map(<[usize]>::to_vec),
+                fact.methods.as_ref(),
+                fact.determination.as_deref(),
                 source.application.span,
             )
         };
+        self.constraint_work
+            .charge(
+                method_ids
+                    .len()
+                    .checked_add(key_positions.map_or(0, <[usize]>::len))
+                    .ok_or_else(constraint_resource)?,
+            )
+            .map_err(|()| constraint_resource())?;
+        let mut retained_methods = Vec::new();
+        retained_methods
+            .try_reserve(method_ids.len())
+            .map_err(|_| constraint_resource())?;
+        retained_methods.extend_from_slice(method_ids);
+        let key_positions = if let Some(positions) = key_positions {
+            let mut retained = Vec::new();
+            retained
+                .try_reserve(positions.len())
+                .map_err(|_| constraint_resource())?;
+            retained.extend_from_slice(positions);
+            Some(retained)
+        } else {
+            None
+        };
+        let method_ids = retained_methods;
         let mut arguments = OwnedTypeBuffer(Vec::new());
         self.type_work
             .charge(source.application.arguments.len())
@@ -8412,11 +8443,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let (parameters, mut type_parameters, value_type, declaration_span) =
                 if let Some(selector) = &self.selection {
                     let method = selector.method(*id).ok_or_else(invalid_state)?;
-                    let parameters = method
-                        .interface_parameters()
-                        .iter()
-                        .map(|(id, _)| *id)
-                        .collect::<Vec<_>>();
+                    self.constraint_work
+                        .charge(method.interface_parameters().len())
+                        .map_err(|()| constraint_resource())?;
+                    let mut parameters = Vec::new();
+                    parameters
+                        .try_reserve(method.interface_parameters().len())
+                        .map_err(|_| constraint_resource())?;
+                    parameters.extend(method.interface_parameters().iter().map(|(id, _)| *id));
                     let type_parameters = clone_kinded_type_parameters_with_budget(
                         method.type_parameters(),
                         &mut self.type_work,
@@ -8438,8 +8472,16 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         .as_ref()
                         .and_then(|lowering| lowering.interface_methods.get(id))
                         .ok_or_else(invalid_state)?;
+                    self.constraint_work
+                        .charge(method.parameters.len())
+                        .map_err(|()| constraint_resource())?;
+                    let mut parameters = Vec::new();
+                    parameters
+                        .try_reserve(method.parameters.len())
+                        .map_err(|_| constraint_resource())?;
+                    parameters.extend_from_slice(&method.parameters);
                     (
-                        method.parameters.to_vec(),
+                        parameters,
                         clone_kinded_type_parameters_with_budget(
                             &method.type_parameters,
                             &mut self.type_work,
@@ -8462,6 +8504,19 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ));
             }
             let mut replacements = TypeReplacementBuffer::new();
+            let replacement_count =
+                parameters
+                    .len()
+                    .checked_add(type_parameters.len())
+                    .ok_or(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted,
+                    ))?;
+            self.type_work
+                .charge(replacement_count)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            replacements
+                .try_reserve(replacement_count)
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             for (parameter, argument) in parameters.iter().zip(application.arguments()) {
                 replacements
                     .try_insert_unique(*parameter, self.clone_type(argument)?)
@@ -8619,20 +8674,44 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let method = &progress.methods[progress.next];
         let group = progress.supplied.get(&id).ok_or_else(invalid_state)?;
         let rewrite_checkpoint = self.builder.type_rewrite_checkpoint();
-        let ty = self.clone_type(&method.value_type)?;
+        let ty = IterativeTypeOwner::new(self.clone_type(&method.value_type)?);
         let provenance = self.at_span_provenance(&ty, method.declaration_span)?;
         let equations = self.prepare_equations(
             &group.equations,
-            ProvenancedType { ty, provenance },
+            ProvenancedType {
+                ty: ty.into_inner(),
+                provenance,
+            },
             group.span,
             Origin::Source(group.span),
         )?;
         let resumes = std::mem::take(&mut self.active_resumes);
+        let capture_checkpoint = self.lexical_capture_uses.len();
+        if self.purpose == ElaborationPurpose::FinalSynthesis {
+            let owner = self.builder.lexical_capture_owner(progress.source.id, id)?;
+            let captures =
+                crate::resolved::lexical_method_capture_occurrences(group, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            self.type_work
+                .charge(captures.len())
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            self.lexical_capture_uses
+                .try_reserve(captures.len())
+                .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            for (ordinal, occurrence) in captures.iter().enumerate() {
+                self.lexical_capture_uses.push(LexicalCaptureUse {
+                    occurrence_address: std::ptr::from_ref(*occurrence) as usize,
+                    owner,
+                    ordinal,
+                });
+            }
+        }
         tasks.push(ElaborationTask::Equation(
             EquationTask::FinishLexicalMethod {
                 progress,
                 rewrite_checkpoint,
                 resumes,
+                capture_checkpoint,
             },
         ));
         tasks.push(ElaborationTask::Equation(EquationTask::ContinueEquations(
@@ -8671,10 +8750,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let scheme_parameters =
                 clone_kinded_type_parameters_with_budget(&parameters, &mut self.type_work)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let scheme = Type::Forall(
+            let scheme = IterativeTypeOwner::new(Type::Forall(
                 scheme_parameters.into_boxed_slice(),
                 Box::new(self.clone_type(&body.ty)?),
-            );
+            ));
             if self.evidence_lowering.is_some() {
                 let mut replacements = Vec::new();
                 self.type_work
@@ -8712,7 +8791,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 Origin::Source(group.span),
             )?;
             body.set_node(node);
-            body.replace_type(scheme);
+            body.replace_type(scheme.into_inner());
         }
         let binder_type = self.clone_type(&core_type)?;
         let binder = self.builder.resolved_binder(
@@ -8727,12 +8806,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             checked_methods
                 .try_reserve(1)
                 .map_err(|_| constraint_resource())?;
+            let scheme = IterativeTypeOwner::new(self.clone_type(&body.ty)?);
+            let captures = crate::resolved::lexical_method_captures(group, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             checked_methods.push(crate::interface::CheckedLexicalMethod {
                 method: *id,
                 binder: group.binder.id,
-                scheme: self.clone_type(&body.ty)?,
-                captures: crate::resolved::lexical_method_captures(group, &mut self.type_work)
-                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?,
+                scheme: scheme.into_inner(),
+                captures,
             });
         }
         if self.evidence_lowering.is_some() {
@@ -8804,6 +8885,28 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         })
     }
 
+    fn authenticate_lexical_capture_occurrence(
+        &mut self,
+        occurrence: &crate::resolved::ResolvedOccurrence,
+        node: NodeId,
+    ) -> Result<(), TypeError> {
+        self.type_work
+            .charge(self.lexical_capture_uses.len())
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let address = std::ptr::from_ref(occurrence) as usize;
+        for index in 0..self.lexical_capture_uses.len() {
+            let capture = self.lexical_capture_uses[index];
+            if capture.occurrence_address == address {
+                self.builder.authenticate_lexical_capture_use(
+                    node,
+                    capture.owner,
+                    capture.ordinal,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     fn step_equation_task<'a>(
         &mut self,
         task: EquationTask<'a>,
@@ -8830,10 +8933,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 mut progress,
                 rewrite_checkpoint,
                 resumes,
+                capture_checkpoint,
             } => {
                 self.active_resumes = resumes;
                 let body = values.pop().ok_or_else(invalid_state)?;
                 self.finish_lexical_method(&mut progress, body, rewrite_checkpoint)?;
+                self.lexical_capture_uses.truncate(capture_checkpoint);
                 tasks.push(ElaborationTask::Equation(
                     EquationTask::ContinueLexicalEvidence(progress),
                 ));
@@ -8979,6 +9084,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                         effects: EffectRow::empty(),
                                         provenance: provenance.clone(),
                                     });
+                                    self.authenticate_lexical_capture_occurrence(
+                                        occurrence,
+                                        current.node,
+                                    )?;
                                     let mut current_arguments = OwnedTypeBuffer(Vec::new());
                                     self.type_work.charge(arguments.len()).map_err(|()| {
                                         TypeError::Internal(
@@ -9121,6 +9230,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                     scheme,
                                     occurrence.origin.clone(),
                                 )?;
+                                self.authenticate_lexical_capture_occurrence(occurrence, node)?;
                                 if !arguments.is_empty() || F::EFFECTS && !row_arguments.is_empty()
                                 {
                                     let core_ty = self.pure_core_type(&ty)?;
@@ -10303,6 +10413,22 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         let mut retained_declarations = declarations.split_off(declaration_start);
         while !retained_declarations.is_empty() {
+            if let Some(ElaboratedDeclaration::Evidence { members, .. }) =
+                retained_declarations.last()
+                && let Some(lowering) = &self.evidence_lowering
+            {
+                // Each binder lookup and the final retain scan visit the backing
+                // table, including capacity from exited scopes. Precharge while
+                // the declaration buffer still owns iterative failure cleanup.
+                let work = members
+                    .len()
+                    .checked_add(1)
+                    .and_then(|scans| scans.checked_mul(lowering.lexical_binders.capacity()))
+                    .ok_or_else(constraint_resource)?;
+                self.constraint_work
+                    .charge(work)
+                    .map_err(|()| constraint_resource())?;
+            }
             let core_body_type = self.clone_type(&body.ty)?;
             let declaration = retained_declarations.pop().ok_or_else(invalid_state)?;
             match &source_declarations[retained_declarations.len()] {
@@ -16424,12 +16550,20 @@ struct EquationsProgress<'a> {
     presentation: OriginOwner,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct LexicalCaptureUse {
+    occurrence_address: usize,
+    owner: usize,
+    ordinal: usize,
+}
+
 enum EquationTask<'a> {
     ContinueLexicalEvidence(Box<LexicalEvidenceProgress<'a>>),
     FinishLexicalMethod {
         progress: Box<LexicalEvidenceProgress<'a>>,
         rewrite_checkpoint: crate::core::dialect::TypeRewriteCheckpoint,
         resumes: Vec<ActiveResume>,
+        capture_checkpoint: usize,
     },
     ContinueEquations(Box<EquationsProgress<'a>>),
     FinishEquationClause {
@@ -21672,6 +21806,727 @@ mod tests {
             .first()
             .expect("the module fixture should retain one result body")
             .body
+    }
+
+    fn lexical_resource_fixture() -> ResolvedModule {
+        resolved_module_fixture(
+            "lexical-preparation-work.ash",
+            "interface Read<A, B> where A -> B {\nread : A -> B\n}\n",
+            "Unit",
+            "{\nnewtype N = N(Int)\nwith Read<N, Int> {\nread ignored = 42\n}\n()\n}",
+        )
+    }
+
+    #[test]
+    fn lexical_scheduling_provenance_failure_discards_deep_type_iteratively() {
+        std::thread::Builder::new()
+            .name("lexical-scheduling-provenance-failure".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved = lexical_resource_fixture();
+                let source = lexical_resource_source(&resolved);
+                let mut elaborator = lexical_resource_elaborator(&resolved, false);
+                let mut progress = elaborator
+                    .prepare_lexical_evidence(source)
+                    .expect("small method header");
+                discard_type_iteratively(std::mem::replace(
+                    &mut progress.methods[0].value_type,
+                    deep_application_type(16_384),
+                ));
+                let mut clone_work = TypeWorkBudget::unbounded();
+                let copied = IterativeTypeOwner::new(
+                    clone_type_with_budget(&progress.methods[0].value_type, &mut clone_work)
+                        .expect("deep clone is iterative"),
+                );
+                drop(copied);
+                elaborator.type_work = TypeWorkBudget::with_limit(clone_work.used());
+                let mut tasks = ElaborationTaskBuffer(Vec::new());
+                assert_eq!(
+                    elaborator.schedule_lexical_method(progress, &mut tasks),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                );
+                assert_eq!(elaborator.type_work.used(), clone_work.used());
+                assert!(tasks.is_empty());
+            })
+            .expect("small-stack scheduling worker")
+            .join()
+            .expect("failure after the deep clone must dismantle iteratively");
+    }
+
+    #[test]
+    fn lexical_polymorphic_finishing_failure_discards_pending_scheme_iteratively() {
+        std::thread::Builder::new()
+            .name("lexical-polymorphic-finishing-failure".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved = resolved_module_fixture(
+                    "lexical-polymorphic-finishing.ash",
+                    "interface Read<A> {\nread<B> : (A, B) -> B\n}\n",
+                    "Unit",
+                    "{\nnewtype N = N(Int)\nwith Read<N> {\nread (ignored, value) = value\n}\n()\n}",
+                );
+                let source = lexical_resource_source(&resolved);
+                let mut elaborator = lexical_resource_elaborator(&resolved, false);
+                let mut progress = elaborator.prepare_lexical_evidence(source).expect("header");
+                assert_eq!(progress.methods[0].type_parameters.len(), 1);
+                let body = TypedNodeOwner::new(TypedNode {
+                    node: elaborator.builder.unit(Type::Unit, Origin::Source(source.span))
+                        .expect("body node"),
+                    ty: deep_application_type(16_384),
+                    effects: EffectRow::empty(),
+                    provenance: TypeProvenance::atom(Some(source.span)),
+                });
+                elaborator.type_work = TypeWorkBudget::unbounded();
+                drop(IterativeTypeOwner::new(elaborator.pure_core_type(&body.ty).expect("projection")));
+                for _ in 0..2 {
+                    clone_kinded_type_parameters_with_budget(
+                        &progress.methods[0].type_parameters, &mut elaborator.type_work,
+                    ).expect("parameter copy");
+                }
+                drop(IterativeTypeOwner::new(elaborator.clone_type(&body.ty).expect("scheme body")));
+                let prefix = elaborator.type_work.used();
+                elaborator.type_work = TypeWorkBudget::with_limit(prefix);
+                let checkpoint = elaborator.builder.type_rewrite_checkpoint();
+                assert_eq!(
+                    elaborator.finish_lexical_method(&mut progress, body, checkpoint),
+                    Err(TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+                );
+                assert_eq!(elaborator.type_work.used(), prefix);
+                assert!(progress.members.is_empty());
+                assert!(source.checked.get().is_none());
+            })
+            .expect("small-stack finishing worker")
+            .join()
+            .expect("pending polymorphic scheme dismantles iteratively");
+    }
+
+    #[test]
+    fn lexical_capture_finishing_failure_discards_unpublished_scheme_iteratively() {
+        std::thread::Builder::new()
+            .name("lexical-capture-finishing-failure".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved = lexical_resource_fixture();
+                let source = lexical_resource_source(&resolved);
+                let mut elaborator = lexical_resource_elaborator(&resolved, false);
+                let mut progress = elaborator.prepare_lexical_evidence(source).expect("header");
+                let body = TypedNodeOwner::new(TypedNode {
+                    node: elaborator
+                        .builder
+                        .unit(Type::Unit, Origin::Source(source.span))
+                        .expect("body node"),
+                    ty: deep_application_type(16_384),
+                    effects: EffectRow::empty(),
+                    provenance: TypeProvenance::atom(Some(source.span)),
+                });
+                elaborator.type_work = TypeWorkBudget::unbounded();
+                drop(IterativeTypeOwner::new(
+                    elaborator.pure_core_type(&body.ty).expect("projection"),
+                ));
+                // Binder clone and checked-scheme clone both complete. The
+                // first capture-walk charge then fails before publication.
+                for _ in 0..2 {
+                    drop(IterativeTypeOwner::new(
+                        elaborator.clone_type(&body.ty).expect("clone"),
+                    ));
+                }
+                let prefix = elaborator.type_work.used();
+                elaborator.type_work = TypeWorkBudget::with_limit(prefix);
+                let checkpoint = elaborator.builder.type_rewrite_checkpoint();
+                assert_eq!(
+                    elaborator.finish_lexical_method(&mut progress, body, checkpoint),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                );
+                assert_eq!(elaborator.type_work.used(), prefix);
+                assert!(progress.checked_methods.is_empty());
+                assert!(progress.members.is_empty());
+                assert!(source.checked.get().is_none());
+            })
+            .expect("small-stack capture finishing worker")
+            .join()
+            .expect("unpublished checked scheme dismantles iteratively");
+    }
+
+    fn lexical_capture_resource_fixture() -> ResolvedModule {
+        resolved_module_fixture(
+            "lexical-capture-work.ash",
+            "interface Read<A> {\nread : A -> Int\n}\n",
+            "Int",
+            "{\nlet x = 20\nlet y = 22\nnewtype Token = Token(Unit)\nwith Read<Token> {\nread ignored = x + x + y\n}\nx + x + y\n}",
+        )
+    }
+
+    #[test]
+    fn lexical_capture_collection_and_routing_have_exact_retry_boundaries() {
+        let resolved = lexical_capture_resource_fixture();
+        let source = lexical_resource_source(&resolved).clone();
+        let module = resolved.module();
+        let checked = check_module(resolved).expect("capture fixture checks");
+        let linked = link_modules(vec![checked], module).expect("capture fixture links");
+        let program = crate::evidence_validation::validate_interface_evidence(linked)
+            .expect("capture catalog authenticates");
+        let prepare = || {
+            let mut elaborator =
+                Elaborator::for_module_program(&program).expect("final elaborator");
+            let progress = elaborator
+                .prepare_lexical_evidence(&source)
+                .expect("method header");
+            elaborator.type_work = TypeWorkBudget::unbounded();
+            (elaborator, progress)
+        };
+        let (mut baseline, progress) = prepare();
+        baseline.purpose = ElaborationPurpose::ModuleCheck;
+        baseline
+            .schedule_lexical_method(progress, &mut ElaborationTaskBuffer(Vec::new()))
+            .expect("ordinary scheduling without final capture collection");
+        let ordinary_work = baseline.type_work.used();
+        let captures = crate::resolved::lexical_method_capture_occurrences(
+            &source.method_groups[0],
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .expect("three capture occurrences");
+        assert_eq!(captures.len(), 3);
+        // Walker 11 + retained routes 3; each of three uses scans all 3
+        // active routes. Builder authentication owns a separate meter.
+        const COLLECTION: usize = 11 + 3;
+        const CAPTURE_WORK: usize = COLLECTION + 3 * 3;
+        let (mut short, progress) = prepare();
+        short.type_work = TypeWorkBudget::with_limit(ordinary_work + COLLECTION - 1);
+        let mut tasks = ElaborationTaskBuffer(Vec::new());
+        assert_eq!(
+            short.schedule_lexical_method(progress, &mut tasks),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        );
+        assert!(short.lexical_capture_uses.is_empty());
+        assert!(tasks.is_empty());
+        for one_short in [true, false, false] {
+            let (mut elaborator, progress) = prepare();
+            elaborator.type_work =
+                TypeWorkBudget::with_limit(ordinary_work + CAPTURE_WORK - usize::from(one_short));
+            let mut tasks = ElaborationTaskBuffer(Vec::new());
+            elaborator
+                .schedule_lexical_method(progress, &mut tasks)
+                .expect("exact collection");
+            assert_eq!(elaborator.type_work.used(), ordinary_work + COLLECTION);
+            assert_eq!(elaborator.lexical_capture_uses.len(), 3);
+            for (ordinal, occurrence) in captures.iter().enumerate() {
+                assert_eq!(
+                    elaborator.lexical_capture_uses[ordinal].occurrence_address,
+                    std::ptr::from_ref(*occurrence) as usize
+                );
+                assert_eq!(elaborator.lexical_capture_uses[ordinal].ordinal, ordinal);
+                let crate::resolved::ResolvedTermName::Global(binder) = occurrence.term else {
+                    panic!("outer captured value")
+                };
+                let node = elaborator
+                    .builder
+                    .variable(binder, Type::Int, occurrence.origin.clone())
+                    .expect("captured variable");
+                let result = elaborator.authenticate_lexical_capture_occurrence(occurrence, node);
+                if one_short && ordinal == 2 {
+                    assert_eq!(
+                        result,
+                        Err(TypeError::Internal(
+                            ElaborationFailure::TypeResourceExhausted
+                        ))
+                    );
+                } else {
+                    result.expect("exact capture routing authenticates the original occurrence");
+                }
+            }
+            if !one_short {
+                assert_eq!(elaborator.type_work.used(), ordinary_work + CAPTURE_WORK);
+            }
+            let outsider = (*captures[0]).clone();
+            let node = elaborator
+                .builder
+                .variable(
+                    program.method_evidence().lexical_owners()[0].captures[0],
+                    Type::Int,
+                    outsider.origin.clone(),
+                )
+                .expect("outside variable");
+            elaborator.type_work = TypeWorkBudget::with_limit(2);
+            assert_eq!(
+                elaborator.authenticate_lexical_capture_occurrence(&outsider, node),
+                Err(TypeError::Internal(
+                    ElaborationFailure::TypeResourceExhausted
+                ))
+            );
+            assert_eq!(elaborator.type_work.used(), 0);
+            elaborator.type_work = TypeWorkBudget::with_limit(3);
+            elaborator
+                .authenticate_lexical_capture_occurrence(&outsider, node)
+                .expect("a nonmatching occurrence still charges all active routes");
+            assert_eq!(elaborator.type_work.used(), 3);
+            elaborator.lexical_capture_uses.clear();
+            elaborator.type_work = TypeWorkBudget::with_limit(0);
+            elaborator
+                .authenticate_lexical_capture_occurrence(&outsider, node)
+                .expect("no active routes is free");
+        }
+    }
+
+    #[test]
+    fn lexical_capture_module_boundaries_clear_routes_and_poison_failed_synthesis() {
+        let resolved = lexical_capture_resource_fixture();
+        let module = resolved.module();
+        let checked = check_module(resolved).expect("capture fixture checks");
+        let linked = link_modules(vec![checked], module).expect("capture fixture links");
+        let program = crate::evidence_validation::validate_interface_evidence(linked)
+            .expect("capture catalog authenticates");
+        let mut measured = Elaborator::for_module_program(&program).expect("elaborator");
+        measured.type_work = TypeWorkBudget::unbounded();
+        measured
+            .synthesize_module_program_after_effect_scan(&program)
+            .expect("authentic final synthesis");
+        assert!(measured.lexical_capture_uses.is_empty());
+        let work = measured.type_work.used();
+        for one_short in [true, false, false] {
+            let mut elaborator =
+                Elaborator::for_module_program(&program).expect("fresh elaborator");
+            // A stale route must be cleared before the next module starts.
+            elaborator.lexical_capture_uses.push(LexicalCaptureUse {
+                occurrence_address: usize::MAX,
+                owner: usize::MAX,
+                ordinal: usize::MAX,
+            });
+            elaborator.type_work = TypeWorkBudget::with_limit(work - usize::from(one_short));
+            let result = elaborator.synthesize_module_program_after_effect_scan(&program);
+            assert!(elaborator.lexical_capture_uses.is_empty());
+            if one_short {
+                assert_eq!(
+                    result.map(|_| ()),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                );
+                assert_eq!(elaborator.state, ElaboratorState::Poisoned);
+                assert!(elaborator.final_root.is_none());
+                assert_eq!(
+                    elaborator
+                        .synthesize_module_program_after_effect_scan(&program)
+                        .map(|_| ()),
+                    Err(invalid_state())
+                );
+            } else {
+                let root = result.expect("fresh exact final synthesis");
+                assert_eq!(elaborator.type_work.used(), work);
+                elaborator
+                    .finish(root.node)
+                    .expect("successful synthesis alone publishes Core");
+            }
+        }
+    }
+
+    fn lexical_resource_source(
+        module: &ResolvedModule,
+    ) -> &crate::resolved::ResolvedLexicalEvidence {
+        let ResolvedExprKind::Block(block) = &fixture_result(module).kind else {
+            panic!("the lexical fixture must be a block");
+        };
+        block
+            .declarations
+            .iter()
+            .find_map(|declaration| {
+                if let ResolvedLocalDeclaration::Evidence(source) = declaration {
+                    Some(source.as_ref())
+                } else {
+                    None
+                }
+            })
+            .expect("the block must supply evidence")
+    }
+
+    fn lexical_resource_elaborator(module: &ResolvedModule, synthesis: bool) -> Elaborator {
+        let mut elaborator = Elaborator::for_module(module).expect("the fixture should reserve");
+        let mut constraints = InterfaceConstraintBudget::default();
+        let checked = check_interface_declarations(module, &mut constraints).expect("interface");
+        let facts = checked_interface_facts(
+            module,
+            &checked,
+            &mut elaborator.type_work,
+            &mut constraints,
+        )
+        .expect("checked interface facts");
+        if synthesis {
+            let fact = &facts[0];
+            elaborator.evidence_lowering = Some(EvidenceLowering {
+                lexical_binders: HashMap::new(),
+                interfaces: HashMap::from([(
+                    fact.id,
+                    LoweredInterface {
+                        methods: fact.methods.iter().map(|method| method.id).collect(),
+                        determination: fact.determination().map(|key| key.positions().into()),
+                    },
+                )]),
+                interface_methods: fact
+                    .methods
+                    .iter()
+                    .map(|method| {
+                        (
+                            method.id,
+                            LoweredInterfaceMethod {
+                                interface: fact.id,
+                                parameters: fact
+                                    .parameters
+                                    .iter()
+                                    .map(|parameter| parameter.id)
+                                    .collect(),
+                                type_parameters: Box::new([]),
+                                value_type: method.value_type.clone(),
+                                declaration_span: method.span,
+                            },
+                        )
+                    })
+                    .collect(),
+                global_schemes: HashMap::new(),
+                implementation_methods: HashMap::new(),
+                active_binders: HashMap::new(),
+            });
+        } else {
+            elaborator.selection = Some(
+                build_evidence_selector(
+                    module,
+                    &elaborator.registry,
+                    &[],
+                    &facts,
+                    &[],
+                    &mut elaborator.type_work,
+                    &mut constraints,
+                )
+                .expect("the selector should retain the interface"),
+            );
+        }
+        elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+        elaborator
+    }
+
+    fn assert_lexical_preparation_boundary(synthesis: bool, work: usize) {
+        let module = lexical_resource_fixture();
+        let source = lexical_resource_source(&module);
+        let mut elaborator = lexical_resource_elaborator(&module, synthesis);
+        elaborator.constraint_work = InterfaceConstraintBudget::with_limit(work - 1);
+        assert_eq!(
+            elaborator.prepare_lexical_evidence(source).map(|_| ()),
+            Err(constraint_resource())
+        );
+        assert!(source.checked.get().is_none());
+        assert!(
+            elaborator
+                .selection
+                .as_ref()
+                .is_none_or(|selector| selector.lexical_head().is_none())
+        );
+        assert!(
+            elaborator
+                .evidence_lowering
+                .as_ref()
+                .is_none_or(|lowering| lowering.lexical_binders.is_empty())
+        );
+        for fresh in [false, true] {
+            if fresh {
+                elaborator = lexical_resource_elaborator(&module, synthesis);
+            }
+            elaborator.constraint_work = InterfaceConstraintBudget::with_limit(work);
+            let progress = elaborator
+                .prepare_lexical_evidence(source)
+                .expect("the exact budget should prepare the unpublished methods");
+            assert_eq!(elaborator.constraint_work.used(), work);
+            assert_eq!(progress.methods.len(), 1);
+            assert_eq!(progress.methods[0].parameters.len(), 2);
+            assert!(progress.members.is_empty());
+            assert!(progress.active.is_empty());
+            assert!(source.checked.get().is_none());
+        }
+    }
+
+    #[test]
+    fn lexical_preparation_precharges_replacement_slots_before_cloning_arguments() {
+        for (polymorphic, synthesis) in [(false, false), (false, true), (true, false)] {
+            let resolved = if polymorphic {
+                resolved_module_fixture(
+                    "lexical-polymorphic-replacements.ash",
+                    "interface Read<A, B> where A -> B {\nread<C, D> : (A, C, D) -> B\n}\n",
+                    "Unit",
+                    "{\nnewtype N = N(Int)\nwith Read<N, Int> {\nread ignored = 42\n}\n()\n}",
+                )
+            } else {
+                lexical_resource_fixture()
+            };
+            let source = lexical_resource_source(&resolved);
+            let id = source.method_groups[0].method.expect("known method");
+            let mut elaborator = lexical_resource_elaborator(&resolved, synthesis);
+            let mut prefix = TypeWorkBudget::unbounded();
+            prefix
+                .charge(source.application.arguments.len())
+                .expect("argument slots");
+            for argument in &source.application.arguments {
+                drop(IterativeTypeOwner::new(
+                    clone_type_with_budget(&argument.ty, &mut prefix).expect("argument clone"),
+                ));
+            }
+            let (parameters, value_type) = if let Some(selector) = &elaborator.selection {
+                let method = selector.method(id).expect("selector method");
+                (method.type_parameters(), method.value_type())
+            } else {
+                let method = &elaborator
+                    .evidence_lowering
+                    .as_ref()
+                    .expect("lowering")
+                    .interface_methods[&id];
+                (method.type_parameters.as_ref(), &method.value_type)
+            };
+            clone_kinded_type_parameters_with_budget(parameters, &mut prefix)
+                .expect("method parameter copy");
+            drop(IterativeTypeOwner::new(
+                clone_type_with_budget(value_type, &mut prefix).expect("method type clone"),
+            ));
+            assert_eq!(parameters.len(), if polymorphic { 2 } else { 0 });
+            let slots = source.application.arguments.len() + parameters.len();
+            assert_eq!(slots, if polymorphic { 4 } else { 2 });
+            elaborator.type_work = TypeWorkBudget::with_limit(prefix.used() + slots - 1);
+            assert!(matches!(
+                elaborator.prepare_lexical_evidence(source),
+                Err(TypeError::Internal(
+                    ElaborationFailure::TypeResourceExhausted
+                ))
+            ));
+            assert_eq!(
+                elaborator.type_work.used(),
+                prefix.used(),
+                "replacement slots reject before argument clones, synthesis={synthesis}"
+            );
+            assert!(source.checked.get().is_none());
+
+            let mut measured = lexical_resource_elaborator(&resolved, synthesis);
+            measured.type_work = TypeWorkBudget::unbounded();
+            drop(
+                measured
+                    .prepare_lexical_evidence(source)
+                    .expect("fresh complete retry"),
+            );
+            let total = measured.type_work.used();
+            for one_short in [true, false] {
+                let mut fresh = lexical_resource_elaborator(&resolved, synthesis);
+                fresh.type_work = TypeWorkBudget::with_limit(total - usize::from(one_short));
+                let result = fresh.prepare_lexical_evidence(source);
+                if one_short {
+                    assert!(matches!(
+                        result,
+                        Err(TypeError::Internal(
+                            ElaborationFailure::TypeResourceExhausted
+                        ))
+                    ));
+                } else {
+                    drop(result.expect("fresh exact retry"));
+                    assert_eq!(fresh.type_work.used(), total);
+                }
+                assert!(source.checked.get().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn lexical_checker_preparation_charges_parameter_copies_before_publication() {
+        // M = G = K = 1, P = 2: 3M + K + P + MG + G.
+        assert_lexical_preparation_boundary(false, 8);
+    }
+
+    #[test]
+    fn lexical_synthesis_preparation_charges_parameter_and_key_copies_before_publication() {
+        // Final synthesis also reserves M active method records.
+        assert_lexical_preparation_boundary(true, 9);
+    }
+
+    #[test]
+    fn lexical_block_cleanup_charges_retained_map_capacity_at_exact_boundaries() {
+        let resolved = lexical_resource_fixture();
+        let source = lexical_resource_source(&resolved).clone();
+        let module = resolved.module();
+        let checked = check_module(resolved).expect("the lexical fixture should check");
+        let linked = link_modules(vec![checked], module).expect("the lexical fixture should link");
+        let program = crate::evidence_validation::validate_interface_evidence(linked)
+            .expect("the lexical fixture should authenticate");
+        let method = source.method_groups[0].method.expect("one supplied method");
+        let span = source.span;
+        for width in [1, 128] {
+            for one_short in [true, false, false] {
+                let mut elaborator =
+                    Elaborator::for_module_program(&program).expect("final elaborator");
+                elaborator.type_work = TypeWorkBudget::with_limit(usize::MAX);
+                let application = InterfaceApplication::new(
+                    method.interface(),
+                    source
+                        .application
+                        .arguments
+                        .iter()
+                        .map(|argument| argument.ty.clone())
+                        .collect(),
+                );
+                let method_type = Type::Function(
+                    Box::new(application.arguments()[0].clone()),
+                    Box::new(Type::Int),
+                );
+                let binder = elaborator
+                    .builder
+                    .resolved_binder(
+                        source.method_groups[0].binder.id,
+                        method_type.clone(),
+                        Origin::Source(span),
+                    )
+                    .expect("binder");
+                let binder_id = binder.id();
+                let parameter = elaborator
+                    .builder
+                    .binder(application.arguments()[0].clone(), Origin::Source(span))
+                    .expect("method parameter");
+                let result = elaborator
+                    .builder
+                    .integer(
+                        crate::integer::Integer::parse_decimal("42").expect("integer"),
+                        Type::Int,
+                        Origin::Source(span),
+                    )
+                    .expect("method result");
+                let initializer = elaborator
+                    .builder
+                    .function(parameter, result, method_type.clone(), Origin::Source(span))
+                    .expect("initializer");
+                let body = elaborator
+                    .builder
+                    .unit(Type::Unit, Origin::Source(span))
+                    .expect("body");
+                let lowering = elaborator.evidence_lowering.as_mut().expect("lowering");
+                // A finished wide source leaves its backing allocation for a
+                // later narrow scope. HashMap scans visit capacity, not len.
+                for ordinal in 0..width {
+                    lowering.lexical_binders.insert(
+                        (source.id, MethodId::new(method.interface(), ordinal)),
+                        ActiveEvidenceBinder {
+                            binder: binder_id,
+                            application: application.clone(),
+                            ty: method_type.clone(),
+                        },
+                    );
+                }
+                lowering.lexical_binders.clear();
+                lowering.lexical_binders.insert(
+                    (source.id, method),
+                    ActiveEvidenceBinder {
+                        binder: binder_id,
+                        application,
+                        ty: method_type,
+                    },
+                );
+                let capacity = lowering.lexical_binders.capacity();
+                assert_eq!(lowering.lexical_binders.len(), 1);
+                assert!(capacity >= width as usize);
+                // One full lookup scan and one full retain scan.
+                let work = 2 * capacity;
+                elaborator.constraint_work =
+                    InterfaceConstraintBudget::with_limit(work - usize::from(one_short));
+                let mut declarations =
+                    ElaboratedDeclarationBuffer(vec![ElaboratedDeclaration::Evidence {
+                        source: source.id,
+                        previous: None,
+                        members: vec![(binder, initializer)],
+                        origin: Origin::Source(span),
+                    }]);
+                let result = elaborator.finish_expression_block(
+                    &[ResolvedLocalDeclaration::Evidence(Box::new(source.clone()))],
+                    0,
+                    &mut declarations,
+                    TypedNodeOwner::new(TypedNode {
+                        node: body,
+                        ty: Type::Unit,
+                        effects: EffectRow::empty(),
+                        provenance: TypeProvenance::atom(Some(span)),
+                    }),
+                    &mut TypeContext::new(),
+                    span,
+                );
+                if one_short {
+                    assert_eq!(result.map(|_| ()), Err(constraint_resource()));
+                    assert_eq!(
+                        elaborator
+                            .evidence_lowering
+                            .as_ref()
+                            .expect("lowering")
+                            .lexical_binders
+                            .len(),
+                        1
+                    );
+                } else {
+                    result.expect("the exact capacity scan charge should finish the block");
+                    assert_eq!(elaborator.constraint_work.used(), work);
+                    assert!(
+                        elaborator
+                            .evidence_lowering
+                            .as_ref()
+                            .expect("lowering")
+                            .lexical_binders
+                            .is_empty()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lexical_final_synthesis_resource_failure_poisoning_prevents_publication() {
+        let resolved = lexical_resource_fixture();
+        let module = resolved.module();
+        let checked = check_module(resolved).expect("the lexical fixture should check");
+        let linked = link_modules(vec![checked], module).expect("the lexical fixture should link");
+        let program = crate::evidence_validation::validate_interface_evidence(linked)
+            .expect("the lexical fixture should authenticate");
+        let mut measured = Elaborator::for_module_program(&program).expect("final elaborator");
+        measured.type_work = TypeWorkBudget::with_limit(usize::MAX);
+        measured.constraint_work = InterfaceConstraintBudget::with_limit(usize::MAX);
+        measured
+            .synthesize_module_program(&program)
+            .expect("measure final synthesis");
+        let work = measured.constraint_work.used();
+        assert!(work > 0);
+        let mut short = Elaborator::for_module_program(&program).expect("final elaborator");
+        let private = short
+            .builder
+            .unit(Type::Unit, Origin::Source(program.groups()[0].span()))
+            .expect("private Core");
+        short.type_work = TypeWorkBudget::with_limit(usize::MAX);
+        short.constraint_work = InterfaceConstraintBudget::with_limit(work - 1);
+        assert_eq!(
+            short.synthesize_module_program(&program).map(|_| ()),
+            Err(constraint_resource())
+        );
+        assert_eq!(short.state, ElaboratorState::Poisoned);
+        assert!(short.final_root.is_none());
+        short.constraint_work = InterfaceConstraintBudget::with_limit(work);
+        assert_eq!(
+            short.synthesize_module_program(&program).map(|_| ()),
+            Err(invalid_state())
+        );
+        assert!(matches!(
+            short.finish(private),
+            Err(ElaborationFailure::InvalidState)
+        ));
+        let mut retry = Elaborator::for_module_program(&program).expect("fresh final elaborator");
+        retry.type_work = TypeWorkBudget::with_limit(usize::MAX);
+        retry.constraint_work = InterfaceConstraintBudget::with_limit(work);
+        let root = retry
+            .synthesize_module_program(&program)
+            .expect("fresh exact synthesis");
+        assert_eq!(retry.constraint_work.used(), work);
+        retry
+            .finish(root.node)
+            .expect("only successful synthesis may publish Core");
     }
 
     #[test]
@@ -28502,6 +29357,70 @@ mod tests {
             .expect("the lowered-evidence thread should start")
             .join()
             .expect("a provenance failure must dismantle the variable type iteratively");
+    }
+
+    #[test]
+    fn lexical_selection_second_clone_failure_discards_first_type_iteratively() {
+        const DEPTH: usize = 16_384;
+        const CLONE_WORK: usize = 2 * DEPTH + 1;
+        std::thread::Builder::new()
+            .name("lexical-selection-clone-failure".into())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let resolved = resolved_module_fixture("lexical-clone.ash", "", "Unit", "()");
+                let span = fixture_result(&resolved).span;
+                let module = resolved.module();
+                let interface = InterfaceId::new(module, 0);
+                let method = MethodId::new(interface, 0);
+                let source = crate::interface::LexicalEvidenceId::new(module, 0);
+                let mut selection = EvidenceSelectionBuilder::new();
+                let root = selection
+                    .push_lexical(source, &[method], &mut InterfaceConstraintBudget::default())
+                    .expect("one lexical plan node");
+                let selection = selection
+                    .finish(
+                        root,
+                        InterfaceApplication::new(interface, Box::new([Type::Unit])),
+                    )
+                    .expect("complete selection");
+                let mut lowering = EvidenceLowering {
+                    lexical_binders: HashMap::from([(
+                        (source, method),
+                        ActiveEvidenceBinder {
+                            binder: BinderId::resolved(module, 0),
+                            application: InterfaceApplication::new(
+                                interface,
+                                Box::new([Type::Unit]),
+                            ),
+                            ty: deep_application_type(DEPTH),
+                        },
+                    )]),
+                    interfaces: HashMap::new(),
+                    interface_methods: HashMap::new(),
+                    global_schemes: HashMap::new(),
+                    implementation_methods: HashMap::new(),
+                    active_binders: HashMap::new(),
+                };
+                let mut elaborator = Elaborator::for_module(&resolved).expect("namespace");
+                // Five plan/slot cells, a complete first clone, then one short
+                // for the second clone, before any Core variable is built.
+                elaborator.type_work = TypeWorkBudget::with_limit(5 + 2 * CLONE_WORK - 1);
+                assert!(matches!(
+                    elaborator.lower_evidence_selection(
+                        &selection,
+                        &mut lowering,
+                        &Origin::Source(span),
+                        None,
+                        0,
+                    ),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                ));
+            })
+            .expect("small-stack lexical selection worker")
+            .join()
+            .expect("both partial and complete deep clones dismantle iteratively");
     }
 
     #[test]

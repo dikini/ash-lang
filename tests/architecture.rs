@@ -415,6 +415,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/evidence.rs::EvidenceSelector.lexical_sources", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::LexicalSource.application", FieldEvidenceInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence_validation.rs::EvidenceScope.lexical_sources", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
+    kind_site!("src/evidence_validation.rs::LinkedLocalScope.Method.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
     kind_site!("src/interface.rs::CheckedLexicalEvidence.application", FieldEvidenceInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/interface.rs::CheckedLexicalEvidence.methods", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/interface.rs::CheckedLexicalMethod.scheme", FieldEvidenceSchemeSchemeValueEvidenceSelectionEvidenceTypeEvidenceTree),
@@ -2419,6 +2420,12 @@ const METHOD_PARAMETER_CARRIERS: &[MethodParameterCarrier] = &[
         "src/elaborate.rs",
         ELABORATE_SOURCE,
         "struct EvidenceLowering"
+    ),
+    method_parameter_carrier!(
+        "core_authentication.lexical_evidence_progress",
+        "src/elaborate.rs",
+        ELABORATE_SOURCE,
+        "struct LexicalEvidenceProgress"
     ),
     method_parameter_carrier!(
         "core_authentication.evidence_specification_buffer",
@@ -5501,6 +5508,7 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                 identifier,
                 "MethodEvidenceAnchor"
                     | "MethodEvidenceAnchorRole"
+                    | "MethodEvidenceLexicalOwner"
                     | "MethodEvidenceCatalog"
                     | "MethodEvidenceCatalogMutationForTest"
                     | "MethodEvidenceExpectedProducer"
@@ -5511,12 +5519,15 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                     | "ScopeRequirementKey"
                     | "ScopeRequirements"
                     | "authenticated_method_evidence"
+                    | "enclosing_implementation_replacements"
+                    | "implementation_owner_count"
                     | "implementation_replacements"
                     | "method_evidence"
                     | "method_evidence_anchor_matches_expectation"
                     | "method_evidence_anchors"
                     | "method_evidence_producer_matches"
                     | "method_evidence_scope_binder"
+                    | "method_evidence_subtree_contains"
                     | "previous_interface_parameters"
                     | "same_interface_application"
                     | "substitute_interface_application"

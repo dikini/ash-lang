@@ -7805,21 +7805,60 @@ impl Resolver {
         let mut contextual_parameters = ImportedTypeVariableBuffer(Vec::new());
         if let Some(method) = method {
             let parameters = if method.interface().module() == self.module {
-                self.resolved_interfaces
+                self.type_work
+                    .charge(self.resolved_interfaces.0.len())
+                    .map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            first.span,
+                            "lexical interface lookup exceeded its budget",
+                        )
+                    })?;
+                let interface = self
+                    .resolved_interfaces
                     .0
                     .iter()
                     .find(|interface| interface.id == method.interface())
-                    .and_then(|interface| {
-                        interface
-                            .methods
-                            .iter()
-                            .find(|candidate| candidate.id == method)
-                    })
+                    .ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            first.span,
+                            "method parameters are unavailable",
+                        )
+                    })?;
+                self.type_work
+                    .charge(interface.methods.len())
+                    .map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            first.span,
+                            "lexical method lookup exceeded its budget",
+                        )
+                    })?;
+                interface
+                    .methods
+                    .iter()
+                    .find(|candidate| candidate.id == method)
                     .map(|method| method.type_parameters.as_ref())
             } else {
-                self.imported
-                    .interface(method.interface())
-                    .and_then(|interface| interface.method(method))
+                let interface = self.imported.interface(method.interface()).ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        first.span,
+                        "method parameters are unavailable",
+                    )
+                })?;
+                self.type_work
+                    .charge(interface.methods.len())
+                    .map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            first.span,
+                            "lexical method lookup exceeded its budget",
+                        )
+                    })?;
+                interface
+                    .method(method)
                     .map(|method| method.authoritative_type_parameters())
             }
             .ok_or_else(|| {
@@ -7867,6 +7906,15 @@ impl Resolver {
                     })?;
                 contextual_parameters.push(fresh);
             }
+            self.type_work
+                .charge(contextual_parameters.0.len())
+                .map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        first.span,
+                        "lexical method registry retention exceeded its budget",
+                    )
+                })?;
             self.lexical_method_parameters
                 .try_reserve(contextual_parameters.0.len())
                 .map_err(|_| {
@@ -12301,6 +12349,143 @@ mod tests {
         let source = SourceFile::new(name, text).expect("the declaration fixture should fit");
         let tree = parse(lex(&source).expect("the declaration fixture should lex"));
         project_module(&source, &tree).expect("the declaration fixture should project")
+    }
+
+    #[test]
+    fn lexical_method_lookup_and_parameter_registry_have_exact_work_boundaries() {
+        for (interface_count, method_count, parameter_count) in
+            [(1, 1, 0), (64, 1, 0), (1, 64, 0), (1, 1, 2)]
+        {
+            let mut text = String::from("interface R<A> {\n");
+            text.push_str(if parameter_count == 0 {
+                "read : A -> Unit\n"
+            } else {
+                "read<X, Y> : (A, X, Y) -> Unit\n"
+            });
+            for index in 1..method_count {
+                text.push_str(&format!("spare{index} : A -> Unit\n"));
+            }
+            text.push_str("}\n");
+            for index in 1..interface_count {
+                text.push_str(&format!(
+                    "interface Spare{index}<A> {{\nspareInterface{index} : A -> Unit\n}}\n"
+                ));
+            }
+            text.push_str(
+                "main : Unit -> Unit\nmain () = {\nwith R<Unit> {\nread ignored = ()\n}\n()\n}\n",
+            );
+            let surface = declaration_fixture("lexical-method-lookup-work.ash", &text);
+            let SurfaceDefinitionKind::Equational(main) = &surface.definitions[0].kind else {
+                panic!("equational main");
+            };
+            let SurfaceExprKind::Block(block) = &main.equations[0].body.kind else {
+                panic!("evidence block");
+            };
+            let SurfaceLocalDeclaration::Evidence(source) = &block.declarations[0] else {
+                panic!("lexical source");
+            };
+            let fresh = || {
+                let mut resolver = Resolver::new(ModuleId::new(7_015));
+                let mut declarations = resolver
+                    .resolve_declarations(&surface)
+                    .expect("resolved fixture");
+                resolver.resolved_interfaces =
+                    ResolvedInterfaceBuffer(std::mem::take(&mut declarations.interfaces));
+                resolver.type_work = TypeWorkBudget::unbounded();
+                resolver
+            };
+            let resolver = fresh();
+            let parameters = &resolver.resolved_interfaces.0[0].methods[0].type_parameters;
+            assert_eq!(parameters.len(), parameter_count);
+            let mut parameter_clones = TypeWorkBudget::unbounded();
+            for parameter in parameters {
+                clone_resolved_type_variable_with_budget(parameter, &mut parameter_clones)
+                    .expect("canonical parameter clone");
+            }
+            // Full local interface and method tables; two retained parameter
+            // buffers and two copies of each parameter's unchanged metadata.
+            let exact_work =
+                interface_count + method_count + 2 * parameter_count + 2 * parameter_clones.used();
+            let mut short = fresh();
+            short.type_work = TypeWorkBudget::with_limit(exact_work - 1);
+            let failure = short
+                .resolve_lexical_method_group(source, 0)
+                .expect_err("one-short lookup/registry work must reject");
+            assert_eq!(failure.reason, ResolveReason::TypeResourceExhausted);
+            for _ in 0..2 {
+                let mut exact = fresh();
+                exact.type_work = TypeWorkBudget::with_limit(exact_work);
+                let (group, end) = exact
+                    .resolve_lexical_method_group(source, 0)
+                    .expect("fresh exact retry");
+                assert_eq!(end, 1);
+                assert_eq!(group.contextual_parameters.len(), parameter_count);
+                assert_eq!(exact.lexical_method_parameters.0.len(), parameter_count);
+                assert_eq!(exact.type_work.used(), exact_work);
+            }
+            let imported_fresh = || {
+                let row = &resolver.resolved_interfaces.0[0];
+                let fact = CheckedInterfaceFact::new(
+                    row.id,
+                    row.spelling.clone(),
+                    row.parameters.clone(),
+                    None,
+                    row.methods
+                        .iter()
+                        .map(|method| {
+                            CheckedInterfaceMethodFact::with_mirrored_binder_authority_for_test(
+                                method.id,
+                                method.spelling.clone(),
+                                method.type_parameters.clone(),
+                                method.annotation.ty.clone(),
+                                method.origin.clone(),
+                                method.annotation.span,
+                                method.span,
+                            )
+                        })
+                        .collect(),
+                    row.origin.clone(),
+                    row.span,
+                );
+                let mut imported = Resolver::new(ModuleId::new(7_016));
+                imported.method_names.insert(
+                    "read".into(),
+                    ResolvedTermBinding::imported(
+                        ResolvedTermName::Method(row.methods[0].id),
+                        source.span,
+                    ),
+                );
+                imported
+                    .imported
+                    .insert_interface(fact, row.id.module(), source.span, true);
+                imported
+            };
+            let imported_work = exact_work - interface_count;
+            for one_short in [true, false, false] {
+                let mut imported = imported_fresh();
+                imported.type_work =
+                    TypeWorkBudget::with_limit(imported_work - usize::from(one_short));
+                let result = imported.resolve_lexical_method_group(source, 0);
+                if one_short {
+                    assert_eq!(
+                        result.expect_err("one-short imported method lookup").reason,
+                        ResolveReason::TypeResourceExhausted
+                    );
+                } else {
+                    let (group, _) = result.expect("fresh exact imported retry");
+                    assert_eq!(group.contextual_parameters.len(), parameter_count);
+                    assert_eq!(imported.type_work.used(), imported_work);
+                }
+            }
+            let mut no_method = fresh();
+            no_method.method_names.clear();
+            no_method.type_work = TypeWorkBudget::with_limit(0);
+            let (group, _) = no_method
+                .resolve_lexical_method_group(source, 0)
+                .expect("unknown method defers to existing membership checking");
+            assert!(group.method.is_none());
+            assert_eq!(no_method.type_work.used(), 0);
+        }
     }
 
     #[test]
