@@ -303,10 +303,10 @@ identity, lexical escape, row, and handler questions. Their branch specification
 does not make those checkpoints current on `main`.
 
 The verified scoped-evidence checkpoint settles the bounded pure-evidence
-choices. The active
+choices. The completed
 [capture/discard checkpoint](effect-ash/capture-discard-evidence.md)
-implements inferred request obligations and consuming abandonment; final
-verification and local integration remain open. Stored ordinary values remain
+implements inferred request obligations and consuming abandonment, with its
+reviews and full verification retained. Stored ordinary values remain
 unrestricted. Resource acquisition, lifetime and cleanup rules remain the next
 proposal-owned questions before safe resource scope; this checkpoint does not
 implement them.

@@ -46,10 +46,9 @@ and locally integrated on the milestone branch, with
 [implementation evidence](effect-ash/scoped-evidence-evidence.md) recording
 authentication, resource bounds, reviews, and the full gate. The forecast below
 retains its original relative weights; it is not an elapsed-work ledger.
-Capture/usage and checked discard are implemented in the active checkpoint;
-their [evidence](effect-ash/capture-discard-evidence.md) records reviewed
-inference and runtime behavior. Documentation, full verification and local
-integration remain open.
+Capture/usage and checked discard are complete in the retained checkpoint;
+their [evidence](effect-ash/capture-discard-evidence.md) records inference,
+runtime behavior, reviews, full verification and transition cleanup.
 
 ## Completion condition
 
@@ -626,7 +625,7 @@ request-carried obligations, exactly-once completion, non-escape, independent
 Core validation and moved-capture release. Known and imported functions retain
 finite control summaries; unknown relevant obligations fail closed. The
 [evidence](effect-ash/capture-discard-evidence.md) records tests and completed
-inference/runtime reviews. Final closure and local integration remain open.
+inference/runtime reviews, full verification and transition cleanup.
 The contract is one resume or one checked discard, never duplication, a second
 completion, escape, or discard of unaccounted obligations.
 
@@ -742,7 +741,7 @@ row, handler, and one-shot control questions. The local-newtype checkpoint
 settles sequential lexical identity, escape, and erased scope validation.
 Scoped exact evidence settles pure introduction, precedence, improvement,
 authentication, and erasure. The branch results are not current on `main`.
-The active capture/discard checkpoint settles bounded continuation abandonment
-and is completing its final gate. Resource-scope composition remains a later
+The completed capture/discard checkpoint settles bounded continuation
+abandonment. Resource-scope composition remains a later
 proposal-owned question. This informative plan authorizes neither expansion
 nor integration into `main`.

@@ -23,4 +23,4 @@ No proposed change is currently awaiting a decision.
 
 ## Accepted changes
 
-- [CP-0016: Capture Usage and Checked Discard](CP-0016-capture-usage-and-checked-discard.md)
+No accepted change proposal currently requires implementation.

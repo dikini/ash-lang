@@ -1,10 +1,10 @@
 # Capture usage and checked discard
 
 This informative report records the capture/discard checkpoint above the
-scoped-evidence baseline `da3ea62`. Inference and runtime implementation are
-present in the product worktree. Independent semantic, Rust/resource and
-documentation reviews and full verification are complete. Transition cleanup
-and local integration remain open.
+scoped-evidence baseline `da3ea62`. Implementation, independent semantic,
+Rust/resource and documentation reviews, full verification and transition
+cleanup are complete. Local integration is recorded separately by merge
+ancestry.
 The branch specification remains prospective until separate integration into
 `main`; this report does not make the wider Effects Ash milestone current.
 
@@ -14,9 +14,13 @@ CP-0016 was accepted at `52f7ae5`. The baseline and implementation plan were
 retained at `8a921f1`; gated syntax, Core carriers and structural usage checks
 at `f1e073a`. The approved finite inference redesign is retained at `870d81b`;
 reviewed runtime discard and accounting at `ca73354`.
-After GPG timed out, the user authorized unsigned intermediate commits and
-signing the local integration merge. The repository signing setting is
-unchanged.
+The specification and full-gate evidence are retained at `6ad72e9`.
+CP-0016, TASK-0026 and the task-owned execution plan were then removed from
+the product tree with their index entries. Git retains their accepted
+transition, work history and verification records.
+After GPG timed out, the user first authorized unsigned intermediate commits,
+then authorized an unsigned local integration merge while away from the
+desktop. The repository signing setting is unchanged; no signature is claimed.
 
 `discard` is a reserved nullary expression with type `Unit` and empty immediate
 row. Every normally completing clause path consumes its hidden capability once,
