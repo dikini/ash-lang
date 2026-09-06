@@ -23,5 +23,4 @@ No proposed change is currently awaiting a decision.
 
 ## Accepted changes
 
-- [CP-0015: Scoped Exact Evidence](CP-0015-scoped-exact-evidence.md) authorizes
-  checked sequential lexical methods for one complete local-identity relation.
+No accepted change currently awaits its product checkpoint.

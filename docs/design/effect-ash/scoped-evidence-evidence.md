@@ -2,8 +2,8 @@
 
 This report retains implementation and review evidence from `90f517d`, the
 combined module/local-newtype and resume-required kernel baseline. It is
-informative. Both independent reviews and the full gate are closed; artifact
-closure and local integration remain. The branch specification is prepared
+informative. Both independent reviews, the full gate, and transition artifacts
+are closed; local integration remains. The branch specification is prepared
 with the implementation. Neither this report nor milestone integration makes
 the change current on `main`.
 
@@ -16,6 +16,9 @@ selection interactions are retained at `d87203d`.
 The reviewed nested-body scheduling correction is retained at `bceb688`.
 Complete source/capture/header authentication and resource corrections are
 retained at `85bbe0d`.
+The specification, executable examples, and evidence are retained at `c16cd5d`.
+CP-0015, TASK-0025, and its execution plan leave the product tree after this
+verified checkpoint; Git retains their transition authority and work history.
 
 Sequential private `with` declarations supply every method for one exact
 complete interface application. Its selection key must contain an active local
@@ -228,6 +231,8 @@ The full `CARGO_INCREMENTAL=0 cargo xtask verify` gate passed on 2026-09-06:
 formatting, metadata, build, Clippy, 2,088 tests across 62 binaries, and rustdoc
 with warnings denied. Markdown lint and diff checks passed after consolidation;
 all 194 local file links in the thirteen changed Markdown files resolved.
+After transition cleanup, Markdown lint and diff checks pass, and all 187
+remaining local file links in the thirteen changed Markdown files resolve.
 
 The requirement audit found no missing evidence category. Manual ordering
 review confirms resolution and header arity/kinds before local-key admission,
@@ -239,8 +244,7 @@ retain the proposal's explicit non-goals and branch-versus-main distinction.
 
 An isolated target directory with incremental compilation disabled avoids a
 corrupted pre-existing build cache. Ignored build logs are disposable and carry
-no semantic authority. Artifact closure and local integration are the remaining
-checkpoint operations.
+no semantic authority. Local integration is the remaining checkpoint operation.
 
 ## Remaining boundary
 

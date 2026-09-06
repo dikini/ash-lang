@@ -44,9 +44,12 @@ implementation state rather than source-language continuations.
 The retained nominal carrier distinguishes module and lexical declarations.
 The local checkpoint uses one erased Core scope and permits identity-free
 closure escape. It adds no runtime-fresh identity class. The kernel adds the
-bounded effect-row form. Scoped exact evidence is the next identity-track
-checkpoint; its authority and runtime acquisition identities remain proposal
-questions.
+bounded effect-row form. The scoped-exact-evidence checkpoint is implemented
+and verified; its [implementation evidence](effect-ash/scoped-evidence-evidence.md)
+records the behavioral cases, independent authentication, resource bounds,
+and reviews. Pure supplied methods
+establish neither provider nor proof authority. Runtime acquisition identities
+remain a later proposal question.
 
 ## Closure boundary
 
@@ -299,9 +302,12 @@ resume-required effect-kernel product checkpoints now resolve the bounded
 identity, lexical escape, row, and handler questions. Their branch specification
 does not make those checkpoints current on `main`.
 
-The next planning questions are scoped exact evidence and capture and checked-discard rules
-needed before safe resource scope. The later questions remain owned by their
-proposal capsules.
+The verified scoped-evidence checkpoint settles the bounded pure-evidence
+choices. The next planning questions concern the capture
+and checked-discard rules needed before safe resource scope. Exact capture-use
+authentication in the current evidence work does not add capture classes,
+ownership, lifetime checking, or permission to discard a continuation. Those
+questions remain owned by the later proposal capsules.
 
 ## Supporting evidence
 
