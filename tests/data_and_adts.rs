@@ -521,6 +521,27 @@ fn admitted_nested_patterns_complete_the_full_pipeline_on_a_small_stack() {
 
 #[test]
 fn admitted_type_depth_survives_synthesized_tuple_and_function_wrappers() {
+    const CHILD: &str = "ASH_SYNTHESIZED_WRAPPER_SMALL_STACK_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        // A fresh process prevents a larger cached thread stack from satisfying
+        // this 256 KiB request and hiding accumulated pipeline-frame growth.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "admitted_type_depth_survives_synthesized_tuple_and_function_wrappers",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .expect("the isolated small-stack witness should start");
+        assert!(
+            output.status.success(),
+            "isolated small-stack witness failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return;
+    }
     std::thread::scope(|scope| {
         std::thread::Builder::new()
             .stack_size(256 * 1024)

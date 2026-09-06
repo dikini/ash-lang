@@ -7271,10 +7271,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 let renamed =
                     substitute_fresh_type_variables_in_order(&wrapper, replacements, &mut work)
                         .map_err(|()| BuildError::TypeWorkExceeded)?;
-                let Type::EffectfulFunction(_, computation) = renamed else {
-                    unreachable!()
-                };
-                Ok(computation.effects)
+                match renamed {
+                    Type::Function(_, _) => Ok(EffectRow::empty()),
+                    Type::EffectfulFunction(_, computation) => Ok(computation.effects),
+                    other => {
+                        discard_type_iteratively(other);
+                        Err(BuildError::InvalidPayload)
+                    }
+                }
             },
         )?;
         Ok(())
@@ -18880,7 +18884,10 @@ fn zonk_core_effect_row(
 ) -> Result<EffectRow, BuildError> {
     let row =
         clone_effect_row_with_budget(row, type_work).map_err(|()| BuildError::TypeWorkExceeded)?;
-    let wrapper = Type::function_computation(Type::Unit, ComputationType::new(Type::Unit, row));
+    let wrapper = IterativeTypeOwner::new(Type::function_computation(
+        Type::Unit,
+        ComputationType::new(Type::Unit, row),
+    ));
     let zonked = zonk_core_type(
         &wrapper,
         solutions,
@@ -18890,11 +18897,14 @@ fn zonk_core_effect_row(
         type_work,
         strict,
     )?;
-    discard_type_iteratively(wrapper);
-    let Type::EffectfulFunction(_, computation) = zonked else {
-        unreachable!()
-    };
-    Ok(computation.effects)
+    match zonked {
+        Type::Function(_, _) => Ok(EffectRow::empty()),
+        Type::EffectfulFunction(_, computation) => Ok(computation.effects),
+        other => {
+            discard_type_iteratively(other);
+            Err(BuildError::InvalidPayload)
+        }
+    }
 }
 
 fn resolved_build_error(error: ResolvedBuildFailure) -> TypeError {
@@ -31038,6 +31048,53 @@ mod tests {
         retry.type_work = TypeWorkBudget::with_limit(exact);
         assert_eq!(retry.zonk_with_status(&wide), Ok(zonked));
         assert_eq!(retry.type_work.used(), exact);
+    }
+
+    #[test]
+    fn core_effect_row_wrapper_is_exact_retryable_and_disposed_on_deep_failure() {
+        std::thread::Builder::new()
+            .name("core-row-wrapper-owner".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut argument = Type::Unit;
+                for _ in 0..32_000 {
+                    argument = Type::Application(Box::new(Type::Unit), Box::new(argument));
+                }
+                let row = EffectRow::singleton(crate::types::EffectInstance::new(
+                    crate::types::EffectId::new(ModuleId::new(0), 0),
+                    Box::new([argument]),
+                ));
+                let mut clone_work = TypeWorkBudget::unbounded();
+                drop(clone_effect_row_with_budget(&row, &mut clone_work).unwrap());
+                let zonk = |work: &mut TypeWorkBudget| {
+                    zonk_core_effect_row(
+                        &row,
+                        &HashMap::new(),
+                        &HashMap::new(),
+                        &InferenceVariableRegistry::default(),
+                        &HashSet::new(),
+                        work,
+                        false,
+                    )
+                };
+                // The clone is retained when the first wrapper-zonk charge fails.
+                assert_eq!(
+                    zonk(&mut TypeWorkBudget::with_limit(clone_work.used())),
+                    Err(BuildError::TypeWorkExceeded),
+                );
+                let mut measured = TypeWorkBudget::unbounded();
+                drop(zonk(&mut measured).unwrap());
+                assert_eq!(
+                    zonk(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+                    Err(BuildError::TypeWorkExceeded),
+                );
+                let mut exact = TypeWorkBudget::with_limit(measured.used());
+                drop(zonk(&mut exact).unwrap());
+                assert_eq!(exact.used(), measured.used());
+            })
+            .expect("the Core row wrapper thread should start")
+            .join()
+            .expect("Core row wrappers must be dropped iteratively");
     }
 
     #[test]

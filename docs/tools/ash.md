@@ -190,8 +190,10 @@ Its exact standard output is:
 
 The global signature quantifies `A` implicitly. Each use of `id` and `Some`
 instantiates its outer scheme. The unannotated local anonymous function is the
-only local initializer form that generalizes. These type operations are erased
-before producing runtime values.
+only local initializer form that generalizes. Pure execution erases these type
+operations. Effect execution retains lexical instantiation so a generic
+operation request matches the corresponding concrete handler; no type becomes
+a source-inspectable runtime value.
 
 Declaration parameters may state monomorphic kinds. `Type -> Type` admits a
 unary type constructor such as bare `Option`; omitted kind annotations remain
@@ -238,9 +240,9 @@ Its exact standard output is:
 ```
 
 Selected interface evidence flows as ordinary function values and applications.
-It adds no new runtime value class or interface-specific state. Kinds and scheme
-instantiation add no runtime state; the existing evaluator erases their Core
-type operations before producing the observation. They add no CLI
+It adds no interface-specific runtime state. Pure execution erases scheme
+instantiation; Effect execution retains ordinary lexical type/row instantiation
+for exact operation matching. Neither adds a source-inspectable type value, CLI
 configuration, runtime lookup, or output field.
 
 ### Method-local type parameters
@@ -306,8 +308,8 @@ The exact output is:
 
 Method parameters add no command-line option, runtime configuration, registry,
 dispatch, or output field. Their schemes and authentication records are
-compiler facts; generated type operations erase through the existing evaluator
-rules.
+compiler facts. Pure execution erases generated type operations; Effect
+execution retains lexical instantiation without a runtime interface registry.
 
 An absent method parameter list keeps the predecessor meaning: it binds no
 method-local parameter. This complete module is rejected with

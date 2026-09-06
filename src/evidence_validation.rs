@@ -2318,6 +2318,38 @@ fn same_type_after_interface_substitution(
                 pending.push((left_codomain, right_codomain));
                 pending.push((left_domain, right_domain));
             }
+            (Type::EffectfulFunction(_, _), Type::EffectfulFunction(_, _)) => {
+                charge(budget, parameters.len(), span)?;
+                let mut replacements = HashMap::new();
+                replacements
+                    .try_reserve(parameters.len())
+                    .map_err(|_| resource(span))?;
+                let mut retained = TypeBuffer::new();
+                for argument in arguments {
+                    reserve_rebuilt_type(&mut retained, budget, span)?;
+                    let argument =
+                        clone_type_with_budget(argument, &mut |cells| charge(budget, cells, span))?;
+                    retained.push(argument);
+                }
+                for (parameter, argument) in parameters.iter().zip(retained.0.drain(..)) {
+                    replacements.insert(parameter.id, argument);
+                }
+                // Preserve method-local variables that this interface substitution
+                // does not bind; all effect arguments still participate in equality.
+                let expected = crate::types::substitute_type_variables_with(
+                    source,
+                    &replacements,
+                    |cells| charge(budget, cells, span),
+                    || resource(span),
+                );
+                for (_, ty) in replacements {
+                    discard_type_iteratively(ty);
+                }
+                let expected = IterativeTypeOwner::new(expected?);
+                if !same_type_charged(&expected, actual, budget, span)? {
+                    return Ok(false);
+                }
+            }
             _ => return Ok(false),
         }
     }
@@ -11296,6 +11328,81 @@ mod tests {
             .expect_err("an open row tail is invalid in a linked interface argument")
             .reason(),
             EvidenceValidationReason::InvalidEvidenceRoot
+        );
+    }
+
+    #[test]
+    fn interface_substitution_compares_effectful_methods_exactly_and_retryably() {
+        let program = entry_program(
+            "interface Read<A> {\nread : A -> A\n}\nmain : Unit -> Unit\nmain () = ()\n",
+        );
+        let parameters = &program.groups()[0].interface_facts()[0].parameters;
+        let span = program.result().span;
+        let effect = crate::types::EffectId::new(ModuleId::new(77), 0);
+        let free = TypeVariableId::generated(900);
+        let function = |argument| {
+            Type::function_computation(
+                Type::Variable(free),
+                crate::types::ComputationType::new(
+                    Type::Int,
+                    crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                        effect,
+                        Box::new([argument]),
+                    )),
+                ),
+            )
+        };
+        let source = function(Type::Variable(parameters[0].id));
+        let actual = function(Type::Bool);
+        let mut measured = InterfaceConstraintBudget::default();
+        assert!(
+            same_type_after_interface_substitution(
+                &source,
+                parameters,
+                &[Type::Bool],
+                &actual,
+                &mut measured,
+                span
+            )
+            .unwrap()
+        );
+        let exact = measured.used();
+        let error = same_type_after_interface_substitution(
+            &source,
+            parameters,
+            &[Type::Bool],
+            &actual,
+            &mut InterfaceConstraintBudget::with_limit(exact - 1),
+            span,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted
+        );
+        for _ in 0..2 {
+            assert!(
+                same_type_after_interface_substitution(
+                    &source,
+                    parameters,
+                    &[Type::Bool],
+                    &actual,
+                    &mut InterfaceConstraintBudget::with_limit(exact),
+                    span
+                )
+                .unwrap()
+            );
+        }
+        assert!(
+            !same_type_after_interface_substitution(
+                &source,
+                parameters,
+                &[Type::Int],
+                &actual,
+                &mut InterfaceConstraintBudget::default(),
+                span
+            )
+            .unwrap()
         );
     }
 

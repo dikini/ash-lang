@@ -141,6 +141,7 @@ fn runtime_value_class(value: &Value) -> &'static str {
         Value::Boolean(_) => "boolean",
         Value::Unit => "unit",
         Value::Function(_) => "function",
+        Value::Polymorphic { .. } => "function",
         Value::ConstructorFunction(_) => "constructor-function",
         Value::Location(_) => "location",
         Value::Data(_) => "data",

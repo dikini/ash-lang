@@ -769,34 +769,7 @@ where
                 .map_err(PipelineFailure::Typing)
                 .map_err(FileFailure::Pipeline)?
         {
-            let mut elaborator = EffectElaborator::for_module_program(&validated_interfaces)
-                .map_err(TypeError::Internal)
-                .map_err(PipelineFailure::Typing)
-                .map_err(FileFailure::Pipeline)?;
-            let typed = elaborator
-                .synthesize_effect_module_program(&validated_interfaces)
-                .map_err(PipelineFailure::Typing)
-                .map_err(FileFailure::Pipeline)?;
-            let ty = IterativeTypeOwner::new(typed.ty);
-            let type_display = registry.display_type(&ty);
-            let unchecked = elaborator
-                .finish(typed.node)
-                .map_err(TypeError::Internal)
-                .map_err(PipelineFailure::Typing)
-                .map_err(FileFailure::Pipeline)?;
-            let validated = validate_effect_modules(unchecked, &sources, &module_sources)
-                .map_err(PipelineFailure::Validation)
-                .map_err(FileFailure::Pipeline)?;
-            let evaluation = evaluate_effect(&validated)
-                .map_err(PipelineFailure::Runtime)
-                .map_err(FileFailure::Pipeline)?;
-            let (value, heap) = evaluation.into_observation_parts();
-            return Ok(Observation {
-                value,
-                ty: ty.into_inner(),
-                type_display: Some(type_display),
-                _heap: heap,
-            });
+            return finish_effect_observation(&validated_interfaces, &sources, &module_sources);
         }
         let mut elaborator = Elaborator::for_module_program(&validated_interfaces)
             .map_err(TypeError::Internal)
@@ -828,6 +801,42 @@ where
         validator,
         evaluator,
     )
+}
+
+// Keep later Effect-phase temporaries out of the source-checking caller's frame.
+fn finish_effect_observation(
+    validated_interfaces: &ValidatedInterfaceProgram,
+    sources: &[&SourceFile],
+    module_sources: &[(ModuleId, SourceId)],
+) -> Result<Observation, FileFailure> {
+    let mut elaborator = EffectElaborator::for_module_program(validated_interfaces)
+        .map_err(TypeError::Internal)
+        .map_err(PipelineFailure::Typing)
+        .map_err(FileFailure::Pipeline)?;
+    let typed = elaborator
+        .synthesize_effect_module_program(validated_interfaces)
+        .map_err(PipelineFailure::Typing)
+        .map_err(FileFailure::Pipeline)?;
+    let ty = IterativeTypeOwner::new(typed.ty);
+    let type_display = validated_interfaces.registry().display_type(&ty);
+    let unchecked = elaborator
+        .finish(typed.node)
+        .map_err(TypeError::Internal)
+        .map_err(PipelineFailure::Typing)
+        .map_err(FileFailure::Pipeline)?;
+    let validated = validate_effect_modules(unchecked, sources, module_sources)
+        .map_err(PipelineFailure::Validation)
+        .map_err(FileFailure::Pipeline)?;
+    let evaluation = evaluate_effect(&validated)
+        .map_err(PipelineFailure::Runtime)
+        .map_err(FileFailure::Pipeline)?;
+    let (value, heap) = evaluation.into_observation_parts();
+    Ok(Observation {
+        value,
+        ty: ty.into_inner(),
+        type_display: Some(type_display),
+        _heap: heap,
+    })
 }
 
 fn finish_observation<V, E>(

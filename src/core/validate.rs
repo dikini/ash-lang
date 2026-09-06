@@ -7750,6 +7750,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             &authenticated_method_evidence,
         )?;
         let has_discard = self.validate_effect_nodes(&type_binders)?;
+        self.validate_effect_abstraction_shapes(&authenticated_method_evidence)?;
         self.validate_scopes()?;
         self.validate_type_scopes()?;
         if !has_discard {
@@ -8089,6 +8090,70 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             ));
         }
         Ok(has_discard)
+    }
+
+    fn validate_effect_abstraction_shapes(
+        &self,
+        authenticated: &HashSet<NodeId>,
+    ) -> Result<(), ValidationError> {
+        let resource = || ValidationError::new(ValidationReason::Resource, None);
+        let mut adapters = HashSet::new();
+        self.charge_type_work(self.program.method_evidence_anchors.len())?;
+        for anchor in &self.program.method_evidence_anchors {
+            if matches!(anchor.role, MethodEvidenceAnchorRole::Adapter { .. })
+                && authenticated.contains(&anchor.node)
+            {
+                self.charge_type_work(1)?;
+                adapters.try_reserve(1).map_err(|_| resource())?;
+                adapters.insert(anchor.node);
+            }
+        }
+        let mut inert = HashSet::new();
+        let mut pending = Vec::new();
+        for (index, node) in self.program.nodes.iter().enumerate() {
+            self.charge_type_work(1)?;
+            let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
+                super::effect::EffectOperationFamily::pure(&node.kind)
+            else {
+                continue;
+            };
+            let root = node_id(self.program.arena, index)?;
+            if adapters.contains(&root) {
+                continue;
+            }
+            let mut current = abstraction.body();
+            loop {
+                self.charge_type_work(1)?;
+                if inert.contains(&current) {
+                    break;
+                }
+                self.charge_type_work(1)?;
+                pending.try_reserve(1).map_err(|_| resource())?;
+                pending.push(current);
+                match super::effect::EffectOperationFamily::pure(&self.node(current)?.kind) {
+                    Some(
+                        PureExprKind::Value(PureValue::Function(_) | PureValue::Constructor(_))
+                        | PureExprKind::Variable(_)
+                        | PureExprKind::Computation(PureComputation::TypeAbstraction(_)),
+                    ) => break,
+                    Some(PureExprKind::Computation(PureComputation::TypeApplication(
+                        application,
+                    ))) => current = application.function(),
+                    _ => {
+                        return Err(ValidationError::new(
+                            ValidationReason::TypeOperation,
+                            Some(root),
+                        ));
+                    }
+                }
+            }
+            // Each shared suffix enters this cache once; graph validation has
+            // already excluded cycles. Nested abstractions are checked separately.
+            self.charge_type_work(pending.len())?;
+            inert.try_reserve(pending.len()).map_err(|_| resource())?;
+            inert.extend(pending.drain(..));
+        }
+        Ok(())
     }
 
     fn validate_pure_effect_row(
@@ -15995,6 +16060,68 @@ mod tests {
             .expect_err("a forged complete row argument must be rejected");
         assert_eq!(error.reason(), ValidationReason::TypeOperation);
         assert_eq!(error.node(), Some(application));
+    }
+
+    #[test]
+    fn effect_abstraction_shape_scan_caches_shared_suffixes_with_exact_work() {
+        const DEPTH: usize = 4096;
+        const ROOTS: usize = 32;
+        let file = source();
+        let node_origin = origin(&file);
+        let mut builder = crate::core::EffectCoreBuilder::with_effect_registry(Arc::new(
+            crate::resolved::ResolvedRegistry::default(),
+        ));
+        let unit = builder.unit(Type::Unit, node_origin.clone()).unwrap();
+        let parameter = builder.binder(Type::Unit, node_origin.clone()).unwrap();
+        let ty = Type::Function(Box::new(Type::Unit), Box::new(Type::Unit));
+        let mut body = builder
+            .function(parameter, unit, ty.clone(), node_origin.clone())
+            .unwrap();
+        for _ in 0..DEPTH {
+            body = builder
+                .type_application(body, vec![Type::Unit], ty.clone(), node_origin.clone())
+                .unwrap();
+        }
+        let mut root = body;
+        for index in 0..ROOTS {
+            let parameter = crate::types::TypeVariableId::generated(index as u32);
+            root = builder
+                .type_abstraction(
+                    vec![(parameter, Kind::Type)],
+                    body,
+                    Type::Forall(Box::new([(parameter, Kind::Type)]), Box::new(ty.clone())),
+                    node_origin.clone(),
+                )
+                .unwrap();
+        }
+        let program = builder.finish(root).unwrap();
+        let measured = Validator::new(&program, &[&file]);
+        measured
+            .validate_effect_abstraction_shapes(&HashSet::new())
+            .unwrap();
+        let required = measured.type_work.get();
+        assert_eq!(required, 4 * DEPTH + 2 * ROOTS + 4);
+        let short = Validator::new(&program, &[&file]);
+        short
+            .type_work
+            .set(CORE_VALIDATION_TYPE_WORK_LIMIT - required + 1);
+        assert_eq!(
+            short
+                .validate_effect_abstraction_shapes(&HashSet::new())
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Resource
+        );
+        for _ in 0..2 {
+            let exact = Validator::new(&program, &[&file]);
+            exact
+                .type_work
+                .set(CORE_VALIDATION_TYPE_WORK_LIMIT - required);
+            exact
+                .validate_effect_abstraction_shapes(&HashSet::new())
+                .unwrap();
+            assert_eq!(exact.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+        }
     }
 
     #[test]

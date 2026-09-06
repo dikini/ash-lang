@@ -2,6 +2,10 @@
 
 use std::{error::Error, fmt, sync::Arc};
 
+#[path = "instantiation.rs"]
+mod instantiation;
+use instantiation::Instantiation;
+
 use super::{
     Closure, Value,
     value::{ExecutableNode, ExecutableProgram, HeapCell, Location, ObservedHeap, ObservedValue},
@@ -13,7 +17,7 @@ use crate::{
         ValidatedProgram,
     },
     resolved::{BinderId, ResumeId},
-    types::{EffectInstance, OperationId, same_type},
+    types::{EffectInstance, OperationId, TypeWorkBudget, same_type_with_budget},
 };
 
 /// Inspectable lexical values available while evaluating one expression.
@@ -28,12 +32,14 @@ use crate::{
 pub struct Environment {
     head: Option<Arc<EnvironmentEntry>>,
     len: usize,
+    instantiation: Instantiation,
 }
 
 struct EnvironmentEntry {
     kind: EnvironmentEntryKind,
     parent: Option<Arc<Self>>,
     visible_len: usize,
+    instantiation: Instantiation,
 }
 
 enum EnvironmentEntryKind {
@@ -56,6 +62,7 @@ enum RecursiveMemberKind {
         parameter: BinderId,
         body: NodeId,
         origin: crate::source::Origin,
+        abstraction: Option<NodeId>,
     },
     Data {
         location: Location,
@@ -83,15 +90,16 @@ impl EnvironmentEntry {
         if let Some(parent) = self.parent.take() {
             pending.push(parent);
         }
-        if let EnvironmentEntryKind::Binding {
-            value: Value::Function(closure),
-            ..
-        } = &mut self.kind
-        {
-            if let Some(captured) = closure.environment.head.take() {
+        if let EnvironmentEntryKind::Binding { value, .. } = &mut self.kind {
+            let environment = match value {
+                Value::Function(closure) => &mut closure.environment,
+                Value::Polymorphic { environment, .. } => environment,
+                _ => return,
+            };
+            if let Some(captured) = environment.head.take() {
                 pending.push(captured);
             }
-            closure.environment.len = 0;
+            environment.len = 0;
         }
     }
 }
@@ -160,16 +168,27 @@ impl Environment {
                                 parameter,
                                 body,
                                 origin,
-                            } => Value::Function(Closure {
-                                parameter: *parameter,
-                                body: *body,
-                                program: program.clone(),
-                                environment: Self {
+                                abstraction,
+                            } => {
+                                let environment = Self {
                                     head: Some(Arc::clone(entry)),
                                     len: entry.visible_len,
-                                },
-                                origin: origin.clone(),
-                            }),
+                                    instantiation: entry.instantiation.clone(),
+                                };
+                                if let Some(abstraction) = abstraction {
+                                    return Some(Value::Polymorphic {
+                                        abstraction: *abstraction,
+                                        environment,
+                                    });
+                                }
+                                Value::Function(Closure {
+                                    parameter: *parameter,
+                                    body: *body,
+                                    program: program.clone(),
+                                    environment,
+                                    origin: origin.clone(),
+                                })
+                            }
                             RecursiveMemberKind::Data { location } => Value::Location(*location),
                         });
                     }
@@ -191,8 +210,10 @@ impl Environment {
                 kind: EnvironmentEntryKind::Binding { binder, value },
                 parent: self.head.take(),
                 visible_len: len,
+                instantiation: self.instantiation.clone(),
             })),
             len,
+            instantiation: self.instantiation,
         })
     }
 
@@ -226,8 +247,10 @@ impl Environment {
                 },
                 parent: self.head.take(),
                 visible_len: len,
+                instantiation: self.instantiation.clone(),
             })),
             len,
+            instantiation: self.instantiation,
         })
     }
 }
@@ -425,6 +448,11 @@ enum Frame {
     },
     Request {
         node: NodeId,
+        instantiation: Instantiation,
+    },
+    TypeApplication {
+        node: NodeId,
+        caller: Instantiation,
     },
     Resume {
         node: NodeId,
@@ -491,6 +519,7 @@ pub struct Machine {
     heap: Vec<HeapCell>,
     capture_limit: usize,
     captured_cells: usize,
+    instantiation_work: TypeWorkBudget,
 }
 
 impl Machine {
@@ -505,6 +534,7 @@ impl Machine {
             heap: Vec::new(),
             capture_limit: 0,
             captured_cells: 0,
+            instantiation_work: TypeWorkBudget::unbounded(),
         }
     }
 
@@ -526,6 +556,7 @@ impl Machine {
             heap: Vec::new(),
             capture_limit,
             captured_cells: 0,
+            instantiation_work: TypeWorkBudget::unbounded(),
         }
     }
 
@@ -589,7 +620,13 @@ impl Machine {
             Frame::HandlerBoundary { .. } => {
                 self.control = Some(Control::Return(value));
             }
-            Frame::Request { node } => self.return_request(node, value)?,
+            Frame::Request {
+                node,
+                instantiation,
+            } => self.return_request(node, &instantiation, value)?,
+            Frame::TypeApplication { node, caller } => {
+                self.return_type_application(node, &caller, value)?
+            }
             Frame::Resume { node } => self.return_resume(node, value)?,
             Frame::ClauseBoundary {
                 handler,
@@ -610,7 +647,50 @@ impl Machine {
         Ok(())
     }
 
-    fn return_request(&mut self, node: NodeId, value: Value) -> Result<(), RuntimeFailure> {
+    fn return_type_application(
+        &mut self,
+        node: NodeId,
+        caller: &Instantiation,
+        value: Value,
+    ) -> Result<(), RuntimeFailure> {
+        let PureExprKind::Computation(PureComputation::TypeApplication(application)) =
+            pure_expression(&self.program, node)?
+        else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        match value {
+            Value::Polymorphic {
+                abstraction,
+                mut environment,
+            } => {
+                let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                    pure_expression(&self.program, abstraction)?
+                else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                environment.instantiation = environment.instantiation.apply(
+                    caller,
+                    abstraction.parameters(),
+                    application.arguments(),
+                    application.row_arguments(),
+                    &mut self.instantiation_work,
+                )?;
+                self.control = Some(Control::Evaluate(abstraction.body(), environment));
+            }
+            value @ (Value::ConstructorFunction(_) | Value::Location(_)) => {
+                self.control = Some(Control::Return(value))
+            }
+            _ => return Err(RuntimeFailure::InvalidControlState),
+        }
+        Ok(())
+    }
+
+    fn return_request(
+        &mut self,
+        node: NodeId,
+        instantiation: &Instantiation,
+        value: Value,
+    ) -> Result<(), RuntimeFailure> {
         let (effect, operation) = match self.program.node(node) {
             Some(ExecutableNode::Effect(expression)) => match &expression.kind {
                 EffectExprKind::Operation(EffectOperation::Request(request)) => {
@@ -620,16 +700,34 @@ impl Machine {
             },
             _ => return Err(RuntimeFailure::InvalidControlState),
         };
-        let selected = self
-            .frames
-            .iter()
-            .rposition(|frame| match frame {
-                Frame::HandlerBoundary { node, .. } => self
-                    .handler(*node)
-                    .is_some_and(|handler| same_effect_instance(handler.effect(), effect)),
-                _ => false,
-            })
-            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let effect = instantiation.effect(effect, &mut self.instantiation_work)?;
+        let mut selected = None;
+        for (index, frame) in self.frames.iter().enumerate().rev() {
+            self.instantiation_work
+                .charge(1)
+                .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+            let Frame::HandlerBoundary { node, environment } = frame else {
+                continue;
+            };
+            let Some(ExecutableNode::Effect(expression)) = self.program.node(*node) else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &expression.kind
+            else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            if handler.effect().effect() != effect.effect() {
+                continue;
+            }
+            let handled = environment
+                .instantiation
+                .effect(handler.effect(), &mut self.instantiation_work)?;
+            if same_effect_instance(&handled, &effect, &mut self.instantiation_work)? {
+                selected = Some(index);
+                break;
+            }
+        }
+        let selected = selected.ok_or(RuntimeFailure::InvalidControlState)?;
         self.trace_effect(EffectTraceEvent::Request(operation));
         let continuation = self.capture_from(selected)?;
         let captured = &continuation.frames;
@@ -816,14 +914,22 @@ impl Machine {
     }
 }
 
-fn same_effect_instance(left: &EffectInstance, right: &EffectInstance) -> bool {
-    left.effect() == right.effect()
-        && left.arguments().len() == right.arguments().len()
-        && left
-            .arguments()
-            .iter()
-            .zip(right.arguments())
-            .all(|(left, right)| same_type(left, right))
+fn same_effect_instance(
+    left: &EffectInstance,
+    right: &EffectInstance,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, RuntimeFailure> {
+    if left.effect() != right.effect() || left.arguments().len() != right.arguments().len() {
+        return Ok(false);
+    }
+    for (left, right) in left.arguments().iter().zip(right.arguments()) {
+        if !same_type_with_budget(left, right, work)
+            .map_err(|()| RuntimeFailure::EnvironmentCapacity)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn dispatch_entry(
@@ -840,8 +946,11 @@ fn dispatch_entry(
             EffectExprKind::Operation(operation) => {
                 return Ok(match operation {
                     EffectOperation::Request(request) => Transition::suspend(
-                        Control::Evaluate(request.operand(), environment),
-                        Frame::Request { node },
+                        Control::Evaluate(request.operand(), environment.clone()),
+                        Frame::Request {
+                            node,
+                            instantiation: environment.instantiation,
+                        },
                     ),
                     EffectOperation::Handler(handler) => Transition::suspend(
                         Control::Evaluate(handler.body(), environment.clone()),
@@ -894,10 +1003,27 @@ fn dispatch_entry(
             Transition::direct(Control::Evaluate(scope.body(), environment))
         }
         PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
-            enter_type_abstraction(operation, environment)
+            if matches!(program, ExecutableProgram::Effect(_)) {
+                Transition::direct(Control::Return(Value::Polymorphic {
+                    abstraction: node,
+                    environment,
+                }))
+            } else {
+                enter_type_abstraction(operation, environment)
+            }
         }
         PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
-            enter_type_application(operation, environment)
+            if matches!(program, ExecutableProgram::Effect(_)) {
+                Transition::suspend(
+                    Control::Evaluate(operation.function(), environment.clone()),
+                    Frame::TypeApplication {
+                        node,
+                        caller: environment.instantiation,
+                    },
+                )
+            } else {
+                enter_type_application(operation, environment)
+            }
         }
     })
 }
@@ -1034,6 +1160,9 @@ fn enter_recursive_binding(
                 parameter: function.parameter().id(),
                 body: function.body(),
                 origin: initializer_origin,
+                abstraction: (matches!(program, ExecutableProgram::Effect(_))
+                    && erased_initializer != member.initializer())
+                .then_some(member.initializer()),
             },
             _ if member.binder().ty().outer_nominal().is_some() => {
                 let location = allocate_heap(heap, HeapCell::Uninitialized)?;
@@ -1157,6 +1286,7 @@ fn dispatch_return(
         } => return_recursive_initialization(pending, next, body, environment, value, heap),
         Frame::HandlerBoundary { .. }
         | Frame::Request { .. }
+        | Frame::TypeApplication { .. }
         | Frame::Resume { .. }
         | Frame::ClauseBoundary { .. } => Err(RuntimeFailure::InvalidControlState),
     }
@@ -1472,6 +1602,55 @@ mod tests {
         ))
     }
 
+    #[test]
+    fn generic_execution_instantiation_work_is_exact_and_retryable() {
+        let program = effect_program(concat!(
+            "effect E<T> {\nask : Unit -> Int\n}\n",
+            "helper<T> : T -> Int ! {E<T>}\nhelper ignored = perform E<T>.ask ()\n",
+            "main : Unit -> Int\nmain () = handle (helper 0) with E<Int> {\nask ignored => resume 42\n}\n",
+        ));
+        // Application: 3. Request argument: 2 + 1. Handler search: 1.
+        // Handler argument: 2 + 1. Exact comparison: 1.
+        const REQUIRED: usize = 11;
+        let mut short = Machine::new_effect(&program);
+        short.instantiation_work = TypeWorkBudget::with_limit(REQUIRED - 1);
+        assert_eq!(
+            short.run().unwrap_err(),
+            RuntimeFailure::EnvironmentCapacity
+        );
+        for _ in 0..2 {
+            let mut exact = Machine::new_effect(&program);
+            exact.instantiation_work = TypeWorkBudget::with_limit(REQUIRED);
+            assert_eq!(exact.run().unwrap().value.to_string(), "42");
+        }
+    }
+
+    #[test]
+    fn polymorphic_environment_edges_are_disposed_iteratively() {
+        let program = sequential_effect_program();
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let mut environment = Environment::new();
+                for index in 0..32_000 {
+                    let captured = environment.clone();
+                    environment = environment
+                        .extend(
+                            BinderId::new(index),
+                            Value::Polymorphic {
+                                abstraction: program.root(),
+                                environment: captured,
+                            },
+                        )
+                        .unwrap();
+                }
+                drop(environment);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     fn effect_program(text: &str) -> ValidatedEffectProgram {
         let path = std::env::temp_dir().join(format!(
             "ash-machine-effect-budget-{}-{}.ash",
@@ -1528,9 +1707,10 @@ mod tests {
         )
         .expect("Core should validate");
         let mut machine = Machine::new_effect_with_capture_limit(&program, limit);
-        machine
-            .frames
-            .extend((0..3).map(|_| Frame::Request { node: root }));
+        machine.frames.extend((0..3).map(|_| Frame::Request {
+            node: root,
+            instantiation: Instantiation::default(),
+        }));
         machine
     }
 
@@ -1550,7 +1730,10 @@ mod tests {
         )
         .expect("Core should validate");
         let mut pure = Machine::new(&program);
-        pure.frames.push(Frame::Request { node: root });
+        pure.frames.push(Frame::Request {
+            node: root,
+            instantiation: Instantiation::default(),
+        });
         assert_eq!(
             pure.capture_from(0).expect_err("Pure cannot capture"),
             RuntimeFailure::CapturedControlCapacity
@@ -1575,7 +1758,10 @@ mod tests {
                 Some(Control::Evaluate(node, _)) => *node,
                 _ => unreachable!("fixture begins by evaluating its root"),
             };
-            exact.frames.push(Frame::Request { node });
+            exact.frames.push(Frame::Request {
+                node,
+                instantiation: Instantiation::default(),
+            });
             assert_eq!(
                 exact.capture_from(0).expect_err("cumulative quota is full"),
                 RuntimeFailure::CapturedControlCapacity
@@ -1678,7 +1864,10 @@ mod tests {
             handler: HandlerId::new(1),
             owner: ResumeId::new(1),
             continuation: Some(CapturedContinuation {
-                frames: vec![Frame::Request { node: root }],
+                frames: vec![Frame::Request {
+                    node: root,
+                    instantiation: Instantiation::default(),
+                }],
             }),
         });
         machine.frames.push(Frame::ClauseBoundary {
@@ -1686,7 +1875,10 @@ mod tests {
             owner,
             continuation: Some(captured),
         });
-        machine.frames.push(Frame::Request { node: root });
+        machine.frames.push(Frame::Request {
+            node: root,
+            instantiation: Instantiation::default(),
+        });
         machine
             .discard(handler, owner)
             .expect("discard should release its three cells");
@@ -2744,6 +2936,7 @@ mod tests {
                             parameter: parameter.id(),
                             body,
                             origin: origin.clone(),
+                            abstraction: None,
                         },
                     })
                     .collect();

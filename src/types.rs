@@ -2643,13 +2643,36 @@ fn substitute_type_and_row_variables<E>(
                     charge(1)?;
                     charge(tail.lacks.len())?;
                 }
-                let known = codomain
-                    .effects
-                    .known
-                    .iter()
-                    .map(|instance| (instance.effect, instance.arguments.len()))
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice();
+                let instances = codomain.effects.known.iter().chain(
+                    codomain
+                        .effects
+                        .tail
+                        .iter()
+                        .flat_map(|tail| tail.lacks.iter()),
+                );
+                let argument_count = instances.clone().try_fold(0usize, |count, instance| {
+                    count
+                        .checked_add(instance.arguments.len())
+                        .ok_or_else(&mut *allocation_error)
+                })?;
+                // The label scan is already admitted. Admit every queued argument
+                // before scanning the arguments or retaining proportional work.
+                charge(argument_count)?;
+                let pending = argument_count
+                    .checked_add(3)
+                    .ok_or_else(&mut *allocation_error)?;
+                work.try_reserve(pending).map_err(|_| allocation_error())?;
+                let mut known = Vec::new();
+                known
+                    .try_reserve(codomain.effects.known.len())
+                    .map_err(|_| allocation_error())?;
+                known.extend(
+                    codomain
+                        .effects
+                        .known
+                        .iter()
+                        .map(|instance| (instance.effect, instance.arguments.len())),
+                );
                 let replacement =
                     codomain
                         .effects
@@ -2668,37 +2691,30 @@ fn substitute_type_and_row_variables<E>(
                             }
                             _ => None,
                         });
-                let tail = codomain.effects.tail.as_ref().map(|tail| {
-                    (
-                        tail.variable,
+                let tail = if let Some(tail) = &codomain.effects.tail {
+                    let mut lacks = Vec::new();
+                    lacks
+                        .try_reserve(tail.lacks.len())
+                        .map_err(|_| allocation_error())?;
+                    lacks.extend(
                         tail.lacks
                             .iter()
-                            .map(|instance| (instance.effect, instance.arguments.len()))
-                            .collect::<Vec<_>>()
-                            .into_boxed_slice(),
-                    )
-                });
-                let arguments = codomain
-                    .effects
-                    .known
-                    .iter()
-                    .chain(
-                        codomain
-                            .effects
-                            .tail
-                            .iter()
-                            .flat_map(|tail| tail.lacks.iter()),
-                    )
-                    .flat_map(|instance| instance.arguments.iter())
-                    .collect::<Vec<_>>();
+                            .map(|instance| (instance.effect, instance.arguments.len())),
+                    );
+                    Some((tail.variable, lacks.into_boxed_slice()))
+                } else {
+                    None
+                };
                 work.push(Task::FinishEffectfulFunction(RowShape {
-                    known,
+                    known: known.into_boxed_slice(),
                     tail,
-                    argument_count: arguments.len(),
+                    argument_count,
                     replacement,
                 }));
-                for argument in arguments.into_iter().rev() {
-                    work.push(Task::Visit(argument, substitute));
+                for instance in instances.rev() {
+                    for argument in instance.arguments.iter().rev() {
+                        work.push(Task::Visit(argument, substitute));
+                    }
                 }
                 work.push(Task::Visit(&codomain.value, substitute));
                 work.push(Task::Visit(domain, substitute));
@@ -4782,6 +4798,130 @@ mod tests {
             .expect("the nested-row test thread should start")
             .join()
             .expect("row clone, substitution, and disposal should fit a 256 KiB stack");
+    }
+
+    #[test]
+    fn effectful_substitution_preflights_known_row_argument_work() {
+        assert_effectful_substitution_preflights_row_arguments(false);
+    }
+
+    #[test]
+    fn effectful_substitution_preflights_lacks_row_argument_work() {
+        assert_effectful_substitution_preflights_row_arguments(true);
+    }
+
+    fn assert_effectful_substitution_preflights_row_arguments(lacks: bool) {
+        for width in [16, 4_096] {
+            let parameter = TypeVariableId::new(0);
+            let instance = EffectInstance::new(
+                EffectId::new(ModuleId::new(0), 0),
+                vec![Type::Unit; width].into_boxed_slice(),
+            );
+            let row = if lacks {
+                EffectRow::open(EffectRowVariable::rigid(parameter), Box::new([instance]))
+            } else {
+                EffectRow::singleton(instance)
+            };
+            let source =
+                Type::function_computation(Type::Unit, ComputationType::new(Type::Unit, row));
+            let mut work = TypeWorkBudget::with_limit(if lacks { 5 } else { 4 });
+            let mut charges = Vec::new();
+            assert_eq!(
+                substitute_type_and_row_variables_with(
+                    &source,
+                    &HashMap::from([(parameter, Type::Bool)]),
+                    &HashMap::new(),
+                    |cells| {
+                        charges.push(cells);
+                        work.charge(cells)
+                    },
+                    || (),
+                ),
+                Err(()),
+            );
+            assert_eq!(
+                charges,
+                if lacks {
+                    vec![3, 0, 1, 1, width]
+                } else {
+                    vec![3, 1, width]
+                },
+                "the complete argument queue must be admitted before any argument traversal",
+            );
+        }
+    }
+
+    #[test]
+    fn effectful_substitution_row_queue_is_exact_simultaneous_and_drops_deep_failure() {
+        std::thread::Builder::new()
+            .name("effectful-substitution-row-queue".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 32_000;
+                let first = TypeVariableId::new(0);
+                let second = TypeVariableId::new(1);
+                let row_parameter = TypeVariableId::new(2);
+                let mut deep = Type::Unit;
+                for _ in 0..DEPTH {
+                    deep = Type::Application(Box::new(Type::Unit), Box::new(deep));
+                }
+                let row = EffectRow::with_tail(
+                    Box::new([EffectInstance::new(
+                        EffectId::new(ModuleId::new(0), 0),
+                        Box::new([deep, Type::Variable(first)]),
+                    )]),
+                    EffectRowVariable::rigid(row_parameter),
+                    Box::new([EffectInstance::new(
+                        EffectId::new(ModuleId::new(0), 1),
+                        Box::new([Type::Variable(second)]),
+                    )]),
+                );
+                let source = IterativeTypeOwner::new(Type::function_computation(
+                    Type::Unit,
+                    ComputationType::new(Type::Unit, row),
+                ));
+                let replacements =
+                    HashMap::from([(first, Type::Variable(second)), (second, Type::Bool)]);
+                let substitute = |work: &mut TypeWorkBudget| {
+                    substitute_type_and_row_variables_with(
+                        &source,
+                        &replacements,
+                        &HashMap::new(),
+                        |cells| work.charge(cells),
+                        || (),
+                    )
+                };
+                // Seven shape cells, five queued arguments, two function children,
+                // and the first deep argument are retained before the next failure.
+                let mut partial = TypeWorkBudget::with_limit(2 * DEPTH + 15);
+                assert_eq!(substitute(&mut partial), Err(()));
+                assert_eq!(partial.used(), 2 * DEPTH + 15);
+                let mut measured = TypeWorkBudget::unbounded();
+                discard_type_iteratively(substitute(&mut measured).unwrap().unwrap());
+                assert_eq!(
+                    substitute(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+                    Err(()),
+                );
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(measured.used());
+                    let substituted =
+                        IterativeTypeOwner::new(substitute(&mut exact).unwrap().unwrap());
+                    assert_eq!(exact.used(), measured.used());
+                    let Type::EffectfulFunction(_, computation) = &*substituted else {
+                        panic!("the open row remains effectful");
+                    };
+                    assert_eq!(
+                        computation.effects.known[0].arguments[1],
+                        Type::Variable(second),
+                        "replacement values must not be substituted a second time",
+                    );
+                    let tail = computation.effects.tail.as_ref().unwrap();
+                    assert_eq!(tail.lacks[1].arguments[0], Type::Bool);
+                }
+            })
+            .expect("the row-queue thread should start")
+            .join()
+            .expect("partial row-queue reconstruction must be disposed iteratively");
     }
 
     #[test]

@@ -138,9 +138,9 @@ impl ObservedValue {
                     Value::Integer(value) => output.push_str(&value.to_string()),
                     Value::Boolean(value) => output.push_str(if value { "true" } else { "false" }),
                     Value::Unit => output.push_str("()"),
-                    Value::Function(_) | Value::ConstructorFunction(_) => {
-                        output.push_str("<function>")
-                    }
+                    Value::Function(_)
+                    | Value::Polymorphic { .. }
+                    | Value::ConstructorFunction(_) => output.push_str("<function>"),
                     Value::Location(location) => tasks.push(Task::Location(location)),
                     Value::Data(value) => output.push_str(&value.render()),
                 },
@@ -279,6 +279,13 @@ pub enum Value {
     Unit,
     /// A lexical unary function and its captured Ash environment.
     Function(Closure),
+    /// Internal lexical construction retained until validated Effect instantiation.
+    Polymorphic {
+        /// The admitted abstraction in the current executable arena.
+        abstraction: NodeId,
+        /// Its immutable lexical definition environment.
+        environment: Environment,
+    },
     /// A payload constructor awaiting its one ordinary argument.
     ConstructorFunction(ConstructorId),
     /// An internal heap location used while the machine is running.
@@ -294,6 +301,7 @@ impl fmt::Display for Value {
             Self::Boolean(value) => value.fmt(formatter),
             Self::Unit => formatter.write_str("()"),
             Self::Function(_) => formatter.write_str("<function>"),
+            Self::Polymorphic { .. } => formatter.write_str("<function>"),
             Self::ConstructorFunction(_) => formatter.write_str("<function>"),
             Self::Location(_) => formatter.write_str("<location>"),
             Self::Data(value) => value.fmt(formatter),

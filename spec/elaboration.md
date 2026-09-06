@@ -265,7 +265,8 @@ type arguments. Their two ordered slices follow the abstraction's one ordered
 parameter vector by kind. Pure Core type applications retain no row arguments.
 Effect Core validation checks argument cardinality, kind, scope, and complete
 result substitution; transforms preserve or rebuild the same arguments before
-revalidation, and evaluation erases the type application directly.
+revalidation. Effect execution retains the complete row instantiation in the
+function's lexical context for exact operation matching.
 
 ## Interface-evidence lowering
 
@@ -386,8 +387,9 @@ domain, occurrence, forwarding use, adapter, and supplied local method. Their te
 ordinary Core type abstractions, function binders, binder occurrences, type
 applications, local bindings, and term applications. Method authentication facts and schemes
 may remain as inert validation and transformation authority in the validated
-program; the evaluator does not inspect them. Core type operations erase
-through the existing dynamic rules.
+program; the evaluator does not inspect them. Pure Core type operations erase;
+Effect execution retains their lexical instantiation for exact effect matching,
+without inspecting method authentication records.
 Determination adds no Core node, type binder, evidence method, evaluator value,
 or interface-specific operation. Complete substituted types and the existing
 method-evidence relationships are sufficient after the determinant-position
@@ -415,6 +417,16 @@ substitution into the scheme body. The Core operation is not a curried sequence
 of unary expression operations.
 Parameterized constructors use the same Core instantiation form as
 polymorphic value names.
+
+Effect Core independently checks that every type-abstraction body is an inert
+function/constructor value or variable, a transparent type-operation wrapper,
+or an authenticated generated method adapter whose checked applications only
+construct evidence functions. Each nested abstraction satisfies the same
+check. Arbitrary applications, bindings, aggregates, handlers and requests do
+not qualify merely because their immediate row is empty. This invariant
+matches source generalization and generated evidence; it permits execution to
+retain the lexical abstraction until instantiation without delaying source
+effects. Pure Core keeps its existing erasure and validation boundary.
 
 A newtype constructor occurrence lowers to an ordinary unary function whose body is a wrap conversion.
 For a parameterized declaration, the function uses fresh generated type
@@ -482,8 +494,9 @@ Core transformations preserve or rebuild type abstractions, type applications,
 binder kinds, ordered identities and arguments, structural types, origins, and
 every method-evidence authentication relationship. The transformed program
 passes fresh independent validation before use. The dynamic semantics erase
-the type operations. They produce no runtime kind or type value and change
-neither evaluation order nor heap contents.
+Pure type operations and retain Effect instantiation in lexical execution
+context. Neither produces a source-inspectable kind or type value, changes
+strict source evaluation order, or allocates an ordinary heap cell.
 
 ## Function presentations
 

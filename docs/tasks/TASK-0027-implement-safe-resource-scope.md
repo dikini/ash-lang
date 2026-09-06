@@ -30,7 +30,7 @@ exceed high. Keep commits unsigned per the user's instruction. Use the local
 - The user approved the concrete resource contract after those audits.
 - Moved the clean integration checkout to the active feature worktree and
   created `codex/safe-resource-scope`; integration remains at the baseline.
-- Fresh full baseline verification is running before product changes.
+- Fresh full baseline verification passed before product changes.
 - Accepted proposal, task and implementation plan recorded.
 - Independent contract review required explicit owner-relative checking of
   dependent request payloads sent to outer handler clauses. CP-0017 now records
@@ -39,7 +39,39 @@ exceed high. Keep commits unsigned per the user's instruction. Use the local
 - The reviewer confirmed that the revised contract closes the reported gap.
 - Moving the worktree exposed stale executable paths in Cargo's retained
   package cache. Rebuilding that cache restored all 74 specification-example
-  tests without changing source or tests; the full baseline gate is rerunning.
+  tests without changing source or tests. The fresh full baseline gate then
+  passed with `CARGO_INCREMENTAL=0 cargo xtask verify`: 2,156 tests in 62
+  binaries plus formatting, metadata, build, Clippy and rustdoc.
+- Step 1's first frozen revision passed 1,094 focused tests, all-target Clippy
+  with warnings denied, and formatting. Review corrections are in progress;
+  no resource acquisition code has been implemented yet.
+- The full Step 1 gate passed build/lint and library tests, then exposed missing
+  architecture-inventory entries and raw mutation of an iterative owner. Four
+  inventory entries and the narrow owner-method correction now pass their exact
+  architecture checks. Semantic re-review closed the empty-row finding; the
+  corrected focused suite passed 1,097 tests plus Clippy and formatting.
+- Rust/resource review found one charge-before-staging omission in the shared
+  type/row substitution helper newly used by runtime instantiation. The bounded
+  correction passed 1,101 focused tests, Clippy and formatting. Independent
+  resource re-review closed the finding with five targeted tests.
+- The next full gate passed all 32 architecture checks, then aborted on a stack
+  overflow in `data_and_adts`. The same compiled test binary passes all 32 tests
+  serially but reproduces the abort with normal concurrency. The isolated
+  synthesized-type-wrapper test also aborts alone on its 256 KiB thread stack;
+  its trace shows accumulated elaboration frames, not recursive traversal.
+  A fresh baseline build passes that test; the current revision fails it. The
+  driver's frame grew by 96 bytes through its later inline Effect phase.
+  The narrow phase-helper extraction reduces that frame by 17,728 bytes. Its
+  fresh-process regression went RED to GREEN without changing the stack limit
+  or concurrency. Independent review closed the correction; 1,133 focused tests,
+  Clippy and formatting passed.
+- Step 1's fresh complete gate passed: `CARGO_INCREMENTAL=0 cargo xtask verify`,
+  2,183 tests in 62 binaries plus formatting, metadata, build, Clippy and rustdoc.
+  Both independent reviews are closed. Documentation review corrected three
+  stale erasure/frame statements; seven affected documents pass Markdown lint
+  with the line-length exception for existing formal rules/tables, and 29 local
+  link targets were checked. Step 1 is ready to retain. Step 2 is next; no
+  acquisition syntax or builtin cell API is implemented yet.
 
 ## Verification
 
@@ -51,10 +83,10 @@ Only close CP/task/plan after the full implementation and evidence are retained.
 
 ## Discoveries
 
-Generic effect type applications currently erase the instantiation before
-runtime request selection. A generic `E<T>` helper under `E<Int>` fails with
+At the baseline, generic effect type applications erased instantiation before
+runtime request selection. A generic `E<T>` helper under `E<Int>` failed with
 `runtime.invalid-control-state`; monomorphic and internally handled controls
-pass. Returned requesting closures fail similarly. CP-0017 explicitly corrects
+passed. Returned requesting closures failed similarly. CP-0017 explicitly corrects
 this prerequisite and the corresponding blanket type-erasure wording.
 
 Source-generated type abstractions contain inert values, transparent type
@@ -64,6 +96,36 @@ arbitrary bodies could delay effects. Step 1 therefore independently enforces
 the actual lowered forms before retaining lexical abstractions. This preserves
 source order and avoids a general runtime aggregate-specialization mechanism;
 Pure Core and source generalization are unchanged.
+
+The method-adapter corpus found another prerequisite omission: linked evidence
+comparison handles pure function signatures but omits the effectful-function
+case when substituting interface parameters. Even a non-generic implementation
+with a generic effectful method is checked, then rejected as
+`evidence.validation.unknown-identity`. Step 1 includes the narrow structural
+comparison repair, with charged substitution and exact-row negative controls;
+this does not change interface selection or authorization.
+
+After that comparison repair, the same generic adapter reached Core and
+exposed incomplete method-parameter renaming. The function type used its fresh
+generated binder, but the body row still used the resolved method binder.
+The owning Core rewrite seam handled ordinary types and type-application row
+arguments but skipped expression rows and Effect operation/pattern metadata.
+Step 1 corrects that seam with the existing charged callbacks and tests the
+complete relationship; independent validation is not relaxed.
+
+Independent semantic review reproduced valid ordinary and generic-method
+forwarding of a pure lambda through an open-row helper. Zonking that row to
+empty normalizes its function wrapper to a pure function, but two existing
+callbacks assumed an effectful function and panicked. Step 1 handles both
+canonical forms and retains the empty/nonempty controls. The reviewer found no
+additional semantic defect in lexical runtime contexts or the abstraction gate.
+
+The resource reviewer measured width-dependent allocation under constant
+admitted work: a nonempty lexical context substituting a function type with
+one wide effect instance spent four units before exhaustion, while staging
+grew with argument width. The shared substitution helper flattened known/lacks
+arguments before charging their visits. Step 1 must preflight that staging or
+stream it through bounded state; both known and lacks rows require controls.
 
 Ordinary closure environments retain unused preceding bindings, while ordinary
 heap cells persist into observation. Resource payload ownership must therefore

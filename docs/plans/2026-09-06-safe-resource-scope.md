@@ -23,8 +23,8 @@ typed Core and loop-driven evaluator.
 - [x] Read current authority, inspect implementation and compare alternatives.
 - [x] Obtain approval for scope-owned release with reusable access.
 - [x] Isolate the active checkout under `.worktree/safe-resource-scope`.
-- [ ] Fresh full baseline gate, before product edits.
-- [ ] Step 1: instantiated Effect execution across abstraction boundaries.
+- [x] Fresh full baseline gate, before product edits.
+- [x] Step 1: instantiated Effect execution across abstraction boundaries.
 - [ ] Step 2: sealed builtin cell API and acquisition syntax carriers.
 - [ ] Step 3: acquisition typing, exact provider authority and Core structure.
 - [ ] Step 4: stored resource dependencies and carried scope obligations.
@@ -57,6 +57,20 @@ effect-instantiation module only if it simplifies ownership, and
 `tests/effect_runtime.rs`. The narrow Effect abstraction-form invariant also
 uses `src/core/validate.rs` and `tests/effect_core.rs`. The parent updates
 relevant dynamic/spec wording.
+The required method-adapter corpus also exposed an omitted effectful-function
+case in `src/evidence_validation.rs`'s interface-substitution comparison.
+Repair that structural case with its owning charged work and negative controls;
+do not redesign evidence validation.
+The adapter then exposed incomplete method-parameter renaming in Core's owning
+rewrite seam. Include `src/core/dialect.rs` and `src/core/effect.rs` to rewrite
+expression rows and Effect operation/pattern metadata through the existing
+fallible callbacks, with exact/negative/transform evidence. Do not relax Core
+validation to accept stale method binders.
+The full gate also exposed a 256 KiB stack regression in ordinary checking:
+retained runtime values enlarged the driver's frame for its later inline Effect
+phase. Include a narrow `src/driver.rs` phase-helper extraction and keep the
+existing `tests/data_and_adts.rs` witness in a fresh subprocess, so reused larger
+thread stacks cannot hide the bound. Do not raise the limit or serialize tests.
 
 1. Retain the confirmed generic-helper and returned-closure regressions. The
    smallest complete program has `helper<T> : T -> Int ! {E<T>}`, performs
@@ -104,6 +118,11 @@ to change all pure evidence erasure or implement resources in the first commit.
    facts. Preserve graph budgets, deterministic module identity, source
    provenance and canonical summary closure. Do not privilege a source file,
    spelling or copied module text. Do not add a general builtin registry.
+   Reuse the ordinary parser/resolver on fixed compiler source, with a private
+   builtin origin in the module identity. Use one fixed API descriptor for the
+   complete relation. Hidden constructor visibility alone is insufficient:
+   independent Core must reject ordinary construction/pattern matching for
+   the builtin handle family, including retained private constructor facts.
 3. Add the reserved `resource` expression and contextual `cell<R>` form with one
    handle binder, initializer and block. Test projection and scope ownership;
    require builtin dependency only when acquisition is used.
@@ -112,6 +131,10 @@ to change all pure evidence erasure or implement resources in the first commit.
    introduction, fake module origins and detached/tampered hidden facts.
 5. Until Step 3/4 proof exists, keep acquisition unavailable at executable
    validation; do not lower it to an ordinary newtype or silently erase it.
+   Reject at resolution before publishing a resolved acquisition until its
+   later checks exist. The eventual brand uses a rigid resolved type variable,
+   owned by the resource Core node rather than a generalized abstraction or
+   nominal representation declaration.
 6. Run syntax/module/fact tests, existing module/CLI tests, library tests,
    Clippy/fmt/diff and both reviews. Record actual new carrier owners in the
    architecture inventory without weakening scanners.
@@ -234,4 +257,33 @@ owner-relative request-payload escape and includes both positive controls.
 The first full baseline run exposed stale absolute executable paths in Cargo
 artifacts retained across the worktree move. Rebuilding the disposable `ash`
 package cache restored all 74 specification-example tests without source or
-test changes. The fresh full gate is running before product edits.
+test changes. The fresh `CARGO_INCREMENTAL=0 cargo xtask verify` then passed
+formatting, metadata, build, Clippy, all 2,156 tests in 62 binaries, and rustdoc
+before product edits.
+Step 1 implementation and review corrections are in progress. The original generic
+helper and returned-closure tests reproduced `InvalidControlState`, then passed
+unchanged. The focused suite passed 1,094 tests; all-target Clippy with warnings
+denied and formatting passed. Exact/one-short/retry and depth-32,000 tests cover
+instantiation ownership and the repaired operation-metadata rewrite. Semantic
+review found an existing empty-row callback panic in required forwarding cases.
+The full gate found four missing architecture-inventory entries and raw mutation
+of the new iterative owner. Those corrections pass their exact checks and
+semantic re-review is closed. Rust/resource review then found uncharged
+row-argument staging in the shared substitution helper. Its narrow correction
+passes 1,101 focused tests, Clippy and formatting; resource re-review is closed.
+The next full gate passed all 32 architecture tests, then aborted on a stack
+overflow in `data_and_adts`. All 32 tests in the same binary pass serially, but
+normal concurrency reproduces the abort. The isolated synthesized-type-wrapper
+test also aborts alone on its 256 KiB stack, during a shallow chain of
+elaboration frames. A fresh build of the integration baseline passes the
+isolated test; the current revision fails it. The driver's frame grew by 96
+bytes while the two largest elaboration frames stayed unchanged. Extracting the
+later Effect phase reduced that driver frame by 17,728 bytes. The fresh-process
+256 KiB witness went RED to GREEN; independent review closed the correction.
+The frozen revision passed 1,133 focused tests, Clippy and formatting. The fresh
+`CARGO_INCREMENTAL=0 cargo xtask verify` passed 2,183 tests in 62 binaries,
+formatting, metadata, build, Clippy and rustdoc. Both independent reviews are
+closed. The documentation audit corrected three stale erasure/frame statements;
+seven affected documents pass Markdown lint with the line-length exception for
+existing formal rules and tables, and all 29 local link targets exist. Step 1
+is ready to retain; acquisition work has not started.

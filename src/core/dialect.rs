@@ -1446,6 +1446,14 @@ pub trait CoreOperationFamily: Clone + Copy + fmt::Debug + Eq + PartialEq + 'sta
         _visit: &mut dyn FnMut(OperationTypeMetadata<'a>),
     ) {
     }
+    /// Rewrites operation-owned types through admitted, fallible callbacks.
+    fn rewrite_operation_type_metadata(
+        _kind: &mut Self::Kind,
+        _rewrite: &mut dyn FnMut(&Type) -> Result<Type, BuildError>,
+        _charge: &mut dyn FnMut(usize) -> Result<(), BuildError>,
+    ) -> Result<(), BuildError> {
+        Ok(())
+    }
     /// Stores an admitted row in this family's per-node carrier.
     fn store_effects(effects: EffectRow) -> Self::Effects;
     /// Borrows the semantic row represented by the family carrier.
@@ -3114,6 +3122,35 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         for node in nodes {
             let rewritten = rewrite_admitted!(&node.ty)?;
             replace_type_iteratively(&mut node.ty, rewritten);
+            if let Some(rewrite_row) = rewrite_row.as_deref_mut()
+                && !F::effect_row(&node.effects).is_empty()
+            {
+                let effects = rewrite_row(F::effect_row(&node.effects))?;
+                charge_effect_row_cells(&effects, rewrite_type_work)
+                    .map_err(|()| BuildError::TypeWorkExceeded)?;
+                node.effects = F::store_effects(effects);
+            }
+            {
+                let work = std::cell::RefCell::new(&mut *rewrite_type_work);
+                F::rewrite_operation_type_metadata(
+                    &mut node.kind,
+                    &mut |ty| {
+                        let rewritten = rewrite(ty)?;
+                        let (rewritten, contains_inference) = admit_rewritten_type(
+                            rewritten,
+                            &mut work.borrow_mut(),
+                            F::ALLOWS_EFFECTFUL_TYPES,
+                        )?;
+                        rewritten_requires_type_rewrite |= contains_inference;
+                        Ok(rewritten)
+                    },
+                    &mut |cells| {
+                        work.borrow_mut()
+                            .charge(cells)
+                            .map_err(|()| BuildError::TypeWorkExceeded)
+                    },
+                )?;
+            }
             let Some(kind) = F::pure_mut(&mut node.kind) else {
                 continue;
             };

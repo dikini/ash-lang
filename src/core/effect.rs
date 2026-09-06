@@ -333,6 +333,51 @@ impl CoreOperationFamily for EffectOperationFamily {
         effects
     }
 
+    fn rewrite_operation_type_metadata(
+        kind: &mut Self::Kind,
+        rewrite: &mut dyn FnMut(&Type) -> Result<Type, super::BuildError>,
+        charge: &mut dyn FnMut(usize) -> Result<(), super::BuildError>,
+    ) -> Result<(), super::BuildError> {
+        let instance = match kind {
+            EffectExprKind::Operation(EffectOperation::Request(request)) => &mut request.effect,
+            EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
+                charge(handler.clauses.len())?;
+                for clause in &mut handler.clauses {
+                    clause
+                        .arm
+                        .pattern_mut()
+                        .rewrite_types(&mut |ty| rewrite(ty))?;
+                }
+                &mut handler.effect
+            }
+            _ => return Ok(()),
+        };
+        let count = instance.arguments().len();
+        charge(
+            count
+                .checked_mul(2)
+                .ok_or(super::BuildError::TypeWorkExceeded)?,
+        )?;
+        let mut staged = Vec::new();
+        staged
+            .try_reserve(count)
+            .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+        for argument in instance.arguments() {
+            staged.push(crate::types::IterativeTypeOwner::new(rewrite(argument)?));
+        }
+        let mut arguments = Vec::new();
+        arguments
+            .try_reserve(count)
+            .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+        arguments.extend(
+            staged
+                .into_iter()
+                .map(crate::types::IterativeTypeOwner::into_inner),
+        );
+        *instance = EffectInstance::new(instance.effect(), arguments.into_boxed_slice());
+        Ok(())
+    }
+
     fn effect_row(effects: &Self::Effects) -> &EffectRow {
         effects
     }
@@ -881,5 +926,76 @@ mod tests {
             .expect("small-stack worker")
             .join()
             .expect("range teardown remains stack-safe");
+    }
+}
+
+#[cfg(test)]
+mod rewrite_tests {
+    use super::*;
+
+    #[test]
+    fn operation_rewrite_is_exact_retryable_and_drops_partial_deep_arguments() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                use crate::{
+                    module::ModuleId,
+                    types::{EffectId, IterativeTypeOwner},
+                };
+                const DEPTH: usize = 32_000;
+                let effect = EffectId::new(ModuleId::new(0), 0);
+                let deep = || {
+                    (0..DEPTH).fold(Type::Unit, |ty, _| {
+                        Type::Application(Box::new(ty), Box::new(Type::Unit))
+                    })
+                };
+                let node = NodeId::new(super::super::dialect::ArenaId::new(0), 0);
+                let mut request =
+                    EffectExprKind::Operation(EffectOperation::Request(RequestNode::new(
+                        EffectInstance::new(effect, Box::new([deep(), Type::Unit])),
+                        OperationId::new(effect, 0),
+                        node,
+                    )));
+                let rewrite = |request: &mut EffectExprKind, limit| {
+                    let work = std::cell::RefCell::new(TypeWorkBudget::with_limit(limit));
+                    let result = EffectOperationFamily::rewrite_operation_type_metadata(
+                        request,
+                        &mut |ty| {
+                            clone_type_with_budget(ty, &mut *work.borrow_mut())
+                                .map_err(|()| crate::core::BuildError::TypeWorkExceeded)
+                        },
+                        &mut |cells| {
+                            work.borrow_mut()
+                                .charge(cells)
+                                .map_err(|()| crate::core::BuildError::TypeWorkExceeded)
+                        },
+                    );
+                    (result, work.into_inner().used())
+                };
+                // Two argument vectors plus the deep Type and final Unit.
+                let required = 2 * DEPTH + 6;
+                assert_eq!(
+                    rewrite(&mut request, required - 1).0,
+                    Err(crate::core::BuildError::TypeWorkExceeded)
+                );
+                for _ in 0..2 {
+                    assert_eq!(rewrite(&mut request, required), (Ok(()), required));
+                }
+                let EffectExprKind::Operation(EffectOperation::Request(request)) = request else {
+                    unreachable!()
+                };
+                assert_eq!(request.effect().effect(), effect);
+                assert_eq!(request.operation(), OperationId::new(effect, 0));
+                assert_eq!(request.operand(), node);
+                let expected = IterativeTypeOwner::new(deep());
+                assert!(crate::types::same_type(
+                    &expected,
+                    &request.effect().arguments()[0]
+                ));
+                drop(request);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

@@ -84,7 +84,8 @@ impl NewtypeConversionNode {
     }
 }
 
-/// A type-erased abstraction over one or more rank-1 type parameters.
+/// An explicit abstraction over one or more rank-1 type parameters.
+/// Pure execution erases it; Effect execution retains its lexical instantiation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TypeAbstractionNode {
     parameters: Box<[(TypeVariableId, Kind)]>,
@@ -112,7 +113,8 @@ impl TypeAbstractionNode {
     }
 }
 
-/// An erased application of one Core type scheme to monotype arguments.
+/// An explicit application of one Core type scheme to monotype arguments.
+/// Pure execution erases it; Effect execution applies its lexical instantiation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TypeApplicationNode {
     function: NodeId,

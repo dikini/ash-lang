@@ -67,6 +67,91 @@ fn checked_registry() -> (Arc<ResolvedRegistry>, SourceFile, EffectId, Operation
 }
 
 #[test]
+fn effect_abstraction_rejects_unproved_aggregate_and_handled_computation() {
+    use ash::types::{Kind, TypeVariableId};
+    let (registry, source, effect, operation) = checked_registry();
+    let origin = Origin::Source(source.span(ByteRange::new(0, 6).unwrap()).unwrap());
+    for handled in [false, true] {
+        let mut builder = EffectCoreBuilder::with_effect_registry(Arc::clone(&registry));
+        let unit = builder.unit(Type::Unit, origin.clone()).unwrap();
+        let (body, ty) = if handled {
+            let instance = EffectInstance::new(effect, Box::new([]));
+            let request = builder
+                .request(
+                    instance.clone(),
+                    operation,
+                    unit,
+                    Type::Int,
+                    EffectRow::singleton(instance.clone()),
+                    origin.clone(),
+                )
+                .unwrap();
+            let answer = builder
+                .integer(
+                    Integer::parse_decimal("42").unwrap(),
+                    Type::Int,
+                    origin.clone(),
+                )
+                .unwrap();
+            let resume = builder
+                .resume(
+                    HandlerId::new(0),
+                    ResumeId::new(0),
+                    ResumeUse::Consumed,
+                    answer,
+                    Type::Int,
+                    EffectRow::empty(),
+                    origin.clone(),
+                )
+                .unwrap();
+            let clause = EffectClause::new(
+                operation,
+                ResumeId::new(0),
+                CoreMatchArm::new(
+                    CorePattern::new(Type::Unit, origin.clone(), CorePatternKind::Wildcard),
+                    resume,
+                    origin.clone(),
+                ),
+            );
+            (
+                builder
+                    .handler(
+                        HandlerId::new(0),
+                        request,
+                        instance,
+                        vec![clause],
+                        Type::Int,
+                        EffectRow::empty(),
+                        origin.clone(),
+                    )
+                    .unwrap(),
+                Type::Int,
+            )
+        } else {
+            let ty = Type::Tuple(Box::new([Type::Unit, Type::Unit]));
+            (
+                builder
+                    .tuple(vec![unit, unit], ty.clone(), origin.clone())
+                    .unwrap(),
+                ty,
+            )
+        };
+        let parameter = TypeVariableId::generated(900);
+        let abstraction = builder
+            .type_abstraction(
+                vec![(parameter, Kind::Type)],
+                body,
+                Type::Forall(Box::new([(parameter, Kind::Type)]), Box::new(ty)),
+                origin.clone(),
+            )
+            .unwrap();
+        let error = validate_effect(builder.finish(abstraction).unwrap(), &[&source])
+            .expect_err("an empty effect row does not prove inert construction");
+        assert_eq!(error.reason(), ValidationReason::TypeOperation);
+    }
+}
+
+#[test]
 fn discard_core_checks_owners_types_rows_and_exact_once_before_safety() {
     let (registry, source, effect, operation) = checked_registry();
     let origin = Origin::Source(source.span(ByteRange::new(0, 6).unwrap()).unwrap());
