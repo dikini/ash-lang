@@ -83,6 +83,105 @@ fn handler_source(clause_body: &str) -> String {
 }
 
 #[test]
+fn discard_uses_the_existing_completion_reason_family() {
+    for (body, reason) in [
+        (
+            "{\nlet _ = discard\nresume 1\n}",
+            TypeReason::ResumeAlreadyConsumed,
+        ),
+        (
+            "{\nlet _ = resume 1\nlet _ = discard\n1\n}",
+            TypeReason::ResumeAlreadyConsumed,
+        ),
+        (
+            "{\nlet _ = discard\nlet _ = discard\n1\n}",
+            TypeReason::ResumeAlreadyConsumed,
+        ),
+        (
+            "match true {\ntrue => {\nlet _ = discard\n1\n}\nfalse => 2\n}",
+            TypeReason::ResumeNotConsumed,
+        ),
+        (
+            "{\nlet deferred = fn(ignored) {\ndiscard\n}\nresume 1\n}",
+            TypeReason::ResumeCapture,
+        ),
+        (
+            "{\nlet rec deferred : Unit -> Unit = fn(ignored) {\ndiscard\n}\nresume 1\n}",
+            TypeReason::ResumeCapture,
+        ),
+    ] {
+        assert_eq!(typing_reason(&handler_source(body)), reason, "{body}");
+    }
+}
+
+#[test]
+fn discard_usage_diagnostic_names_the_completion_capability() {
+    let TypeError::Source(error) = typing_error(&handler_source("{\nlet _ = discard\nresume 1\n}"))
+    else {
+        panic!("expected source diagnostic")
+    };
+    assert!(
+        error.primary.message().contains("completion capability"),
+        "{}",
+        error.primary.message()
+    );
+}
+
+#[test]
+fn discard_outside_a_clause_is_a_resolution_error() {
+    let fixture = TempModule::write("main : Unit -> Unit\nmain () = discard\n");
+    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty()).expect("fixture should load");
+    let module = graph.module(graph.entry()).expect("entry should exist");
+    let ResolveModuleError::Resolution(error) =
+        resolve_module(module, &[]).expect_err("outside discard")
+    else {
+        panic!("expected resolution error")
+    };
+    assert_eq!(error.reason, ResolveReason::ResumeOutsideClause);
+}
+
+#[test]
+fn discard_publication_fails_closed_after_ordinary_typing() {
+    for body in [
+        "{\nlet _ = discard\n42\n}",
+        "match true {\ntrue => resume 1\nfalse => {\nlet _ = discard\n2\n}\n}",
+    ] {
+        let TypeError::Source(error) = typing_error(&handler_source(body)) else {
+            panic!("expected discard safety diagnostic")
+        };
+        assert_eq!(error.reason.to_string(), "effect.discard-unsafe");
+    }
+    assert!(matches!(
+        typing_error(&handler_source("discard")),
+        TypeError::Mismatch(_)
+    ));
+    let later_error = format!(
+        "{}\nbroken : Unit -> Int\nbroken () = true\n",
+        handler_source("{\nlet _ = discard\n42\n}")
+    );
+    assert_eq!(typing_reason(&later_error), TypeReason::DefinitionResult);
+}
+
+#[test]
+fn discard_does_not_cross_supplied_method_or_nested_clause_boundaries() {
+    let supplied = concat!(
+        "effect Ask {\nask : Unit -> Int\n}\n",
+        "interface Read<A> {\nread : A -> Unit\n}\n",
+        "main : Unit -> Int\nmain () = handle (perform Ask.ask ()) with Ask {\n",
+        "ask ignored => {\nnewtype Token = Token(Unit)\n",
+        "with Read<Token> {\nread ignored = discard\n}\nresume 42\n}\n}\n",
+    );
+    assert_eq!(typing_reason(supplied), TypeReason::ResumeCapture);
+    let nested = concat!(
+        "effect Ask {\nask : Unit -> Int\n}\n",
+        "main : Unit -> Int\nmain () = handle (perform Ask.ask ()) with Ask {\n",
+        "ask ignored => handle (perform Ask.ask ()) with Ask {\n",
+        "ask ignored => {\nlet _ = discard\n42\n}\n}\n}\n",
+    );
+    assert_eq!(typing_reason(nested), TypeReason::ResumeNotConsumed);
+}
+
+#[test]
 fn resume_usage_rejects_zero_double_branch_and_capture() {
     let cases = [
         ("zero", handler_source("1"), TypeReason::ResumeNotConsumed),

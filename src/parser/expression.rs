@@ -96,6 +96,7 @@ fn parse_primary(parser: &mut Parser<'_>, forms: &[PrimaryForm]) -> CompletedExp
         Some(
             PrimaryForm::Integer
             | PrimaryForm::Boolean
+            | PrimaryForm::Discard
             | PrimaryForm::Identifier
             | PrimaryForm::UpperIdentifier,
         ) => {
@@ -201,6 +202,7 @@ fn primary_form(parser: &Parser<'_>, forms: &[PrimaryForm]) -> Option<PrimaryFor
             | (PrimaryForm::UpperIdentifier, Some(TokenKind::UpperIdentifier(_)))
             | (PrimaryForm::Parenthesized, Some(TokenKind::LeftParen)) => true,
             (PrimaryForm::Perform, Some(TokenKind::Perform)) => true,
+            (PrimaryForm::Discard, Some(TokenKind::Discard)) => true,
             (PrimaryForm::Qualified, Some(TokenKind::UpperIdentifier(_))) => parser
                 .nth(1)
                 .is_some_and(|kind| matches!(kind, TokenKind::Dot)),

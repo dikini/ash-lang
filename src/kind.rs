@@ -4639,7 +4639,8 @@ fn check_expression_work<'a>(
                 | ResolvedExprKind::Boolean(_)
                 | ResolvedExprKind::Unit
                 | ResolvedExprKind::Occurrence(_)
-                | ResolvedExprKind::Constructor(_) => {}
+                | ResolvedExprKind::Constructor(_)
+                | ResolvedExprKind::Discard(_) => {}
             },
         }
     }

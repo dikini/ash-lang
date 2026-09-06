@@ -55,6 +55,35 @@ fn latent_effects<'a>(checked: &'a ash::resolved::CheckedModule, spelling: &str)
 }
 
 #[test]
+fn discard_and_resume_branches_have_unit_completion_carriers() {
+    let fixture = TempModule::write(concat!(
+        "effect Stop {\nstop : Unit -> Unit\n}\n",
+        "main : Unit -> Unit\n",
+        "main () = handle (perform Stop.stop ()) with Stop {\n",
+        "stop ignored => match true {\ntrue => resume ()\nfalse => discard\n}\n}\n",
+    ));
+    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty()).expect("fixture should load");
+    let module = graph.module(graph.entry()).expect("entry should exist");
+    let resolved = resolve_module(module, &[]).expect("discard should resolve");
+    let ash::resolved::ResolvedDefinitionKind::Equational(main) = &resolved.definitions()[0].kind
+    else {
+        panic!("main should remain equational")
+    };
+    let body = &main.equations[0].body;
+    let mut elaborator = ash::elaborate::EffectElaborator::for_resolved_expression(&resolved, body)
+        .expect("carrier elaborator");
+    let typed = elaborator
+        .synthesize(body, &ash::elaborate::TypeContext::new())
+        .expect("both completion paths should type before capture proof");
+    assert_eq!(typed.ty, Type::Unit);
+    assert!(typed.effects.is_empty());
+    let program = elaborator.finish(typed.node).expect("carrier Core");
+    let error = ash::core::validate_effect(program, &[module.source()])
+        .expect_err("unproved discard must not reach execution");
+    assert_eq!(error.reason().to_string(), "core.validation.discard-unsafe");
+}
+
+#[test]
 fn closed_handler_discharges_exact_effect_and_keeps_main_pure() {
     let checked = check_source(concat!(
         "effect Cell {\n",

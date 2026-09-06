@@ -134,6 +134,8 @@ pub enum TypeReason {
     ResumeAlreadyConsumed,
     /// A nested scope attempts to capture a resume capability.
     ResumeCapture,
+    /// Discard lacks proof that its captured segment has no live obligations.
+    DiscardUnsafe,
 }
 
 /// Projects source computation arrows onto the predecessor pure-Core type
@@ -351,6 +353,7 @@ impl fmt::Display for TypeReason {
             Self::ResumeNotConsumed => formatter.write_str("effect.resume-not-consumed"),
             Self::ResumeAlreadyConsumed => formatter.write_str("effect.resume-already-consumed"),
             Self::ResumeCapture => formatter.write_str("effect.resume-capture"),
+            Self::DiscardUnsafe => formatter.write_str("effect.discard-unsafe"),
         }
     }
 }
@@ -1793,6 +1796,7 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     coverage_work: UsefulnessBudget,
     base_context: TypeContext,
     active_resumes: Vec<ActiveResume>,
+    first_unproved_discard: Option<Span>,
     // Addresses identify only immutably borrowed source occurrences during one
     // module synthesis. They are never dereferenced or retained in Core.
     lexical_capture_uses: Vec<LexicalCaptureUse>,
@@ -1919,6 +1923,14 @@ impl CoreLoweringFamily for EffectOperationFamily {
                 let (handler, owner, use_state, value) = resume.into_parts();
                 builder.resume(handler, owner, use_state, value, ty, effects, origin)
             }
+            EffectOperation::Discard(discard) => builder.discard(
+                discard.handler(),
+                discard.owner(),
+                discard.use_state(),
+                ty,
+                effects,
+                origin,
+            ),
             EffectOperation::Handler(handler) => {
                 let (id, body, effect, clauses) = handler.into_parts();
                 builder.handler(id, body, effect, clauses, ty, effects, origin)
@@ -2030,6 +2042,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
+            first_unproved_discard: None,
             lexical_capture_uses: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
@@ -2123,6 +2136,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             coverage_work,
             base_context,
             active_resumes: Vec::new(),
+            first_unproved_discard: None,
             lexical_capture_uses: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
@@ -2183,6 +2197,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
+            first_unproved_discard: None,
             lexical_capture_uses: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
@@ -2624,6 +2639,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
+            first_unproved_discard: None,
             lexical_capture_uses: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
@@ -2897,6 +2913,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             span: module.span(),
         };
         self.elaborate_result(&result, &mut context)?;
+        if let Some(span) = self.first_unproved_discard {
+            return Err(inference_failure(
+                TypeReason::DiscardUnsafe,
+                span,
+                "discard requires proof that the captured continuation has no unfinished obligations",
+            ));
+        }
         let publication = self.prepare_evidence_publication()?;
         Ok((facts.into_boxed_slice(), publication))
     }
@@ -8105,6 +8128,58 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         })
     }
 
+    fn synthesize_discard(
+        &mut self,
+        discard: &crate::resolved::ResolvedDiscardExpr,
+        span: Span,
+    ) -> Result<TypedNode, TypeError> {
+        let owner = discard.owner.ok_or_else(|| {
+            inference_failure(
+                TypeReason::ResumeOutsideClause,
+                span,
+                "resume and discard are available only inside an operation clause",
+            )
+        })?;
+        let active = self
+            .active_resumes
+            .iter()
+            .rev()
+            .find(|active| active.owner == owner)
+            .ok_or_else(|| {
+                inference_failure(
+                    TypeReason::ResumeCapture,
+                    span,
+                    "this nested scope cannot capture the clause completion capability",
+                )
+            })?;
+        let operation = EffectOperation::Discard(crate::core::DiscardNode::new(
+            active.handler,
+            owner,
+            ResumeUse::Consumed,
+        ));
+        let node = self.push_effect_core(
+            Type::Unit,
+            EffectRow::empty(),
+            Origin::Source(span),
+            operation,
+        )?;
+        // Module checking erases effect Core. Keep the source proof boundary
+        // closed until request-capture inference can authenticate this use.
+        if self.first_unproved_discard.is_none() {
+            self.type_work
+                .charge(1)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            self.first_unproved_discard = Some(span);
+        }
+        let provenance = self.at_span_provenance(&Type::Unit, span)?;
+        Ok(TypedNode {
+            node,
+            ty: Type::Unit,
+            effects: EffectRow::empty(),
+            provenance,
+        })
+    }
+
     fn synthesize_resume(
         &mut self,
         resume: &crate::resolved::ResolvedResumeExpr,
@@ -8115,7 +8190,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             inference_failure(
                 TypeReason::ResumeOutsideClause,
                 span,
-                "resume is available only inside an operation clause",
+                "resume and discard are available only inside an operation clause",
             )
         })?;
         let active_position = self
@@ -8128,7 +8203,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 inference_failure(
                     TypeReason::ResumeCapture,
                     span,
-                    "this nested scope cannot capture the clause resume capability",
+                    "this nested scope cannot capture the clause completion capability",
                 )
             })?;
         let input = IterativeTypeOwner::new(
@@ -9475,6 +9550,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     }
                     ResolvedExprKind::Resume(resume) => {
                         let typed = self.synthesize_resume(resume, current.span, context)?;
+                        values.push(typed);
+                    }
+                    ResolvedExprKind::Discard(discard) => {
+                        let typed = self.synthesize_discard(discard, current.span)?;
                         values.push(typed);
                     }
                     ResolvedExprKind::Function(function) => {
@@ -18961,6 +19040,7 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
                 work.extend(handler.clauses.iter().map(|clause| &clause.body));
             }
             ResolvedExprKind::Resume(resume) => work.push(&resume.value),
+            ResolvedExprKind::Discard(_) => {}
             ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
@@ -20164,7 +20244,7 @@ fn check_clause_resume_usage(
         ResumeUsage::Available => Err(inference_failure(
             TypeReason::ResumeNotConsumed,
             expression.span,
-            "this operation clause can complete without resuming",
+            "this operation clause can complete without resuming or discarding",
         )),
     }
 }
@@ -20248,7 +20328,7 @@ fn resume_usage_with_budget(
                                         return Err(inference_failure(
                                             TypeReason::ResumeCapture,
                                             equation.body.span,
-                                            "a supplied method cannot capture the clause resume capability",
+                                            "a supplied method cannot capture the clause completion capability",
                                         ));
                                     }
                                 }
@@ -20293,6 +20373,13 @@ fn resume_usage_with_budget(
                     )?;
                     push(&mut tasks, Task::Visit(&resume.value), budget)?;
                 }
+                ResolvedExprKind::Discard(discard) => {
+                    push(
+                        &mut tasks,
+                        Task::Consume(discard.owner, expression.span),
+                        budget,
+                    )?;
+                }
             },
             Task::Consume(resume_owner, span) => {
                 if resume_owner == Some(owner) {
@@ -20302,7 +20389,7 @@ fn resume_usage_with_budget(
                             return Err(inference_failure(
                                 TypeReason::ResumeAlreadyConsumed,
                                 span,
-                                "this control-flow path already consumed the resume capability",
+                                "this control-flow path already consumed the completion capability",
                             ));
                         }
                     };
@@ -20335,7 +20422,7 @@ fn resume_usage_with_budget(
                     return Err(inference_failure(
                         TypeReason::ResumeNotConsumed,
                         span,
-                        "every match branch must leave the same resume usage state",
+                        "every match branch must leave the same completion usage state",
                     ));
                 }
                 let outgoing = Some(state);
@@ -20360,7 +20447,7 @@ fn resume_usage_with_budget(
                         return Err(inference_failure(
                             TypeReason::ResumeCapture,
                             group.span,
-                            "a recursive member cannot capture the clause resume capability",
+                            "a recursive member cannot capture the clause completion capability",
                         ));
                     }
                 }
@@ -20370,7 +20457,7 @@ fn resume_usage_with_budget(
                     return Err(inference_failure(
                         TypeReason::ResumeCapture,
                         span,
-                        "a nested function cannot capture the clause resume capability",
+                        "a nested function cannot capture the clause completion capability",
                     ));
                 }
             }
@@ -20380,7 +20467,7 @@ fn resume_usage_with_budget(
                         return Err(inference_failure(
                             TypeReason::ResumeCapture,
                             span,
-                            "a nested handler clause cannot capture the outer resume capability",
+                            "a nested handler clause cannot capture the outer completion capability",
                         ));
                     }
                 }
@@ -20458,6 +20545,11 @@ fn contains_resume_owner_with_budget(
                     return Ok(true);
                 }
                 schedule(&mut pending, &resume.value, budget)?;
+            }
+            ResolvedExprKind::Discard(discard) => {
+                if discard.owner == Some(owner) {
+                    return Ok(true);
+                }
             }
             ResolvedExprKind::Tuple(elements) => {
                 for element in elements {
@@ -20727,7 +20819,8 @@ pub(crate) fn checked_program_contains_effect_syntax(
         match &expression.kind {
             ResolvedExprKind::Perform(_)
             | ResolvedExprKind::Handle(_)
-            | ResolvedExprKind::Resume(_) => return Ok(true),
+            | ResolvedExprKind::Resume(_)
+            | ResolvedExprKind::Discard(_) => return Ok(true),
             ResolvedExprKind::Tuple(elements) => {
                 for element in elements {
                     schedule(&mut work, element, budget)?;
@@ -20897,6 +20990,7 @@ fn collect_expression_binders(binders: &mut Vec<BinderId>, mut expressions: Vec<
                 }
             }
             ResolvedExprKind::Resume(resume) => expressions.push(&resume.value),
+            ResolvedExprKind::Discard(_) => {}
             ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
@@ -21015,6 +21109,60 @@ mod tests {
             Ok(None)
         );
         assert_eq!(exact.used(), EXACT_WORK);
+    }
+
+    #[test]
+    fn deep_discard_usage_is_iterative_exact_and_retryable() {
+        const DEPTH: usize = 16_384;
+        const EXACT_WORK: usize = DEPTH + 2;
+        std::thread::Builder::new()
+            .name("deep-discard-usage".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let owner = ResumeId::new(7);
+                let source = SourceFile::new("discard-usage.ash", "discard").unwrap();
+                let span = source.span(ByteRange::new(0, 7).unwrap()).unwrap();
+                let mut expression = ResolvedExpr {
+                    kind: ResolvedExprKind::Discard(crate::resolved::ResolvedDiscardExpr {
+                        owner: Some(owner),
+                    }),
+                    span,
+                };
+                for _ in 0..DEPTH {
+                    expression = ResolvedExpr {
+                        kind: ResolvedExprKind::Tuple(vec![expression]),
+                        span,
+                    };
+                }
+                let mut one_short = TypeWorkBudget::with_limit(EXACT_WORK - 1);
+                assert!(matches!(
+                    resume_usage_with_budget(
+                        &expression,
+                        owner,
+                        ResumeUsage::Available,
+                        &mut one_short
+                    ),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                ));
+                assert_eq!(one_short.used(), EXACT_WORK - 1);
+                let mut exact = TypeWorkBudget::with_limit(EXACT_WORK);
+                assert_eq!(
+                    resume_usage_with_budget(
+                        &expression,
+                        owner,
+                        ResumeUsage::Available,
+                        &mut exact
+                    ),
+                    Ok(ResumeUsage::Consumed)
+                );
+                assert_eq!(exact.used(), EXACT_WORK);
+                crate::resolved::discard_resolved_expression_iteratively(expression);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]

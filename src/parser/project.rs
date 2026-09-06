@@ -671,6 +671,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                     matches!(
                         kind,
                         TokenKind::Integer(_)
+                            | TokenKind::Discard
                             | TokenKind::True
                             | TokenKind::False
                             | TokenKind::Identifier(_)
@@ -2361,6 +2362,7 @@ fn project_primitive(
         TokenKind::Integer(value) => SurfaceExprKind::Integer(value.clone()),
         TokenKind::True => SurfaceExprKind::Boolean(true),
         TokenKind::False => SurfaceExprKind::Boolean(false),
+        TokenKind::Discard => SurfaceExprKind::Discard,
         TokenKind::Identifier(text) => {
             SurfaceExprKind::Name(SurfaceReference::Unqualified(SurfaceName {
                 text: text.clone(),

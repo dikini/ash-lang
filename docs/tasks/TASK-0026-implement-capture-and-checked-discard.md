@@ -32,8 +32,14 @@ resource tests, specification and reviewed evidence. Keep one product writer.
   binary took 151.65 seconds. Neither reported a failure.
 - High-reasoning read-only agent auditing summary composition; parent owns
   proposal and task preparation.
-- Step 1 product writer started after the baseline passed. Capture-summary
-  implementation and runtime discard remain pending.
+- Step 1 carriers and fail-closed checks implemented. Parent verification:
+  982 library tests and 28 focused effect tests passed; formatting and diff
+  checks passed. Independent semantic and Rust/resource reviews found no
+  must-fix issues. The broader build found two missing leaf cases in predecessor
+  test visitors; both were corrected. All-target Clippy and 84 interface tests
+  then passed in the writer's and parent's runs.
+- Capture-summary inference and runtime discard remain unimplemented. The
+  temporary source and Core safety gates reject every unproved discard.
 
 ## Verification
 

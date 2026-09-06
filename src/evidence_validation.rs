@@ -4676,6 +4676,7 @@ fn collect_method_evidence_expression_occurrences(
                 pending.push(&handler.body);
             }
             ResolvedExprKind::Resume(resume) => pending.push(&resume.value),
+            ResolvedExprKind::Discard(_) => {}
         }
     }
     Ok(())
@@ -5609,6 +5610,7 @@ fn validate_pending_expressions<'a, 'body>(
                 pending.push(handler.body.as_ref());
             }
             ResolvedExprKind::Resume(resume) => pending.push(resume.value.as_ref()),
+            ResolvedExprKind::Discard(_) => {}
         }
         if !sources.is_empty() || !method_scopes.is_empty() {
             resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;

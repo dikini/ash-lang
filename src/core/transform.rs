@@ -76,6 +76,14 @@ impl TransformFamily for EffectOperationFamily {
                 effects,
                 expression.origin.clone(),
             ),
+            EffectOperation::Discard(node) => builder.discard(
+                node.handler(),
+                node.owner(),
+                node.use_state(),
+                ty.into_inner(),
+                effects,
+                expression.origin.clone(),
+            ),
             EffectOperation::Handler(node) => {
                 let mut clauses = Vec::new();
                 builder.charge_effect_metadata(node.clauses().len())?;
@@ -1597,6 +1605,43 @@ mod tests {
                 .expect("the exact transform allowance fits");
         super::super::validate::validate(transformed, &[&source])
             .expect("the exact transform preserves canonical binder kinds");
+    }
+
+    #[test]
+    fn discard_rebuild_preserves_owner_usage_and_empty_row_without_children() {
+        use crate::{
+            core::{DiscardNode, HandlerId, ResumeUse},
+            resolved::ResumeId,
+            types::EffectRow,
+        };
+        let source = SourceFile::new("discard-transform.ash", "discard").unwrap();
+        let origin = Origin::Source(source.span(ByteRange::new(0, 7).unwrap()).unwrap());
+        let expression = CoreTypedExpr {
+            ty: Type::Unit,
+            effects: EffectRow::empty(),
+            origin,
+            kind: EffectExprKind::Operation(EffectOperation::Discard(DiscardNode::new(
+                HandlerId::new(7),
+                ResumeId::new(9),
+                ResumeUse::Consumed,
+            ))),
+        };
+        let mut builder = CoreBuilder::<EffectOperationFamily>::with_effect_registry(Arc::new(
+            ResolvedRegistry::default(),
+        ));
+        let root =
+            EffectOperationFamily::rebuild_operation(&mut builder, &[], &expression).unwrap();
+        let rebuilt = &builder.nodes[root.index().unwrap()];
+        assert_eq!(rebuilt.kind, expression.kind);
+        assert_eq!(rebuilt.ty, Type::Unit);
+        assert!(rebuilt.effects.is_empty());
+        assert_eq!(rebuilt.origin.as_ref(), Some(&expression.origin));
+        assert_eq!(
+            crate::core::validate_effect(builder.finish(root).unwrap(), &[&source])
+                .unwrap_err()
+                .reason(),
+            crate::core::ValidationReason::Resume
+        );
     }
 
     #[test]

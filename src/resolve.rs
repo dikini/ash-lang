@@ -8797,7 +8797,7 @@ impl Resolver {
                     error(
                         ResolveReason::ResumeOutsideClause,
                         expression.span,
-                        "resume is available only inside an operation clause",
+                        "resume and discard are available only inside an operation clause",
                     )
                 })?;
                 let value = self.resolve_expr(value)?;
@@ -8805,6 +8805,21 @@ impl Resolver {
                     kind: ResolvedExprKind::Resume(ResolvedResumeExpr {
                         owner: Some(owner),
                         value: Box::new(value),
+                    }),
+                    span: expression.span,
+                });
+            }
+            SurfaceExprKind::Discard => {
+                let owner = self.active_resumes.last().copied().ok_or_else(|| {
+                    error(
+                        ResolveReason::ResumeOutsideClause,
+                        expression.span,
+                        "resume and discard are available only inside an operation clause",
+                    )
+                })?;
+                expressions.push(ResolvedExpr {
+                    kind: ResolvedExprKind::Discard(crate::resolved::ResolvedDiscardExpr {
+                        owner: Some(owner),
                     }),
                     span: expression.span,
                 });

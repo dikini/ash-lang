@@ -803,6 +803,8 @@ fn dispatch_entry(
                         Control::Evaluate(resume.value(), environment),
                         Frame::Resume { node },
                     ),
+                    // Validation rejects discard until capture proof and execution exist.
+                    EffectOperation::Discard(_) => return Err(RuntimeFailure::InvalidControlState),
                 });
             }
         },

@@ -20,9 +20,10 @@ pub use dialect::{
     UnvalidatedProgram, ValidatedProgram,
 };
 pub use effect::{
-    AshEffectDialect, EffectClause, EffectCoreBuilder, EffectExpr, EffectExprKind, EffectOperation,
-    EffectOperationFamily, HandlerId, HandlerNode, RequestNode, ResumeNode, ResumeUse,
-    UnvalidatedEffectProgram, ValidatedEffectProgram, validate_effect, validate_effect_modules,
+    AshEffectDialect, DiscardNode, EffectClause, EffectCoreBuilder, EffectExpr, EffectExprKind,
+    EffectOperation, EffectOperationFamily, HandlerId, HandlerNode, RequestNode, ResumeNode,
+    ResumeUse, UnvalidatedEffectProgram, ValidatedEffectProgram, validate_effect,
+    validate_effect_modules,
 };
 pub use primitive::Primitive;
 pub use recursion::{RecursiveBindingMember, RecursiveBindingNode};

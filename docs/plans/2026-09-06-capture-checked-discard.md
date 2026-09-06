@@ -21,7 +21,7 @@ check Core and reuse the explicit evaluator's moved continuation storage.
 - [x] Reconstruct baseline, compare approaches, explain and obtain approval.
 - [x] Record accepted proposal and allocate unused task/plan IDs.
 - [x] Finish baseline verification before product edits.
-- [ ] Step 1: explicit completion carriers and usage checks.
+- [x] Step 1: explicit completion carriers and usage checks.
 - [ ] Step 2: inferred capture summaries and independent Core checking.
 - [ ] Step 3: execution, accounting and complete adversarial corpus.
 - [ ] Step 4: specification, reviews, full gate and retained evidence.
@@ -114,8 +114,31 @@ and module-local exact-budget tests.
 ## Execution record
 
 Baseline `cargo test --workspace --all-targets` passed on 2026-09-06, exit 0,
-before the product writer began. Step 1 is active; its RED/GREEN evidence is
-pending. No checkpoint completion claim is made here.
+before the product writer began. No checkpoint completion claim is made here.
+
+### Step 1 evidence
+
+- RED: `cargo test --test effects_syntax discard -- --nocapture` projected
+  `Name`, not `Discard`; the corresponding `effect_typing` and
+  `effect_diagnostics` filters failed with `UnknownName`. The new diagnostic
+  wording assertion then failed on the old resume-only wording.
+- GREEN, independently repeated by the parent:
+  `cargo test --lib --test effects_syntax --test effect_typing --test effect_diagnostics --test effect_core --quiet`
+  passed 982 library and 28 focused tests, exit 0.
+- `cargo fmt --all -- --check` and `git diff --check` passed.
+- The corpus covers zero-child row/transform handling, owner/type/row/state
+  tampering, completion barriers, mixed and double completion, ordinary-error
+  precedence, and 16,384-deep exact/one-short/retry usage traversal.
+- Independent high-reasoning semantic and Rust/resource reviews: compliant
+  for Step 1, no must-fix issue.
+- All-target Clippy exposed missing `Discard` leaf cases in predecessor test
+  visitors in `tests/interfaces.rs` and `tests/interface_selection.rs`. After
+  those two test-only corrections, independently repeated
+  `cargo clippy --workspace --all-targets -- -D warnings` and
+  `cargo test --test interfaces --test interface_selection --quiet` passed,
+  including all 84 interface tests. Formatting and diff checks also passed.
+- All otherwise valid discard still fails at module publication and Core
+  validation. These gates are temporary; no usable discard claim is made.
 
 The read-only summary audit found that module checking already builds ordinary
 typed Core bodies, but currently erases its effect operations. Step 2 should

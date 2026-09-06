@@ -28,6 +28,7 @@ pub(super) enum PrimaryForm {
     UpperIdentifier,
     Parenthesized,
     Perform,
+    Discard,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -144,6 +145,7 @@ const CURRENT_ASH_DIALECT: ParserDialect = ParserDialect {
             PrimaryForm::UpperIdentifier,
             PrimaryForm::Parenthesized,
             PrimaryForm::Perform,
+            PrimaryForm::Discard,
         ],
         infix: &[
             InfixDescriptor {

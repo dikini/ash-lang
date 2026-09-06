@@ -20,6 +20,26 @@ fn project(text: &str) -> ash::surface::SurfaceModule {
 }
 
 #[test]
+fn discard_is_a_reserved_nullary_atom() {
+    let module = project("main : Unit -> Unit\nmain () = discard\n");
+    let SurfaceDefinitionKind::Equational(main) = &module.definitions[0].kind else {
+        panic!("main should remain equational")
+    };
+    assert!(matches!(
+        main.equations[0].body.kind,
+        SurfaceExprKind::Discard
+    ));
+
+    let source = SourceFile::new(
+        "reserved-discard.ash",
+        "discard : Unit -> Unit\ndiscard () = ()\n",
+    )
+    .expect("source should fit");
+    let tree = parse(lex(&source).expect("source should lex"));
+    assert!(!tree.parse_diagnostics().is_empty());
+}
+
+#[test]
 fn malformed_effect_syntax_remains_token_complete_and_cannot_project() {
     let source = SourceFile::new(
         "malformed-effect.ash",

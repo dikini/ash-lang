@@ -737,6 +737,7 @@ fn token_name(kind: &TokenKind) -> &'static str {
         TokenKind::Handle => "handle",
         TokenKind::With => "with",
         TokenKind::Resume => "resume",
+        TokenKind::Discard => "discard",
         TokenKind::Import => "import",
         TokenKind::As => "as",
         TokenKind::Pub => "pub",

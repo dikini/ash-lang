@@ -2684,7 +2684,8 @@ impl ResolvedModuleProgram {
                 | ResolvedExprKind::Match(_)
                 | ResolvedExprKind::Perform(_)
                 | ResolvedExprKind::Handle(_)
-                | ResolvedExprKind::Resume(_) => None,
+                | ResolvedExprKind::Resume(_)
+                | ResolvedExprKind::Discard(_) => None,
             })
         else {
             return false;
@@ -17856,6 +17857,7 @@ pub(crate) fn lexical_method_capture_occurrences<'a>(
                 }
             }
             ResolvedExprKind::Resume(resume) => pending.push(&resume.value),
+            ResolvedExprKind::Discard(_) => {}
             ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
@@ -17948,6 +17950,15 @@ pub enum ResolvedExprKind {
     Handle(ResolvedHandleExpr),
     /// A use of the nearest clause-scoped resume capability.
     Resume(ResolvedResumeExpr),
+    /// Nullary consumption of the enclosing clause capability.
+    Discard(ResolvedDiscardExpr),
+}
+
+/// One resolved discard use, with no value operand.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolvedDiscardExpr {
+    /// Enclosing clause owner; absent only in malformed standalone probes.
+    pub owner: Option<ResumeId>,
 }
 
 /// Stable identity for one lexical handler clause's resume capability.
@@ -18309,6 +18320,7 @@ fn discard_resolved_body_work(
                 }
             }
             ResolvedExprKind::Resume(resume) => expressions.push(*resume.value),
+            ResolvedExprKind::Discard(_) => {}
         }
     }
     while let Some(pattern) = patterns.pop() {

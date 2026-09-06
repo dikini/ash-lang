@@ -221,6 +221,7 @@ fn method_occurrences(definition: &CheckedDefinition, method: MethodId) -> Vec<&
             | ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
+            | ResolvedExprKind::Discard(_)
             | ResolvedExprKind::Constructor(_) => {}
             ResolvedExprKind::Tuple(elements) => expressions.extend(elements),
             ResolvedExprKind::Apply(application) => {
