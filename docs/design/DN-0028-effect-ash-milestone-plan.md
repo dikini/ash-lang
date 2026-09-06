@@ -46,6 +46,10 @@ and locally integrated on the milestone branch, with
 [implementation evidence](effect-ash/scoped-evidence-evidence.md) recording
 authentication, resource bounds, reviews, and the full gate. The forecast below
 retains its original relative weights; it is not an elapsed-work ledger.
+Capture/usage and checked discard are implemented in the active checkpoint;
+their [evidence](effect-ash/capture-discard-evidence.md) records reviewed
+inference and runtime behavior. Documentation, full verification and local
+integration remain open.
 
 ## Completion condition
 
@@ -617,11 +621,14 @@ locality guard. Do not turn evaluator frames into implicitly capturable control.
 
 Prerequisite: integrated resume-required effect kernel.
 
-The proposal must define the minimum qualitative capture classes, how closure
-and continuation capture is computed, affine use, safe discard, non-escape,
-failure ownership, Core metadata, and validator rules. The accepted contract is
-one resume or one checked discard, never duplication, a second resume, escape,
-or discard of unaccounted obligations.
+The accepted checkpoint implements explicit nullary discard, inferred
+request-carried obligations, exactly-once completion, non-escape, independent
+Core validation and moved-capture release. Known and imported functions retain
+finite control summaries; unknown relevant obligations fail closed. The
+[evidence](effect-ash/capture-discard-evidence.md) records tests and completed
+inference/runtime reviews. Final closure and local integration remain open.
+The contract is one resume or one checked discard, never duplication, a second
+completion, escape, or discard of unaccounted obligations.
 
 This is not a complete ownership, borrowing, lifetime, multiplicity, or replay
 system. Its corpus must nevertheless be strong enough that resource scope does
@@ -735,6 +742,7 @@ row, handler, and one-shot control questions. The local-newtype checkpoint
 settles sequential lexical identity, escape, and erased scope validation.
 Scoped exact evidence settles pure introduction, precedence, improvement,
 authentication, and erasure. The branch results are not current on `main`.
-Capture and checked discard and resource-scope composition
-remain later proposal-owned questions. This informative plan authorizes none
-of them.
+The active capture/discard checkpoint settles bounded continuation abandonment
+and is completing its final gate. Resource-scope composition remains a later
+proposal-owned question. This informative plan authorizes neither expansion
+nor integration into `main`.

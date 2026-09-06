@@ -177,6 +177,13 @@ resource tests, specification and reviewed evidence. Keep one product writer.
 
 ## Verification
 
+The final `cargo xtask verify` gate passed on 2026-09-06 with formatting,
+metadata, build, all-feature Clippy, 2,156 tests across 62 binaries and rustdoc
+with warnings denied. Whole-feature semantic and Rust/resource reviews and
+the documentation/link/authority audit passed. Retained evidence is in
+[the capture/discard report](../design/effect-ash/capture-discard-evidence.md).
+Only transition cleanup and signed local integration remain.
+
 Record RED/GREEN commands and their actual outcomes in the task-owned plan.
 Run the CP-0016 positive, negative, tamper, transform, budget and deep teardown
 corpus, then `cargo xtask verify`. Require independent semantic review before

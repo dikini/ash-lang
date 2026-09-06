@@ -24,7 +24,7 @@ check Core and reuse the explicit evaluator's moved continuation storage.
 - [x] Step 1: explicit completion carriers and usage checks.
 - [x] Step 2: inferred capture summaries and independent Core checking.
 - [x] Step 3: execution, accounting and complete adversarial corpus.
-- [ ] Step 4: specification, reviews, full gate and retained evidence.
+- [x] Step 4: specification, reviews, full gate and retained evidence.
 - [ ] Local integration and clean-checkout lifecycle after checkpoint closure.
 
 Use high reasoning for compiler, summary, semantic and resource work; medium
@@ -276,3 +276,20 @@ approved the frozen runtime diff; each passed 23 machine and 12 runtime tests.
 The implementation adds one discard action and reuses existing continuation
 storage and iterative disposal. Specification, documentation review, full
 verification, transition cleanup and local integration remain open.
+
+### Step 4 verified checkpoint
+
+The specification now includes nullary discard, shared completion usage,
+inferred request obligations, authenticated summaries, independent Core
+checking and consuming runtime abandonment. Whole-feature semantic and
+Rust/resource reviews passed. The semantic reviewer required an explicit
+T-Discard premise preserving outer scheduled completion; the corrected rule
+was approved. Documentation review passed authority, notation and all 132
+relative links/anchors across eleven changed documents. Markdown lint passes
+with MD013 excluded for existing long lines and formal rules; diff checks pass.
+
+`cargo xtask verify` passed on 2026-09-06: formatting, metadata, build,
+all-feature Clippy, 2,156 tests across 62 binaries and warning-free rustdoc.
+The evidence report retains the implementation, regression and resource
+measurements. Retain this checkpoint, remove the CP/task/plan with index
+cleanup, then perform the signed local merge and AD-0011 worktree cleanup.

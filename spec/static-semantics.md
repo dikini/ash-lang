@@ -1025,7 +1025,7 @@ T-Handle :=
   for each op_i : P_i -> Q_i,
     GAMMA, bindings(pattern_i : P_i);
       resume(Q_i, A, epsilon_out)
-      |- clause_i ⇐ A ! epsilon_out, consumes-resume-once
+      |- clause_i ⇐ A ! epsilon_out, consumes-capability-once
   rho subset-of epsilon_out
   ===>
   GAMMA |- handle body with E<arguments> { clauses }
@@ -1038,6 +1038,14 @@ T-Resume :=
   ===>
   GAMMA; active-resume |- resume value
     ⇒ A ! epsilon_out, consumes-resume
+
+T-Discard :=
+  active-resume = resume(Q, A, epsilon_out)
+  active-resume is available
+  inferred captured segment has no other unfinished obligation
+  abandonment preserves required completion of owners outside that segment
+  ===>
+  GAMMA; active-resume |- discard ⇒ Unit ! {}, consumes-resume
 ```
 
 `T-Handle` chooses the least `epsilon_out` satisfying the body remainder and
@@ -1047,6 +1055,9 @@ body passes its `A` value through; there is no source return clause.
 `T-Resume` checks the resumed value against the selected operation result,
 consumes the capability, and gives the resumed computation the handler's result
 contract.
+`T-Discard` consumes the same capability without resuming its captured
+computation. Its result is `Unit`, not the handler's result type; subsequent
+clause work still checks against the handler contract.
 
 This complete handler discharges `Cell`, so `main` has a pure computation
 codomain and evaluates to `42`:
@@ -1064,26 +1075,62 @@ main () = handle (perform Cell.read ()) with Cell {
 }
 ```
 
-Resume consumption is a structural dataflow judgment with states `available`
+Capability consumption is a structural dataflow judgment with states `available`
 and `consumed`. A clause starts in `available` and every normally completing
 path must finish in `consumed`. Sequential evaluation passes the outgoing state
 to the next expression. A match checks its scrutinee first, gives each arm the
 same resulting state, and requires equal outgoing states from all arms. A
-form with no resume occurrence otherwise preserves its incoming state. A
+form with no completion occurrence otherwise preserves its incoming state. A
 `resume` first checks its value expression under the incoming state, then
-requires that result to remain `available` and changes it to `consumed`. Use in
-`consumed` is `effect.resume-already-consumed`, and a normally completing clause
-left in `available` is `effect.resume-not-consumed`. Divergence before a
-syntactic resume remains ordinary divergence; this structural judgment does
+requires that result to remain `available` and changes it to `consumed`.
+`discard` requires `available` and changes it directly to `consumed`. Match
+arms may choose different completion forms if their outgoing states agree.
+Use in `consumed` is `effect.resume-already-consumed`. A normally completing
+clause left in `available` is `effect.resume-not-consumed`. Divergence before a
+syntactic completion remains ordinary divergence; this structural judgment does
 not claim termination or convert divergence into discard.
 
-Anonymous-function bodies, recursive members, and nested handler clauses are
+Anonymous-function bodies, recursive members, supplied local evidence methods,
+and nested handler clauses are
 barriers for an enclosing resume capability. An occurrence beyond one of those
 barriers is `effect.resume-capture`; a nested handler clause receives only its
-own capability. Resolution rejects `resume` outside an operation clause as
-`effect.resume-outside-clause`. A capability has no source type or binder and
-cannot be placed in a tuple, constructor, argument, result, local binding,
-scheme, or stored function body.
+own capability. Resolution rejects `resume` or `discard` outside an operation
+clause as `effect.resume-outside-clause`. A capability has no source type or
+binder and cannot be placed in a tuple, constructor, argument, result,
+local binding, scheme, or stored function body.
+
+Discard permission is distinct from duplication permission. Ordinary values
+and their stored closure captures are unrestricted. The hidden continuation
+capability is nonduplicable and nonescaping. A captured segment cannot be
+discarded while it carries another clause's live capability, including an
+obligation nested inside another captured segment. A consumed capability adds
+no unfinished obligation. Discard consumes its own owner only.
+
+Capture inference distinguishes stored values from latent requests. A helper
+can store only ordinary values yet request an operation while its caller or an
+internal clause has a live owner. For each possible request, inference follows
+control through the nearest matching exact handler, including caller
+continuations. A handler removes requests from its body, but its clauses bypass
+that handler. A handler installed inside a live clause does not capture the
+outer owner for requests confined to its own body. Resuming restores the
+selected captured segment and its handlers; it does not replay the prefix
+before capture. Discard must also preserve completion of owners outside the
+abandoned segment whose scheduled work it skips.
+
+Known functions, aliases, closures, recursive groups and imported functions
+retain inferred control summaries. Possible paths join conservatively, without
+merging unrelated exact effect identities. Generic type parameters may later
+coincide; a proof cannot assume they remain distinct. Handler matching after
+specialization must retain that possibility. Recursive analysis must finish
+before publishing a permission. An unknown higher-order callee or open row
+rejects discard when the relevant request's obligations cannot be proved
+absent; this uncertainty alone does not reject resume-only code. There are no
+source capture annotations or capture-polymorphic function types.
+
+An unsafe or unproved discard has type-phase reason `effect.discard-unsafe`,
+with its primary label on `discard` and causal request/call and live-owner
+labels where known. Ordinary syntax, resolution, typing and structural usage
+errors precede this capture check.
 
 The executable test `public_effect_identity_survives_facade_reexport` checks
 effect declaration and summary identity. The tests
@@ -1969,12 +2016,12 @@ publishes all fields together. It publishes none if any retained inference
 variable or relationship is invalid.
 
 `freeze_module_and_public` constructs the returned checked module from
-`checked_definitions` and derives its body-free checked summary in one atomic
-publication after the complete module succeeds. Any failure publishes neither
-result. Public local declarations, effects, and implementations retain the facts
-established by their owning judgments. The summary retains public kinds,
-effects and operations, and the hidden kind and identity closure required by
-public schemes, constructors, effects, interfaces, ordered parameters and
+`checked_definitions` and derives its source-body-free checked summary in one
+atomic publication after the complete module succeeds. Any failure publishes
+neither result. Public local declarations, effects, and implementations retain
+the facts established by their owning judgments. The summary retains public
+kinds, effects and operations, and the hidden kind and identity closure
+required by public schemes, constructors, effects, interfaces, ordered parameters and
 determinant positions, ordered method binders and bodies, complete
 implementation heads, prerequisites, and selected evidence. Publicly selected
 name and implementation re-exports preserve the
@@ -1988,6 +2035,11 @@ Summary admission authenticates complete interface-application arity and
 positional kinds before classifying detached prerequisite pairs. It then uses
 the same current-then-earlier source order and complete-before-key identity
 precedence as source header admission.
+Publication also completes capture inference and retains the inferred control
+summary of each exported function value. These private summaries carry the
+type and effect identities needed to check calls after specialization, without
+importing or reinferring dependency source bodies. Capture failure publishes
+neither a checked module nor its summary.
 
 For every module-owned `newtype` identity retained by a summary, the canonical hidden closure includes
 its declaration kind, ordered parameters, sole constructor identity and owner,
@@ -2070,16 +2122,19 @@ and relate the interface declaration. Forged checked source or selection facts
 are internal validation failures, not source diagnostics.
 
 Lexing owns the reserved effect keywords. Parsing owns malformed effect
-declarations, rows, requests, handlers, clauses, and resume forms. Resolution
-owns unknown effects or operations, namespace and visibility failures, stable
-identity assignment, row-tail scope, and `resume` outside a clause. Effect
-instance arity precedes positional kind checking. Kind checking owns an invalid
-effect argument, row tail, or forbidden use of `EffectRow`. Row formation owns
-a duplicate written member and an unsatisfied lacks fact. Ordinary expression
-typing owns operation operand and latent-row failures. Handler checking owns
-target membership, clause coverage and patterns, the shared result and output
-rows, and resume consumption and barriers. Entry checking owns a nonempty
-linked entry row.
+declarations, rows, requests, handlers, clauses, and completion forms.
+Resolution owns unknown effects or operations, namespace and visibility
+failures, stable identity assignment, row-tail scope, and `resume` or `discard`
+outside a clause.
+Effect instance arity precedes positional kind checking. Kind checking owns
+an invalid effect argument, row tail, or forbidden use of `EffectRow`.
+Row formation owns a duplicate written member and an unsatisfied lacks fact.
+Ordinary expression typing owns operation operand and latent-row failures.
+Handler checking owns target membership, clause coverage and patterns,
+the shared result and output rows, and capability consumption and barriers.
+Capture checking owns unsafe
+or unproved discard after ordinary checking succeeds. Entry checking owns a
+nonempty linked entry row.
 
 Implementation requirement pairs, visibility, head, prerequisite, coverage,
 orphan, and termination failures belong to header admission. Effective-
@@ -2131,9 +2186,9 @@ Within one source unit, causal precedence is:
     checking, unresolved-key ambiguity, atomic improvement and dependent
     conflict, remaining dependent ambiguity, full-application selection,
     active-goal cycle detection, and unsatisfied evidence; and
-12. whole-module inference closure, method ambiguity, and publication, then
-    entry checking, summary admission, linking, elaboration, and Core
-    validation.
+12. whole-module inference closure, method ambiguity, capture checking, and
+    publication, then entry checking, summary admission, linking, elaboration,
+    and Core validation.
 
 An earlier failure prevents publication to later boundaries. Existing
 predecessor diagnostics within one listed family retain their internal order
@@ -2172,6 +2227,11 @@ work or retention occurs. Effect summaries, linked facts, and Core validation
 charge their existing owning ledgers; they do not introduce a separate effect
 budget. Exhaustion publishes no partial row, checked module, summary, or Core
 program.
+Capture-summary construction, composition, identity admission and validation
+charge their existing owning work ledgers, including retained control and
+type metadata, candidate comparisons and filtered scans. Capture queries use
+finite control states and iterative walks; exhaustion publishes no partial
+permission. A retry with sufficient work must agree with a fresh run.
 
 Kind traversal, cloning, equality, hashing, rendering, substitution,
 unification, matching, summary admission, validation, and disposal use

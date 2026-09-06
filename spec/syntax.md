@@ -134,6 +134,7 @@ handler_expression ::=
   "}" ;
 handler_clause ::= identifier pattern "=>" expression ;
 resume_expression ::= "resume" expression ;
+discard_expression ::= "discard" ;
 
 expression ::=
     block
@@ -155,6 +156,7 @@ primary_expression ::=
   | unqualified_term_reference
   | qualified_term_reference
   | perform_expression
+  | discard_expression
   | parenthesized_expression ;
 unqualified_term_reference ::= identifier | upper_identifier ;
 qualified_term_reference ::= upper_identifier "." import_name ;
@@ -367,8 +369,8 @@ instances, and open rows either append `| R` to known instances or write only
 `perform` consumes one primary-expression operand. A non-primary operand must be
 parenthesized. A handler contains one or more clauses, each with one operation
 name, one pattern, and one expression body. `resume` consumes one expression;
-name resolution and static semantics restrict it to its owning operation
-clause.
+`discard` is a nullary primary expression. Name resolution and static semantics
+restrict both completion forms to their owning operation clause.
 
 The executable test `syntax_local_recursive_group_example_is_executable`
 checks a complete entry module containing a two-member recursive group. The
