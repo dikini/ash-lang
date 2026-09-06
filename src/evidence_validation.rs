@@ -2714,8 +2714,32 @@ fn build_core_method_evidence_catalog(
         methods.len().saturating_sub(1),
         program.result().span,
     )?;
-    if methods.len() != method_count || methods.windows(2).any(|pair| pair[0].id >= pair[1].id) {
+    if methods.len() != method_count {
         return Err(invalid_root(program.result().span));
+    }
+    // Dependency order need not be identity order across module namespaces.
+    // Keep the common already-canonical path, and charge every comparison when
+    // canonicalizing a mixed builtin/source catalog before authentication.
+    if methods.windows(2).any(|pair| pair[0].id >= pair[1].id) {
+        for index in 1..methods.len() {
+            let mut cursor = index;
+            while cursor > 0 {
+                charge(constraint_work, 1, program.result().span)?;
+                if methods[cursor - 1].id <= methods[cursor].id {
+                    break;
+                }
+                methods.swap(cursor - 1, cursor);
+                cursor -= 1;
+            }
+        }
+        charge(
+            constraint_work,
+            methods.len().saturating_sub(1),
+            program.result().span,
+        )?;
+        if methods.windows(2).any(|pair| pair[0].id >= pair[1].id) {
+            return Err(invalid_root(program.result().span));
+        }
     }
     let mut implementation_owner_count = 0usize;
     for group in program.groups() {
@@ -8866,6 +8890,175 @@ mod tests {
         let fixture = ValidationFixture::create(source);
         let graph = fixture.graph();
         link_modules(check_graph(&graph), graph.entry()).expect("the entry fixture should link")
+    }
+
+    fn published_resource_program(implementation_only: bool) -> ResolvedModuleProgram {
+        let (owner, entry) = if implementation_only {
+            (
+                "import @builtin.cell as Cell\npub interface Value<A> {\nvalue : A -> Int\n}\npub impl Value<Unit> {\nvalue ignored = resource cell<R> c = 42 {\nCell.read c\n}\n}\n",
+                "import owner (value, impl Value)\nmain : Unit -> Int\nmain () = value ()\n",
+            )
+        } else {
+            (
+                "import @builtin.cell as Cell\npub readCell : Unit -> Int\nreadCell () = resource cell<R> c = 42 {\nCell.read c\n}\n",
+                "import owner (readCell)\nmain : Unit -> Int\nmain () = readCell ()\n",
+            )
+        };
+        let fixture = ValidationFixture::create(entry);
+        fixture.write("owner.ash", owner);
+        let graph = fixture.graph();
+        let checked = check_graph(&graph);
+        let defining = checked
+            .iter()
+            .find(|module| {
+                module
+                    .schemes()
+                    .iter()
+                    .any(|scheme| scheme.spelling == "readCell")
+                    || !module.implementation_facts().is_empty()
+            })
+            .unwrap();
+        assert_eq!(defining.schemes().len(), usize::from(!implementation_only));
+        assert_eq!(
+            defining.implementation_facts().len(),
+            usize::from(implementation_only)
+        );
+        link_modules(checked, graph.entry()).unwrap()
+    }
+
+    #[test]
+    fn published_resource_linked_owners_have_exact_atomic_validation_boundaries() {
+        for implementation_only in [false, true] {
+            let run = |constraint_limit, type_limit| {
+                let mut constraints = InterfaceConstraintBudget::with_limit(constraint_limit);
+                let mut types = TypeWorkBudget::with_limit(type_limit);
+                let result = validate_interface_evidence_with_budget(
+                    published_resource_program(implementation_only),
+                    &mut constraints,
+                    &mut types,
+                );
+                (result, constraints.used(), types.used())
+            };
+            let (measured, constraints, types) = run(usize::MAX, usize::MAX);
+            let validated = measured.unwrap();
+            let owners: Vec<_> = validated
+                .method_evidence()
+                .lexical_owners()
+                .iter()
+                .filter_map(|owner| owner.acquisition.map(|acquisition| (owner, acquisition)))
+                .collect();
+            assert_eq!(
+                owners.len(),
+                2,
+                "one acquisition owns both generated methods"
+            );
+            assert_eq!(owners[0].1.identity, owners[1].1.identity);
+            assert_eq!(owners[0].1.provider, owners[1].1.provider);
+            assert_eq!(owners[0].0.method.declaration(), 0);
+            assert_eq!(owners[1].0.method.declaration(), 1);
+            // Full validation rejects a duplicate owner insertion, so success
+            // above also proves the shared R is registered only once.
+            assert_eq!(
+                run(constraints - 1, types).0.unwrap_err().reason(),
+                EvidenceValidationReason::ConstraintResourceExhausted
+            );
+            assert_eq!(
+                run(constraints, types - 1).0.unwrap_err().reason(),
+                EvidenceValidationReason::TypeResourceExhausted
+            );
+            for _ in 0..2 {
+                let (retry, used_constraints, used_types) = run(constraints, types);
+                retry.unwrap();
+                assert_eq!((used_constraints, used_types), (constraints, types));
+            }
+            let mut surplus = published_resource_program(implementation_only);
+            let module = surplus
+                .groups()
+                .iter()
+                .find(|group| {
+                    group
+                        .schemes()
+                        .iter()
+                        .any(|scheme| scheme.spelling == "readCell")
+                        || !group.implementation_facts().is_empty()
+                })
+                .unwrap()
+                .module();
+            assert!(surplus.add_surplus_registry_type_variable_for_test(module));
+            assert_eq!(
+                validate_interface_evidence(surplus).unwrap_err().reason(),
+                EvidenceValidationReason::UnknownIdentity
+            );
+        }
+        for detach in [false, true] {
+            let mut program = published_resource_program(false);
+            assert!(program.corrupt_first_direct_resource_owner_for_test(detach));
+            assert!(
+                validate_interface_evidence(program).is_err(),
+                "detached={detach} must publish no capability"
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_namespace_method_catalog_is_canonical_and_exactly_retryable() {
+        let program = published_resource_program(true);
+        let run = |constraint_limit, type_limit| {
+            let mut constraints = InterfaceConstraintBudget::with_limit(constraint_limit);
+            let mut types = TypeWorkBudget::with_limit(type_limit);
+            let result = build_core_method_evidence_catalog(&program, &mut constraints, &mut types);
+            (result, constraints.used(), types.used())
+        };
+        let (catalog, constraints, types) = run(usize::MAX, usize::MAX);
+        let catalog = catalog.unwrap();
+        assert!(
+            catalog
+                .methods()
+                .windows(2)
+                .all(|pair| pair[0].id < pair[1].id)
+        );
+        assert_eq!(catalog.methods().len(), 3);
+        assert_eq!(
+            run(constraints - 1, types).0.unwrap_err().reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted
+        );
+        assert_eq!(
+            run(constraints, types - 1).0.unwrap_err().reason(),
+            EvidenceValidationReason::TypeResourceExhausted
+        );
+        for _ in 0..2 {
+            let (retry, used_constraints, used_types) = run(constraints, types);
+            retry.unwrap();
+            assert_eq!((used_constraints, used_types), (constraints, types));
+        }
+        let mut duplicate = published_resource_program(true);
+        let builtin = duplicate
+            .groups()
+            .iter()
+            .find(|group| {
+                group.implementation_facts().is_empty() && !group.interface_facts().is_empty()
+            })
+            .unwrap()
+            .interface_facts()[0]
+            .methods[0]
+            .id;
+        let source = duplicate
+            .groups()
+            .iter()
+            .find(|group| !group.implementation_facts().is_empty())
+            .unwrap()
+            .module();
+        assert!(duplicate.replace_first_interface_method_id_for_test(source, builtin));
+        assert_eq!(
+            build_core_method_evidence_catalog(
+                &duplicate,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .unwrap_err()
+            .reason(),
+            EvidenceValidationReason::InvalidEvidenceRoot
+        );
     }
 
     #[test]

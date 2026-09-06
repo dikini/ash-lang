@@ -181,10 +181,7 @@ fn acquisition_resolution_requires_a_direct_builtin_dependency() {
 fn direct_targeted_import_satisfies_acquisition_availability_but_a_facade_does_not() {
     let tree = Tree::new();
     tree.write("facade.ash", "pub import @builtin.cell (Handle)\n");
-    for (import, reason) in [
-        ("@builtin.cell", "ResourceProofUnavailable"),
-        ("facade", "ResourceBuiltinRequired"),
-    ] {
+    for import in ["@builtin.cell", "facade"] {
         let entry = tree.write("entry.ash", &format!("import {import} (Handle)\nmain : Unit -> Int\nmain () = resource cell<R> c = 41 {{\n42\n}}\n"));
         let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
         let mut checked: Vec<CheckedModule> = Vec::new();
@@ -206,11 +203,12 @@ fn direct_targeted_import_satisfies_acquisition_availability_but_a_facade_does_n
                 .collect::<Vec<_>>();
             let result = resolve_module(module, &dependencies);
             if module.id() == graph.entry() {
-                let error = match result {
-                    Ok(resolved) => format!("{:?}", check_module(resolved).unwrap_err()),
-                    Err(error) => format!("{error:?}"),
-                };
-                assert!(error.contains(reason), "{error}");
+                if import == "@builtin.cell" {
+                    check_module(result.unwrap()).unwrap();
+                } else {
+                    let error = format!("{:?}", result.unwrap_err());
+                    assert!(error.contains("ResourceBuiltinRequired"), "{error}");
+                }
             } else {
                 checked.push(check_module(result.unwrap()).unwrap());
             }
@@ -256,8 +254,8 @@ fn cli_preserves_builtin_failure_categories_and_import_only_execution() {
         ),
         (
             "import @builtin.cell (Handle)\nmain : Unit -> Int\nmain () = resource cell<R> c = 41 {\n42\n}\n",
-            1,
-            "resource.proof-unavailable\n",
+            2,
+            "core.validation.resource-proof-unavailable\n",
         ),
     ] {
         let entry = tree.write("entry.ash", source);

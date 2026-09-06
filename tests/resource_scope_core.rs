@@ -4,11 +4,10 @@ use ash::{
     source::SourceFile,
 };
 
-// Structural Core positives and corruption tests live with the private Core
-// validator. The production entry point must not expose their lifetime-unproved
-// fixture as an executable program.
+// Source dependency proof permits publication, but the production entry point
+// must still reject execution until resource acquisition and release exist.
 #[test]
-fn resource_programs_cannot_reach_execution_before_dependency_proof() {
+fn resource_programs_cannot_reach_execution_before_resource_runtime() {
     let path = std::env::temp_dir().join(format!(
         "ash-resource-admission-{}-{}.ash",
         std::process::id(),
@@ -29,7 +28,7 @@ fn resource_programs_cannot_reach_execution_before_dependency_proof() {
         .unwrap_err();
         assert_eq!(
             failure.reason_code(),
-            "resource.proof-unavailable",
+            "core.validation.resource-proof-unavailable",
             "{body}: {failure:?}"
         );
     }

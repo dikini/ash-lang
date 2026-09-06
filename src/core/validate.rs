@@ -213,7 +213,9 @@ pub enum ValidationReason {
     Resume,
     /// Discard has no authenticated proof of capture safety.
     DiscardUnsafe,
-    /// Stored resource dependencies have not yet been proved safe.
+    /// A stored value crosses the boundary of its resource owner.
+    ResourceEscape,
+    /// Resource acquisition and release are not yet available for execution.
     ResourceProofUnavailable,
 }
 
@@ -243,6 +245,7 @@ impl fmt::Display for ValidationReason {
             Self::Resume => "core.validation.resume",
             Self::ResourceProofUnavailable => "core.validation.resource-proof-unavailable",
             Self::DiscardUnsafe => "core.validation.discard-unsafe",
+            Self::ResourceEscape => "core.validation.resource-escape",
         })
     }
 }
@@ -3111,7 +3114,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             .program
                             .method_evidence
                             .method(prerequisite.method)
-                            .is_some()
+                            .is_some_and(|method| !method.parameters.is_empty())
                         {
                             self.charge_type_work(anchors.len())?;
                             if !anchors.values().any(|candidate| {
@@ -4323,7 +4326,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         module_sources: Option<&HashMap<ModuleId, SourceId>>,
         parameter_owners: &mut RegistryParameterOwners,
     ) -> Result<(), ValidationError> {
-        let mut previous_effect: Option<crate::types::EffectId> = None;
+        let mut next_declaration = HashMap::<ModuleId, u32>::new();
+        self.charge_type_work(self.program.registry.effects().len())?;
+        next_declaration
+            .try_reserve(self.program.registry.effects().len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
         for effect in self.program.registry.effects() {
             self.charge_type_work(
                 effect
@@ -4349,15 +4356,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             if expected_source != Some(effect.origin.primary_span().source()) {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
-            let ordered = match previous_effect {
-                None => effect.id.declaration() == 0,
-                Some(previous) if previous.module() == module => previous
-                    .declaration()
-                    .checked_add(1)
-                    .is_some_and(|next| next == effect.id.declaration()),
-                Some(previous) => previous.module() < module && effect.id.declaration() == 0,
-            };
-            if !ordered
+            // Linked registries retain dependency-ordered module groups, not
+            // the total order of module namespaces. Declaration order remains
+            // exact within each defining module.
+            self.charge_type_work(1)?;
+            let expected = next_declaration.entry(module).or_insert(0);
+            if effect.id.declaration() != *expected
                 || effect.operations.is_empty()
                 || !valid_upper_spelling(&effect.spelling)
                 || !origin_depth_within_limit(&effect.origin)
@@ -4365,7 +4369,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
-            previous_effect = Some(effect.id);
+            *expected = expected
+                .checked_add(1)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
             self.validate_origin(&effect.origin, self.program.root)?;
             let mut parameter_ids = HashSet::new();
             let mut parameter_spellings = HashSet::new();
@@ -7880,6 +7886,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         self.validate_effect_abstraction_shapes(&authenticated_method_evidence)?;
         self.validate_scopes()?;
         self.validate_type_scopes()?;
+        let mut has_resource = false;
         for node in &self.program.nodes {
             self.charge_type_work(1)?;
             if matches!(
@@ -7888,13 +7895,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     _
                 ))
             ) {
-                return Err(ValidationError::new(
-                    ValidationReason::ResourceProofUnavailable,
-                    None,
-                ));
+                has_resource = true;
             }
         }
-        if !has_discard {
+        if !has_discard && !has_resource {
             return Ok(());
         }
         let mut capture_work = TypeWorkBudget::with_limit(
@@ -7915,17 +7919,25 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             super::capture::Failure::Resource => {
                 ValidationError::new(ValidationReason::Resource, None)
             }
-            super::capture::Failure::ResourceProofUnavailable(_) => {
-                ValidationError::new(ValidationReason::ResourceProofUnavailable, None)
-            }
             super::capture::Failure::Invalid => {
                 ValidationError::new(ValidationReason::Handler, None)
+            }
+            super::capture::Failure::Escape { .. } => {
+                ValidationError::new(ValidationReason::ResourceEscape, None)
             }
             super::capture::Failure::Unsafe(unsafe_discard) => ValidationError::new(
                 ValidationReason::DiscardUnsafe,
                 Some(NodeId::new(self.program.arena, unsafe_discard.node as u32)),
             ),
         })?;
+        if has_resource {
+            // Resource execution remains closed until acquisition and release
+            // exist. Safety analysis above must still inspect the actual Core.
+            return Err(ValidationError::new(
+                ValidationReason::ResourceProofUnavailable,
+                None,
+            ));
+        }
         Ok(())
     }
 
@@ -8924,6 +8936,110 @@ mod tests {
     }
 
     #[test]
+    fn cell_core_reconstructs_hidden_closure_escape_before_the_execution_gate() {
+        use super::super::{
+            binding::BindingNode,
+            effect::{EffectExprKind, EffectOperation},
+            function::FunctionNode,
+            variable::{TypedBinder, VariableNode},
+        };
+        let (mut core, sources) = cell_core_fixture();
+        let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+            &core.nodes[core.root.index().unwrap()].kind
+        else {
+            panic!("resource root")
+        };
+        let handle = resource.handle.clone();
+        let mut leaf = resource.body;
+        let mut bindings = Vec::new();
+        while let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) =
+            &core.nodes[leaf.index().unwrap()].kind
+        {
+            bindings.push(leaf);
+            leaf = binding.body();
+        }
+        assert!(
+            !bindings.is_empty(),
+            "trusted provider bindings remain inside the scope"
+        );
+        let dialect = core.nodes[leaf.index().unwrap()].dialect;
+        let effects = core.nodes[leaf.index().unwrap()].effects.clone();
+        let origin = core.nodes[leaf.index().unwrap()].origin.clone().unwrap();
+        let variable = node_id(core.arena, core.nodes.len()).unwrap();
+        core.nodes.push(StoredNode {
+            ty: handle.ty().clone(),
+            kind: EffectExprKind::Pure(PureExprKind::Variable(VariableNode::new(handle.id()))),
+            dialect,
+            effects: effects.clone(),
+            origin: Some(origin.clone()),
+        });
+        let body = node_id(core.arena, core.nodes.len()).unwrap();
+        core.nodes.push(StoredNode {
+            kind: EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                BindingNode::new(
+                    TypedBinder::new(
+                        core.arena,
+                        BinderId::generated(u32::MAX - 1),
+                        handle.ty().clone(),
+                        origin.clone(),
+                    ),
+                    variable,
+                    leaf,
+                ),
+            ))),
+            ty: Type::Int,
+            dialect,
+            effects: effects.clone(),
+            origin: Some(origin.clone()),
+        });
+        let closure = node_id(core.arena, core.nodes.len()).unwrap();
+        let closure_type = Type::Function(Box::new(Type::Unit), Box::new(Type::Int));
+        core.nodes.push(StoredNode {
+            ty: closure_type.clone(),
+            kind: EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(
+                FunctionNode::new(
+                    TypedBinder::new(
+                        core.arena,
+                        BinderId::generated(u32::MAX),
+                        Type::Unit,
+                        origin.clone(),
+                    ),
+                    body,
+                ),
+            ))),
+            dialect,
+            effects,
+            origin: Some(origin),
+        });
+        for node in bindings {
+            let node = &mut core.nodes[node.index().unwrap()];
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) =
+                &node.kind
+            else {
+                unreachable!()
+            };
+            let replacement = BindingNode::new(
+                binding.binder().clone(),
+                binding.initializer(),
+                if binding.body() == leaf {
+                    closure
+                } else {
+                    binding.body()
+                },
+            );
+            node.kind = EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                replacement,
+            )));
+            node.ty = closure_type.clone();
+        }
+        core.nodes[core.root.index().unwrap()].ty = closure_type;
+        assert_eq!(
+            cell_core_reason(&core, &sources, 0).0,
+            ValidationReason::ResourceEscape
+        );
+    }
+
+    #[test]
     fn cell_core_requires_both_provider_owners_even_for_constant_body() {
         let (mut core, sources) = cell_core_fixture();
         core.method_evidence = Arc::new(super::super::dialect::MethodEvidenceCatalog::new(
@@ -9277,6 +9393,279 @@ mod tests {
             } else {
                 result.unwrap();
             }
+        }
+    }
+
+    #[test]
+    fn published_resource_core_reconstructs_dependencies_after_every_rebuild() {
+        use super::super::effect::{EffectExprKind, EffectOperation, EffectOperationFamily};
+        use crate::core::dialect::{CoreProgram, CoreTypedExpr, ValidatedCoreProgram};
+        for payload in [false, true] {
+            let directory = LinkedValidationDirectory::create();
+            let (header, result, entry) = if payload {
+                (
+                    "pub effect Send {\nsend : (Unit -> Int) -> Unit\n}\npub make : Unit -> Int ! {Send}\n",
+                    "let _ = perform Send.send constant\n42",
+                    "import owner (make, Send)\nmain : Unit -> Int\nmain () = handle (make ()) with Send {\nsend ignored => resume ()\n}\n",
+                )
+            } else {
+                (
+                    "pub make : Unit -> (Unit -> Int)\n",
+                    "constant",
+                    "import owner (make)\nmain : Unit -> Int\nmain () = {\nlet later = make ()\nlater ()\n}\n",
+                )
+            };
+            directory.write("owner.ash", &format!("import @builtin.cell as Cell\n{header}make () = resource cell<R> c = 41 {{\nlet hidden : Unit -> Int = fn(ignored) {{\nlet held = c\n40 + 2\n}}\nlet constant : Unit -> Int = fn(ignored) {{\n40 + 2\n}}\n{result}\n}}\n"));
+            let entry = directory.write("entry.ash", entry);
+            let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+            let linked =
+                link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+            let linked = crate::evidence_validation::validate_interface_evidence(linked).unwrap();
+            let mut elaborator =
+                crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+            let typed = elaborator
+                .synthesize_effect_module_program(&linked)
+                .unwrap();
+            let program = elaborator.finish(typed.node).unwrap();
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let relation = graph
+                .modules()
+                .iter()
+                .map(|module| (module.id(), module.source().id()))
+                .collect::<Vec<_>>();
+            let reason = |program: &super::super::effect::UnvalidatedEffectProgram| {
+                Validator::new_modules(program, &sources, &relation)
+                    .unwrap()
+                    .run_effect()
+                    .unwrap_err()
+                    .reason()
+            };
+            assert_eq!(reason(&program), ValidationReason::ResourceProofUnavailable);
+            let mut measured = Validator::new_modules(&program, &sources, &relation).unwrap();
+            assert_eq!(
+                measured.run_effect().unwrap_err().reason(),
+                ValidationReason::ResourceProofUnavailable
+            );
+            let work = measured.type_work.get();
+            for remaining in [work - 1, work, work] {
+                let mut retry = Validator::new_modules(&program, &sources, &relation).unwrap();
+                retry
+                    .type_work
+                    .set(CORE_VALIDATION_TYPE_WORK_LIMIT - remaining);
+                assert_eq!(
+                    retry.run_effect().unwrap_err().reason(),
+                    if remaining < work {
+                        ValidationReason::Resource
+                    } else {
+                        ValidationReason::ResourceProofUnavailable
+                    }
+                );
+            }
+            // This private transform-only wrapper has passed every static check.
+            // It is never executed or returned: runtime admission remains closed.
+            let (registry, catalog, anchors, arena, stored, root) = program.into_parts();
+            let nodes = stored
+                .into_iter()
+                .map(|node| CoreTypedExpr {
+                    ty: node.ty,
+                    effects: node.effects,
+                    origin: node.origin.unwrap(),
+                    kind: node.kind,
+                })
+                .collect();
+            let validated = ValidatedCoreProgram::<EffectOperationFamily>::new(CoreProgram::new(
+                registry, catalog, anchors, arena, nodes, root,
+            ));
+            for fold in [false, true] {
+                let mut rebuilt = if fold {
+                    crate::core::transform::fold_effect_literal_primitives(&validated).unwrap()
+                } else {
+                    crate::core::transform::identity_effect_traversal(&validated).unwrap()
+                };
+                assert_eq!(reason(&rebuilt), ValidationReason::ResourceProofUnavailable);
+                let resource_index = rebuilt
+                    .nodes
+                    .iter()
+                    .position(|node| {
+                        matches!(
+                            node.kind,
+                            EffectExprKind::Operation(EffectOperation::Resource(_))
+                        )
+                    })
+                    .unwrap();
+                let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+                    &rebuilt.nodes[resource_index].kind
+                else {
+                    unreachable!()
+                };
+                let acquisition = resource.acquisition;
+                for swapped_methods in [false, true] {
+                    let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+                        &mut rebuilt.nodes[resource_index].kind
+                    else {
+                        unreachable!()
+                    };
+                    if swapped_methods {
+                        resource.acquisition.methods.swap(0, 1);
+                    } else {
+                        resource.acquisition.provider = crate::interface::LexicalEvidenceId::new(
+                            acquisition.provider.module(),
+                            u32::MAX,
+                        );
+                    }
+                    assert_eq!(
+                        reason(&rebuilt),
+                        ValidationReason::NodeType,
+                        "fold={fold}, swapped={swapped_methods}"
+                    );
+                    let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+                        &mut rebuilt.nodes[resource_index].kind
+                    else {
+                        unreachable!()
+                    };
+                    resource.acquisition = acquisition;
+                }
+                let resource = rebuilt
+                    .nodes
+                    .iter()
+                    .find_map(|node| match &node.kind {
+                        EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
+                            Some(resource)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let mut current = resource.body;
+                let mut hidden = None;
+                while let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                    binding,
+                ))) = &rebuilt.nodes[current.index().unwrap()].kind
+                {
+                    let span = binding.binder().origin().primary_span();
+                    let source = sources
+                        .iter()
+                        .find(|source| source.id() == span.source())
+                        .unwrap();
+                    if &source.text()[span.range().start() as usize..span.range().end() as usize]
+                        == "hidden"
+                    {
+                        hidden = Some(binding.binder().id());
+                    }
+                    current = binding.body();
+                }
+                if payload {
+                    current = rebuilt
+                        .nodes
+                        .iter()
+                        .find_map(|node| match &node.kind {
+                            EffectExprKind::Operation(EffectOperation::Request(request))
+                                if rebuilt.nodes[request.operand.index().unwrap()].ty
+                                    == Type::Function(
+                                        Box::new(Type::Unit),
+                                        Box::new(Type::Int),
+                                    ) =>
+                            {
+                                Some(request.operand)
+                            }
+                            _ => None,
+                        })
+                        .expect("outward callable payload");
+                }
+                assert!(matches!(
+                    rebuilt.nodes[current.index().unwrap()].kind,
+                    EffectExprKind::Pure(PureExprKind::Variable(_))
+                ));
+                rebuilt.nodes[current.index().unwrap()].kind =
+                    EffectExprKind::Pure(PureExprKind::Variable(
+                        crate::core::variable::VariableNode::new(hidden.expect("hidden binder")),
+                    ));
+                assert_eq!(
+                    reason(&rebuilt),
+                    ValidationReason::ResourceEscape,
+                    "fold={fold}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_module_effect_ordinals_remain_exact_and_retryable() {
+        let directory = LinkedValidationDirectory::create();
+        let entry = directory.write("entry.ash", "import @builtin.cell as Cell\neffect First {\nfirst : Unit -> Unit\n}\neffect Second {\nsecond : Unit -> Unit\n}\nmain : Unit -> Unit\nmain () = ()\n");
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+        let linked = crate::evidence_validation::validate_interface_evidence(linked).unwrap();
+        let mut elaborator =
+            crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let mut program = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let mapping = relation.iter().copied().collect::<HashMap<_, _>>();
+        let run = |program: &super::super::effect::UnvalidatedEffectProgram, remaining| {
+            let validator = Validator::new_modules(program, &sources, &relation).unwrap();
+            validator
+                .type_work
+                .set(CORE_VALIDATION_TYPE_WORK_LIMIT - remaining);
+            let result = validator.validate_effect_registry(Some(&mapping), &mut HashMap::new());
+            (
+                result,
+                validator.type_work.get() - (CORE_VALIDATION_TYPE_WORK_LIMIT - remaining),
+            )
+        };
+        let (result, work) = run(&program, CORE_VALIDATION_TYPE_WORK_LIMIT);
+        result.unwrap();
+        assert_eq!(
+            run(&program, work - 1).0.unwrap_err().reason(),
+            ValidationReason::Resource
+        );
+        for _ in 0..2 {
+            let (result, used) = run(&program, work);
+            result.unwrap();
+            assert_eq!(used, work);
+        }
+        let registry = program.registry.as_ref().clone();
+        for mutation in 0..3 {
+            let mut effects = registry.effects().to_vec();
+            let first = effects
+                .iter()
+                .position(|effect| effect.spelling == "First")
+                .unwrap();
+            let second = effects
+                .iter()
+                .position(|effect| effect.spelling == "Second")
+                .unwrap();
+            match mutation {
+                0 => effects[second] = effects[first].clone(),
+                1 => {
+                    effects.remove(first);
+                }
+                2 => effects.swap(first, second),
+                _ => unreachable!(),
+            }
+            program.registry = Arc::new(registry.clone().with_effects(effects));
+            assert_eq!(
+                run(&program, CORE_VALIDATION_TYPE_WORK_LIMIT)
+                    .0
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Registry,
+                "mutation={mutation}"
+            );
         }
     }
 
@@ -9856,6 +10245,133 @@ mod tests {
             producer_binder: None,
             producer,
         };
+    }
+
+    #[test]
+    fn catalogued_monomorphic_nested_sources_survive_effect_rebuilds() {
+        let directory = LinkedValidationDirectory::create();
+        let entry = directory.write("entry.ash", concat!(
+            "type Wrap<A> = Wrap(A)\n",
+            "interface Leaf<A> {\nleaf : A -> A\n}\n",
+            "interface Base<A> {\nbase : A -> A\n}\n",
+            "interface Convert<A> {\nconvert<B> : (A, B) -> A\n}\n",
+            "impl Leaf<Int> {\nleaf value = value\n}\n",
+            "impl<A> Base<Wrap<A>> where Leaf<A> {\nbase (Wrap value) = Wrap (leaf value)\n}\n",
+            "impl<A> Convert<Wrap<Wrap<A>>> where Base<Wrap<A>> {\nconvert (Wrap value, ignored) = Wrap (base value)\n}\n",
+            "effect Ask {\nask : Unit -> Int\n}\n",
+            "main : Unit -> Wrap<Wrap<Int>>\nmain () = handle {\nlet _ = perform Ask.ask ()\nconvert (Wrap (Wrap (40 + 2)), true)\n} with Ask {\nask ignored => resume 0\n}\n",
+        ));
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+        let linked = validate_linked_facts_for_test(linked).unwrap();
+        let mut elaborator =
+            crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let program = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let validated =
+            super::validate_effect_modules_family(program, &sources, &relation).unwrap();
+        let identity = crate::core::transform::identity_effect_traversal(&validated).unwrap();
+        let identity =
+            super::validate_effect_modules_family(identity, &sources, &relation).unwrap();
+        let folded = crate::core::transform::fold_effect_literal_primitives(&identity).unwrap();
+        super::validate_effect_modules_family(folded, &sources, &relation).unwrap();
+    }
+
+    #[test]
+    fn catalogued_monomorphic_nested_sources_reject_same_typed_global_leaves() {
+        for rebuild in 0..3 {
+            let fixture = LinkedCoreValidationFixture::compile(
+                "pub seed : Unit -> Unit\nseed value = value\n",
+                concat!(
+                    "type Wrap<A> = Wrap(A)\n",
+                    "interface Leaf<A> {\nleaf : A -> A\n}\n",
+                    "interface Base<A> {\nbase : A -> A\n}\n",
+                    "interface Convert<A> {\nconvert<B> : (A, B) -> A\n}\n",
+                    "impl Leaf<Int> {\nleaf value = value\n}\n",
+                    "impl<A> Base<Wrap<A>> where Leaf<A> {\nbase (Wrap value) = Wrap (leaf value)\n}\n",
+                    "impl<A> Convert<Wrap<Wrap<A>>> where Base<Wrap<A>> {\nconvert (Wrap value, ignored) = Wrap (base value)\n}\n",
+                    "fake : Int -> Int\nfake value = value\n",
+                    "main : Unit -> Wrap<Wrap<Int>>\nmain () = {\nlet _ = fake 0\nconvert (Wrap (Wrap 42), true)\n}\n",
+                ),
+                &[],
+            );
+            let LinkedCoreValidationFixture {
+                directory,
+                graph,
+                mut program,
+                module_sources,
+                globals: _,
+            } = fixture;
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            Validator::new_modules(&program, &sources, &module_sources)
+                .unwrap()
+                .validate_method_evidence_authority()
+                .expect("catalogued monomorphic leaf uses concrete source authentication");
+            if rebuild != 0 {
+                let validated = validate_modules(program, &sources, &module_sources).unwrap();
+                program = if rebuild == 1 {
+                    identity_traversal(&validated).unwrap()
+                } else {
+                    fold_literal_primitives(&validated).unwrap()
+                };
+            }
+            let leaf = program
+                .method_evidence
+                .concrete_sources()
+                .iter()
+                .find(|source| {
+                    source.head_arguments.is_empty()
+                        && source.prerequisites.is_empty()
+                        && program
+                            .method_evidence
+                            .method(source.implementation.method())
+                            .is_some_and(|method| method.parameters.is_empty())
+                })
+                .expect("nested leaf remains catalogued and monomorphic")
+                .binder;
+            let leaf_index = program
+                .nodes
+                .iter()
+                .position(|node| {
+                    matches!(node.kind,
+                PureExprKind::Variable(variable) if variable.binder() == leaf)
+                })
+                .unwrap();
+            let fake_index = program.nodes.iter().position(|node| matches!(node.kind,
+                PureExprKind::Variable(variable) if matches!(variable.binder(), BinderId::Resolved { .. })
+                    && crate::types::same_type(&node.ty, &program.nodes[leaf_index].ty))).unwrap();
+            let leaf_kind = program.nodes[leaf_index].kind.clone();
+            program.nodes[leaf_index].kind = program.nodes[fake_index].kind.clone();
+            program.nodes[fake_index].kind = leaf_kind;
+            let authority = Validator::new_modules(&program, &sources, &module_sources)
+                .unwrap()
+                .validate_method_evidence_authority()
+                .expect_err(
+                    "exact concrete-source authentication rejects the ordinary global leaf",
+                );
+            assert_eq!(authority.reason, ValidationReason::ApplicationType);
+            assert!(
+                validate_modules(program, &sources, &module_sources).is_err(),
+                "rebuild {rebuild} must retain exact leaf identity"
+            );
+            drop(directory);
+        }
     }
 
     #[test]

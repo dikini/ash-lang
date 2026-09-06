@@ -1490,6 +1490,43 @@ impl ResolvedModuleProgram {
             .is_none()
     }
 
+    #[cfg(test)]
+    pub(crate) fn corrupt_first_direct_resource_owner_for_test(&mut self, detach: bool) -> bool {
+        for group in &mut self.groups {
+            for checked in &mut group.definitions {
+                let Some(definition) = checked.source.as_mut() else {
+                    continue;
+                };
+                let ResolvedDefinitionKind::Equational(global) = &mut definition.kind else {
+                    continue;
+                };
+                for equation in &mut global.equations {
+                    let ResolvedExprKind::Resource(resource) = &mut equation.body.kind else {
+                        continue;
+                    };
+                    if detach {
+                        let replacement = std::mem::replace(
+                            &mut *resource.body,
+                            ResolvedExpr {
+                                kind: ResolvedExprKind::Unit,
+                                span: equation.body.span,
+                            },
+                        );
+                        discard_resolved_expression_iteratively(std::mem::replace(
+                            &mut equation.body,
+                            replacement,
+                        ));
+                    } else {
+                        resource.acquisition.provider =
+                            crate::interface::LexicalEvidenceId::new(group.module, u32::MAX);
+                    }
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Returns the combined full defining registries.
     #[must_use]
     pub const fn registry(&self) -> &Arc<ResolvedRegistry> {
@@ -5101,6 +5138,7 @@ impl Drop for CheckedImplementationFact {
 /// One checked implementation-method identity-to-binder relation.
 #[derive(Debug, Eq, PartialEq)]
 pub struct CheckedImplementationMethodFact {
+    pub(crate) capture: crate::core::capture::CaptureValueSummary,
     /// Stable implementation-method identity.
     pub id: ImplMethodId,
     /// Stable interface method supplied by the body.
@@ -5338,6 +5376,10 @@ fn clone_checked_implementation_fact(
             }
         }
         methods.push(CheckedImplementationMethodFact {
+            capture: method
+                .capture
+                .clone_with_budget(type_work)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?,
             id: method.id,
             method: method.method,
             binder: method.binder,
@@ -8036,7 +8078,7 @@ pub(crate) fn same_checked_implementation_fact_observing_nominals_with_budget(
 fn same_checked_implementation_fact_with_optional_nominal_observer(
     left: &CheckedImplementationFact,
     right: &CheckedImplementationFact,
-    _type_work: &mut TypeWorkBudget,
+    type_work: &mut TypeWorkBudget,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     mut nominal_identities: Option<&mut MatchedNominalIdentities>,
 ) -> Result<bool, ResolvedBuildFailure> {
@@ -8114,6 +8156,10 @@ fn same_checked_implementation_fact_with_optional_nominal_observer(
     }
     for (left, right) in left.methods.iter().zip(&right.methods) {
         if left.id != right.id
+            || !left
+                .capture
+                .same_with_budget(&right.capture, type_work)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?
             || left.method != right.method
             || left.binder != right.binder
             || left.span != right.span
@@ -11287,6 +11333,14 @@ impl ExportSummary {
                 }
             }
             for method in &implementation.fact.methods {
+                for ty in method
+                    .capture
+                    .types(type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                {
+                    collect_nominal_identities(ty, &mut referenced_nominals, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
                 collect_scheme_nominal_identities(
                     &method.scheme,
                     &mut referenced_nominals,
@@ -11520,6 +11574,27 @@ impl ExportSummary {
                     }
                 }
                 for method in &implementation.fact.methods {
+                    for effect in method
+                        .capture
+                        .effects(type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                    {
+                        type_work
+                            .charge(1)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                        referenced_effects
+                            .try_reserve(1)
+                            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                        referenced_effects.insert(effect);
+                    }
+                    for ty in method
+                        .capture
+                        .types(type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                    {
+                        collect_effect_identities(ty, &mut referenced_effects, type_work)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    }
                     collect_effect_identities(
                         &method.scheme.value_type,
                         &mut referenced_effects,
@@ -21744,6 +21819,7 @@ mod tests {
                     head_parameters: Box::new([]),
                     prerequisites: Box::new([]),
                     methods: Box::new([CheckedImplementationMethodFact {
+                        capture: crate::core::capture::CaptureValueSummary::default(),
                         id: ImplMethodId::new(id, method),
                         method,
                         binder: BinderId::resolved(summary.module, 0),
@@ -22571,6 +22647,7 @@ mod tests {
             head_parameters: implementation_parameters.into_boxed_slice(),
             prerequisites: Box::new([]),
             methods: Box::new([CheckedImplementationMethodFact {
+                capture: crate::core::capture::CaptureValueSummary::default(),
                 id: ImplMethodId::new(implementation_id, implementation_method),
                 method: implementation_method,
                 binder: BinderId::resolved(module, 1),
@@ -24544,6 +24621,7 @@ mod tests {
                         requirement(1, second_dependent.clone()),
                     ]),
                     methods: Box::new([CheckedImplementationMethodFact {
+                        capture: crate::core::capture::CaptureValueSummary::default(),
                         id: ImplMethodId::new(implementation, method),
                         method,
                         binder: BinderId::resolved(module, 0),
@@ -24701,6 +24779,7 @@ mod tests {
                     head_parameters: Box::new([]),
                     prerequisites,
                     methods: Box::new([CheckedImplementationMethodFact {
+                        capture: crate::core::capture::CaptureValueSummary::default(),
                         id: ImplMethodId::new(implementation, marker_method),
                         method: marker_method,
                         binder: BinderId::resolved(module, 0),
@@ -25211,6 +25290,7 @@ mod tests {
             }]),
             prerequisites: Box::new([]),
             methods: Box::new([CheckedImplementationMethodFact {
+                capture: crate::core::capture::CaptureValueSummary::default(),
                 id: ImplMethodId::new(implementation_id, method_id),
                 method: method_id,
                 binder: BinderId::resolved(module, 1),
@@ -25685,6 +25765,7 @@ mod tests {
                     }]),
                     prerequisites: Box::new([]),
                     methods: Box::new([CheckedImplementationMethodFact {
+                        capture: crate::core::capture::CaptureValueSummary::default(),
                         id: ImplMethodId::new(implementation, method),
                         method,
                         binder: BinderId::resolved(module, 1),
@@ -25991,6 +26072,7 @@ mod tests {
                         }]),
                         prerequisites,
                         methods: Box::new([CheckedImplementationMethodFact {
+                            capture: crate::core::capture::CaptureValueSummary::default(),
                             id: ImplMethodId::new(implementation, MethodId::new(interface, 0)),
                             method: MethodId::new(interface, 0),
                             binder: BinderId::resolved(module, 1),
@@ -26087,6 +26169,7 @@ mod tests {
                         for ordinal in 0..WIDTH {
                             let method = MethodId::new(interface, ordinal as u32);
                             prerequisites.push(CheckedImplementationMethodFact {
+                                capture: crate::core::capture::CaptureValueSummary::default(),
                                 id: ImplMethodId::new(implementation, method),
                                 method,
                                 binder: BinderId::resolved(module, ordinal as u32 + 1),
@@ -28651,6 +28734,7 @@ mod tests {
             head_parameters: Box::new([]),
             prerequisites: Box::new([]),
             methods: vec![CheckedImplementationMethodFact {
+                capture: crate::core::capture::CaptureValueSummary::default(),
                 id: ImplMethodId::new(implementation, method),
                 method,
                 binder: BinderId::resolved(module, 0),

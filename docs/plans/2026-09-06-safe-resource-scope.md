@@ -27,7 +27,7 @@ typed Core and loop-driven evaluator.
 - [x] Step 1: instantiated Effect execution across abstraction boundaries.
 - [x] Step 2: sealed builtin cell API and acquisition syntax carriers.
 - [x] Step 3: acquisition typing, exact provider authority and Core structure.
-- [ ] Step 4: stored resource dependencies and carried scope obligations.
+- [x] Step 4: stored resource dependencies and carried scope obligations.
 - [ ] Step 5: cell allocation, exact dispatch, retention and release.
 - [ ] Step 6: complete adversarial/resource/abstraction corpus and reviews.
 - [ ] Step 7: specification, evidence, full gate and transition cleanup.
@@ -366,3 +366,484 @@ afterward. Resource re-review closed both findings. The final parent gate passed
 1,214 tests in 13 binaries, workspace all-target Clippy, and the fresh Pure
 256 KiB regression. Step 3 is complete within its explicit structural boundary;
 stored-dependency proof and runtime support remain Steps 4 and 5.
+
+Step 3 is retained in unsigned commit `64647d8`, with a clean worktree after
+commit and unchanged main/integration refs. Step 4 is active with a fresh
+high-reasoning writer, beginning with the existing summary/control extension
+seams and paired stored-escape and ordinary-value controls.
+
+Step 4's first unchanged witness reaches the publication guard instead of
+rejecting a returned identity-free closure that captures the cell behind an
+internal exact handler. Copied integers, constant closures and closures that
+capture only copied integers provide the paired controls. The implementation
+extends the existing callable summaries with stored dependencies and symbolic
+argument/projection relationships, and the existing finite control engine with
+resource-owner occurrences. It introduces no source capture language or public
+proof carrier. Runtime admission remains closed until Step 5.
+
+The first control tests also cover owner-relative request payloads, safe inner
+discard, outward abandonment, skipped scope completion and recursive scope
+occurrences. The writer reports 22 resource-typing tests and 70 predecessor
+capture/effect tests passing. This remains an incomplete proof boundary.
+
+A bounded design check addressed the next value-summary gap: invoking a
+resource-capturing callback may return a dependency-free constant closure.
+Whole-value dependency sets cannot express that distinction or field selection.
+The selected implementation refinement specializes the existing value graph
+with flat slots keyed by Core site and a context of distinct static call sites.
+A repeated call site folds to an existing context and joins conservatively;
+closure captures and aggregate fields refer to slots, not nested environment
+snapshots or growing projection paths. Every retained context, edge and scan
+must be charged. Required pairs cover storing versus invoking a callback,
+selecting dependent versus independent fields through imports, and two outer
+wrapper calls sharing one inner factory site. Recursive uncertainty cannot
+authorize escape or abandonment; the required recursive positives still apply.
+This design check is not the increment's final semantic or resource review.
+
+Handler value flow uses the same finite context rule with static call and
+request-to-clause dispatch symbols. Context keys never embed request slots or
+prior contexts; a selected event retains its originating result slot only as a
+flat reference. Selected operands flow to clause patterns, resume arguments flow
+back to the suspended request, and resumed computation results flow to the
+resume expression. Known operations select their own clauses. Value closure and
+control-edge discovery alternate until stable before checking safety; bottom,
+resource-free values and opaque uncertainty remain distinct. This retains the
+existing control engine rather than adding a second evaluator.
+
+The imported generic projection witness exposed a publication seam: pure module
+checking skips capture summaries, so a pure helper cannot convey its
+argument-to-result relationship to a resource-bearing importer. Step 4 therefore
+retains data summaries for pure helpers as well. Having a data summary must not
+select Effect execution; the owning lowering family supplies that distinct
+internal dialect fact. Pure execution and erasure remain unchanged. Cover the
+imported projection pair, resource-free pure import/execution, and charged
+summary publication/admission before opening the resource publication boundary.
+
+The mixed-kind callback test also exposed an existing pattern-admission defect.
+A fresh archive of `64647d8` rejects both the resource witness and a resource-free
+tuple/open-row relay with `InvalidPayload`; its unary relay control executes
+`42`. The debugger trace reaches Effect `match_expression`, then `admit_pattern`,
+which hardcodes `allow_effectful = false` for pattern payload types. Result
+admission already uses the owning family's allowance. Include the narrow repair
+that carries this allowance through match-arm/pattern admission, preserving Pure
+rejection, existing work/depth limits and iterative failure ownership. Retain
+both original witnesses, a Pure negative and admission-boundary controls.
+
+The contextual request/resume pair now has writer RED-to-GREEN evidence. The
+joint analysis initially exceeded the unchanged work limit for 24 nested scopes;
+phase measurements located the failure in initial value closure, before control
+discovery. Repeated full scans delayed newly demanded children and revisited
+unrelated slots. A dependent-slot worklist now schedules new slots, edge targets
+and readers of growing facts, including transitive dependency reads. The writer
+reports the existing 32 resource tests and 15 predecessor capture tests passing.
+A new imported-projection request-payload pair still exposes a reachability gap
+after a cell read. This remains active implementation evidence, not completion
+of owner-relative checking or the increment's independent reviews.
+
+The imported-projection request pair subsequently went RED to GREEN after the
+writer distinguished externally undefined method binders from unresolved local
+computations. Treating those external methods as opaque exposed excessive
+control exploration in two valid cases. Read-only tracing identified the missing
+source-analysis seam: ModuleCheck builds lexical method bodies and stages exact
+selections, but method occurrences reference a shared body-free placeholder.
+The graph needs each occurrence's selected method relationship, not a global
+alias by method identity. Borrow staged publication facts without filling source
+slots early; keep the existing evidence audit and atomic publication gates.
+Generic and imported constrained helpers also need their abstract method inputs
+connected to the selected methods at each call. Final Core must continue to
+derive the relationship from its independently authenticated lowered structure.
+
+Parent-owned source fixtures cover a returned closure whose selected lexical
+method captures the cell, paired with copied-integer and constant methods.
+A second pair selects the same method in disjoint evidence blocks and returns
+either the dependent or independent closure. All five reach the publication
+guard on the exact `64647d8` archive, confirming ordinary typing before the new
+lifetime checks. Current implementation outcomes remain to be established.
+
+The direct selected-method bridge passed the writer's 35-test resource suite;
+the parent independently reran that compiled checkpoint with 35 passing tests.
+The copied-integer and constant controls remain admitted to the publication
+guard, and the two earlier work-limit failures disappear when cell methods use
+their actual generated bodies. The writer then passed the disjoint-selection
+and imported constrained-helper pairs using abstract method inputs and
+occurrence-specific callable specialization. Implementation selections and
+their prerequisite adapters remain unfinished source-summary paths.
+
+A further owner-relative recursive pair exposes a limit of folded value contexts.
+At the second recursive entry through one call site, middle and inner scopes
+share the same resource-site/context atom. A callback owned by middle may cross
+inner to a handler still inside middle; a callback owned by inner may not.
+Both source fixtures pass ordinary typing on the exact `64647d8` archive. The
+writer reproduced the incorrect rejection of the inherited callback and retained
+the paired regression. Existing recent/older control frames distinguish those
+occurrences, but the stored dependency has already lost the distinction before
+the owner comparison. An occurrence-provenance refinement is under assessment.
+No shared-key exemption, raised limit or partial publication is authorized.
+
+The bounded refinement uses the existing value/control rules in a focused-owner
+query. At a reachable acquisition entry, retain actual incoming callable,
+aggregate and evidence structure in a pre-focus namespace; those values predate
+the fresh owner. Give the designated body a focus root unavailable to ordinary
+calls, and mark only its handle and identity metadata. Descendant acquisitions
+remain unrelated to that marker, while inherited captures preserve it. Carry
+the focus marker on the actual resource frame occurrence through aging,
+capture and restoration. Check it when that occurrence closes or is crossed.
+Relabeling already-merged slots or replacing known incoming structure with
+unknown values would not establish this proof. Cover all possible designated
+activations and preserve the failing local-payload control. Triggering refinement
+only on ambiguous folded-owner candidates may bound cost; measure it against
+the unchanged work limits and nested-scope corpus before accepting the change.
+This parameterizes the current solver and adds no source lifetime mechanism.
+An absence proof must use converged input facts. Control discovery currently
+checks payloads before the joint value/control revision stabilizes; defer any
+ambiguous-owner acceptance until convergence, or invalidate and rerun it whenever
+the input revision grows. A partially populated entry is not a proof of absence.
+
+Implementation-only modules now retain method body summaries through the same
+private carrier as ordinary globals. Flat transient prerequisite adapters use
+the staged exact evidence graph, with the hidden method binder and ordered head
+arguments followed by the method-local argument suffix. The first direct pair
+passed after adding the hidden binder to enclosing callable inputs; the nested
+pair required those inputs through the prerequisite adapter graph as well. The
+parent independently reran the six-case test successfully. Parent CLI probes
+also pass a nested adapter with a method-local parameter, and the resource-free
+implementation-only import executes 42. These checks do not establish final
+publication, recursive owner precision or executable resource support.
+
+A bounded publication review identified the next atomicity regression: stage a
+valid selected occurrence in an earlier implementation method, then fail capture
+checking in a later method of the same module with no ordinary globals. Assert
+the earlier selection remains unpublished, and use a fresh corrected fixture
+for successful summary publication. The existing ordinary module-failure test
+rejects before staging and cannot establish this later boundary. The parent
+also ran the source-reading ownership scanner: it reports five new unmanifested
+fields and no stale entries; their exact profiles remain part of Step 4's gate.
+
+The expanded non-owner resource checkpoint passes 40 tests and its nested-stack
+child in the parent's independent run; the recursive-owner regression is
+explicitly excluded, not fixed. Executing the method-local nested adapter chain
+then exposed an existing Core validation defect on the exact `64647d8` archive
+and the current build, in both Pure and Effect pipelines. Concrete prerequisite
+validation uses global method-catalog presence to choose whether a nested child
+must have an adapter anchor, although the failing occurrence retains that child
+as a concrete source. Diagnose and repair this exact representation boundary
+without weakening source authentication. Retain the original chain execution,
+paired owning-family and transformed/tampered Core tests, and exact-work/retry
+controls. The simpler Pure adapter control is not evidence for this chain.
+
+The method-only post-staging failure regression now passes in the parent's
+independent run, together with the five-test publication gate and the existing
+pre-staging module-failure test. Bounded diagnosis confirmed that evidence
+construction and lowering already select anchored adapters by method-level
+polymorphism. Matching that predicate in Core validation preserves the two exact
+authentication paths and makes both original chain programs execute 42 in
+parent Pure and Effect CLI runs. It introduces no fallback for a missing required
+polymorphic anchor. Fresh transformed/tampered and exact-budget checks are still
+required before this prerequisite closes.
+
+The parent reran the concrete-source, exact-work and tampering gates, and the
+rebuilt ownership scanner passes its fixed-point check. The broader gate aborted
+in the existing 64 KiB deep capture-equation test, also independently reproduced
+by the parent. GDB identifies the enlarged `Graph::build` entry frame. Extract
+sequential adapter/import construction phases; preserve the exact test, stack,
+work budgets and iterative teardown before continuing owner refinement.
+
+Restored execution needs active request-result and computation slots even when
+an acquisition entry already contains a captured Clause/Event. A finite mapping
+from frozen context IDs to active counterparts can supply those slots, but
+pre-entry lexical reads must remain frozen. Re-running their Alias/Bind
+initializers would recreate old closures and aggregates with active captures and
+reintroduce false owner dependencies. Keep saved creation references separate
+from active execution/result contexts; new mappings and links participate in the
+existing worklist and convergence checks. Retain both the restored recursive
+owner pair and a pre-entry request whose handler acquires a cell and resumes
+with a value later sent outward, paired with copied and constant values.
+
+The graph-construction phase extraction now passes the exact 64 KiB regression
+in the parent's independent rerun, without changed limits. The broader library
+gate is being rerun before focused-owner implementation. For restoration, key
+active roots by frozen context and static continuation cut/role: one old context
+can have incompatible completed-versus-pending roles in folded saved frames.
+Freeze completed child values before `Next.next - 1`, not the in-progress child.
+Use explicit result links into each restored cut's pending slot and enclosing
+result destination. This remains finite static context, not a runtime history or
+nested environment snapshot; ordinary calls cannot manufacture the restore root.
+
+The broader library run completes with 1,040 passes and four budget-test
+failures. Duplicate-route checks now include retained-summary type comparison
+work without changing their exact constraint totals or route snapshots; the
+parent reran the 36-test duplicate gate and cumulative module-budget test
+successfully. The exact `64647d8` archive passes its original cross-stage
+snapshot. The new snapshot adds 90 units at each of four dependent resolution
+stages: 18 retained nominal re-admissions per importer, each charging shape,
+parameter record, Kind and two Origins. Checking, linking and linked-evidence
+validation costs are unchanged. The parent independently reran the corrected
+exact/one-short/fresh-retry gate; the writer then passed all 1,044 library tests.
+
+The pre-entry resume callback that internally handles a generic operation also
+exposes stale solved inference during enclosing-clause row recomputation. A
+resource-free generic-call witness reproduces the same Core-build error on the
+exact `64647d8` archive. Normalize the current handler's emitted suffix, including
+operation metadata, and its output row after all clauses constrain inference
+but before recomputation. Reuse checkpointed type/row rewriting with non-strict
+zonking; preserve genuinely unresolved inference for later checking. Do not
+relax exact instance matching or invoke final whole-builder normalization early.
+The rewrite is progressive, so failure propagates to the existing poisoned or
+discarded builder; only the existing row-recompute rollback is transactional.
+Retain runtime 42, hidden/copy/constant, instance-separation and one-short/fresh
+exact-budget publication tests for this prerequisite.
+
+The bounded normalization is implemented. The parent independently reran the
+resource-free callback execution and wrong-instance rejection, the resource
+hidden/copy/constant callback test, and the exact row-recompute gate
+successfully. The normalization exhaustion/fresh-owner retry test and both
+strengthened nested concrete-source validation tests also pass independently.
+The writer's post-normalization library run passes all 1,045 tests, and the
+non-owner resource source gate passes 44 tests plus its small-stack child.
+
+Owner restoration also needs the completed-function-before-suspending-argument
+pair. A factory creates a function before an operation suspends its argument;
+the clause acquires a resource, recursively revisits the factory with a local
+callback, and resumes. Returning the factory's earlier inherited capture is
+safe; returning the resumed resource-dependent argument must reject. The
+resource-free predecessor executes 42 on the feature and exact `64647d8`
+executables. The safe term-capture resource variant reaches the baseline
+publication guard but currently fails internally in feature control analysis
+when popping an unconsumed clause. Preserve this regression while correcting
+restoration; do not bypass clause consumption or owner checks.
+
+Bounded GDB diagnosis identifies copied older resource-prefix addresses joining
+their original live-clause tail with a rebound consumed-clause tail. Distinguish
+the rebound prefix without rewriting other references to the original live
+prefix. Retain a direct heap test of both references and the passing nonrecursive
+source pair. Static free-input subtraction and frozen completed-value helper
+tests pass independently, as do the compiled 1,047-test library gate and
+44-test non-owner source gate with its small-stack child. The recursive-owner
+source test remains failing; the helper stage is not a completed owner proof.
+
+The first complete query now compiles with acquisition-entry collection,
+convergence-delayed focus queries, marked resource frames and restored result
+ports. The parent reran the 44-test non-owner source gate and its small-stack
+child successfully. The inherited recursive-owner case changes from false
+escape to type-work exhaustion; the writer reports continued escape rejection
+for its local counterpart. The trace reaches control-state copying in a focused
+discovery pass. Each entry query converges after about two passes; repeated
+queries continue through unrelated outer control after the marked owner exits.
+Stop each such path at its marked owner's exit, retaining post-convergence
+body/result checks and all live-owner seeds. Preserve default limits, exact
+work accounting and both closed publication guards.
+
+Owner-exit stopping saves little of the dominant replay cost. Bounded review
+supports retaining exact visited states across value rounds, replaying reached
+calls directly (including bottom targets), and recording every payload-crossing
+obligation for converged checking. That scheduling correction is implemented;
+the parent reran the 44-test non-owner source gate and its small-stack child
+successfully. The inherited query covers more entries but still exhausts the
+unchanged limit. Measure and replace linear context interning with a charged
+exact index over the same flat transition vectors; preserve stable identities,
+folding and distinct seeds, with narrow/wide and exact-boundary tests.
+
+The exact context index passes its focused boundary tests and the original
+recursive-owner source pair under unchanged limits. The parent ran all 46
+source tests and their small-stack child at that checkpoint. A separate fixed
+completion region closes the direct older-prefix alias regression while
+retaining original live-prefix references.
+
+The restored owner pair still exhausted work in repeated normalization of
+unchanged stack/heap successors. Bounded review supports an enqueue tail that
+skips normalization only for call targets, choice children and final sequence
+children with no frame push; all root/stack/heap mutations still normalize.
+The corrected restored pair passes. The parent reran 47 source tests and their
+small-stack child with the completed-factory test explicitly excluded.
+
+The remaining completed-factory failure is false resource escape, not the
+earlier internal control error. Frozen completed values remain intact; shared
+older control addresses mix known outer and descendant contexts, attaching a
+descendant handler's result to the outer resume. Check a finite allocation
+context partition and preserve stable provenance across restoration and
+segment copying. Do not suppress selected result edges or substitute context
+equality for resource-owner proof. Publication and runtime gates remain closed.
+
+Bounded review selects immutable allocation context on all control addresses,
+drawn from existing value-context IDs. Fresh clause addresses use their dispatch
+context; older/copy/consumption operations retain source provenance. Restoring
+execution contexts does not retag allocation addresses. This does not claim to
+separate already-folded recursive contexts; source verification remains pending.
+
+Scalar-successor enqueue equivalence and read-only final dependency gates pass
+independently. A renewed 64 KiB regression comes from the enlarged analysis local
+sharing a caller frame with graph construction. Moving the final control-query
+phase into a helper restores the unchanged test; the parent passes all 22
+capture tests at that helper checkpoint. Whole-increment verification is still
+required after the allocation-context change.
+
+The allocation-context revision fails the original and restored inherited-owner
+controls with type-work exhaustion. Its source gate passes 45 of 47 tests with
+the completed-factory test excluded; that excluded test also exhausts. These
+results supersede earlier source passes for the current revision. Several
+focused queries complete before their cumulative work reaches the unchanged
+limit. A sorted-heap stack-pop path retains exact reachability pruning and
+passes the parent's differential exact/one-short/fresh-retry test, but does not
+resolve the completed-factory exhaustion by itself. Before further product
+changes, review whether coarse candidate-discovery addresses and precise
+focused-query addresses preserve conservative candidate coverage and saved
+continuation inputs. All entry seeds and ownership obligations remain required.
+
+The parent's post-sorting rerun passes 46 of 47 source tests, excluding the
+completed factory: original inherited ownership passes again, while restored
+ownership still exhausts. The current 24 capture tests pass independently.
+Hold phase-local address coarsening until recent-address singleton preservation
+through segment copies is established. Instead, measure per-query reuse of
+fully prepared identical static cuts; every later result-port join remains
+required, including joins that add new dependencies.
+
+Prepared-cut cache hits preserve a later resource-bearing result edge in the
+parent's focused test. Both remaining source controls still exhaust; initial
+cache-publication boundary coverage is pending. The sixth factory query now
+starts at 295,180 charged type-work units, compared with 324,435 before sorting
+and cut reuse. These measurements do not count notional milestone effort.
+
+Review also requires a direct copy-state invariant check: distinct recent
+addresses from different source regions can map to one destination with the
+same site/context. Preserve all alternatives without claiming a singleton;
+no source-level clause omission has yet been reproduced. After the bounded
+corrections, consolidate legacy resource proof into the contextual engine.
+Retain returned-parameter callable-target propagation for resource-free
+predecessors, and make missing resource data/ports fail closed.
+
+The parent passes both initial cut-publication and cache-hit/late-edge exact
+boundaries. A complete source rerun passes 46 of 48 tests, retaining the two
+known work-limit failures. The factory has seven entry states for two candidate
+keys, not an unbounded sequence; the sixth check exhausts before the seventh.
+The mixed-region copy witness went RED to GREEN by marking collided copy
+destinations as older while preserving all tails. Bounded review accepts the
+correction; existing-recent aging and staging preflight checks still need their
+final evidence before legacy dependency consolidation.
+
+The parent passes the consolidated 27-test capture gate, including explicit
+recent-destination aging, older-tail preservation and unchanged stack/work
+boundaries. Copy staging is precharged. Legacy stored/captured dependency fields,
+handle-taint scans and request-payload fallback are removed; callable targets and
+returned-argument substitution remain. Contextual metadata uses a dedicated
+charged variable set. Missing-data/port negatives and the full source rerun
+remain required before accepting this consolidation.
+
+The fresh consolidated source gate remains 46 of 48. Missing-context and
+wide-copy preflight tests pass independently; the present-data/missing-port
+combination still needs explicit coverage. Bounded scheduling review permits
+unchanged-choice suppression only for already-expanded exact call states.
+Preserve first expansion of every new state, late callback propagation and
+joint value convergence. Measure replay cost before implementation, and retain
+all seven factory entry checks.
+
+The parent passes the consolidated 1,059-test library checkpoint and the
+expanded missing-port and returned-callable controls. The proposed call-choice
+cache was not added: its measured saving was only 5,613 units through five
+focused checks. Structural pruning is the larger measured cost; discard the
+invalid `value::close` bucket from the loop-line profiler.
+
+Singleton pop pruning now preserves the full traversal's result by testing only
+whether the old root remains reachable. Multiple-edge and live-capture roots
+retain the full traversal. The parent passes 30 capture tests and 48 of 49
+source tests; both owner pairs pass. Only the factory's seventh check still
+exhausts, starting at 308,995 charged type-work units. Measure one lower-bound
+lookup plus a charged equal-address scan next, preserving all returned edges
+and the unchanged work limit.
+
+The parent passes the edge-range and wider singleton-pop exact tests. A transient
+address-range index inside the remaining full traversal now admits the factory
+without dropping checks: the parent passes all 49 source tests and their
+small-stack child. The index preserves complete equal-address groups and all
+live capture edges, precharges staging and mutates the heap only at final
+retention. Fresh internal index/library verification and the rest of Step 4's
+publication, linking, independent-Core and review requirements remain open;
+runtime execution is still unavailable.
+
+The parent independently passes the fresh 1,062-test library and 51-test source
+gate. Source publication now succeeds only after dependency/control proof.
+Real ordinary-export and implementation-only modules both publish, import and
+link to the separate final Core execution guard. The latter required charged
+canonical ordering of the private method catalog: builtin/source dependency
+order is not identity order. Duplicate rejection and exact identities remain
+unchanged. Full linked-owner, tamper, exact-boundary and independent-Core gates
+remain open before Step 4 review. A bounded same-site dispatch investigation
+found no reachable mismatch and requires no identity redesign.
+
+Fresh parent verification passes 1,064 library tests and 11 Effect module tests,
+including real linked-resource ownership, exact constraint/type boundaries,
+one-short failures, two fresh retries and surplus/detached-owner negatives.
+Mixed-namespace duplicate rejection also passes; bounded semantic review found
+no defect in the private ordering repair. Old source-guard assertions in the
+Core and module suites reproduced the expected migration failures. Their
+correction passes the parent's fresh 63-test resource integration gate and
+unchanged small-stack child. Direct acquisition requires real module-checking
+success; CLI execution retains its separate internal guard.
+
+The parent independently passes real published/linked Core through original,
+identity and folding validation to that guard. Both transforms reject a
+same-typed result substitution that changes a constant closure into one that
+captures the resource. Request-payload tampering, exact real-Core work,
+source-publication atomicity and final reviews remain open. Runtime cells have
+not started; this is not Step 4 closure.
+
+The request-payload variant reaches a predecessor registry-order failure before
+dependency checking. The parent reproduces it with no acquisition: importing
+the cell API plus declaring an ordinary effect fails on both current and Step 3
+baseline, while removing only that import returns `42`. Debugger evidence finds
+the numeric cross-module effect-order predicate incompatible with dependency
+order across builtin/source namespaces. Correct that owning check while keeping
+exact per-module declaration order, duplicates, indexed lookup, sources and
+charged work intact; retain the unchanged payload witness and resource-free
+regression. Do not introduce an identity exception or relax provider authority.
+
+The per-module ordinal correction passes the parent's 1,067-test library,
+including duplicate/gap/reversal and exact-work checks. Bounded semantic review
+supports retaining dependency order and the existing indexed identity checks.
+The parent independently passes the complete real Core result/payload test:
+exact work, original validation, both transforms and same-typed dependency
+tampering. Late source-publication exhaustion leaves an earlier pending
+selection private; exact fresh retries publish. Full focused gates and the
+required final semantic then Rust/resource reviews remain before Step 4 closure.
+
+The frozen full focused gate passes 1,269 tests plus the unchanged small-stack
+child, all 32 architecture checks, strict Clippy and formatting. Fresh semantic
+review nevertheless identifies a strict-readiness rejection bug: match, call
+and tuple result equations retain values from work skipped by safe discard.
+The parent also reproduces the same cause in a primitive operand and nested
+acquisition initializer. Correct readiness through existing value-reader
+wakeups, preserving metadata-only merges and latent closure creation. Retain
+each discard positive and resume/escape negative before semantic re-review;
+Rust/resource review follows only after that finding closes.
+
+Semantic re-review closes the readiness finding. The parent passes the new
+five-shape source/domain checks and all six CLI probes; safe discard reaches
+the final guard and paired resumed dependency escapes still reject. The fresh
+library passes 1,068 tests, with resource Core/module/typing gates at 1/11/53
+plus the unchanged small-stack child. A fresh high-reasoning Rust/resource
+review now owns the frozen snapshot; the corrected full focused gate continues.
+Strict Clippy and formatting pass. No Step 4 commit is authorized by these
+partial review results alone.
+
+The corrected full gate passes 1,271 tests plus the unchanged small-stack child.
+Rust/resource review requires proportional preflight before new value/control
+staging buffers reserve or copy, and iterative ownership for the copied method
+body type across a fallible quantified-parameter clone. Retain wide insufficient-
+staging/exact/retry and deep failure/retry evidence; the review established the
+recursive-drop path, not an observed overflow. Correct these ownership/work
+boundaries without changing semantics, limits or query coverage, then re-review.
+
+The parent independently passes all 57 wide tests after proportional precharges
+at the seven reported staging sites, including six new boundary tests. The
+method-type test now provides an observed pre-fix overflow in an isolated 64 KiB
+child, not merely an inferred drop path. The actual method-root helper retains
+its body in the existing iterative owner through parameter-copy failure; the
+unchanged deep failure and two fresh retries pass. Full corrected gates and
+Rust/resource re-review remain open; Step 4 is not yet committed.
+
+The corrected full focused gate passes 1,278 tests plus the unchanged small-stack
+child, including all 32 architecture checks. Both independent reviews are
+closed; Rust/resource re-review independently passes the 15 relevant tests.
+Strict Clippy, formatting, diff checks, Markdown lint and all five local links
+pass. Step 4 is accepted for an unsigned local commit. The seven prepared
+runtime probes still reach the final execution guard; Step 5 must implement
+cell ownership, exact activation dispatch and release before opening it.

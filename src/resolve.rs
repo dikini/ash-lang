@@ -3974,7 +3974,42 @@ impl Resolver {
                 }
             }
             self.retain_scheme_nominals(&method.scheme, summary, span)?;
+            for ty in method.capture.types(&mut self.type_work).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported implementation capture type scan exceeded its work budget",
+                )
+            })? {
+                self.retain_type_nominals(ty, summary, span)?;
+            }
+            for effect in method.capture.effects(&mut self.type_work).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported implementation capture effect scan exceeded its work budget",
+                )
+            })? {
+                let declaration = summary.effect_by_id(effect).ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "an implementation capture graph references missing effect metadata",
+                    )
+                })?;
+                self.retain_imported_effect(declaration, span)?;
+            }
             methods.push(crate::resolved::CheckedImplementationMethodFact {
+                capture: method
+                    .capture
+                    .clone_with_budget(&mut self.type_work)
+                    .map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "imported implementation capture retention exceeded its work budget",
+                        )
+                    })?,
                 id: method.id,
                 method: method.method,
                 binder: method.binder,
@@ -11610,6 +11645,16 @@ mod tests {
             .id;
         let span = entry.surface().imports[0].span;
 
+        let mut capture_work = TypeWorkBudget::unbounded();
+        assert!(
+            exported
+                .capture
+                .same_with_budget(&exported.capture, &mut capture_work)
+                .unwrap()
+        );
+        let capture_work = capture_work.used();
+        assert!(capture_work > 0);
+
         let snapshot = |resolver: &Resolver| {
             let globals = resolver
                 .imported
@@ -11634,7 +11679,15 @@ mod tests {
             vec![(token, ImportedTypeAccess::Hidden, Vec::new())],
         );
 
-        resolver.type_work = TypeWorkBudget::with_limit(0);
+        resolver.type_work = TypeWorkBudget::with_limit(capture_work - 1);
+        resolver.constraint_work = InterfaceConstraintBudget::with_limit(DUPLICATE_CONSTRAINT_WORK);
+        let error = resolver
+            .retain_imported_global(exported, summary, span)
+            .expect_err("one missing data-summary comparison unit should reject the route");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(snapshot(&resolver), baseline);
+
+        resolver.type_work = TypeWorkBudget::with_limit(capture_work);
         resolver.constraint_work =
             InterfaceConstraintBudget::with_limit(DUPLICATE_CONSTRAINT_WORK - 1);
         let error = resolver
@@ -11645,16 +11698,16 @@ mod tests {
             resolver.constraint_work.used(),
             DUPLICATE_CONSTRAINT_WORK - 1,
         );
-        assert_eq!(resolver.type_work.used(), 0);
+        assert_eq!(resolver.type_work.used(), capture_work);
         assert_eq!(snapshot(&resolver), baseline);
 
-        resolver.type_work = TypeWorkBudget::with_limit(0);
+        resolver.type_work = TypeWorkBudget::with_limit(capture_work);
         resolver.constraint_work = InterfaceConstraintBudget::with_limit(DUPLICATE_CONSTRAINT_WORK);
         resolver
             .retain_imported_global(exported, summary, span)
             .expect("the exact duplicate comparison should retain no second closure");
         assert_eq!(resolver.constraint_work.used(), DUPLICATE_CONSTRAINT_WORK,);
-        assert_eq!(resolver.type_work.used(), 0);
+        assert_eq!(resolver.type_work.used(), capture_work);
         assert_eq!(snapshot(&resolver), baseline);
     }
 
@@ -11701,6 +11754,17 @@ mod tests {
             .next()
             .expect("the dependency should export one implementation");
         let implementation = exported.fact().id;
+        let mut capture_work = TypeWorkBudget::unbounded();
+        for method in &exported.fact().methods {
+            assert!(
+                method
+                    .capture
+                    .same_with_budget(&method.capture, &mut capture_work)
+                    .unwrap()
+            );
+        }
+        let capture_work = capture_work.used();
+        assert!(capture_work > 0);
         let token = summary
             .nominal("Token")
             .expect("the implementation head should retain its nominal")
@@ -11766,7 +11830,16 @@ mod tests {
             public_baseline.1,
             vec![(token, ImportedTypeAccess::Hidden, Vec::new())],
         );
-        duplicate.type_work = TypeWorkBudget::with_limit(0);
+        duplicate.type_work = TypeWorkBudget::with_limit(capture_work - 1);
+        duplicate.constraint_work =
+            InterfaceConstraintBudget::with_limit(PUBLIC_DUPLICATE_CONSTRAINT_WORK);
+        let error = duplicate
+            .retain_imported_implementation_fact(exported, summary, public_selection)
+            .expect_err("one missing method-summary comparison unit should reject the route");
+        assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
+        assert_eq!(snapshot(&duplicate), public_baseline);
+
+        duplicate.type_work = TypeWorkBudget::with_limit(capture_work);
         duplicate.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_DUPLICATE_CONSTRAINT_WORK - 1);
         let error = duplicate
@@ -11777,10 +11850,10 @@ mod tests {
             duplicate.constraint_work.used(),
             PUBLIC_DUPLICATE_CONSTRAINT_WORK - 1,
         );
-        assert_eq!(duplicate.type_work.used(), 0);
+        assert_eq!(duplicate.type_work.used(), capture_work);
         assert_eq!(snapshot(&duplicate), public_baseline);
 
-        duplicate.type_work = TypeWorkBudget::with_limit(0);
+        duplicate.type_work = TypeWorkBudget::with_limit(capture_work);
         duplicate.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_DUPLICATE_CONSTRAINT_WORK);
         duplicate
@@ -11790,7 +11863,7 @@ mod tests {
             duplicate.constraint_work.used(),
             PUBLIC_DUPLICATE_CONSTRAINT_WORK,
         );
-        assert_eq!(duplicate.type_work.used(), 0);
+        assert_eq!(duplicate.type_work.used(), capture_work);
         assert_eq!(snapshot(&duplicate), public_baseline);
 
         let mut promotion = Resolver::new(entry.id());
@@ -11800,7 +11873,7 @@ mod tests {
         let private_baseline = snapshot(&promotion);
         assert!(private_baseline.0[0].2.is_none());
         assert!(private_baseline.4.is_empty());
-        promotion.type_work = TypeWorkBudget::with_limit(0);
+        promotion.type_work = TypeWorkBudget::with_limit(capture_work);
         promotion.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_PROMOTION_CONSTRAINT_WORK - 1);
         let error = promotion
@@ -11811,10 +11884,10 @@ mod tests {
             promotion.constraint_work.used(),
             PUBLIC_PROMOTION_CONSTRAINT_WORK - 1,
         );
-        assert_eq!(promotion.type_work.used(), 0);
+        assert_eq!(promotion.type_work.used(), capture_work);
         assert_eq!(snapshot(&promotion), private_baseline);
 
-        promotion.type_work = TypeWorkBudget::with_limit(0);
+        promotion.type_work = TypeWorkBudget::with_limit(capture_work);
         promotion.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_PROMOTION_CONSTRAINT_WORK);
         promotion
@@ -11824,7 +11897,7 @@ mod tests {
             promotion.constraint_work.used(),
             PUBLIC_PROMOTION_CONSTRAINT_WORK,
         );
-        assert_eq!(promotion.type_work.used(), 0);
+        assert_eq!(promotion.type_work.used(), capture_work);
         let promoted = snapshot(&promotion);
         assert_eq!(promoted.0.len(), 1);
         assert_eq!(promoted.1, private_baseline.1);
@@ -13630,6 +13703,7 @@ mod tests {
                     }]),
                     prerequisites: Box::new([]),
                     methods: Box::new([crate::resolved::CheckedImplementationMethodFact {
+                        capture: crate::core::capture::CaptureValueSummary::default(),
                         id: implementation_method,
                         method,
                         binder: BinderId::resolved(module, 0),

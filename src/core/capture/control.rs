@@ -1,7 +1,7 @@
 //! Finite control positions and continuation occurrences for capture checking.
 //!
-//! An address contains a static frame site, an active or handler/request capture
-//! region, and a recent/older distinction. It never contains a residual, stack,
+//! An address contains a static frame site, an active/capture/completion region,
+//! a finite allocation context, and a recent/older distinction. It never contains a residual, stack,
 //! or request-history identity. Older occurrences join edges; the recent address
 //! denotes one occurrence and permits consumption to move that occurrence.
 //! Live and consumed clauses have separate sites. Ordinary frames save control
@@ -21,8 +21,8 @@ use std::{
 };
 
 use super::{
-    Failure, Request, Substitutions, SummaryGraph, TypeArguments, UnsafeDiscard, Value, charge,
-    same_effect,
+    CompletionOwner, Failure, Request, Substitutions, SummaryGraph, TypeArguments, UnsafeDiscard,
+    Value, charge, same_effect,
 };
 use crate::{
     source::Span,
@@ -48,6 +48,10 @@ pub(super) enum Control {
         effect: Request,
         clauses: Vec<Clause>,
     },
+    Resource {
+        body: usize,
+        effect: Request,
+    },
     Resume {
         owner: usize,
         value: usize,
@@ -61,6 +65,7 @@ pub(super) enum Control {
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Clause {
+    pub(super) operation: Option<crate::types::OperationId>,
     pub(super) body: usize,
     pub(super) owner: usize,
     pub(super) source: Span,
@@ -101,7 +106,7 @@ impl Control {
                 pending.push(*body);
                 pending.extend(clauses.iter().map(|clause| clause.body));
             }
-            Self::Resume { value, .. } => {
+            Self::Resume { value, .. } | Self::Resource { body: value, .. } => {
                 pending.try_reserve(1).map_err(|_| Failure::Resource)?;
                 pending.push(*value);
             }
@@ -132,9 +137,7 @@ impl Control {
             }
             Self::Call { value, ty, source } => {
                 let mut value = value.copy(budget)?;
-                for target in &mut value.targets {
-                    *target += target_offset;
-                }
+                value.relocate(target_offset, budget)?;
                 Self::Call {
                     value,
                     ty: ty + type_offset,
@@ -142,6 +145,10 @@ impl Control {
                 }
             }
             Self::Request(request) => Self::Request(request.copy(budget)?),
+            Self::Resource { body, effect } => Self::Resource {
+                body: body + code_offset,
+                effect: effect.copy(budget)?,
+            },
             Self::Handler {
                 body,
                 effect,
@@ -191,7 +198,10 @@ pub(super) fn query_required(
         }
         seen.try_reserve(1).map_err(|_| Failure::Resource)?;
         seen.insert(code);
-        if matches!(graph.code[code], Control::Discard { .. }) {
+        if matches!(
+            graph.code[code],
+            Control::Discard { .. } | Control::Resource { .. }
+        ) {
             return Ok(true);
         }
         graph.code[code].children(graph, &mut pending, budget)?;
@@ -222,6 +232,7 @@ struct Position {
 enum Site {
     Next(Position),
     Handler(usize),
+    Resource(usize),
     Clause(usize, bool),
 }
 
@@ -229,6 +240,7 @@ enum Site {
 enum Region {
     Active,
     Capture(usize, usize),
+    Completion(usize, usize),
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -238,6 +250,9 @@ enum Address {
     Slot {
         region: Region,
         site: Site,
+        // Saved execution contexts can change on restoration. Allocation
+        // provenance cannot: copying preserves this existing finite value ID.
+        allocation_context: usize,
         old: bool,
     },
 }
@@ -245,9 +260,15 @@ enum Address {
 impl Address {
     fn older(self) -> Self {
         match self {
-            Self::Slot { region, site, .. } => Self::Slot {
+            Self::Slot {
                 region,
                 site,
+                allocation_context,
+                ..
+            } => Self::Slot {
+                region,
+                site,
+                allocation_context,
                 old: true,
             },
             _ => self,
@@ -260,6 +281,7 @@ struct Event {
     code: usize,
     label: usize,
     unknown: bool,
+    port: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -267,27 +289,49 @@ enum Frame {
     Next {
         position: Position,
         context: usize,
+        value_context: usize,
     },
     Handler {
         code: usize,
         context: usize,
+        value_context: usize,
+        capture_context: usize,
+    },
+    Resource {
+        code: usize,
+        context: usize,
+        value_context: usize,
+        focused: bool,
     },
     Clause {
         handler: usize,
         ordinal: usize,
         owner: usize,
         context: usize,
+        value_context: usize,
         capture: Address,
+        capture_context: usize,
+        clause_context: usize,
         event: Event,
         consumed: bool,
     },
 }
 
 impl Frame {
+    fn allocation_context(self) -> usize {
+        match self {
+            Self::Next { value_context, .. }
+            | Self::Handler { value_context, .. }
+            | Self::Resource { value_context, .. } => value_context,
+            Self::Clause { clause_context, .. } => clause_context,
+        }
+    }
+
     fn site(self) -> Site {
         match self {
             Self::Next { position, .. } => Site::Next(position),
             Self::Handler { code, .. } => Site::Handler(code),
+            Self::Resource { code, .. } => Site::Resource(code),
             Self::Clause {
                 owner, consumed, ..
             } => Site::Clause(owner, consumed),
@@ -311,6 +355,7 @@ struct Edge {
 struct State {
     position: Position,
     context: usize,
+    value_context: usize,
     stack: Address,
     heap: Vec<Edge>,
     abandoned: Option<(usize, Event)>,
@@ -318,9 +363,16 @@ struct State {
 
 impl State {
     fn edges(&self, address: Address, budget: &mut TypeWorkBudget) -> Result<&[Edge], Failure> {
-        charge(budget, self.heap.len().max(1).ilog2() as usize * 2 + 1)?;
+        charge(budget, self.heap.len().max(1).ilog2() as usize + 1)?;
         let start = self.heap.partition_point(|edge| edge.address < address);
-        let count = self.heap[start..].partition_point(|edge| edge.address == address);
+        let mut count = 0;
+        for edge in &self.heap[start..] {
+            charge(budget, 1)?;
+            if edge.address != address {
+                break;
+            }
+            count += 1;
+        }
         charge(budget, count)?;
         Ok(&self.heap[start..start + count])
     }
@@ -328,6 +380,7 @@ impl State {
         Ok(Self {
             position: self.position,
             context: self.context,
+            value_context: self.value_context,
             stack: self.stack,
             heap: copy_slice(&self.heap, budget)?,
             abandoned: self.abandoned,
@@ -353,6 +406,7 @@ impl State {
         let address = Address::Slot {
             region: Region::Active,
             site: frame.site(),
+            allocation_context: frame.allocation_context(),
             old: false,
         };
         let mut renaming = HashMap::new();
@@ -381,8 +435,13 @@ impl State {
         region: Region,
         budget: &mut TypeWorkBudget,
     ) -> Result<Address, Failure> {
+        charge(budget, edges.len())?;
         let mut destinations = HashMap::new();
         let mut renaming = HashMap::new();
+        let mut origins = HashMap::new();
+        origins
+            .try_reserve(edges.len())
+            .map_err(|_| Failure::Resource)?;
         destinations
             .try_reserve(edges.len())
             .map_err(|_| Failure::Resource)?;
@@ -390,16 +449,37 @@ impl State {
             .try_reserve(edges.len())
             .map_err(|_| Failure::Resource)?;
         for edge in edges {
-            charge(budget, 1)?;
-            let old = matches!(edge.address, Address::Slot { old: true, .. });
+            let Address::Slot {
+                old,
+                allocation_context,
+                ..
+            } = edge.address
+            else {
+                return Err(Failure::Invalid);
+            };
             let address = Address::Slot {
                 region,
                 site: edge.frame.site(),
+                allocation_context,
                 old,
             };
             destinations.insert(edge.address, address);
             if !old {
+                charge(budget, 1)?;
+                let source = origins.entry(address).or_insert(Some(edge.address));
+                if *source != Some(edge.address) {
+                    *source = None;
+                }
                 renaming.insert(address, address.older());
+            }
+        }
+        // Distinct source regions can collapse to the same copy region. Such
+        // a destination summarizes occurrences; it cannot authorize a recent
+        // singleton's strong completion update.
+        for address in destinations.values_mut() {
+            charge(budget, 1)?;
+            if origins.get(address) == Some(&None) {
+                *address = address.older();
             }
         }
         self.rename(&renaming, budget)?;
@@ -438,6 +518,18 @@ impl State {
         )?;
         self.heap.sort_unstable();
         self.heap.dedup();
+        self.prune_sorted_heap(budget)
+    }
+
+    fn prune_sorted_heap(&mut self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        charge(budget, self.heap.len())?;
+        let mut ranges: HashMap<Address, (usize, usize)> = HashMap::new();
+        ranges
+            .try_reserve(self.heap.len())
+            .map_err(|_| Failure::Resource)?;
+        for (index, edge) in self.heap.iter().enumerate() {
+            ranges.entry(edge.address).or_insert((index, index)).1 = index + 1;
+        }
         let mut reachable = HashSet::new();
         let mut pending = Vec::new();
         pending.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -449,7 +541,10 @@ impl State {
             }
             reachable.try_reserve(1).map_err(|_| Failure::Resource)?;
             reachable.insert(address);
-            for edge in self.edges(address, budget)? {
+            charge(budget, 1)?;
+            let (start, end) = ranges.get(&address).copied().unwrap_or((0, 0));
+            charge(budget, end - start)?;
+            for edge in &self.heap[start..end] {
                 pending.try_reserve(2).map_err(|_| Failure::Resource)?;
                 pending.push(edge.next);
                 if let Frame::Clause {
@@ -464,6 +559,39 @@ impl State {
         }
         charge(budget, self.heap.len())?;
         self.heap.retain(|edge| reachable.contains(&edge.address));
+        Ok(())
+    }
+
+    fn prune_after_pop(
+        &mut self,
+        root: Address,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let edges = self.edges(root, budget)?;
+        if edges.len() != 1
+            || edges[0].next != self.stack
+            || matches!(
+                edges[0].frame,
+                Frame::Clause {
+                    consumed: false,
+                    ..
+                }
+            )
+        {
+            return self.prune_sorted_heap(budget);
+        }
+        // In a normalized graph this sole outgoing edge reached every other
+        // vertex through its tail. Only the popped root can become unreachable.
+        for edge in &self.heap {
+            charge(budget, 1)?;
+            if edge.next == root
+                || matches!(edge.frame, Frame::Clause { capture, consumed: false, .. } if capture == root)
+            {
+                return Ok(());
+            }
+        }
+        charge(budget, self.heap.len())?;
+        self.heap.retain(|edge| edge.address != root);
         Ok(())
     }
 }
@@ -565,6 +693,11 @@ pub(super) struct Analysis<'a> {
     labels: Vec<Request>,
     label_cache: HashMap<(usize, usize), usize>,
     call_cache: HashMap<(usize, usize, usize), usize>,
+    data: Option<super::value::Analysis<'a>>,
+    entries: Vec<State>,
+    candidates: HashSet<(usize, usize)>,
+    focusing: bool,
+    payloads: Vec<(usize, usize, usize)>,
 }
 
 impl<'a> Analysis<'a> {
@@ -572,6 +705,11 @@ impl<'a> Analysis<'a> {
         graph: &'a SummaryGraph,
         budget: &mut TypeWorkBudget,
     ) -> Result<Self, Failure> {
+        charge(budget, graph.code.len())?;
+        let has_resource = graph
+            .code
+            .iter()
+            .any(|code| matches!(code, Control::Resource { .. }));
         let mut types: Vec<&Type> = Vec::new();
         let mut pending = Vec::new();
         pending
@@ -637,6 +775,15 @@ impl<'a> Analysis<'a> {
             labels: Vec::new(),
             label_cache: HashMap::new(),
             call_cache: HashMap::new(),
+            data: if has_resource {
+                Some(graph.data.as_ref().ok_or(Failure::Invalid)?.start(budget)?)
+            } else {
+                None
+            },
+            entries: Vec::new(),
+            candidates: HashSet::new(),
+            focusing: false,
+            payloads: Vec::new(),
         })
     }
 
@@ -732,6 +879,9 @@ impl<'a> Analysis<'a> {
         let request = match &self.graph.code[code] {
             Control::Request(request)
             | Control::Handler {
+                effect: request, ..
+            }
+            | Control::Resource {
                 effect: request, ..
             } => request,
             _ => return Err(Failure::Invalid),
@@ -959,7 +1109,7 @@ impl<'a> Analysis<'a> {
         }
     }
 
-    fn unsafe_discard(&self, code: usize, event: Event, owner: Option<Span>) -> Failure {
+    fn unsafe_discard(&self, code: usize, event: Event, owner: Option<CompletionOwner>) -> Failure {
         let Control::Discard { node, source, .. } = self.graph.code[code] else {
             return Failure::Invalid;
         };
@@ -979,6 +1129,18 @@ impl<'a> Analysis<'a> {
     ) -> Result<(), Failure> {
         let mut state = state;
         state.normalize(budget)?;
+        Self::enqueue_normalized(state, pending, visited, budget)
+    }
+
+    // Scalar control-position/context changes, or the proven pop helper below,
+    // may reuse normalized reachability. Other stack/frame changes and new
+    // roots use enqueue.
+    fn enqueue_normalized(
+        state: State,
+        pending: &mut VecDeque<State>,
+        visited: &mut HashSet<State>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
         charge(budget, state.heap.len() + 1)?;
         if visited.contains(&state) {
             return Ok(());
@@ -991,13 +1153,57 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
+    fn enqueue_after_pop(
+        mut state: State,
+        root: Address,
+        pending: &mut VecDeque<State>,
+        visited: &mut HashSet<State>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        state.prune_after_pop(root, budget)?;
+        Self::enqueue_normalized(state, pending, visited, budget)
+    }
+
     pub(super) fn check(
         &mut self,
         roots: &[usize],
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
+        self.entries.clear();
+        self.candidates.clear();
+        self.payloads.clear();
+        self.discover(roots, None, budget)?;
+        self.check_payloads(budget)?;
+        if let Some(data) = &mut self.data {
+            data.close(budget)?;
+            for candidate in data.resource_candidates(budget)? {
+                charge(budget, 1)?;
+                self.candidates
+                    .try_reserve(1)
+                    .map_err(|_| Failure::Resource)?;
+                self.candidates.insert(candidate);
+            }
+        }
+        self.check_focused_entries(budget)
+    }
+
+    fn discover(
+        &mut self,
+        roots: &[usize],
+        seed: Option<&State>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
         let mut pending = VecDeque::new();
         let mut visited = HashSet::new();
+        let mut calls = Vec::new();
+        let mut observed_calls = HashSet::new();
+        let mut revision = self
+            .data
+            .as_ref()
+            .map_or(0, super::value::Analysis::revision);
+        if let Some(seed) = seed {
+            Self::enqueue(seed.copy(budget)?, &mut pending, &mut visited, budget)?;
+        }
         for root in roots {
             Self::enqueue(
                 State {
@@ -1006,6 +1212,12 @@ impl<'a> Analysis<'a> {
                         next: 0,
                     },
                     context: 0,
+                    value_context: self
+                        .data
+                        .as_ref()
+                        .map(|data| data.root_context(*root, budget))
+                        .transpose()?
+                        .unwrap_or(0),
                     stack: Address::Empty,
                     heap: Vec::new(),
                     abandoned: None,
@@ -1015,174 +1227,471 @@ impl<'a> Analysis<'a> {
                 budget,
             )?;
         }
-        while let Some(state) = pending.pop_front() {
-            charge(budget, 1)?;
-            let code = state.position.code;
-            match &self.graph.code[code] {
-                Control::Return => self.returned(state, &mut pending, &mut visited, budget)?,
-                Control::Sequence(children) => {
-                    let mut ordinal = state.position.next;
-                    while children
-                        .get(ordinal)
-                        .is_some_and(|child| matches!(self.graph.code[*child], Control::Return))
-                    {
-                        charge(budget, 1)?;
-                        ordinal += 1;
-                    }
-                    if let Some(child) = children.get(ordinal).copied() {
-                        let mut next = state;
-                        let position = Position {
-                            code,
-                            next: ordinal + 1,
-                        };
-                        if ordinal + 1 < children.len() {
-                            next.push(
-                                Frame::Next {
-                                    position,
-                                    context: next.context,
-                                },
-                                budget,
-                            )?;
-                        }
-                        next.position = Position {
-                            code: child,
-                            next: 0,
-                        };
-                        Self::enqueue(next, &mut pending, &mut visited, budget)?;
-                    } else {
-                        self.returned(state, &mut pending, &mut visited, budget)?;
-                    }
-                }
-                Control::Choice(children) => {
-                    for child in children {
-                        let mut next = state.copy(budget)?;
-                        next.position = Position {
-                            code: *child,
-                            next: 0,
-                        };
-                        Self::enqueue(next, &mut pending, &mut visited, budget)?;
-                    }
-                }
-                Control::Handler { body, .. } => {
-                    let body = *body;
-                    let mut next = state;
-                    next.push(
-                        Frame::Handler {
-                            code,
-                            context: next.context,
-                        },
-                        budget,
-                    )?;
-                    next.position = Position {
-                        code: body,
-                        next: 0,
-                    };
-                    Self::enqueue(next, &mut pending, &mut visited, budget)?;
-                }
-                Control::Request(_) => {
-                    let label = self.label(code, state.context, budget)?;
-                    self.requested(
-                        &state,
-                        Event {
-                            code,
-                            label,
-                            unknown: false,
-                        },
-                        &mut pending,
-                        &mut visited,
-                        budget,
-                    )?;
-                }
-                Control::Call { value, ty, source } => {
-                    let targets = copy_slice(&value.targets, budget)?;
-                    let unknown = value.unknown || targets.is_empty();
-                    let ty = *ty;
-                    let source = *source;
-                    for target in targets {
-                        let context = self.call_context(code, target, state.context, budget)?;
-                        let mut next = state.copy(budget)?;
-                        next.context = context;
-                        next.position = Position {
-                            code: self.graph.callables[target].body,
-                            next: 0,
-                        };
-                        Self::enqueue(next, &mut pending, &mut visited, budget)?;
-                    }
-                    if unknown {
-                        // The opaque call may return now or request again. No
-                        // uncertainty marker survives its normal return.
-                        self.returned(state.copy(budget)?, &mut pending, &mut visited, budget)?;
-                        let mut ty_owner = TypeArguments(Vec::new());
-                        ty_owner.0.try_reserve(1).map_err(|_| Failure::Resource)?;
-                        ty_owner.0.push(self.substitute(
-                            &self.graph.types.0[ty],
-                            state.context,
-                            budget,
-                        )?);
-                        if let Some(effects) = ty_owner.0[0]
-                            .function_view()
-                            .and_then(|function| function.effects())
+        loop {
+            while let Some(state) = pending.pop_front() {
+                charge(budget, 1)?;
+                let code = state.position.code;
+                match &self.graph.code[code] {
+                    Control::Return => self.returned(state, &mut pending, &mut visited, budget)?,
+                    Control::Sequence(children) => {
+                        let mut ordinal = state.position.next;
+                        while children
+                            .get(ordinal)
+                            .is_some_and(|child| matches!(self.graph.code[*child], Control::Return))
                         {
-                            let mut labels = Vec::new();
-                            for effect in effects.known() {
-                                let request = Request::effect(effect, source, budget)?;
-                                let label = self.intern_label(request, budget)?;
-                                labels.try_reserve(1).map_err(|_| Failure::Resource)?;
-                                labels.push(label);
-                            }
-                            if effects.tail().is_some() {
-                                labels
-                                    .try_reserve(self.contexts[state.context].row.len() + 1)
-                                    .map_err(|_| Failure::Resource)?;
-                                labels.extend(&self.contexts[state.context].row);
-                                if self.contexts[state.context].open {
-                                    let label =
-                                        self.intern_label(Request::unknown(source), budget)?;
-                                    labels.push(label);
-                                }
-                            }
-                            for label in labels {
-                                self.requested(
-                                    &state,
-                                    Event {
-                                        code,
-                                        label,
-                                        unknown: true,
+                            charge(budget, 1)?;
+                            ordinal += 1;
+                        }
+                        if let Some(child) = children.get(ordinal).copied() {
+                            let mut next = state;
+                            let position = Position {
+                                code,
+                                next: ordinal + 1,
+                            };
+                            if ordinal + 1 < children.len() {
+                                next.push(
+                                    Frame::Next {
+                                        position,
+                                        context: next.context,
+                                        value_context: next.value_context,
                                     },
-                                    &mut pending,
-                                    &mut visited,
                                     budget,
                                 )?;
                             }
+                            next.position = Position {
+                                code: child,
+                                next: 0,
+                            };
+                            if ordinal + 1 < children.len() {
+                                Self::enqueue(next, &mut pending, &mut visited, budget)?;
+                            } else {
+                                Self::enqueue_normalized(next, &mut pending, &mut visited, budget)?;
+                            }
+                        } else {
+                            self.returned(state, &mut pending, &mut visited, budget)?;
                         }
                     }
-                }
-                Control::Resume { owner, value } => {
-                    if state.position.next == 0 {
-                        let value = *value;
+                    Control::Choice(children) => {
+                        for child in children {
+                            let mut next = state.copy(budget)?;
+                            next.position = Position {
+                                code: *child,
+                                next: 0,
+                            };
+                            Self::enqueue_normalized(next, &mut pending, &mut visited, budget)?;
+                        }
+                    }
+                    Control::Handler { body, .. } | Control::Resource { body, .. } => {
+                        let body = *body;
                         let mut next = state;
-                        next.push(
-                            Frame::Next {
-                                position: Position { code, next: 1 },
+                        let frame = if matches!(self.graph.code[code], Control::Resource { .. }) {
+                            if !self.focusing {
+                                charge(budget, 1)?;
+                                self.entries.try_reserve(1).map_err(|_| Failure::Resource)?;
+                                self.entries.push(next.copy(budget)?);
+                            }
+                            Frame::Resource {
+                                code,
                                 context: next.context,
-                            },
-                            budget,
-                        )?;
+                                value_context: next.value_context,
+                                focused: false,
+                            }
+                        } else {
+                            Frame::Handler {
+                                code,
+                                context: next.context,
+                                value_context: next.value_context,
+                                capture_context: next.value_context,
+                            }
+                        };
+                        next.push(frame, budget)?;
                         next.position = Position {
-                            code: value,
+                            code: body,
                             next: 0,
                         };
                         Self::enqueue(next, &mut pending, &mut visited, budget)?;
-                    } else {
-                        self.completed(state, *owner, true, &mut pending, &mut visited, budget)?;
+                    }
+                    Control::Request(_) => {
+                        let label = self.label(code, state.context, budget)?;
+                        let port = self
+                            .data
+                            .as_mut()
+                            .map(|data| data.port(code, state.value_context, budget))
+                            .transpose()?;
+                        self.requested(
+                            &state,
+                            Event {
+                                code,
+                                label,
+                                unknown: false,
+                                port,
+                            },
+                            &mut pending,
+                            &mut visited,
+                            budget,
+                        )?;
+                    }
+                    Control::Call { value, ty, source } => {
+                        if self.data.is_some() {
+                            charge(budget, state.heap.len() + 1)?;
+                            if !observed_calls.contains(&state) {
+                                observed_calls
+                                    .try_reserve(1)
+                                    .map_err(|_| Failure::Resource)?;
+                                observed_calls.insert(state.copy(budget)?);
+                                calls.try_reserve(1).map_err(|_| Failure::Resource)?;
+                                calls.push(state.copy(budget)?);
+                            }
+                        }
+                        let super::value::CallSuccessors {
+                            targets,
+                            unknown,
+                            returns,
+                        } = if let Some(data) = &mut self.data {
+                            data.calls(code, state.value_context, budget)?
+                        } else {
+                            charge(budget, value.targets.len())?;
+                            let mut targets = Vec::new();
+                            targets
+                                .try_reserve(value.targets.len())
+                                .map_err(|_| Failure::Resource)?;
+                            targets.extend(value.targets.iter().map(|target| (*target, 0)));
+                            super::value::CallSuccessors {
+                                targets,
+                                unknown: value.unknown || value.targets.is_empty(),
+                                returns: false,
+                            }
+                        };
+                        let ty = *ty;
+                        let source = *source;
+                        for (target, value_context) in targets {
+                            let context = self.call_context(code, target, state.context, budget)?;
+                            let mut next = state.copy(budget)?;
+                            next.context = context;
+                            next.value_context = value_context;
+                            next.position = Position {
+                                code: self.graph.callables[target].body,
+                                next: 0,
+                            };
+                            Self::enqueue_normalized(next, &mut pending, &mut visited, budget)?;
+                        }
+                        if returns || unknown {
+                            // The opaque call may return now or request again. No
+                            // uncertainty marker survives its normal return.
+                            self.returned(state.copy(budget)?, &mut pending, &mut visited, budget)?;
+                        }
+                        if unknown {
+                            let mut ty_owner = TypeArguments(Vec::new());
+                            ty_owner.0.try_reserve(1).map_err(|_| Failure::Resource)?;
+                            ty_owner.0.push(self.substitute(
+                                &self.graph.types.0[ty],
+                                state.context,
+                                budget,
+                            )?);
+                            if let Some(effects) = ty_owner.0[0]
+                                .function_view()
+                                .and_then(|function| function.effects())
+                            {
+                                let mut labels = Vec::new();
+                                for effect in effects.known() {
+                                    let request = Request::effect(effect, source, budget)?;
+                                    let label = self.intern_label(request, budget)?;
+                                    labels.try_reserve(1).map_err(|_| Failure::Resource)?;
+                                    labels.push(label);
+                                }
+                                if effects.tail().is_some() {
+                                    labels
+                                        .try_reserve(self.contexts[state.context].row.len() + 1)
+                                        .map_err(|_| Failure::Resource)?;
+                                    labels.extend(&self.contexts[state.context].row);
+                                    if self.contexts[state.context].open {
+                                        let label =
+                                            self.intern_label(Request::unknown(source), budget)?;
+                                        labels.push(label);
+                                    }
+                                }
+                                for label in labels {
+                                    let port = self
+                                        .data
+                                        .as_mut()
+                                        .map(|data| data.port(code, state.value_context, budget))
+                                        .transpose()?;
+                                    self.requested(
+                                        &state,
+                                        Event {
+                                            code,
+                                            label,
+                                            unknown: true,
+                                            port,
+                                        },
+                                        &mut pending,
+                                        &mut visited,
+                                        budget,
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                    Control::Resume { owner, value } => {
+                        if state.position.next == 0 {
+                            let value = *value;
+                            let mut next = state;
+                            next.push(
+                                Frame::Next {
+                                    position: Position { code, next: 1 },
+                                    context: next.context,
+                                    value_context: next.value_context,
+                                },
+                                budget,
+                            )?;
+                            next.position = Position {
+                                code: value,
+                                next: 0,
+                            };
+                            Self::enqueue(next, &mut pending, &mut visited, budget)?;
+                        } else {
+                            self.completed(
+                                state,
+                                *owner,
+                                true,
+                                &mut pending,
+                                &mut visited,
+                                budget,
+                            )?;
+                        }
+                    }
+                    Control::Discard { owner, .. } => {
+                        self.completed(state, *owner, false, &mut pending, &mut visited, budget)?
                     }
                 }
-                Control::Discard { owner, .. } => {
-                    self.completed(state, *owner, false, &mut pending, &mut visited, budget)?
-                }
+            }
+            let Some(data) = &mut self.data else {
+                break;
+            };
+            data.close(budget)?;
+            if data.revision() == revision {
+                break;
+            }
+            revision = data.revision();
+            // Only calls choose control successors from growing value facts.
+            // Replay them directly; ordinary enqueue would suppress visited states.
+            charge(budget, calls.len())?;
+            pending
+                .try_reserve(calls.len())
+                .map_err(|_| Failure::Resource)?;
+            for call in &calls {
+                pending.push_back(call.copy(budget)?);
             }
         }
         Ok(())
+    }
+
+    fn check_focused_entries(&mut self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        if self.candidates.is_empty() {
+            return Ok(());
+        }
+        let normal = self.data.take().ok_or(Failure::Invalid)?;
+        let entries = std::mem::take(&mut self.entries);
+        let mut covered = HashSet::new();
+        self.focusing = true;
+        let result = (|| {
+            for entry in &entries {
+                let key = normal.resource_key(entry.position.code, entry.value_context, budget)?;
+                charge(budget, 1)?;
+                if !self.candidates.contains(&key) {
+                    continue;
+                }
+                covered.try_reserve(1).map_err(|_| Failure::Resource)?;
+                covered.insert(key);
+                let (query, context) =
+                    normal.focused(entry.position.code, entry.value_context, budget)?;
+                self.data = Some(query);
+                let seed = self.restore_entry(entry, context, budget)?;
+                self.payloads.clear();
+                self.discover(&[], Some(&seed), budget)?;
+                self.check_payloads(budget)?;
+                let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+                data.close(budget)?;
+                data.check_resources(budget)?;
+            }
+            charge(budget, self.candidates.len())?;
+            if self
+                .candidates
+                .iter()
+                .any(|candidate| !covered.contains(candidate))
+            {
+                return Err(Failure::Invalid);
+            }
+            Ok(())
+        })();
+        self.data = Some(normal);
+        self.focusing = false;
+        result
+    }
+
+    fn restore_entry(
+        &mut self,
+        entry: &State,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<State, Failure> {
+        let mut seed = entry.copy(budget)?;
+        let data = self.data.as_mut().ok_or(Failure::Invalid)?;
+        let mut cuts = Vec::new();
+        charge(budget, seed.heap.len())?;
+        cuts.try_reserve(seed.heap.len())
+            .map_err(|_| Failure::Resource)?;
+        for edge in &mut seed.heap {
+            let cut = match &mut edge.frame {
+                Frame::Next {
+                    position,
+                    value_context,
+                    ..
+                } => {
+                    let (pending, completed) = match &self.graph.code[position.code] {
+                        Control::Sequence(children) => {
+                            let pending = position.next.checked_sub(1).ok_or(Failure::Invalid)?;
+                            (
+                                *children.get(pending).ok_or(Failure::Invalid)?,
+                                &children[..pending],
+                            )
+                        }
+                        Control::Resume { value, .. } if position.next == 1 => (*value, &[][..]),
+                        _ => return Err(Failure::Invalid),
+                    };
+                    let cut = data.restore_cut(
+                        *value_context,
+                        position.code,
+                        position.next,
+                        pending,
+                        completed,
+                        false,
+                        budget,
+                    )?;
+                    *value_context = cut.context;
+                    cut
+                }
+                Frame::Handler {
+                    code,
+                    value_context,
+                    ..
+                }
+                | Frame::Resource {
+                    code,
+                    value_context,
+                    ..
+                } => {
+                    let body = match &self.graph.code[*code] {
+                        Control::Handler { body, .. } | Control::Resource { body, .. } => *body,
+                        _ => return Err(Failure::Invalid),
+                    };
+                    let cut = data.restore_cut(
+                        *value_context,
+                        *code,
+                        usize::MAX - 1,
+                        body,
+                        &[],
+                        true,
+                        budget,
+                    )?;
+                    *value_context = cut.context;
+                    cut
+                }
+                Frame::Clause {
+                    handler,
+                    ordinal,
+                    value_context,
+                    clause_context,
+                    event,
+                    ..
+                } => {
+                    let Control::Handler { body, clauses, .. } = &self.graph.code[*handler] else {
+                        return Err(Failure::Invalid);
+                    };
+                    let clause = clauses.get(*ordinal).ok_or(Failure::Invalid)?;
+                    let cut = data.restore_cut(
+                        *clause_context,
+                        clause.body,
+                        usize::MAX - 2,
+                        clause.body,
+                        &[],
+                        true,
+                        budget,
+                    )?;
+                    let handler_cut = data.restore_cut(
+                        *value_context,
+                        *handler,
+                        usize::MAX - 1,
+                        *body,
+                        &[],
+                        true,
+                        budget,
+                    )?;
+                    data.join_ports(handler_cut.result, cut.result, budget)?;
+                    *value_context = handler_cut.context;
+                    *clause_context = cut.context;
+                    if let Some(port) = event.port {
+                        event.port = Some(data.restore_event(port, budget)?);
+                    }
+                    super::value::Cut {
+                        result: handler_cut.result,
+                        ..cut
+                    }
+                }
+            };
+            cuts.push(cut);
+        }
+        // Connect the saved continuation graph by result ports. Reusing old
+        // value-context equality would replay completed calls and acquisitions.
+        for (index, edge) in seed.heap.iter().enumerate() {
+            for (outer, destination) in seed.heap.iter().enumerate() {
+                charge(budget, 1)?;
+                if edge.next == destination.address {
+                    data.join_ports(cuts[outer].input, cuts[index].result, budget)?;
+                }
+            }
+            if let Frame::Clause {
+                capture,
+                event: Event {
+                    port: Some(port), ..
+                },
+                ..
+            } = edge.frame
+            {
+                for (captured, destination) in seed.heap.iter().enumerate() {
+                    charge(budget, 1)?;
+                    if capture == destination.address {
+                        data.join_ports(cuts[captured].input, port, budget)?;
+                    }
+                }
+            }
+        }
+        let result = data.port(entry.position.code, context, budget)?;
+        for (index, edge) in seed.heap.iter().enumerate() {
+            charge(budget, 1)?;
+            if seed.stack == edge.address {
+                data.join_ports(cuts[index].input, result, budget)?;
+            }
+        }
+        let Control::Resource { body, .. } = self.graph.code[entry.position.code] else {
+            return Err(Failure::Invalid);
+        };
+        seed.value_context = context;
+        seed.push(
+            Frame::Resource {
+                code: entry.position.code,
+                context: entry.context,
+                value_context: context,
+                focused: true,
+            },
+            budget,
+        )?;
+        seed.position = Position {
+            code: body,
+            next: 0,
+        };
+        data.close(budget)?;
+        Ok(seed)
     }
 
     fn returned(
@@ -1196,21 +1705,43 @@ impl<'a> Analysis<'a> {
             return Ok(());
         }
         for edge in state.edges(state.stack, budget)? {
+            if self.focusing && matches!(edge.frame, Frame::Resource { focused: true, .. }) {
+                // This query ends with its designated activation. The final
+                // converged body-result check owns the exit obligation; later
+                // caller execution cannot acquire this fresh marker again.
+                continue;
+            }
             let mut next = state.copy(budget)?;
             next.stack = edge.next;
             match edge.frame {
-                Frame::Next { position, context } => {
+                Frame::Next {
+                    position,
+                    context,
+                    value_context,
+                } => {
                     next.position = position;
                     next.context = context;
+                    next.value_context = value_context;
                 }
-                Frame::Handler { context, .. } => {
+                Frame::Handler {
+                    context,
+                    value_context,
+                    ..
+                }
+                | Frame::Resource {
+                    context,
+                    value_context,
+                    ..
+                } => {
                     next.position = Position { code: 0, next: 0 };
                     next.context = context;
+                    next.value_context = value_context;
                 }
                 Frame::Clause {
                     handler,
                     ordinal,
                     context,
+                    value_context,
                     consumed,
                     ..
                 } => {
@@ -1219,17 +1750,21 @@ impl<'a> Analysis<'a> {
                             return Err(Failure::Invalid);
                         };
                         return Err(match state.abandoned {
-                            Some((discard, event)) => {
-                                self.unsafe_discard(discard, event, Some(clauses[ordinal].source))
-                            }
+                            Some((discard, event)) => self.unsafe_discard(
+                                discard,
+                                event,
+                                Some(CompletionOwner::Clause(clauses[ordinal].source)),
+                            ),
                             None => Failure::Invalid,
                         });
                     }
                     next.position = Position { code: 0, next: 0 };
                     next.context = context;
+                    next.value_context = value_context;
                 }
             }
-            Self::enqueue(next, pending, visited, budget)?;
+            // Popping changes reachability, not the order or contents of edges.
+            Self::enqueue_after_pop(next, state.stack, pending, visited, budget)?;
         }
         Ok(())
     }
@@ -1247,7 +1782,8 @@ impl<'a> Analysis<'a> {
         let mut matching = HashMap::new();
         charge(budget, state.heap.len())?;
         for edge in &state.heap {
-            if let Frame::Handler { code, context } = edge.frame
+            if let Frame::Handler { code, context, .. } | Frame::Resource { code, context, .. } =
+                edge.frame
                 && !matching.contains_key(&(code, context))
             {
                 let label = self.label(code, context, budget)?;
@@ -1261,13 +1797,26 @@ impl<'a> Analysis<'a> {
             state.stack,
             |frame| {
                 Ok(match frame {
-                    Frame::Handler { code, context } => matching[&(code, context)],
+                    Frame::Handler { code, context, .. }
+                    | Frame::Resource { code, context, .. } => matching[&(code, context)],
                     _ => (false, true),
                 })
             },
             budget,
         )?;
         if escaped {
+            if let (Some(data), Some(port)) = (&mut self.data, event.port) {
+                data.external_result(port, budget)?;
+            }
+            let (owners, _) = selections(
+                state,
+                state.stack,
+                |frame| Ok((matches!(frame, Frame::Resource { .. }), true)),
+                budget,
+            )?;
+            for owner in owners {
+                self.check_payload(state, event, &[owner.boundary], budget)?;
+            }
             if event.unknown {
                 Self::enqueue(state.copy(budget)?, pending, visited, budget)?;
             } else {
@@ -1275,9 +1824,21 @@ impl<'a> Analysis<'a> {
             }
         }
         for selected in selected {
+            if matches!(selected.boundary.frame, Frame::Resource { .. }) {
+                if let (Some(data), Some(port)) = (&mut self.data, event.port) {
+                    data.external_result(port, budget)?;
+                }
+                // The trusted interpreter completes this operation without
+                // transferring its operand outside the owning scope.
+                self.returned(state.copy(budget)?, pending, visited, budget)?;
+                continue;
+            }
+            self.check_payload(state, event, &selected.prefix, budget)?;
             let Frame::Handler {
                 code: handler,
                 context,
+                value_context,
+                capture_context,
             } = selected.boundary.frame
             else {
                 return Err(Failure::Invalid);
@@ -1286,6 +1847,27 @@ impl<'a> Analysis<'a> {
                 return Err(Failure::Invalid);
             };
             for (ordinal, clause) in clauses.iter().enumerate() {
+                charge(budget, 1)?;
+                if let Control::Request(request) = &self.graph.code[event.code]
+                    && request.operation.is_some()
+                    && clause.operation.is_some()
+                    && request.operation != clause.operation
+                {
+                    continue;
+                }
+                let clause_context = if let (Some(data), Some(port)) = (&mut self.data, event.port)
+                {
+                    data.dispatch(
+                        port,
+                        handler,
+                        ordinal,
+                        capture_context,
+                        value_context,
+                        budget,
+                    )?
+                } else {
+                    value_context
+                };
                 let mut next = state.copy(budget)?;
                 next.stack = selected.boundary.next;
                 let mut prefix = copy_slice(&selected.prefix, budget)?;
@@ -1298,6 +1880,7 @@ impl<'a> Analysis<'a> {
                     let address = Address::Slot {
                         region: Region::Active,
                         site: Site::Next(position),
+                        allocation_context: state.value_context,
                         old: false,
                     };
                     prefix.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -1306,6 +1889,7 @@ impl<'a> Analysis<'a> {
                         frame: Frame::Next {
                             position,
                             context: state.context,
+                            value_context: state.value_context,
                         },
                         next: state.stack,
                     });
@@ -1327,13 +1911,17 @@ impl<'a> Analysis<'a> {
                         ordinal,
                         owner: clause.owner,
                         context,
+                        value_context,
                         capture,
+                        capture_context,
+                        clause_context,
                         event,
                         consumed: false,
                     },
                     budget,
                 )?;
                 next.context = context;
+                next.value_context = clause_context;
                 next.position = Position {
                     code: clause.body,
                     next: 0,
@@ -1345,7 +1933,7 @@ impl<'a> Analysis<'a> {
     }
 
     fn completed(
-        &self,
+        &mut self,
         state: State,
         owner: usize,
         resume: bool,
@@ -1374,6 +1962,8 @@ impl<'a> Analysis<'a> {
                 capture,
                 event,
                 consumed,
+                handler,
+                value_context,
                 ..
             } = selected.boundary.frame
             else {
@@ -1381,6 +1971,16 @@ impl<'a> Analysis<'a> {
             };
             if consumed {
                 return Err(Failure::Invalid);
+            }
+            if resume && let (Some(data), Some(port)) = (&mut self.data, event.port) {
+                data.resume(
+                    port,
+                    state.position.code,
+                    state.value_context,
+                    handler,
+                    value_context,
+                    budget,
+                )?;
             }
             if !resume {
                 if event.unknown {
@@ -1396,7 +1996,7 @@ impl<'a> Analysis<'a> {
                                 Frame::Clause {
                                     consumed: false,
                                     ..
-                                }
+                                } | Frame::Resource { .. }
                             ),
                             true,
                         ))
@@ -1404,6 +2004,16 @@ impl<'a> Analysis<'a> {
                     budget,
                 )?;
                 if let Some(live) = live.first() {
+                    if let Frame::Resource { code, .. } = live.boundary.frame {
+                        let Control::Resource { effect, .. } = &self.graph.code[code] else {
+                            return Err(Failure::Invalid);
+                        };
+                        return Err(self.unsafe_discard(
+                            state.position.code,
+                            event,
+                            Some(CompletionOwner::Resource(effect.source)),
+                        ));
+                    }
                     let Frame::Clause {
                         handler, ordinal, ..
                     } = live.boundary.frame
@@ -1416,7 +2026,7 @@ impl<'a> Analysis<'a> {
                     return Err(self.unsafe_discard(
                         state.position.code,
                         event,
-                        Some(clauses[ordinal].source),
+                        Some(CompletionOwner::Clause(clauses[ordinal].source)),
                     ));
                 }
             }
@@ -1439,6 +2049,12 @@ impl<'a> Analysis<'a> {
                     let address = Address::Slot {
                         region: Region::Active,
                         site: selected.boundary.frame.site(),
+                        allocation_context: match selected.boundary.address {
+                            Address::Slot {
+                                allocation_context, ..
+                            } => allocation_context,
+                            _ => return Err(Failure::Invalid),
+                        },
                         old: false,
                     };
                     let mut rename = HashMap::new();
@@ -1462,7 +2078,10 @@ impl<'a> Analysis<'a> {
                         &selected.prefix,
                         Some(selected.boundary),
                         selected.boundary.next,
-                        Region::Active,
+                        // The rebound older prefix must not retain the live
+                        // original prefix's tail. Repeated completions at this
+                        // fixed site still join conservatively within a region.
+                        Region::Completion(state.position.code, owner),
                         budget,
                     )?
                 };
@@ -1504,6 +2123,69 @@ impl<'a> Analysis<'a> {
         }
         Ok(())
     }
+
+    fn check_payload(
+        &mut self,
+        _state: &State,
+        event: Event,
+        crossed: &[Edge],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if let (Some(_), Some(port)) = (&mut self.data, event.port) {
+            for edge in crossed {
+                charge(budget, 1)?;
+                if let Frame::Resource {
+                    code,
+                    value_context,
+                    focused,
+                    ..
+                } = edge.frame
+                {
+                    if self.focusing && !focused {
+                        continue;
+                    }
+                    let payload = (port, code, value_context);
+                    charge(budget, self.payloads.len() + 1)?;
+                    if !self.payloads.contains(&payload) {
+                        self.payloads
+                            .try_reserve(1)
+                            .map_err(|_| Failure::Resource)?;
+                        self.payloads.push(payload);
+                    }
+                }
+            }
+            return Ok(());
+        }
+        for edge in crossed {
+            charge(budget, 1)?;
+            if matches!(edge.frame, Frame::Resource { .. }) {
+                return Err(Failure::Invalid);
+            }
+        }
+        Ok(())
+    }
+
+    fn check_payloads(&mut self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        let Some(data) = &mut self.data else {
+            return Ok(());
+        };
+        for &(port, code, context) in &self.payloads {
+            charge(budget, 1)?;
+            if let Err(failure) = data.check_payload(port, code, context, budget) {
+                if !self.focusing && matches!(failure, Failure::Escape { .. }) {
+                    let candidate = data.resource_key(code, context, budget)?;
+                    charge(budget, 1)?;
+                    self.candidates
+                        .try_reserve(1)
+                        .map_err(|_| Failure::Resource)?;
+                    self.candidates.insert(candidate);
+                } else {
+                    return Err(failure);
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1515,6 +2197,949 @@ mod tests {
         source::{ByteRange, SourceFile},
         types::{ComputationType, EffectId, EffectRow},
     };
+
+    #[test]
+    fn wide_resource_free_call_targets_preflight_and_retry_exactly() {
+        const WIDTH: usize = 128;
+        let source = SourceFile::new("wide-targets", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let ty = || Type::Function(Box::new(Type::Unit), Box::new(Type::Unit));
+        let graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: vec![Callable {
+                body: 0,
+                ty: ty(),
+                result: Value::default(),
+            }],
+            types: TypeArguments(vec![ty()]),
+            code: vec![
+                Control::Return,
+                Control::Call {
+                    value: Value {
+                        targets: vec![0; WIDTH],
+                        unknown: false,
+                        ..Value::default()
+                    },
+                    ty: 0,
+                    source: span,
+                },
+            ],
+        };
+        let run = |early: bool, budget: &mut TypeWorkBudget| {
+            let mut analysis = Analysis::new(&graph, &mut TypeWorkBudget::unbounded()).unwrap();
+            let outcome = analysis.discover(&[1], None, budget);
+            if early {
+                assert!(
+                    analysis.call_cache.is_empty(),
+                    "target staging must fail before target expansion"
+                );
+            }
+            outcome
+        };
+        for limit in [0, WIDTH - 1] {
+            assert!(matches!(
+                run(true, &mut TypeWorkBudget::with_limit(limit)),
+                Err(Failure::Resource)
+            ));
+        }
+        let mut measured = TypeWorkBudget::unbounded();
+        run(false, &mut measured).unwrap();
+        assert!(matches!(
+            run(false, &mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        for _ in 0..2 {
+            run(false, &mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+        }
+    }
+
+    #[test]
+    fn consuming_an_older_clause_keeps_rebound_and_original_prefixes_separate() {
+        let graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: vec![],
+            types: TypeArguments(vec![]),
+            code: vec![Control::Return],
+        };
+        let run = |budget: &mut TypeWorkBudget| {
+            let resource = Frame::Resource {
+                code: 7,
+                context: 0,
+                value_context: 0,
+                focused: true,
+            };
+            let address = |site| Address::Slot {
+                region: Region::Active,
+                site,
+                allocation_context: 0,
+                old: true,
+            };
+            let root = address(resource.site());
+            let owner = address(Site::Clause(3, false));
+            let retained = address(Site::Clause(9, false));
+            let event = Event {
+                code: 0,
+                label: 0,
+                unknown: false,
+                port: None,
+            };
+            let clause = |id, capture| Frame::Clause {
+                handler: 0,
+                ordinal: 0,
+                owner: id,
+                context: 0,
+                value_context: 0,
+                capture,
+                capture_context: 0,
+                clause_context: 0,
+                event,
+                consumed: false,
+            };
+            let mut state = State {
+                position: Position { code: 0, next: 0 },
+                context: 0,
+                value_context: 0,
+                stack: root,
+                abandoned: None,
+                heap: vec![
+                    Edge {
+                        address: root,
+                        frame: resource,
+                        next: owner,
+                    },
+                    Edge {
+                        address: owner,
+                        frame: clause(3, Address::End),
+                        next: retained,
+                    },
+                    Edge {
+                        address: retained,
+                        frame: clause(9, root),
+                        next: Address::Empty,
+                    },
+                ],
+            };
+            state.normalize(budget)?;
+            let mut pending = VecDeque::new();
+            Analysis::new(&graph, budget)?.completed(
+                state,
+                3,
+                true,
+                &mut pending,
+                &mut HashSet::new(),
+                budget,
+            )?;
+            let rebound = pending.pop_front().unwrap();
+            let (selected, _) = selections(
+                &rebound,
+                rebound.stack,
+                |frame| Ok((matches!(frame, Frame::Clause { owner: 3, .. }), true)),
+                budget,
+            )?;
+            assert!(selected.iter().all(|selection| matches!(
+                selection.boundary.frame,
+                Frame::Clause { consumed: true, .. }
+            )));
+            assert!(
+                rebound
+                    .edges(root, budget)?
+                    .iter()
+                    .any(|edge| edge.next == owner)
+            );
+            assert!(rebound.edges(owner, budget)?.iter().any(|edge| matches!(
+                edge.frame,
+                Frame::Clause {
+                    consumed: false,
+                    ..
+                }
+            )));
+            Ok::<(), Failure>(())
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        run(&mut measured).unwrap();
+        run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+    }
+
+    #[test]
+    fn scalar_successor_reuses_normalized_heap_with_exact_fresh_retry() {
+        let frame = Frame::Resource {
+            code: 7,
+            context: 0,
+            value_context: 0,
+            focused: false,
+        };
+        let root = Address::Slot {
+            region: Region::Active,
+            site: frame.site(),
+            allocation_context: 0,
+            old: false,
+        };
+        let run = |normalize, budget: &mut TypeWorkBudget| {
+            let state = State {
+                position: Position { code: 3, next: 2 },
+                context: 4,
+                value_context: 5,
+                stack: root,
+                heap: vec![Edge {
+                    address: root,
+                    frame,
+                    next: Address::Empty,
+                }],
+                abandoned: None,
+            };
+            let mut pending = VecDeque::new();
+            let mut visited = HashSet::new();
+            if normalize {
+                Analysis::enqueue(state, &mut pending, &mut visited, budget)?;
+            } else {
+                Analysis::enqueue_normalized(state, &mut pending, &mut visited, budget)?;
+            }
+            Ok::<_, Failure>((pending, visited))
+        };
+        let mut full = TypeWorkBudget::unbounded();
+        let expected = run(true, &mut full).unwrap();
+        let mut measured = TypeWorkBudget::unbounded();
+        assert_eq!(run(false, &mut measured).unwrap(), expected);
+        assert!(measured.used() < full.used());
+        assert_eq!(
+            run(false, &mut TypeWorkBudget::with_limit(measured.used())).unwrap(),
+            expected
+        );
+        assert!(matches!(
+            run(false, &mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        assert_eq!(
+            run(false, &mut TypeWorkBudget::with_limit(measured.used())).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn allocation_context_survives_restoration_copy_and_aging() {
+        let run = |budget: &mut TypeWorkBudget| {
+            let frame = |value_context| Frame::Resource {
+                code: 7,
+                context: 0,
+                value_context,
+                focused: false,
+            };
+            let mut state = State {
+                position: Position { code: 0, next: 0 },
+                context: 0,
+                value_context: 0,
+                stack: Address::Empty,
+                heap: Vec::new(),
+                abandoned: None,
+            };
+            state.push(frame(3), budget)?;
+            let first = state.stack;
+            state.push(frame(4), budget)?;
+            assert_ne!(state.stack, first);
+            assert_eq!(
+                state.heap[0].address, first,
+                "another allocation context must not age the first"
+            );
+            state.push(frame(3), budget)?;
+            assert_eq!(state.stack, first);
+            assert!(state.heap.iter().any(|edge| edge.address == first.older()));
+            let mut edge = *state.heap.last().unwrap();
+            if let Frame::Resource { value_context, .. } = &mut edge.frame {
+                *value_context = 99;
+            }
+            let copied = state.copy_segment(
+                first,
+                &[edge],
+                Some(edge),
+                Address::End,
+                Region::Capture(2, 5),
+                budget,
+            )?;
+            assert!(matches!(
+                copied,
+                Address::Slot {
+                    allocation_context: 3,
+                    old: false,
+                    ..
+                }
+            ));
+            state.normalize(budget)?;
+            Ok::<(), Failure>(())
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        run(&mut measured).unwrap();
+        run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+    }
+
+    #[test]
+    fn stack_pop_prunes_sorted_heap_with_exact_fresh_retry() {
+        let run = |sort, budget: &mut TypeWorkBudget| {
+            let frame = Frame::Resource {
+                code: 7,
+                context: 0,
+                value_context: 0,
+                focused: false,
+            };
+            let root = Address::Slot {
+                region: Region::Active,
+                site: frame.site(),
+                allocation_context: 0,
+                old: false,
+            };
+            let unreachable = Address::Slot {
+                region: Region::Active,
+                site: Site::Resource(8),
+                allocation_context: 0,
+                old: false,
+            };
+            let state = State {
+                position: Position { code: 0, next: 0 },
+                context: 0,
+                value_context: 0,
+                stack: root,
+                heap: vec![
+                    Edge {
+                        address: root,
+                        frame,
+                        next: Address::Empty,
+                    },
+                    Edge {
+                        address: unreachable,
+                        frame,
+                        next: root,
+                    },
+                ],
+                abandoned: None,
+            };
+            let mut pending = VecDeque::new();
+            let mut visited = HashSet::new();
+            if sort {
+                Analysis::enqueue(state, &mut pending, &mut visited, budget)?;
+            } else {
+                Analysis::enqueue_after_pop(
+                    state,
+                    unreachable,
+                    &mut pending,
+                    &mut visited,
+                    budget,
+                )?;
+            }
+            assert_eq!(pending[0].heap.len(), 1);
+            Ok::<_, Failure>((pending, visited))
+        };
+        let mut full = TypeWorkBudget::unbounded();
+        let expected = run(true, &mut full).unwrap();
+        let mut measured = TypeWorkBudget::unbounded();
+        assert_eq!(run(false, &mut measured).unwrap(), expected);
+        assert!(measured.used() < full.used());
+        assert_eq!(
+            run(false, &mut TypeWorkBudget::with_limit(measured.used())).unwrap(),
+            expected
+        );
+        assert!(matches!(
+            run(false, &mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        assert_eq!(
+            run(false, &mut TypeWorkBudget::with_limit(measured.used())).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn copying_distinct_recent_regions_never_claims_a_singleton() {
+        let run = |budget: &mut TypeWorkBudget| {
+            let frame = Frame::Resource {
+                code: 7,
+                context: 0,
+                value_context: 3,
+                focused: false,
+            };
+            let address = |region| Address::Slot {
+                region,
+                site: frame.site(),
+                allocation_context: 3,
+                old: false,
+            };
+            let first = address(Region::Active);
+            let second = address(Region::Completion(2, 5));
+            let edges = [
+                Edge {
+                    address: first,
+                    frame,
+                    next: second,
+                },
+                Edge {
+                    address: second,
+                    frame,
+                    next: Address::End,
+                },
+            ];
+            let mut state = State {
+                position: Position { code: 0, next: 0 },
+                context: 0,
+                value_context: 0,
+                stack: Address::Empty,
+                heap: Vec::new(),
+                abandoned: None,
+            };
+            state.stack = state.copy_segment(
+                first,
+                &edges,
+                Some(edges[1]),
+                Address::End,
+                Region::Capture(1, 4),
+                budget,
+            )?;
+            assert!(matches!(state.stack, Address::Slot { old: true, .. }));
+            state.normalize(budget)?;
+            let copied = state.edges(state.stack, budget)?;
+            assert_eq!(copied.len(), 2);
+            assert!(copied.iter().any(|edge| edge.next == state.stack));
+            assert!(copied.iter().any(|edge| edge.next == Address::End));
+            // A second copy joins the existing older destination without
+            // erasing either tail; repeated edges from one source stay recent.
+            state.stack = state.copy_segment(
+                first,
+                &edges,
+                Some(edges[1]),
+                Address::Empty,
+                Region::Capture(1, 4),
+                budget,
+            )?;
+            state.normalize(budget)?;
+            assert_eq!(state.edges(state.stack, budget)?.len(), 3);
+            let recent = state.copy_segment(
+                second,
+                &[edges[1], edges[1]],
+                Some(edges[1]),
+                Address::End,
+                Region::Capture(1, 4),
+                budget,
+            )?;
+            assert!(matches!(recent, Address::Slot { old: false, .. }));
+            state.stack = recent;
+            let merged = state.copy_segment(
+                first,
+                &edges,
+                Some(edges[1]),
+                Address::Empty,
+                Region::Capture(1, 4),
+                budget,
+            )?;
+            assert_eq!(
+                state.stack,
+                recent.older(),
+                "retained recent references must age even when new copies demote"
+            );
+            assert_eq!(merged, state.stack);
+            state.normalize(budget)?;
+            assert_eq!(state.edges(merged, budget)?.len(), 3);
+            Ok::<(), Failure>(())
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        run(&mut measured).unwrap();
+        run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+    }
+
+    #[test]
+    fn resource_proof_requires_contextual_graph_and_payload_ports() {
+        let source = SourceFile::new("missing-resource-data", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let effect = EffectInstance::new(EffectId::new(ModuleId::new(0), 0), Box::new([]));
+        let mut budget = TypeWorkBudget::unbounded();
+        let mut graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: vec![],
+            types: TypeArguments(vec![]),
+            code: vec![
+                Control::Return,
+                Control::Resource {
+                    body: 0,
+                    effect: Request::effect(&effect, span, &mut budget).unwrap(),
+                },
+            ],
+        };
+        assert!(matches!(
+            Analysis::new(&graph, &mut budget),
+            Err(Failure::Invalid)
+        ));
+        graph.code.pop();
+        let mut analysis = Analysis::new(&graph, &mut budget).unwrap();
+        let state = State {
+            position: Position { code: 0, next: 0 },
+            context: 0,
+            value_context: 0,
+            stack: Address::Empty,
+            heap: Vec::new(),
+            abandoned: None,
+        };
+        let crossed = [Edge {
+            address: Address::Empty,
+            frame: Frame::Resource {
+                code: 1,
+                context: 0,
+                value_context: 0,
+                focused: false,
+            },
+            next: Address::Empty,
+        }];
+        for port in [None, Some(0)] {
+            assert!(matches!(
+                analysis.check_payload(
+                    &state,
+                    Event {
+                        code: 0,
+                        label: 0,
+                        unknown: false,
+                        port
+                    },
+                    &crossed,
+                    &mut budget
+                ),
+                Err(Failure::Invalid)
+            ));
+        }
+        let imports = super::super::ImportedCallables::new(&[], 0, &mut budget).unwrap();
+        let data = super::super::value::Graph::build::<crate::core::effect::EffectOperationFamily>(
+            &[],
+            &[],
+            &[],
+            &imports,
+            |_| None,
+            &[],
+            &[],
+            &mut budget,
+        )
+        .unwrap();
+        graph.data = Some(Arc::new(data));
+        graph.code.push(Control::Resource {
+            body: 0,
+            effect: Request::effect(&effect, span, &mut budget).unwrap(),
+        });
+        let mut analysis = Analysis::new(&graph, &mut budget).unwrap();
+        assert!(analysis.data.is_some());
+        assert!(matches!(
+            analysis.check_payload(
+                &state,
+                Event {
+                    code: 0,
+                    label: 0,
+                    unknown: false,
+                    port: None
+                },
+                &crossed,
+                &mut budget
+            ),
+            Err(Failure::Invalid)
+        ));
+    }
+
+    #[test]
+    fn wide_copy_preflights_staging_and_has_an_exact_fresh_boundary() {
+        const WIDTH: usize = 96;
+        let frame = Frame::Resource {
+            code: 7,
+            context: 0,
+            value_context: 3,
+            focused: false,
+        };
+        let address = |site| Address::Slot {
+            region: Region::Completion(site, 5),
+            site: frame.site(),
+            allocation_context: 3,
+            old: false,
+        };
+        let edges: Vec<_> = (0..WIDTH)
+            .map(|index| Edge {
+                address: address(index),
+                frame,
+                next: if index + 1 == WIDTH {
+                    Address::End
+                } else {
+                    address(index + 1)
+                },
+            })
+            .collect();
+        let run = |budget: &mut TypeWorkBudget| {
+            let mut state = State {
+                position: Position { code: 0, next: 0 },
+                context: 0,
+                value_context: 0,
+                stack: Address::Empty,
+                heap: Vec::new(),
+                abandoned: None,
+            };
+            let result = state.copy_segment(
+                address(0),
+                &edges,
+                Some(edges[WIDTH - 1]),
+                Address::End,
+                Region::Capture(1, 4),
+                budget,
+            );
+            if budget.used() == 0 {
+                assert!(state.heap.is_empty());
+            }
+            assert!(matches!(result?, Address::Slot { old: true, .. }));
+            Ok::<(), Failure>(())
+        };
+        for limit in [0, WIDTH - 1] {
+            let mut budget = TypeWorkBudget::with_limit(limit);
+            assert!(matches!(run(&mut budget), Err(Failure::Resource)));
+            assert_eq!(budget.used(), 0);
+        }
+        let mut measured = TypeWorkBudget::unbounded();
+        run(&mut measured).unwrap();
+        run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+    }
+
+    #[test]
+    fn singleton_pop_matches_full_pruning_for_cycles_captures_and_summary_roots() {
+        let event = Event {
+            code: 0,
+            label: 0,
+            unknown: false,
+            port: None,
+        };
+        let resource = |code| Frame::Resource {
+            code,
+            context: 0,
+            value_context: 0,
+            focused: false,
+        };
+        let address = |frame: Frame| Address::Slot {
+            region: Region::Active,
+            site: frame.site(),
+            allocation_context: 0,
+            old: false,
+        };
+        let clause = |owner, capture, consumed| Frame::Clause {
+            handler: 0,
+            ordinal: 0,
+            owner,
+            context: 0,
+            value_context: 0,
+            capture,
+            capture_context: 0,
+            clause_context: 0,
+            event,
+            consumed,
+        };
+        for case in 0..8 {
+            let branch = address(resource(9));
+            let root_frame = if case == 6 {
+                clause(7, branch, false)
+            } else {
+                resource(7)
+            };
+            let root = address(root_frame);
+            let tail_frame = if case == 3 || case == 4 {
+                clause(8, root, case == 4)
+            } else {
+                resource(8)
+            };
+            let tail = address(tail_frame);
+            let mut heap = vec![Edge {
+                address: root,
+                frame: root_frame,
+                next: if case == 1 { root } else { tail },
+            }];
+            if case != 1 {
+                heap.push(Edge {
+                    address: tail,
+                    frame: tail_frame,
+                    next: if case == 2 { root } else { Address::Empty },
+                });
+            }
+            if case == 5 {
+                heap.push(Edge {
+                    address: root,
+                    frame: root_frame,
+                    next: branch,
+                });
+            }
+            if case == 5 || case == 6 {
+                heap.push(Edge {
+                    address: branch,
+                    frame: resource(9),
+                    next: Address::Empty,
+                });
+            }
+            if case == 7 {
+                heap[1].next = address(resource(9));
+                for code in 9..41 {
+                    heap.push(Edge {
+                        address: address(resource(code)),
+                        frame: resource(code),
+                        next: if code == 40 {
+                            Address::Empty
+                        } else {
+                            address(resource(code + 1))
+                        },
+                    });
+                }
+            }
+            let mut state = State {
+                position: Position { code: 0, next: 0 },
+                context: 0,
+                value_context: 0,
+                stack: root,
+                heap,
+                abandoned: None,
+            };
+            state.normalize(&mut TypeWorkBudget::unbounded()).unwrap();
+            state.stack = if case == 1 { root } else { tail };
+            let mut expected = state.copy(&mut TypeWorkBudget::unbounded()).unwrap();
+            let mut full = TypeWorkBudget::unbounded();
+            expected.prune_sorted_heap(&mut full).unwrap();
+            let run = |budget: &mut TypeWorkBudget| {
+                let mut next = state.copy(&mut TypeWorkBudget::unbounded())?;
+                next.prune_after_pop(root, budget)?;
+                assert_eq!(next, expected, "case {case}");
+                Ok::<(), Failure>(())
+            };
+            let mut measured = TypeWorkBudget::unbounded();
+            run(&mut measured).unwrap();
+            if case == 7 {
+                assert!(
+                    measured.used() < full.used(),
+                    "wide chain did not use the singleton fast path"
+                );
+            }
+            run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+            assert!(matches!(
+                run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+                Err(Failure::Resource)
+            ));
+            run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+        }
+    }
+
+    #[test]
+    fn address_ranges_match_two_bounds_with_exact_wide_retry() {
+        let address = |code| Address::Slot {
+            region: Region::Active,
+            site: Site::Resource(code),
+            allocation_context: 0,
+            old: false,
+        };
+        for (length, group) in [(0, 1), (1, 1), (8, 2), (96, 1), (192, 96)] {
+            let heap = (0..length)
+                .map(|index| {
+                    let code = (index / group) * 2 + 2;
+                    Edge {
+                        address: address(code),
+                        frame: Frame::Resource {
+                            code,
+                            context: 0,
+                            value_context: index,
+                            focused: false,
+                        },
+                        next: Address::Empty,
+                    }
+                })
+                .collect();
+            let state = State {
+                position: Position { code: 0, next: 0 },
+                context: 0,
+                value_context: 0,
+                stack: Address::Empty,
+                heap,
+                abandoned: None,
+            };
+            for target in [
+                Address::Empty,
+                Address::End,
+                address(0),
+                address(2),
+                address(3),
+                address(4),
+                address(length * 2 + 4),
+            ] {
+                let start = state.heap.partition_point(|edge| edge.address < target);
+                let count = state.heap[start..].partition_point(|edge| edge.address == target);
+                let expected = &state.heap[start..start + count];
+                let old_work = state.heap.len().max(1).ilog2() as usize * 2 + 1 + count;
+                let run = |budget: &mut TypeWorkBudget| {
+                    assert_eq!(state.edges(target, budget)?, expected);
+                    Ok::<(), Failure>(())
+                };
+                let mut measured = TypeWorkBudget::unbounded();
+                run(&mut measured).unwrap();
+                if group == 1 && length == 96 && count == 1 {
+                    assert!(measured.used() < old_work);
+                }
+                run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+                assert!(matches!(
+                    run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+                    Err(Failure::Resource)
+                ));
+                run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn indexed_pruning_matches_range_walk_for_every_root_and_retries_atomically() {
+        fn reference(state: &mut State, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+            let mut reachable = HashSet::new();
+            let mut pending = vec![state.stack];
+            while let Some(address) = pending.pop() {
+                charge(budget, 1)?;
+                if matches!(address, Address::Empty | Address::End) || reachable.contains(&address)
+                {
+                    continue;
+                }
+                reachable.try_reserve(1).map_err(|_| Failure::Resource)?;
+                reachable.insert(address);
+                for edge in state.edges(address, budget)? {
+                    pending.try_reserve(2).map_err(|_| Failure::Resource)?;
+                    pending.push(edge.next);
+                    if let Frame::Clause {
+                        capture,
+                        consumed: false,
+                        ..
+                    } = edge.frame
+                    {
+                        pending.push(capture);
+                    }
+                }
+            }
+            charge(budget, state.heap.len())?;
+            state.heap.retain(|edge| reachable.contains(&edge.address));
+            Ok(())
+        }
+        let address = |code| Address::Slot {
+            region: Region::Active,
+            site: match code {
+                50 => Site::Clause(50, false),
+                70 => Site::Clause(70, true),
+                _ => Site::Resource(code),
+            },
+            allocation_context: 0,
+            old: code % 2 == 0,
+        };
+        let event = Event {
+            code: 0,
+            label: 0,
+            unknown: false,
+            port: None,
+        };
+        let frame = |code| {
+            if code == 50 || code == 70 {
+                Frame::Clause {
+                    handler: 0,
+                    ordinal: 0,
+                    owner: code,
+                    context: 0,
+                    value_context: 0,
+                    capture: address(if code == 50 { 200 } else { 201 }),
+                    capture_context: 0,
+                    clause_context: 0,
+                    event,
+                    consumed: code == 70,
+                }
+            } else {
+                Frame::Resource {
+                    code,
+                    context: 0,
+                    value_context: 0,
+                    focused: false,
+                }
+            }
+        };
+        let mut heap: Vec<_> = (0..128)
+            .map(|code| Edge {
+                address: address(code),
+                frame: frame(code),
+                next: if code == 127 {
+                    Address::End
+                } else {
+                    address(code + 1)
+                },
+            })
+            .collect();
+        heap.extend([
+            Edge {
+                address: address(6),
+                frame: frame(6),
+                next: address(3),
+            },
+            Edge {
+                address: address(200),
+                frame: frame(200),
+                next: address(200),
+            },
+            Edge {
+                address: address(201),
+                frame: frame(201),
+                next: Address::End,
+            },
+        ]);
+        heap.sort_unstable();
+        for root in (0..128)
+            .chain(200..203)
+            .map(address)
+            .chain([Address::Empty, Address::End])
+        {
+            let state = State {
+                position: Position { code: 0, next: 0 },
+                context: 0,
+                value_context: 0,
+                stack: root,
+                heap: heap.clone(),
+                abandoned: None,
+            };
+            let mut expected = state.copy(&mut TypeWorkBudget::unbounded()).unwrap();
+            let mut old_work = TypeWorkBudget::unbounded();
+            reference(&mut expected, &mut old_work).unwrap();
+            let run = |budget: &mut TypeWorkBudget| {
+                let mut next = state.copy(&mut TypeWorkBudget::unbounded())?;
+                let result = next.prune_sorted_heap(budget);
+                if result.is_err() {
+                    assert_eq!(next.heap, state.heap);
+                }
+                result?;
+                assert_eq!(next, expected);
+                Ok::<(), Failure>(())
+            };
+            let mut measured = TypeWorkBudget::unbounded();
+            run(&mut measured).unwrap();
+            if root == address(0) {
+                assert!(measured.used() < old_work.used());
+            }
+            run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+            assert!(matches!(
+                run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+                Err(Failure::Resource)
+            ));
+            run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+        }
+    }
 
     #[test]
     fn wide_call_context_charges_binding_membership_exactly_and_retries() {
@@ -1534,6 +3159,8 @@ mod tests {
             Box::new(Type::Unit),
         );
         let graph = SummaryGraph {
+            effects: true,
+            data: None,
             callables: vec![Callable {
                 body: 0,
                 ty: formal,
@@ -1544,6 +3171,7 @@ mod tests {
                 value: Value {
                     targets: vec![0],
                     unknown: false,
+                    ..Value::default()
                 },
                 ty: 0,
                 source: span,
@@ -1592,6 +3220,8 @@ mod tests {
                 let effect = EffectInstance::new(EffectId::new(ModuleId::new(0), 0), Box::new([]));
                 let mut preparation = TypeWorkBudget::unbounded();
                 let mut graph = SummaryGraph {
+                    effects: true,
+                    data: None,
                     callables: Vec::new(),
                     types: TypeArguments(Vec::new()),
                     code: vec![
@@ -1615,6 +3245,7 @@ mod tests {
                     body,
                     effect: Request::effect(&effect, span, &mut preparation).unwrap(),
                     clauses: vec![Clause {
+                        operation: None,
                         body: 2,
                         owner: 2,
                         source: span,
@@ -1666,6 +3297,8 @@ mod tests {
         };
         let mut budget = TypeWorkBudget::default();
         let graph = SummaryGraph {
+            effects: true,
+            data: None,
             callables: vec![Callable {
                 body: 0,
                 ty: function(Type::Variable(variable)),
@@ -1678,6 +3311,7 @@ mod tests {
                     value: Value {
                         targets: vec![0],
                         unknown: false,
+                        ..Value::default()
                     },
                     ty: 0,
                     source: span,
@@ -1739,6 +3373,8 @@ mod tests {
             |result| EffectInstance::new(effect, vec![argument(result)].into_boxed_slice());
         let mut budget = TypeWorkBudget::default();
         let graph = SummaryGraph {
+            effects: true,
+            data: None,
             callables: Vec::new(),
             types: TypeArguments(Vec::new()),
             code: Vec::new(),

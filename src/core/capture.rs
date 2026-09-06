@@ -1,16 +1,16 @@
-//! Bounded inference of request-carried obligations from typed Core.
+//! Bounded inference of stored dependencies and request-carried obligations.
 //!
-//! Stored ordinary values carry no obligation. A portable callable summary
-//! retains the complete control graph, including exact handler instances, so
-//! importing and specializing it cannot erase newly matching handlers. This
-//! graph is finite by Core construction. Abandonment queries use finite frame
-//! allocation sites and live/consumed owner occurrences; they run only when
-//! local or retained imported control contains a discard. Resume-only export
-//! needs no abandonment query and publishes no unproved permission.
+//! Portable callable summaries retain finite value and control graphs. Stored
+//! resource dependencies are distinct from completion obligations: copied
+//! scalars are free, while actual closure/aggregate captures retain their owner.
+//! Resource queries run even without discard, and reconstruct one fresh scope
+//! occurrence at a time. Abandonment queries preserve live/consumed completion
+//! owners across selected handler captures and restored continuations.
 
 use std::{collections::HashMap, sync::Arc};
 
 mod control;
+mod value;
 use control::{Analysis, Clause, Control, copy_slice, query_required};
 
 use super::{
@@ -30,6 +30,7 @@ use crate::{
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct Value {
     targets: Vec<usize>,
+    parameters: Vec<usize>,
     unknown: bool,
 }
 
@@ -77,7 +78,7 @@ impl CaptureValueSummary {
     }
 
     pub(crate) fn is_retained(&self) -> bool {
-        self.graph.is_some()
+        self.graph.as_ref().is_some_and(|graph| graph.effects)
     }
 
     pub(crate) fn same_with_budget(
@@ -86,7 +87,7 @@ impl CaptureValueSummary {
         budget: &mut TypeWorkBudget,
     ) -> Result<bool, ()> {
         if self.graph.is_some() || other.graph.is_some() {
-            budget.charge(self.value.targets.len() + other.value.targets.len() + 1)?;
+            budget.charge(self.value.work_size() + other.value.work_size() + 1)?;
         }
         Ok(self == other)
     }
@@ -116,6 +117,9 @@ impl CaptureValueSummary {
                             Control::Request(request)
                             | Control::Handler {
                                 effect: request, ..
+                            }
+                            | Control::Resource {
+                                effect: request, ..
                             } => Some(request),
                             _ => None,
                         })
@@ -142,6 +146,9 @@ impl CaptureValueSummary {
                 Control::Request(request)
                 | Control::Handler {
                     effect: request, ..
+                }
+                | Control::Resource {
+                    effect: request, ..
                 } => request.effect.as_ref().map(|effect| effect.effect()),
                 _ => None,
             }))
@@ -150,9 +157,11 @@ impl CaptureValueSummary {
 
 #[derive(Debug)]
 struct SummaryGraph {
+    effects: bool,
     callables: Vec<Callable>,
     code: Vec<Control>,
     types: TypeArguments,
+    data: Option<Arc<value::Graph>>,
 }
 
 #[derive(Debug)]
@@ -223,9 +232,7 @@ impl<'a> ImportedCallables<'a> {
                 }
             }
             let mut value = summary.value.copy(budget)?;
-            for target in &mut value.targets {
-                *target += offset;
-            }
+            value.relocate(offset, budget)?;
             result
                 .values
                 .try_reserve(1)
@@ -243,7 +250,50 @@ impl<'a> ImportedCallables<'a> {
     }
 }
 impl Value {
+    fn work_size(&self) -> usize {
+        self.targets.len() + self.parameters.len()
+    }
+
+    fn parameter(&mut self, parameter: usize, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        let parameters = &mut self.parameters;
+        charge(budget, parameters.len() + 1)?;
+        if !parameters.contains(&parameter) {
+            parameters.try_reserve(1).map_err(|_| Failure::Resource)?;
+            parameters.push(parameter);
+        }
+        Ok(())
+    }
+
+    fn instantiate(
+        &self,
+        parameter: usize,
+        argument: &Self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, Failure> {
+        let mut result = self.copy(budget)?;
+        charge(budget, result.parameters.len())?;
+        let returns_argument = result.parameters.contains(&parameter);
+        result
+            .parameters
+            .retain(|candidate| *candidate != parameter);
+        if returns_argument {
+            result.join(argument, budget)?;
+        }
+        Ok(result)
+    }
+
+    fn relocate(&mut self, offset: usize, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        charge(budget, self.targets.len() + self.parameters.len())?;
+        for target in self.targets.iter_mut().chain(&mut self.parameters) {
+            *target += offset;
+        }
+        Ok(())
+    }
+
     fn join(&mut self, other: &Self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        for parameter in &other.parameters {
+            self.parameter(*parameter, budget)?;
+        }
         charge(budget, other.targets.len() + 1)?;
         self.unknown |= other.unknown;
         for target in &other.targets {
@@ -272,6 +322,11 @@ impl Value {
         targets.extend_from_slice(&self.targets);
         Ok(Self {
             targets,
+            parameters: if self.parameters.is_empty() {
+                Vec::new()
+            } else {
+                copy_slice(&self.parameters, budget)?
+            },
             unknown: self.unknown,
         })
     }
@@ -283,6 +338,7 @@ struct Request {
     effect: Option<Arc<EffectInstance>>,
     ambiguous_instance: bool,
     source: Span,
+    operation: Option<crate::types::OperationId>,
 }
 
 impl Request {
@@ -291,6 +347,7 @@ impl Request {
             effect: None,
             ambiguous_instance: false,
             source,
+            operation: None,
         }
     }
 
@@ -313,6 +370,7 @@ impl Request {
             effect: self.effect.as_ref().map(Arc::clone),
             ambiguous_instance: self.ambiguous_instance,
             source: self.source,
+            operation: self.operation,
         })
     }
 }
@@ -358,13 +416,55 @@ pub(crate) struct UnsafeDiscard {
     pub(crate) node: usize,
     pub(crate) discard: Span,
     pub(crate) request: Span,
-    pub(crate) owner: Option<Span>,
+    pub(crate) owner: Option<CompletionOwner>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CompletionOwner {
+    Clause(Span),
+    Resource(Span),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct MethodUse {
+    pub(crate) node: NodeId,
+    pub(crate) target: MethodTarget,
+    pub(crate) method: crate::interface::MethodId,
+    pub(crate) requirement: Option<crate::interface::RequirementId>,
+    pub(crate) arguments: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum MethodTarget {
+    Binder(BinderId),
+    Abstract(crate::interface::RequirementId),
+    Adapter { value: usize, binder: BinderId },
+}
+
+pub(crate) struct MethodAdapter {
+    pub(crate) binder: BinderId,
+    pub(crate) head_arguments: Vec<Type>,
+    pub(crate) method_parameters: usize,
+    pub(crate) prerequisites: Vec<(
+        crate::interface::RequirementId,
+        crate::interface::MethodId,
+        MethodTarget,
+    )>,
+    pub(crate) source: Span,
+}
+
+impl Drop for MethodAdapter {
+    fn drop(&mut self) {
+        for argument in self.head_arguments.drain(..) {
+            crate::types::discard_type_iteratively(argument);
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Failure {
     Resource,
-    ResourceProofUnavailable(Span),
+    Escape { source: Span, acquisition: Span },
     Invalid,
     Unsafe(UnsafeDiscard),
 }
@@ -375,6 +475,293 @@ fn charge(budget: &mut TypeWorkBudget, count: usize) -> Result<(), Failure> {
 
 fn index(node: NodeId) -> usize {
     node.value() as usize
+}
+
+// A function retains only referenced values from outside its body. Bindings
+// evaluated when it is called are not part of its stored environment.
+fn free_values_with_methods<F: CoreOperationFamily>(
+    nodes: &[StoredNode<F>],
+    root: usize,
+    parameters: &[BinderId],
+    methods: &[MethodUse],
+    budget: &mut TypeWorkBudget,
+) -> Result<Vec<BinderId>, Failure> {
+    let mut pending = copy_slice(&[root], budget)?;
+    let mut seen = std::collections::HashSet::new();
+    let mut bound = std::collections::HashSet::new();
+    let mut references = Vec::new();
+    charge(budget, parameters.len() + 1)?;
+    bound
+        .try_reserve(parameters.len())
+        .map_err(|_| Failure::Resource)?;
+    bound.extend(parameters);
+    while let Some(id) = pending.pop() {
+        charge(budget, 1)?;
+        seen.try_reserve(1).map_err(|_| Failure::Resource)?;
+        if !seen.insert(id) {
+            continue;
+        }
+        let node = nodes.get(id).ok_or(Failure::Invalid)?;
+        charge(budget, methods.len())?;
+        for method in methods {
+            if index(method.node) == id
+                && method.requirement.is_none()
+                && let MethodTarget::Binder(binder) | MethodTarget::Adapter { binder, .. } =
+                    method.target
+            {
+                references.try_reserve(1).map_err(|_| Failure::Resource)?;
+                references.push(binder);
+            }
+        }
+        let mut binders = Vec::new();
+        let mut failed = false;
+        F::visit_operation_binders(&node.kind, &mut |binder| {
+            if charge(budget, 1).is_err() || binders.try_reserve(1).is_err() {
+                failed = true;
+            } else {
+                binders.push(binder.id());
+            }
+        });
+        if failed {
+            return Err(Failure::Resource);
+        }
+        match F::pure(&node.kind) {
+            Some(PureExprKind::Variable(variable)) => {
+                charge(budget, 1)?;
+                references.try_reserve(1).map_err(|_| Failure::Resource)?;
+                references.push(variable.binder());
+            }
+            Some(PureExprKind::Value(PureValue::Function(function))) => {
+                binders.try_reserve(1).map_err(|_| Failure::Resource)?;
+                binders.push(function.parameter().id());
+            }
+            Some(PureExprKind::Computation(PureComputation::Bind(binding))) => {
+                binders.try_reserve(1).map_err(|_| Failure::Resource)?;
+                binders.push(binding.binder().id());
+            }
+            Some(PureExprKind::Computation(PureComputation::RecursiveBind(binding))) => {
+                charge(budget, binding.members().len())?;
+                binders
+                    .try_reserve(binding.members().len())
+                    .map_err(|_| Failure::Resource)?;
+                binders.extend(binding.members().iter().map(|member| member.binder().id()));
+            }
+            Some(PureExprKind::Computation(PureComputation::Match(matching))) => {
+                for arm in matching.arms() {
+                    for binder in arm.pattern().binder_iter() {
+                        charge(budget, 1)?;
+                        binders.try_reserve(1).map_err(|_| Failure::Resource)?;
+                        binders.push(binder.id());
+                    }
+                }
+            }
+            _ => {}
+        }
+        charge(budget, binders.len() + F::child_count(&node.kind))?;
+        bound
+            .try_reserve(binders.len())
+            .map_err(|_| Failure::Resource)?;
+        bound.extend(binders);
+        seen.try_reserve(F::child_count(&node.kind))
+            .map_err(|_| Failure::Resource)?;
+        pending
+            .try_reserve(F::child_count(&node.kind))
+            .map_err(|_| Failure::Resource)?;
+        for ordinal in 0..F::child_count(&node.kind) {
+            pending.push(index(
+                F::child_at(&node.kind, ordinal).ok_or(Failure::Invalid)?,
+            ));
+        }
+    }
+    charge(budget, references.len())?;
+    references.retain(|binder| !bound.contains(binder));
+    Ok(references)
+}
+
+#[derive(Default)]
+struct MetadataVariables {
+    variables: Vec<TypeVariableId>,
+}
+
+impl MetadataVariables {
+    fn retain(
+        &mut self,
+        identity: TypeVariableId,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, self.variables.len() + 1)?;
+        if !self.variables.contains(&identity) {
+            self.variables
+                .try_reserve(1)
+                .map_err(|_| Failure::Resource)?;
+            self.variables.push(identity);
+        }
+        Ok(())
+    }
+}
+
+fn retain_type_variables(
+    value: &mut MetadataVariables,
+    ty: &Type,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), Failure> {
+    retain_metadata_variables(value, Metadata::Type(ty), budget)
+}
+
+#[derive(Clone, Copy)]
+enum Metadata<'a> {
+    Type(&'a Type),
+    Row(&'a crate::types::EffectRow),
+}
+
+fn retain_row_variables(
+    value: &mut MetadataVariables,
+    row: &crate::types::EffectRow,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), Failure> {
+    retain_metadata_variables(value, Metadata::Row(row), budget)
+}
+
+fn retain_metadata_variables(
+    value: &mut MetadataVariables,
+    root: Metadata<'_>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), Failure> {
+    let mut pending = copy_slice(&[root], budget)?;
+    let mut discovered = MetadataVariables::default();
+    let mut bound = Vec::new();
+    while let Some(metadata) = pending.pop() {
+        charge(budget, 1)?;
+        match metadata {
+            Metadata::Type(Type::Variable(variable)) => discovered.retain(*variable, budget)?,
+            Metadata::Type(Type::Application(left, right) | Type::Function(left, right)) => {
+                pending.try_reserve(2).map_err(|_| Failure::Resource)?;
+                pending.extend([Metadata::Type(left), Metadata::Type(right)]);
+            }
+            Metadata::Type(Type::Tuple(elements)) => {
+                charge(budget, elements.len())?;
+                pending
+                    .try_reserve(elements.len())
+                    .map_err(|_| Failure::Resource)?;
+                pending.extend(elements.iter().map(Metadata::Type));
+            }
+            Metadata::Type(Type::Forall(parameters, body)) => {
+                charge(budget, parameters.len())?;
+                bound
+                    .try_reserve(parameters.len())
+                    .map_err(|_| Failure::Resource)?;
+                bound.extend(parameters.iter().map(|(variable, _)| *variable));
+                pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+                pending.push(Metadata::Type(body));
+            }
+            Metadata::Type(Type::EffectfulFunction(argument, result)) => {
+                pending.try_reserve(3).map_err(|_| Failure::Resource)?;
+                pending.extend([
+                    Metadata::Type(argument),
+                    Metadata::Type(result.value()),
+                    Metadata::Row(result.effects()),
+                ]);
+            }
+            Metadata::Row(row) => {
+                let lacks = if let Some(tail) = row.tail() {
+                    if let crate::types::EffectRowVariable::Rigid(variable) = tail.variable() {
+                        discovered.retain(variable, budget)?;
+                    }
+                    tail.lacks()
+                } else {
+                    &[]
+                };
+                for effect in row.known().iter().chain(lacks) {
+                    charge(budget, 1)?;
+                    pending
+                        .try_reserve(effect.arguments().len())
+                        .map_err(|_| Failure::Resource)?;
+                    pending.extend(effect.arguments().iter().map(Metadata::Type));
+                }
+            }
+            _ => {}
+        }
+    }
+    for variable in discovered.variables {
+        charge(budget, bound.len())?;
+        if !bound.contains(&variable) {
+            value.retain(variable, budget)?;
+        }
+    }
+    Ok(())
+}
+
+fn retain_function_metadata<F: CoreOperationFamily>(
+    value: &mut MetadataVariables,
+    nodes: &[StoredNode<F>],
+    root: usize,
+    operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), Failure> {
+    let mut pending = copy_slice(&[root], budget)?;
+    let mut seen = std::collections::HashSet::new();
+    let mut bound = Vec::new();
+    while let Some(id) = pending.pop() {
+        charge(budget, 1)?;
+        seen.try_reserve(1).map_err(|_| Failure::Resource)?;
+        if !seen.insert(id) {
+            continue;
+        }
+        let node = nodes.get(id).ok_or(Failure::Invalid)?;
+        retain_type_variables(value, &node.ty, budget)?;
+        retain_row_variables(value, F::effect_row(&node.effects), budget)?;
+        match operation(&node.kind) {
+            Some(EffectOperation::Resource(resource)) => {
+                bound.try_reserve(1).map_err(|_| Failure::Resource)?;
+                bound.push(resource.acquisition.identity);
+            }
+            Some(EffectOperation::Handler(handler)) => {
+                for argument in handler.effect().arguments() {
+                    retain_type_variables(value, argument, budget)?;
+                }
+            }
+            _ => {}
+        }
+        if let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
+            F::pure(&node.kind)
+        {
+            charge(budget, abstraction.parameters().len())?;
+            bound
+                .try_reserve(abstraction.parameters().len())
+                .map_err(|_| Failure::Resource)?;
+            bound.extend(
+                abstraction
+                    .parameters()
+                    .iter()
+                    .map(|(variable, _)| *variable),
+            );
+        }
+        if let Some(PureExprKind::Computation(PureComputation::TypeApplication(application))) =
+            F::pure(&node.kind)
+        {
+            for argument in application.arguments() {
+                retain_type_variables(value, argument, budget)?;
+            }
+            for row in application.row_arguments() {
+                retain_row_variables(value, row, budget)?;
+            }
+        }
+        charge(budget, F::child_count(&node.kind))?;
+        pending
+            .try_reserve(F::child_count(&node.kind))
+            .map_err(|_| Failure::Resource)?;
+        for ordinal in 0..F::child_count(&node.kind) {
+            pending.push(index(
+                F::child_at(&node.kind, ordinal).ok_or(Failure::Invalid)?,
+            ));
+        }
+    }
+    charge(
+        budget,
+        value.variables.len().saturating_mul(bound.len() + 1),
+    )?;
+    value.variables.retain(|variable| !bound.contains(variable));
+    Ok(())
 }
 
 fn same_effect(
@@ -405,9 +792,12 @@ fn compile<F: CoreOperationFamily>(
     values: &[Value],
     imported: &ImportedCallables<'_>,
     operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    data: &mut value::Graph,
     budget: &mut TypeWorkBudget,
 ) -> Result<(SummaryGraph, Vec<usize>), Failure> {
     let mut graph = SummaryGraph {
+        effects: F::ALLOWS_EFFECTFUL_TYPES,
+        data: None,
         callables: Vec::new(),
         code: Vec::new(),
         types: TypeArguments(Vec::new()),
@@ -452,9 +842,7 @@ fn compile<F: CoreOperationFamily>(
         }
         for callable in &import.callables {
             let mut result = callable.result.copy(budget)?;
-            for target in &mut result.targets {
-                *target += target_offset;
-            }
+            result.relocate(*target_offset, budget)?;
             graph.callables.push(Callable {
                 body: callable.body + code_offset,
                 ty: clone_type_with_budget(&callable.ty, budget).map_err(|_| Failure::Resource)?,
@@ -528,6 +916,7 @@ fn compile<F: CoreOperationFamily>(
                     );
                     graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
                     sequence.push(graph.code.len());
+                    data.position(graph.code.len(), id, budget)?;
                     graph.code.push(Control::Call {
                         value: values[actual].copy(budget)?,
                         ty,
@@ -538,16 +927,33 @@ fn compile<F: CoreOperationFamily>(
             }
             _ => match operation(&node.kind) {
                 Some(EffectOperation::Resource(resource)) => {
-                    return Err(Failure::ResourceProofUnavailable(resource.acquisition.span));
+                    graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    let scope = graph.code.len();
+                    data.position(scope, id, budget)?;
+                    let mut arguments = Vec::new();
+                    charge(budget, 1)?;
+                    arguments.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    arguments.push(Type::Variable(resource.acquisition.identity));
+                    let effect = EffectInstance::new(
+                        resource.acquisition.api().ok_or(Failure::Invalid)?.ops(),
+                        arguments.into_boxed_slice(),
+                    );
+                    graph.code.push(Control::Resource {
+                        body: index(resource.body) + 1,
+                        effect: Request::effect(&effect, resource.acquisition.span, budget)?,
+                    });
+                    Control::Sequence(copy_slice(
+                        &[index(resource.initializer) + 1, scope],
+                        budget,
+                    )?)
                 }
                 Some(EffectOperation::Request(request)) => {
                     graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
                     let perform = graph.code.len();
-                    graph.code.push(Control::Request(Request::effect(
-                        request.effect(),
-                        source,
-                        budget,
-                    )?));
+                    data.position(perform, id, budget)?;
+                    let mut inferred = Request::effect(request.effect(), source, budget)?;
+                    inferred.operation = Some(request.operation());
+                    graph.code.push(Control::Request(inferred));
                     Control::Sequence(copy_slice(
                         &[index(request.operand()) + 1, perform],
                         budget,
@@ -573,6 +979,7 @@ fn compile<F: CoreOperationFamily>(
                         .map_err(|_| Failure::Resource)?;
                     for clause in handler.clauses() {
                         clauses.push(Clause {
+                            operation: Some(clause.operation()),
                             body: index(clause.body()) + 1,
                             owner: owners[&(handler.id(), clause.resume())],
                             source: clause.origin().primary_span(),
@@ -626,9 +1033,19 @@ pub(crate) fn check_builder<F: CoreOperationFamily>(
     globals: &[(BinderId, NodeId)],
     imports: &[(BinderId, &CaptureValueSummary)],
     operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    methods: &[MethodUse],
+    adapters: &[MethodAdapter],
     budget: &mut TypeWorkBudget,
 ) -> Result<Vec<CaptureValueSummary>, Failure> {
-    check_nodes(&builder.nodes, globals, imports, operation, budget)
+    check_nodes_with_methods(
+        &builder.nodes,
+        globals,
+        imports,
+        operation,
+        methods,
+        adapters,
+        budget,
+    )
 }
 
 pub(super) fn check_nodes<F: CoreOperationFamily>(
@@ -636,6 +1053,18 @@ pub(super) fn check_nodes<F: CoreOperationFamily>(
     globals: &[(BinderId, NodeId)],
     imports: &[(BinderId, &CaptureValueSummary)],
     operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    budget: &mut TypeWorkBudget,
+) -> Result<Vec<CaptureValueSummary>, Failure> {
+    check_nodes_with_methods(nodes, globals, imports, operation, &[], &[], budget)
+}
+
+fn check_nodes_with_methods<F: CoreOperationFamily>(
+    nodes: &[StoredNode<F>],
+    globals: &[(BinderId, NodeId)],
+    imports: &[(BinderId, &CaptureValueSummary)],
+    operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    methods: &[MethodUse],
+    adapters: &[MethodAdapter],
     budget: &mut TypeWorkBudget,
 ) -> Result<Vec<CaptureValueSummary>, Failure> {
     charge(budget, nodes.len() + globals.len())?;
@@ -647,12 +1076,26 @@ pub(super) fn check_nodes<F: CoreOperationFamily>(
     let imported = ImportedCallables::new(imports, nodes.len(), budget)?;
     let mut has_discard = false;
     let mut resource_scope = None;
-    for node in nodes {
+    let mut parameters = HashMap::new();
+    for (id, node) in nodes.iter().enumerate() {
         if let Some(EffectOperation::Resource(resource)) = operation(&node.kind) {
             resource_scope.get_or_insert(resource.acquisition.span);
         }
         has_discard |= matches!(operation(&node.kind), Some(EffectOperation::Discard(_)));
         match F::pure(&node.kind) {
+            Some(PureExprKind::Value(PureValue::Function(function))) => {
+                parameters.try_reserve(1).map_err(|_| Failure::Resource)?;
+                parameters.insert(function.parameter().id(), id);
+            }
+            Some(PureExprKind::Computation(PureComputation::Match(matching))) => {
+                for arm in matching.arms() {
+                    for binder in arm.pattern().binder_iter() {
+                        charge(budget, 1)?;
+                        bindings.try_reserve(1).map_err(|_| Failure::Resource)?;
+                        bindings.insert(binder.id(), index(matching.scrutinee()));
+                    }
+                }
+            }
             Some(PureExprKind::Computation(PureComputation::Bind(binding))) => {
                 bindings.try_reserve(1).map_err(|_| Failure::Resource)?;
                 bindings.insert(binding.binder().id(), index(binding.initializer()));
@@ -670,13 +1113,9 @@ pub(super) fn check_nodes<F: CoreOperationFamily>(
         }
     }
 
-    if let Some(span) = resource_scope {
-        return Err(Failure::ResourceProofUnavailable(span));
-    }
-
     // Resume-only final Core needs no abandonment proof. Module publication
     // still requests roots, because a caller may install a discarding handler.
-    if !has_discard && globals.is_empty() {
+    if !has_discard && resource_scope.is_none() && globals.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -711,6 +1150,10 @@ pub(super) fn check_nodes<F: CoreOperationFamily>(
                             },
                         },
                     };
+                    if let Some(parameter) = parameters.get(&variable.binder()) {
+                        value.unknown = false;
+                        value.parameter(*parameter, budget)?;
+                    }
                 }
                 Some(PureExprKind::Computation(computation)) => match computation {
                     PureComputation::Bind(binding) => {
@@ -731,6 +1174,11 @@ pub(super) fn check_nodes<F: CoreOperationFamily>(
                     PureComputation::NewtypeConversion(conversion) => {
                         value = values[index(conversion.child())].copy(budget)?
                     }
+                    PureComputation::Tuple(tuple) => {
+                        for element in tuple.elements() {
+                            value.join(&values[index(*element)], budget)?;
+                        }
+                    }
                     PureComputation::Match(matching) => {
                         for arm in matching.arms() {
                             value.join(&values[index(arm.body())], budget)?;
@@ -743,9 +1191,12 @@ pub(super) fn check_nodes<F: CoreOperationFamily>(
                             if *target >= nodes.len() {
                                 let (callable, offset) = imported.get(*target, nodes.len())?;
                                 let mut result = callable.result.copy(budget)?;
-                                for target in &mut result.targets {
-                                    *target += offset;
-                                }
+                                result.relocate(offset, budget)?;
+                                result = result.instantiate(
+                                    *target,
+                                    &values[index(application.argument())],
+                                    budget,
+                                )?;
                                 value.join(&result, budget)?;
                                 continue;
                             }
@@ -754,12 +1205,20 @@ pub(super) fn check_nodes<F: CoreOperationFamily>(
                             else {
                                 return Err(Failure::Invalid);
                             };
-                            value.join(&values[index(function.body())], budget)?;
+                            let result = values[index(function.body())].instantiate(
+                                *target,
+                                &values[index(application.argument())],
+                                budget,
+                            )?;
+                            value.join(&result, budget)?;
                         }
                     }
                     _ => {}
                 },
                 _ => match operation(&node.kind) {
+                    Some(EffectOperation::Resource(resource)) => {
+                        value = values[index(resource.body)].copy(budget)?;
+                    }
                     Some(EffectOperation::Handler(handler)) => {
                         value.join(&values[index(handler.body())], budget)?;
                         for clause in handler.clauses() {
@@ -772,7 +1231,7 @@ pub(super) fn check_nodes<F: CoreOperationFamily>(
                     _ => {}
                 },
             }
-            charge(budget, values[id].targets.len() + value.targets.len())?;
+            charge(budget, values[id].work_size() + value.work_size())?;
             if values[id] != value {
                 values[id] = value;
                 changed = true;
@@ -783,23 +1242,12 @@ pub(super) fn check_nodes<F: CoreOperationFamily>(
         }
     }
 
-    let (graph, roots) = compile(nodes, &values, &imported, operation, budget)?;
-    charge(budget, graph.code.len())?;
-    if graph
-        .code
-        .iter()
-        .any(|code| matches!(code, Control::Discard { .. }))
-    {
-        let mut queries = Vec::new();
-        for root in roots {
-            if query_required(&graph, root, budget)? {
-                queries.try_reserve(1).map_err(|_| Failure::Resource)?;
-                queries.push(root);
-            }
-        }
-        let mut analysis = Analysis::new(&graph, budget)?;
-        analysis.check(&queries, budget)?;
-    }
+    let mut data = value::Graph::build(
+        nodes, globals, imports, &imported, operation, methods, adapters, budget,
+    )?;
+    let (mut graph, roots) = compile(nodes, &values, &imported, operation, &mut data, budget)?;
+    graph.data = Some(Arc::new(data));
+    check_control_roots(&graph, roots, budget)?;
     let graph = Arc::new(graph);
     let mut summaries = Vec::new();
     summaries
@@ -814,6 +1262,31 @@ pub(super) fn check_nodes<F: CoreOperationFamily>(
     Ok(summaries)
 }
 
+// Keep solver storage out of the graph-construction caller's stack frame.
+fn check_control_roots(
+    graph: &SummaryGraph,
+    roots: Vec<usize>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), Failure> {
+    charge(budget, graph.code.len())?;
+    if graph
+        .code
+        .iter()
+        .any(|code| matches!(code, Control::Discard { .. } | Control::Resource { .. }))
+    {
+        let mut queries = Vec::new();
+        for root in roots {
+            if query_required(graph, root, budget)? {
+                queries.try_reserve(1).map_err(|_| Failure::Resource)?;
+                queries.push(root);
+            }
+        }
+        let mut analysis = Analysis::new(graph, budget)?;
+        analysis.check(&queries, budget)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -821,6 +1294,33 @@ mod tests {
         source::{ByteRange, SourceFile},
         types::EffectRow,
     };
+
+    #[test]
+    fn stored_metadata_retains_row_tail_and_lacks_but_not_quantified_variables() {
+        let row = TypeVariableId::generated(800);
+        let resource = TypeVariableId::generated(801);
+        let bound = TypeVariableId::generated(802);
+        let effect = crate::types::EffectId::new(crate::module::ModuleId::new(0), 0);
+        let effects = EffectRow::open(
+            crate::types::EffectRowVariable::Rigid(row),
+            Box::new([EffectInstance::new(
+                effect,
+                Box::new([Type::Variable(resource)]),
+            )]),
+        );
+        let ty = Type::Forall(
+            Box::new([(bound, crate::types::Kind::Type)]),
+            Box::new(Type::EffectfulFunction(
+                Box::new(Type::Variable(bound)),
+                Box::new(crate::types::ComputationType::new(Type::Unit, effects)),
+            )),
+        );
+        let mut value = MetadataVariables::default();
+        retain_type_variables(&mut value, &ty, &mut TypeWorkBudget::default()).unwrap();
+        assert!(value.variables.contains(&row));
+        assert!(value.variables.contains(&resource));
+        assert!(!value.variables.contains(&bound));
+    }
 
     fn checked_core() -> (
         super::super::UnvalidatedEffectProgram,
@@ -1172,6 +1672,8 @@ mod tests {
         let origin = Origin::Source(source.span(ByteRange::new(0, 1).unwrap()).unwrap());
         let capture = CaptureValueSummary {
             graph: Some(Arc::new(SummaryGraph {
+                effects: true,
+                data: None,
                 types: TypeArguments(Vec::new()),
                 callables: Vec::new(),
                 code: Vec::new(),
@@ -1179,6 +1681,7 @@ mod tests {
             value: Value {
                 targets: Vec::new(),
                 unknown: true,
+                ..Value::default()
             },
         };
         let exported = ExportedGlobal {
@@ -1207,6 +1710,8 @@ mod tests {
         assert!(!matches(&imported), "unknown cannot be relabeled safe");
         imported.capture.value.unknown = true;
         imported.capture.graph = Some(Arc::new(SummaryGraph {
+            effects: true,
+            data: None,
             types: TypeArguments(Vec::new()),
             callables: Vec::new(),
             code: Vec::new(),
@@ -1238,6 +1743,8 @@ mod tests {
         let entries = code.len();
         let summary = CaptureValueSummary {
             graph: Some(Arc::new(SummaryGraph {
+                effects: true,
+                data: None,
                 callables: Vec::new(),
                 types: TypeArguments(Vec::new()),
                 code,
@@ -1341,6 +1848,17 @@ mod tests {
                     EffectExprKind::Operation(operation) => Some(operation),
                     _ => None,
                 };
+                let mut data = value::Graph::build(
+                    &builder.nodes,
+                    &[],
+                    &[],
+                    &imported,
+                    operation,
+                    &[],
+                    &[],
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .unwrap();
                 // Compilation charges the node carrier and each of these two
                 // nodes before cloning the function type. This boundary used to
                 // exhaust in the following Value copy, before Callable existed.
@@ -1348,15 +1866,40 @@ mod tests {
                     builder.nodes.len() + 1 + builder.nodes.len() + clone_work.used(),
                 );
                 assert!(matches!(
-                    compile(&builder.nodes, &values, &imported, operation, &mut partial),
+                    compile(
+                        &builder.nodes,
+                        &values,
+                        &imported,
+                        operation,
+                        &mut data,
+                        &mut partial
+                    ),
                     Err(Failure::Resource)
                 ));
                 let mut measured = TypeWorkBudget::unbounded();
                 drop(
-                    compile(&builder.nodes, &values, &imported, operation, &mut measured).unwrap(),
+                    compile(
+                        &builder.nodes,
+                        &values,
+                        &imported,
+                        operation,
+                        &mut data,
+                        &mut measured,
+                    )
+                    .unwrap(),
                 );
                 let mut retry = TypeWorkBudget::with_limit(measured.used());
-                drop(compile(&builder.nodes, &values, &imported, operation, &mut retry).unwrap());
+                drop(
+                    compile(
+                        &builder.nodes,
+                        &values,
+                        &imported,
+                        operation,
+                        &mut data,
+                        &mut retry,
+                    )
+                    .unwrap(),
+                );
                 assert_eq!(retry.used(), measured.used());
             })
             .unwrap()
@@ -1397,6 +1940,8 @@ mod tests {
                         &roots,
                         &[],
                         operation,
+                        &[],
+                        &[],
                         &mut TypeWorkBudget::with_limit(128)
                     ),
                     Err(Failure::Resource)
@@ -1406,6 +1951,8 @@ mod tests {
                     &roots,
                     &[],
                     operation,
+                    &[],
+                    &[],
                     &mut TypeWorkBudget::unbounded(),
                 )
                 .unwrap();
@@ -1416,6 +1963,8 @@ mod tests {
                 }
                 let capture = CaptureValueSummary {
                     graph: Some(Arc::new(SummaryGraph {
+                        effects: true,
+                        data: None,
                         types: TypeArguments(Vec::new()),
                         callables: vec![Callable {
                             body: 0,
@@ -1427,6 +1976,7 @@ mod tests {
                     value: Value {
                         targets: vec![0],
                         unknown: false,
+                        ..Value::default()
                     },
                 };
                 assert!(

@@ -543,6 +543,37 @@ pub(crate) struct PendingEvidencePublication {
 }
 
 impl PendingEvidencePublication {
+    pub(crate) fn capture_selection(
+        &self,
+        slot: usize,
+        method: Option<MethodId>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(&EvidenceSelection, usize), SelectionFailure> {
+        budget
+            .charge(self.occurrences.len())
+            .map_err(|()| SelectionFailure::TypeResource)?;
+        let occurrence = self
+            .occurrences
+            .iter()
+            .find(|occurrence| {
+                occurrence
+                    .slot
+                    .as_ref()
+                    .is_some_and(|candidate| candidate.storage_id() == slot)
+            })
+            .ok_or(SelectionFailure::InvalidState)?;
+        if occurrence.checked_method != method {
+            return Err(SelectionFailure::InvalidState);
+        }
+        Ok((
+            occurrence
+                .selection
+                .as_ref()
+                .ok_or(SelectionFailure::InvalidState)?,
+            occurrence.method_arguments.len(),
+        ))
+    }
+
     pub(crate) fn contains_expected(
         &self,
         slot: &crate::interface::EvidenceSlot,
@@ -7024,6 +7055,7 @@ mod tests {
                     }]
                     .into_boxed_slice(),
                     methods: vec![CheckedImplementationMethodFact {
+                        capture: crate::core::capture::CaptureValueSummary::default(),
                         id: implementation_method,
                         method,
                         binder: method_binder,

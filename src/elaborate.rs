@@ -121,7 +121,6 @@ pub enum TypeReason {
     /// A resource-owned rigid identity occurs outside its acquisition.
     ResourceEscape,
     /// Stored resource dependency proof is not available in this increment.
-    ResourceProofUnavailable,
     /// An effect-row union has no unqualified principal result.
     AmbiguousEffectRow,
     /// A handler body does not request the exact handled instance.
@@ -348,7 +347,6 @@ impl fmt::Display for TypeReason {
             }
             Self::LocalNominalEscape => formatter.write_str("type.local-nominal-escape"),
             Self::ResourceEscape => formatter.write_str("type.resource-escape"),
-            Self::ResourceProofUnavailable => formatter.write_str("resource.proof-unavailable"),
             Self::AmbiguousEffectRow => formatter.write_str("effect.row-union-ambiguous"),
             Self::MissingHandledEffect => formatter.write_str("effect.handler-missing-input"),
             Self::HandlerCoverage => formatter.write_str("effect.handler-coverage"),
@@ -1807,6 +1805,10 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     // Addresses identify only immutably borrowed source occurrences during one
     // module synthesis. They are never dereferenced or retained in Core.
     lexical_capture_uses: Vec<LexicalCaptureUse>,
+    method_capture_uses: Vec<(NodeId, usize, MethodId)>,
+    method_capture_binders: Vec<(crate::interface::LexicalEvidenceId, MethodId, BinderId)>,
+    global_capture_uses: Vec<(NodeId, RequirementId, usize)>,
+    implementation_capture_roots: Vec<(BinderId, NodeId)>,
     expected_effect_rows: Vec<EffectRow>,
     next_handler: u32,
 }
@@ -2065,6 +2067,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
             lexical_capture_uses: Vec::new(),
+            method_capture_uses: Vec::new(),
+            method_capture_binders: Vec::new(),
+            global_capture_uses: Vec::new(),
+            implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
         }
@@ -2160,6 +2166,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             base_context,
             active_resumes: Vec::new(),
             lexical_capture_uses: Vec::new(),
+            method_capture_uses: Vec::new(),
+            method_capture_binders: Vec::new(),
+            global_capture_uses: Vec::new(),
+            implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
         })
@@ -2222,6 +2232,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
             lexical_capture_uses: Vec::new(),
+            method_capture_uses: Vec::new(),
+            method_capture_binders: Vec::new(),
+            global_capture_uses: Vec::new(),
+            implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
         };
@@ -2665,6 +2679,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
             lexical_capture_uses: Vec::new(),
+            method_capture_uses: Vec::new(),
+            method_capture_binders: Vec::new(),
+            global_capture_uses: Vec::new(),
+            implementation_capture_roots: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
         })
@@ -2786,7 +2804,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         program: &ValidatedInterfaceProgram,
     ) -> Result<TypedNode, TypeError> {
-        self.lexical_capture_uses.clear();
+        self.clear_capture_uses();
         if self.state == ElaboratorState::Poisoned
             || self.purpose != ElaborationPurpose::FinalSynthesis
             || self.final_root.is_some()
@@ -2794,7 +2812,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             return Err(invalid_state());
         }
         let result = self.elaborate_module_program(program);
-        self.lexical_capture_uses.clear();
+        self.clear_capture_uses();
         match result {
             Ok(typed) => {
                 self.final_root = Some(typed.node);
@@ -2813,7 +2831,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         program: &ValidatedInterfaceProgram,
     ) -> Result<TypedNode, TypeError> {
-        self.lexical_capture_uses.clear();
+        self.clear_capture_uses();
         if self.state == ElaboratorState::Poisoned
             || self.purpose != ElaborationPurpose::FinalSynthesis
             || self.final_root.is_some()
@@ -2824,7 +2842,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             return Err(invalid_state());
         }
         let result = self.elaborate_module_program(program);
-        self.lexical_capture_uses.clear();
+        self.clear_capture_uses();
         match result {
             Ok(typed) => {
                 self.final_root = Some(typed.node);
@@ -2937,7 +2955,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             span: module.span(),
         };
         self.elaborate_result(&result, &mut context)?;
-        if F::EFFECTS {
+        let publication = self.prepare_evidence_publication()?;
+        {
             self.zonk_builder_types().map_err(TypeError::Internal)?;
             self.type_work
                 .charge(globals.len())
@@ -2951,25 +2970,47 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .iter()
                     .map(|global| (global.binder.id(), global.initializer)),
             );
+            self.type_work
+                .charge(self.implementation_capture_roots.len())
+                .map_err(|()| type_resource())?;
+            roots
+                .try_reserve(self.implementation_capture_roots.len())
+                .map_err(|_| type_resource())?;
+            roots.extend_from_slice(&self.implementation_capture_roots);
             let mut imports = Vec::new();
             for global in module.imported_facts().globals() {
                 self.type_work.charge(1).map_err(|()| type_resource())?;
                 imports.try_reserve(1).map_err(|_| type_resource())?;
                 imports.push((global.binder, &global.capture));
             }
+            for implementation in module.imported_facts().implementations() {
+                for method in &implementation.fact.methods {
+                    self.type_work.charge(1).map_err(|()| type_resource())?;
+                    imports.try_reserve(1).map_err(|_| type_resource())?;
+                    imports.push((method.binder, &method.capture));
+                }
+            }
+            let (method_routes, method_adapters) =
+                self.capture_method_routes(&publication, module, &facts.0)?;
             let captures = crate::core::capture::check_builder(
                 &self.builder,
                 &roots,
                 &imports,
                 F::capture_operation,
+                &method_routes,
+                &method_adapters,
                 &mut self.type_work,
             )
-            .map_err(capture_failure)?;
-            if roots.len() != checked_schemes.len() {
+            .map_err(|failure| capture_failure(failure, &mut self.type_work))?;
+            if globals.len() != checked_schemes.len() || captures.len() != roots.len() {
                 return Err(invalid_state());
             }
-            for (((binder, _), capture), scheme) in
-                roots.iter().zip(captures).zip(checked_schemes.iter_mut())
+            let mut captures = captures.into_iter();
+            for (((binder, _), capture), scheme) in roots
+                .iter()
+                .take(globals.len())
+                .zip(captures.by_ref())
+                .zip(checked_schemes.iter_mut())
             {
                 self.type_work.charge(1).map_err(|()| type_resource())?;
                 if scheme.binder != *binder {
@@ -2977,8 +3018,16 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 }
                 scheme.capture = capture;
             }
+            for fact in &mut facts.0 {
+                for method in &mut fact.methods {
+                    self.type_work.charge(1).map_err(|()| type_resource())?;
+                    method.capture = captures.next().ok_or_else(invalid_state)?;
+                }
+            }
+            if captures.next().is_some() {
+                return Err(invalid_state());
+            }
         }
-        let publication = self.prepare_evidence_publication()?;
         Ok((facts.into_boxed_slice(), publication))
     }
 
@@ -3168,7 +3217,31 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 method.type_parameters(),
                 &checked_body.ty,
             )?;
+            let mut root = checked_body.node;
+            let parameters = F::project_parameters(&scheme.type_parameters, &mut self.type_work)
+                .map_err(|()| type_resource())?;
+            if !parameters.is_empty() {
+                let body_type = self.pure_core_type(&checked_body.ty)?;
+                let abstraction_type = retain_implementation_capture_type(
+                    body_type,
+                    &parameters,
+                    &mut self.type_work,
+                )?;
+                root = self.builder.type_abstraction(
+                    parameters,
+                    root,
+                    abstraction_type,
+                    presentation.clone(),
+                )?;
+            }
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            self.implementation_capture_roots
+                .try_reserve(1)
+                .map_err(|_| type_resource())?;
+            self.implementation_capture_roots
+                .push((checked_method.binder, root));
             method_facts.push(CheckedImplementationMethodFact {
+                capture: crate::core::capture::CaptureValueSummary::default(),
                 id: checked_method.id,
                 method: checked_method.method,
                 binder: checked_method.binder,
@@ -3414,6 +3487,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     }
 
     fn zonk_builder_types(&mut self) -> Result<(), ElaborationFailure> {
+        self.zonk_builder_types_since(None, true)
+    }
+
+    fn zonk_builder_types_since(
+        &mut self,
+        checkpoint: Option<crate::core::dialect::TypeRewriteCheckpoint>,
+        strict: bool,
+    ) -> Result<(), ElaborationFailure> {
         if self.builder.requires_type_rewrite() {
             let solutions = &self.inference_solutions;
             let inference_variables = &self.inference_variables;
@@ -3421,7 +3502,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let row_solutions = &self.row_inference_solutions;
             let type_work = RefCell::new(&mut self.type_work);
             self.builder.rewrite_types_and_rows(
-                None,
+                checkpoint,
                 |ty| {
                     zonk_core_type(
                         ty,
@@ -3430,7 +3511,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         inference_variables,
                         authenticated_solutions,
                         &mut type_work.borrow_mut(),
-                        true,
+                        strict,
                     )
                 },
                 |row| {
@@ -3441,7 +3522,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         inference_variables,
                         authenticated_solutions,
                         &mut type_work.borrow_mut(),
-                        true,
+                        strict,
                     )
                 },
             )?;
@@ -4154,6 +4235,289 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
+    fn clear_capture_uses(&mut self) {
+        self.lexical_capture_uses.clear();
+        self.method_capture_uses.clear();
+        self.method_capture_binders.clear();
+        self.global_capture_uses.clear();
+        self.implementation_capture_roots.clear();
+    }
+
+    fn capture_method_routes(
+        &mut self,
+        publication: &PendingEvidencePublication,
+        module: &ResolvedModule,
+        facts: &[CheckedImplementationFact],
+    ) -> Result<
+        (
+            Vec<crate::core::capture::MethodUse>,
+            Vec<crate::core::capture::MethodAdapter>,
+        ),
+        TypeError,
+    > {
+        use crate::core::capture::MethodUse;
+        let mut routes = Vec::new();
+        let mut adapters = Vec::new();
+        for index in 0..self.method_capture_uses.len() {
+            let (node, slot, method) = self.method_capture_uses[index];
+            let (selection, arguments) = publication
+                .capture_selection(slot, Some(method), &mut self.type_work)
+                .map_err(|failure| selection_failure(failure, None))?;
+            let targets = self.capture_selection_targets(
+                selection,
+                Some(method),
+                module,
+                facts,
+                &mut adapters,
+            )?;
+            let [(selected, target)] = targets.as_slice() else {
+                return Err(invalid_state());
+            };
+            if *selected != method {
+                return Err(invalid_state());
+            }
+            routes.try_reserve(1).map_err(|_| type_resource())?;
+            routes.push(MethodUse {
+                node,
+                target: *target,
+                method,
+                requirement: None,
+                arguments,
+            });
+        }
+        for index in 0..self.global_capture_uses.len() {
+            let (node, requirement, slot) = self.global_capture_uses[index];
+            let (selection, _) = publication
+                .capture_selection(slot, None, &mut self.type_work)
+                .map_err(|failure| selection_failure(failure, None))?;
+            for (method, target) in
+                self.capture_selection_targets(selection, None, module, facts, &mut adapters)?
+            {
+                routes.try_reserve(1).map_err(|_| type_resource())?;
+                routes.push(MethodUse {
+                    node,
+                    target,
+                    method,
+                    requirement: Some(requirement),
+                    arguments: 0,
+                });
+            }
+        }
+        Ok((routes, adapters))
+    }
+
+    fn capture_selection_targets(
+        &mut self,
+        selection: &EvidenceSelection,
+        requested: Option<MethodId>,
+        module: &ResolvedModule,
+        facts: &[CheckedImplementationFact],
+        adapters: &mut Vec<crate::core::capture::MethodAdapter>,
+    ) -> Result<Vec<(MethodId, crate::core::capture::MethodTarget)>, TypeError> {
+        use crate::core::capture::{MethodAdapter, MethodTarget};
+        let mut pending = Vec::new();
+        self.type_work
+            .charge(selection.node_count())
+            .map_err(|()| type_resource())?;
+        pending
+            .try_reserve(selection.node_count())
+            .map_err(|_| type_resource())?;
+        pending.push((selection.root(), false));
+        let mut values: HashMap<crate::interface::EvidenceNodeId, Vec<(MethodId, MethodTarget)>> =
+            HashMap::new();
+        values
+            .try_reserve(selection.node_count())
+            .map_err(|_| type_resource())?;
+        while let Some((node, build)) = pending.pop() {
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            if values.contains_key(&node) {
+                continue;
+            }
+            let selected = selection.node(node).ok_or_else(invalid_state)?;
+            if !build && let EvidenceNode::Implementation { prerequisites, .. } = selected {
+                self.type_work
+                    .charge(prerequisites.len() + 1)
+                    .map_err(|()| type_resource())?;
+                pending
+                    .try_reserve(prerequisites.len() + 1)
+                    .map_err(|_| type_resource())?;
+                pending.push((node, true));
+                pending.extend(prerequisites.iter().rev().map(|node| (*node, false)));
+                continue;
+            }
+            let mut targets = Vec::new();
+            let wanted = (node == selection.root()).then_some(requested).flatten();
+            match selected {
+                EvidenceNode::Lexical { methods, .. } | EvidenceNode::Abstract { methods, .. } => {
+                    self.type_work
+                        .charge(methods.len())
+                        .map_err(|()| type_resource())?;
+                    targets
+                        .try_reserve(methods.len())
+                        .map_err(|_| type_resource())?;
+                    for &method in methods {
+                        if wanted.is_some_and(|wanted| wanted != method) {
+                            continue;
+                        }
+                        let target = match selected {
+                            EvidenceNode::Lexical { source, .. } => {
+                                self.type_work
+                                    .charge(self.method_capture_binders.len())
+                                    .map_err(|()| type_resource())?;
+                                MethodTarget::Binder(
+                                    self.method_capture_binders
+                                        .iter()
+                                        .find(|(owner, candidate, _)| {
+                                            *owner == source && *candidate == method
+                                        })
+                                        .ok_or_else(invalid_state)?
+                                        .2,
+                                )
+                            }
+                            EvidenceNode::Abstract { requirement, .. } => {
+                                MethodTarget::Abstract(requirement)
+                            }
+                            _ => return Err(invalid_state()),
+                        };
+                        targets.push((method, target));
+                    }
+                }
+                EvidenceNode::Implementation {
+                    implementation,
+                    substitution,
+                    prerequisites,
+                    methods,
+                } => {
+                    let mut owner = None;
+                    for fact in facts.iter().chain(
+                        module
+                            .imported_facts()
+                            .implementations()
+                            .map(|imported| &imported.fact),
+                    ) {
+                        self.type_work.charge(1).map_err(|()| type_resource())?;
+                        if fact.id == implementation {
+                            owner = Some(fact);
+                            break;
+                        }
+                    }
+                    let owner = owner.ok_or_else(invalid_state)?;
+                    if owner.prerequisites.len() != prerequisites.len() {
+                        return Err(invalid_state());
+                    }
+                    self.type_work
+                        .charge(methods.len())
+                        .map_err(|()| type_resource())?;
+                    targets
+                        .try_reserve(methods.len())
+                        .map_err(|_| type_resource())?;
+                    for &method in methods {
+                        if wanted.is_some_and(|wanted| wanted != method.method()) {
+                            continue;
+                        }
+                        self.type_work
+                            .charge(owner.methods.len())
+                            .map_err(|()| type_resource())?;
+                        let fact = owner
+                            .methods
+                            .iter()
+                            .find(|fact| fact.id == method)
+                            .ok_or_else(invalid_state)?;
+                        if method.implementation() != implementation
+                            || fact.head_type_parameter_count != substitution.len()
+                            || fact.scheme.type_parameters.len() < substitution.len()
+                        {
+                            return Err(invalid_state());
+                        }
+                        let mut adapter = MethodAdapter {
+                            binder: fact.binder,
+                            head_arguments: Vec::new(),
+                            method_parameters: fact.scheme.type_parameters.len()
+                                - substitution.len(),
+                            prerequisites: Vec::new(),
+                            source: fact.span,
+                        };
+                        self.type_work
+                            .charge(substitution.len())
+                            .map_err(|()| type_resource())?;
+                        adapter
+                            .head_arguments
+                            .try_reserve(substitution.len())
+                            .map_err(|_| type_resource())?;
+                        for ((parameter, _), actual) in
+                            fact.scheme.type_parameters.iter().zip(substitution)
+                        {
+                            if *parameter != actual.parameter() {
+                                return Err(invalid_state());
+                            }
+                            adapter
+                                .head_arguments
+                                .push(self.clone_type(actual.argument())?);
+                        }
+                        for (requirement, node) in owner.prerequisites.iter().zip(prerequisites) {
+                            let supplied = values.get(node).ok_or_else(invalid_state)?;
+                            self.type_work
+                                .charge(supplied.len())
+                                .map_err(|()| type_resource())?;
+                            adapter
+                                .prerequisites
+                                .try_reserve(supplied.len())
+                                .map_err(|_| type_resource())?;
+                            adapter.prerequisites.extend(
+                                supplied
+                                    .iter()
+                                    .map(|(method, target)| (requirement.id, *method, *target)),
+                            );
+                        }
+                        self.type_work.charge(1).map_err(|()| type_resource())?;
+                        adapters.try_reserve(1).map_err(|_| type_resource())?;
+                        let target = MethodTarget::Adapter {
+                            value: adapters.len(),
+                            binder: fact.binder,
+                        };
+                        adapters.push(adapter);
+                        targets.push((method.method(), target));
+                    }
+                }
+            }
+            values.insert(node, targets);
+        }
+        values.remove(&selection.root()).ok_or_else(invalid_state)
+    }
+
+    fn record_capture_global(
+        &mut self,
+        binder: BinderId,
+        node: NodeId,
+        occurrence: &crate::resolved::ResolvedOccurrence,
+    ) -> Result<(), TypeError> {
+        if self.purpose != ElaborationPurpose::ModuleCheck || occurrence.evidence.is_empty() {
+            return Ok(());
+        }
+        let scheme = self
+            .selection
+            .as_ref()
+            .and_then(|selection| selection.scheme(binder))
+            .ok_or_else(invalid_state)?;
+        if scheme.requirements.len() != occurrence.evidence.len() {
+            return Err(invalid_state());
+        }
+        self.type_work
+            .charge(occurrence.evidence.len())
+            .map_err(|()| type_resource())?;
+        self.global_capture_uses
+            .try_reserve(occurrence.evidence.len())
+            .map_err(|_| type_resource())?;
+        self.global_capture_uses.extend(
+            scheme
+                .requirements
+                .iter()
+                .zip(&occurrence.evidence)
+                .map(|(requirement, slot)| (node, requirement.id, slot.storage_id())),
+        );
+        Ok(())
+    }
+
     fn prepare_evidence_publication(&mut self) -> Result<PendingEvidencePublication, TypeError> {
         if self.purpose != ElaborationPurpose::ModuleCheck {
             return Err(invalid_state());
@@ -4455,6 +4819,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 core_ty,
                 occurrence.origin.clone(),
             )?;
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            self.method_capture_uses
+                .try_reserve(1)
+                .map_err(|_| type_resource())?;
+            self.method_capture_uses
+                .push((node, occurrence.evidence[0].storage_id(), method));
             let TypeFact {
                 ty: fact_ty,
                 provenance,
@@ -8593,6 +8963,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         span: Span,
         context: &mut TypeContext,
     ) -> Result<TypedNode, TypeError> {
+        let rewrite_checkpoint = self.builder.type_rewrite_checkpoint();
         let body = TypedNodeOwner::new(self.elaborate_expression_with_context(
             ElaborationTask::Synthesize {
                 expression: &handler.body,
@@ -8739,6 +9110,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ));
         }
 
+        // Clause checking can solve generic effect arguments in nested handler
+        // callbacks. Re-inference reads stored callable types, so normalize
+        // this suffix first while preserving genuinely unresolved variables.
+        self.zonk_builder_types_since(Some(rewrite_checkpoint), false)
+            .map_err(TypeError::Internal)?;
+        output = zonk_core_effect_row(
+            &output,
+            &self.inference_solutions,
+            &self.row_inference_solutions,
+            &self.inference_variables,
+            &self.authenticated_inference_solutions,
+            &mut self.type_work,
+            false,
+        )?;
         let ty = result_type.into_inner();
         let core_ty = self.pure_core_type(&ty)?;
         self.type_work
@@ -9145,6 +9530,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         rewrite_checkpoint: crate::core::dialect::TypeRewriteCheckpoint,
     ) -> Result<(), TypeError> {
         let LexicalEvidenceProgress {
+            source,
             application,
             method_ids,
             methods,
@@ -9218,6 +9604,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             group.binder.origin.clone(),
         )?;
         if self.selection.is_some() {
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            self.method_capture_binders
+                .try_reserve(1)
+                .map_err(|_| type_resource())?;
+            self.method_capture_binders
+                .push((source.id, *id, group.binder.id));
             self.constraint_work
                 .charge(1)
                 .map_err(|()| constraint_resource())?;
@@ -9711,6 +10103,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                         )
                                     }?;
                                 }
+                                self.record_capture_global(binder, node, occurrence)?;
                                 values.push(TypedNode {
                                     node,
                                     ty: ty.into_inner(),
@@ -16562,6 +16955,12 @@ pub(crate) fn check_module_with_budget(
             type_work.charge(1).map_err(|()| type_resource())?;
             effects |= imported.capture.is_retained();
         }
+        for implementation in resolved.imported_facts().implementations() {
+            for method in &implementation.fact.methods {
+                type_work.charge(1).map_err(|()| type_resource())?;
+                effects |= method.capture.is_retained();
+            }
+        }
     }
     if effects {
         check_module_with_budget_family::<EffectOperationFamily>(
@@ -19790,6 +20189,20 @@ fn clone_type_with_budget(ty: &Type, budget: &mut TypeWorkBudget) -> Result<Type
     Ok(ty.clone())
 }
 
+fn retain_implementation_capture_type(
+    body_type: Type,
+    parameters: &[(TypeVariableId, Kind)],
+    budget: &mut TypeWorkBudget,
+) -> Result<Type, TypeError> {
+    let body_type = IterativeTypeOwner::new(body_type);
+    let quantified = clone_kinded_type_parameters_with_budget(parameters, budget)
+        .map_err(|()| type_resource())?;
+    Ok(Type::Forall(
+        quantified.into_boxed_slice(),
+        Box::new(body_type.into_inner()),
+    ))
+}
+
 fn retain_method_occurrence_parameters(
     interface_parameters: &[(TypeVariableId, Kind)],
     method_parameters: &[(TypeVariableId, Kind)],
@@ -20724,17 +21137,42 @@ fn inference_failure(reason: TypeReason, span: Span, message: &str) -> TypeError
     )))
 }
 
-fn capture_failure(failure: crate::core::capture::Failure) -> TypeError {
+fn capture_failure(
+    failure: crate::core::capture::Failure,
+    budget: &mut TypeWorkBudget,
+) -> TypeError {
     use crate::core::capture::Failure;
     match failure {
         Failure::Invalid => invalid_state(),
         Failure::Resource => type_resource(),
-        Failure::ResourceProofUnavailable(span) => inference_failure(
-            TypeReason::ResourceProofUnavailable,
-            span,
-            "resource scope requires stored-dependency proof before publication",
-        ),
+        Failure::Escape {
+            source,
+            acquisition,
+        } => {
+            if budget.charge(2).is_err() {
+                return type_resource();
+            }
+            let mut diagnostic = Diagnostic::new(
+                TypeReason::ResourceEscape,
+                SourceLabel::new(
+                    source,
+                    "this value retains a dependency on the closing resource",
+                ),
+            );
+            if diagnostic.related.try_reserve_exact(1).is_err() {
+                return type_resource();
+            }
+            diagnostic.related.push(SourceLabel::new(
+                acquisition,
+                "this resource is acquired here",
+            ));
+            TypeError::Source(Box::new(diagnostic))
+        }
         Failure::Unsafe(unsafe_discard) => {
+            let related_count = 1 + usize::from(unsafe_discard.owner.is_some());
+            if budget.charge(1 + related_count).is_err() {
+                return type_resource();
+            }
             let mut diagnostic = Diagnostic::new(
                 TypeReason::DiscardUnsafe,
                 SourceLabel::new(
@@ -20742,15 +21180,24 @@ fn capture_failure(failure: crate::core::capture::Failure) -> TypeError {
                     "discard requires proof that the captured continuation has no unfinished obligations",
                 ),
             );
+            if diagnostic.related.try_reserve_exact(related_count).is_err() {
+                return type_resource();
+            }
             diagnostic.related.push(SourceLabel::new(
                 unsafe_discard.request,
                 "this request or call can capture the continuation",
             ));
             if let Some(owner) = unsafe_discard.owner {
-                diagnostic.related.push(SourceLabel::new(
-                    owner,
-                    "this clause still has an unfinished completion capability",
-                ));
+                let (owner, message) = match owner {
+                    crate::core::capture::CompletionOwner::Clause(span) => (
+                        span,
+                        "this clause still has an unfinished completion capability",
+                    ),
+                    crate::core::capture::CompletionOwner::Resource(span) => {
+                        (span, "this resource still requires scope completion")
+                    }
+                };
+                diagnostic.related.push(SourceLabel::new(owner, message));
             }
             TypeError::Source(Box::new(diagnostic))
         }
@@ -22412,7 +22859,18 @@ mod tests {
     ) {
         let text =
             format!("import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = {result}\n");
-        let file = ModuleFixtureFile::write("cell-resource-typed.ash", &text);
+        cell_module_fixture_sources(&text)
+    }
+
+    fn cell_module_fixture_sources(
+        text: &str,
+    ) -> (
+        ResolvedModule,
+        Vec<SourceFile>,
+        Arc<ResolvedRegistry>,
+        Vec<CheckedModule>,
+    ) {
+        let file = ModuleFixtureFile::write("cell-resource-typed.ash", text);
         let graph = load_module_graph(&file.0, &ModuleRoots::empty()).expect("resource graph");
         let mut checked = Vec::<CheckedModule>::new();
         for loaded in graph.modules() {
@@ -23797,6 +24255,64 @@ mod tests {
     }
 
     #[test]
+    fn capture_failure_keeps_staged_implementation_selections_private() {
+        for hidden in [true, false] {
+            let second = if hidden {
+                "resource cell<R> c = 41 {\nlet later : Unit -> Int = fn(ignored) {\nhandle (Cell.read c) with Cell.Ops<R> {\nread value => resume 42\nwrite value => resume ()\n}\n}\nlater\n}"
+            } else {
+                "fn(ignored) {\n42\n}"
+            };
+            let source = format!(
+                "import @builtin.cell as Cell\npub interface Read<A> {{\nread : A -> Int\n}}\npub type Box<A> = Box(A)\npub interface Two<A> {{\nfirst : A -> (Unit -> Int)\nsecond : A -> (Unit -> Int)\n}}\npub impl<A> Two<Box<A>> where Read<A> {{\nfirst (Box value) = fn(ignored) {{\nread value\n}}\nsecond (Box value) = {second}\n}}\n"
+            );
+            let resolved = cell_module_fixture_sources(&source).0;
+            assert!(resolved.definitions().is_empty());
+            let first = &resolved.implementations()[0].method_groups[0].equations[0].body;
+            let ResolvedExprKind::Function(function) = &first.kind else {
+                panic!("first method closure")
+            };
+            let ResolvedExprKind::Apply(application) = &function.body.result.kind else {
+                panic!("selected method call")
+            };
+            let ResolvedExprKind::Occurrence(occurrence) = &application.function.kind else {
+                panic!("selected occurrence")
+            };
+            let [slot] = occurrence.evidence.as_ref() else {
+                panic!("one prerequisite slot")
+            };
+            let handle = slot.handle();
+            let result = check_module(resolved);
+            if hidden {
+                assert!(
+                    matches!(result, Err(TypeError::Source(ref diagnostic)) if diagnostic.reason == TypeReason::ResourceEscape),
+                    "{result:?}"
+                );
+                assert!(
+                    handle.selection().is_none(),
+                    "capture failure must not fill an earlier staged slot"
+                );
+            } else {
+                let checked = result.expect("fresh corrected method-only module publishes");
+                assert!(handle.selection().is_some());
+                let [implementation] = checked.implementation_facts() else {
+                    panic!("one implementation")
+                };
+                assert_eq!(implementation.methods.len(), 2);
+                assert!(
+                    implementation
+                        .methods
+                        .iter()
+                        .all(|method| method.capture.is_retained())
+                );
+                assert_ne!(
+                    implementation.methods[0].capture,
+                    implementation.methods[1].capture
+                );
+            }
+        }
+    }
+
+    #[test]
     fn module_failure_publishes_no_earlier_occurrence_selection() {
         let resolved = resolved_module_fixture(
             "atomic-occurrence-publication.ash",
@@ -23833,6 +24349,66 @@ mod tests {
             handle.selection().is_none(),
             "an earlier choice must remain private when a later body rejects the module"
         );
+    }
+
+    #[test]
+    fn resource_module_publication_has_exact_fresh_budgets_and_private_pending_slots() {
+        let source = "import @builtin.cell as Cell\npub interface Read<A> {\nread : A -> Int\n}\npub type Box<A> = Box(A)\npub interface Two<A> {\nfirst : A -> (Unit -> Int)\nsecond : A -> (Unit -> Int)\n}\npub impl<A> Two<Box<A>> where Read<A> {\nfirst (Box value) = fn(ignored) {\nread value\n}\nsecond (Box value) = resource cell<R> c = 41 {\nlet copied = Cell.read c\nlet later : Unit -> Int = fn(ignored) {\ncopied + 1\n}\nlater\n}\n}\n";
+        let run = |type_limit, constraint_limit| {
+            let resolved = cell_module_fixture_sources(source).0;
+            assert!(resolved.definitions().is_empty());
+            let first = &resolved.implementations()[0].method_groups[0].equations[0].body;
+            let ResolvedExprKind::Function(function) = &first.kind else {
+                panic!("first closure")
+            };
+            let ResolvedExprKind::Apply(application) = &function.body.result.kind else {
+                panic!("selected call")
+            };
+            let ResolvedExprKind::Occurrence(occurrence) = &application.function.kind else {
+                panic!("selected occurrence")
+            };
+            let handle = occurrence.evidence[0].handle();
+            let mut types = TypeWorkBudget::with_limit(type_limit);
+            let mut constraints = InterfaceConstraintBudget::with_limit(constraint_limit);
+            let result = check_module_with_budget(
+                resolved,
+                &mut types,
+                &mut UsefulnessBudget::default(),
+                &mut constraints,
+            );
+            (
+                result,
+                types.used(),
+                constraints.used(),
+                handle.selection().is_some(),
+            )
+        };
+        let (measured, types, constraints, published) = run(usize::MAX, usize::MAX);
+        let checked = measured.unwrap();
+        assert!(published);
+        assert_eq!(checked.implementation_facts()[0].methods.len(), 2);
+        assert!(
+            checked.implementation_facts()[0]
+                .methods
+                .iter()
+                .all(|method| method.capture.is_retained())
+        );
+        let (short, _, _, published) = run(types - 1, constraints);
+        assert_eq!(short.unwrap_err(), type_resource());
+        assert!(!published);
+        // With no globals/imported implementations, the final constraint cell
+        // reserves this one implementation after capture proof and export
+        // freezing, immediately before pending evidence publication.
+        let (short, _, used, published) = run(types, constraints - 1);
+        assert_eq!(short.unwrap_err(), constraint_resource());
+        assert_eq!(used, constraints - 1);
+        assert!(!published);
+        for _ in 0..2 {
+            let (retry, used_types, used_constraints, published) = run(types, constraints);
+            retry.unwrap();
+            assert!(published);
+            assert_eq!((used_types, used_constraints), (types, constraints));
+        }
     }
 
     #[test]
@@ -24102,9 +24678,20 @@ mod tests {
 
     #[test]
     fn one_type_budget_spans_all_checked_modules() {
+        let measured = resolved_module_fixture("measured.ash", "", "Unit", "()");
+        let mut measured_work = TypeWorkBudget::unbounded();
+        check_module_with_budget(
+            measured,
+            &mut measured_work,
+            &mut UsefulnessBudget::default(),
+            &mut InterfaceConstraintBudget::default(),
+        )
+        .expect("one complete module, including its data summary, should fit");
+        let exact = measured_work.used();
+        assert!(exact > 0);
         let first = resolved_module_fixture("first.ash", "", "Unit", "()");
         let second = resolved_module_fixture("second.ash", "", "Unit", "()");
-        let mut type_work = TypeWorkBudget::with_limit(60);
+        let mut type_work = TypeWorkBudget::with_limit(exact);
         let mut coverage_work = UsefulnessBudget::default();
         let mut constraint_work = InterfaceConstraintBudget::default();
 
@@ -24115,6 +24702,7 @@ mod tests {
             &mut constraint_work,
         )
         .expect("the first module should fit the shared type budget");
+        assert_eq!(type_work.used(), exact);
         let failure = check_module_with_budget(
             second,
             &mut type_work,
@@ -25865,6 +26453,54 @@ mod tests {
             .expect("the exact retained match cost should fit");
         assert_eq!(typed.ty, Type::Int);
         assert_eq!(exact.type_work.charge(1), Err(()));
+    }
+
+    #[test]
+    fn implementation_capture_abstraction_failure_is_stack_safe_and_retryable() {
+        const CHILD: &str = "ASH_IMPLEMENTATION_CAPTURE_TYPE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "elaborate::tests::implementation_capture_abstraction_failure_is_stack_safe_and_retryable", "--nocapture"])
+                .env(CHILD, "1")
+                .output().unwrap();
+            assert!(
+                output.status.success(),
+                "method abstraction child failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 10_000;
+                let parameters = [(TypeVariableId::new(0), Kind::Type)];
+                let run = |budget: &mut TypeWorkBudget| {
+                    let mut body = Type::Unit;
+                    for _ in 0..DEPTH {
+                        body = Type::Function(Box::new(Type::Unit), Box::new(body));
+                    }
+                    retain_implementation_capture_type(body, &parameters, budget)
+                        .map(IterativeTypeOwner::new)
+                };
+                let mut measured = TypeWorkBudget::unbounded();
+                drop(run(&mut measured).unwrap());
+                let mut short = TypeWorkBudget::with_limit(measured.used() - 1);
+                assert!(matches!(
+                    run(&mut short),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                ));
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(measured.used());
+                    drop(run(&mut exact).unwrap());
+                    assert_eq!(exact.used(), measured.used());
+                }
+            })
+            .unwrap()
+            .join()
+            .expect("deep method abstraction teardown must fit 64 KiB");
     }
 
     #[test]
@@ -32050,6 +32686,60 @@ mod tests {
             .expect("the Core row wrapper thread should start")
             .join()
             .expect("Core row wrappers must be dropped iteratively");
+    }
+
+    #[test]
+    fn nonstrict_handler_suffix_normalization_has_an_exact_fresh_retry_boundary() {
+        let span = row_test_span("handler-suffix-normalization.ash");
+        let prepare = || {
+            let mut elaborator = CoreElaborator::<EffectOperationFamily>::new();
+            let unresolved = elaborator.fresh_inference(&Kind::Type, span).unwrap();
+            let solved = elaborator.fresh_inference(&Kind::Type, span).unwrap();
+            elaborator.unify(&solved, &Type::Int).unwrap();
+            let checkpoint = elaborator.builder.type_rewrite_checkpoint();
+            elaborator
+                .builder
+                .unit(unresolved, Origin::Source(span))
+                .unwrap();
+            elaborator
+                .builder
+                .unit(solved, Origin::Source(span))
+                .unwrap();
+            elaborator.type_work = TypeWorkBudget::unbounded();
+            (elaborator, checkpoint)
+        };
+        let (mut measured, checkpoint) = prepare();
+        measured
+            .zonk_builder_types_since(Some(checkpoint), false)
+            .unwrap();
+        let exact = measured.type_work.used();
+        assert!(exact > 0);
+        assert!(
+            measured.builder.requires_type_rewrite(),
+            "nonstrict normalization must retain unresolved identities"
+        );
+        let (mut short, checkpoint) = prepare();
+        short.type_work = TypeWorkBudget::with_limit(exact - 1);
+        assert_eq!(
+            short.zonk_builder_types_since(Some(checkpoint), false),
+            Err(ElaborationFailure::TypeResourceExhausted)
+        );
+        assert!(short.final_root.is_none());
+        assert!(short.selection.is_none());
+        // Suffix rewriting is progressive: discard the failed elaborator,
+        // then retry a fresh owner rather than publishing its partial builder.
+        drop(short);
+        let (mut retry, checkpoint) = prepare();
+        retry.type_work = TypeWorkBudget::with_limit(exact);
+        retry
+            .zonk_builder_types_since(Some(checkpoint), false)
+            .unwrap();
+        assert_eq!(retry.type_work.used(), exact);
+        retry.type_work = TypeWorkBudget::unbounded();
+        assert!(
+            retry.zonk_builder_types().is_err(),
+            "strict final admission still rejects the unresolved identity"
+        );
     }
 
     #[test]

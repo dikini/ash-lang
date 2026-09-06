@@ -1365,10 +1365,14 @@ mod tests {
         // publication. The fixed graph order is base, short facade, first long
         // facade, second long facade, then entry; linking and linked evidence
         // validation contribute the final two additive boundaries.
+        // Each of the four importers also scans the retained data summaries:
+        // 18 repeated one-parameter nominal admissions, each charging shape,
+        // parameter record, Kind, and two Origins (18 * 5 = 90). Checking,
+        // linking, and linked-evidence validation contributions are unchanged.
         const EXPECTED_BOUNDARIES: [usize; 13] = [
-            0, 1, 829, 1_374, 1_658, 2_203, 2_487, 3_026, 3_314, 4_282, 4_707, 4_856, 6_516,
+            0, 1, 829, 1_464, 1_748, 2_383, 2_667, 3_296, 3_584, 4_642, 5_067, 5_216, 6_876,
         ];
-        const EXACT_CONSTRAINT_WORK: usize = 6_516;
+        const EXACT_CONSTRAINT_WORK: usize = 6_516 + 4 * 18 * 5;
         let source = relational_interface_graph_source();
         let directory = source
             .0
