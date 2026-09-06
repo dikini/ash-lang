@@ -14,7 +14,8 @@ suffix is moved, not copied. Its clause boundary records whether the unique
 resume capability still owns that captured control or has consumed it.
 
 Runtime values are arbitrary-precision integers, Booleans, unit, lexical
-functions, payload-constructor functions, or heap locations. A function
+functions, internal lexical polymorphic functions, payload-constructor
+functions, opaque non-owning resource handles, or heap locations. A function
 template becomes a lexical function with the recursive environment when its
 binder is looked up. A location is an internal handle, not source-level
 identity or observable mutation.
@@ -509,9 +510,10 @@ for `instance`, so ordinary body return and operation selection are the only
 reachable ways to leave the boundary.
 
 A request first evaluates its one operand. Once that operand is a value,
-`select_nearest` searches outward through continuation boundaries for the
-nearest handler whose exact effect identity and instantiated type arguments
-equal the operation's instance. The request saves its lexical instantiation
+`select_nearest` searches outward for the innermost accepting source-handler
+or cell boundary. The source-handler branch below requires its exact effect
+identity and instantiated type arguments to equal the operation's instance,
+with no nearer accepting cell boundary. The request saves its lexical instantiation
 before operand evaluation; each candidate uses its own saved handler context.
 It returns the matching clause, the handler's saved
 environment, an owner identity, the moved segment through that boundary, and
@@ -526,6 +528,7 @@ family request-steps:
   E-Request-Select :=
     requested = instantiate(instance(operation), request_instantiation)
     select_nearest(continuation, requested) = clause, handler_environment, handler, owner, captured, outer
+    no nearer cell boundary accepts requested
     clause = operation pattern => body
     match(heap, operand_value, pattern) = bindings
     clause_environment = extend(handler_environment, bindings)
@@ -579,7 +582,7 @@ its surrounding control intact, and returns unit at the discard expression:
 ```sequent
 E-Discard :=
   split_owner(continuation, handler, owner) = clause_prefix, live(captured), outer
-  captured contains no other live clause capability
+  captured contains no other live clause capability or acquired resource scope
   remaining = clause_prefix ++ CLAUSE(handler, owner, consumed) :: outer
   ===>
   CONFIG(heap, environment, discard(handler, owner), continuation) -> CONFIG(heap, environment, (), remaining)
@@ -600,6 +603,89 @@ validation, evaluation reports an internal malformed-Core or machine failure.
 Ash has no source-level
 unhandled-operation, abort, exception, cancellation, or unwind result.
 
+## Scoped cell execution
+
+A resource scope owns one mutable integer payload. Its handle is an opaque,
+non-owning activation key: copying a handle, closure or environment does not
+copy the payload or its release obligation. The ordinary value heap owns no
+resource payload, including through unused entries in closure environments.
+
+Acquisition first evaluates the initializer exactly once in the preceding
+environment. Only after it returns an integer does the machine check capacity
+and prepare the new scope, handle binding and lexical instantiation. Successful
+acquisition creates a fresh activation, distinct from every earlier successful
+execution, even at the same source site. Failure publishes none of the new
+scope or authority. It is an internal failure, not a source allocation branch.
+
+The following rules describe entry and normal release. `RESOURCE_INIT` retains
+the initializer's following body and preceding environment. `CELL(a, n)` owns
+payload `n` for activation `a`. `bind_cell` binds `c` to the non-owning handle
+for `a` and binds the rigid identity `R` to `a` in lexical instantiation; it
+does not place `n` in the value heap. The acquisition premise includes all
+capacity and fallible preparation, before publication.
+
+```sequent
+family resource-boundary-steps:
+  E-Resource-Initialize :=
+    ===>
+    CONFIG(heap, environment, resource cell<R> c = initializer { body }, continuation) -> CONFIG(heap, environment, initializer, RESOURCE_INIT(R, c, body, environment) :: continuation)
+
+  E-Resource-Acquire :=
+    n is an integer
+    acquisition preparation succeeds with fresh activation a
+    bind_cell(heap, resource_environment, R, c, a) = heap_1, body_environment
+    ===>
+    CONFIG(heap, environment_value, n, RESOURCE_INIT(R, c, body, resource_environment) :: continuation) -> CONFIG(heap_1, body_environment, body, CELL(a, n) :: continuation)
+
+  E-Resource-Return :=
+    ===>
+    CONFIG(heap, environment_value, value, CELL(a, n) :: continuation) -> CONFIG(heap, environment_value, value, continuation)
+```
+
+Static checking ensures that the returning value does not depend on `a`.
+An inner return releases the inner cell before continuing inside its outer
+scope. An escaped copied integer or closure containing only copied data
+retains no cell payload after release.
+
+Requests retain their lexical type and row instantiation as described above.
+An activation binding travels through generic applications, returned closures,
+handler environments and captured control. A closure from an outer execution
+therefore continues to request its outer activation when called inside another
+execution of the same source site, including when its dependency appears only
+in operation metadata rather than a term capture. The machine does not infer
+activation from operand values or use a global substitution environment.
+
+Request selection searches source-handler and cell boundaries in ordinary
+innermost-to-outermost order. A cell boundary accepts only its authenticated
+builtin operation at its exact activation; nonmatching boundaries are passed.
+A nearer exact source handler intercepts the request by the existing handler
+rules. Its interception creates neither a handle nor provider authority.
+
+For a request selected by a cell boundary, the operand handle must equal that
+boundary's activation. `read` returns a copied payload integer and leaves the
+scope in place. `write` requires the tuple `(handle, integer)`, replaces the
+owned payload and returns `Unit`. Alias resolution and complete operand,
+operation and activation checks precede any mutation. Malformed operands or
+identity disagreement are internal failures, not source use-after-release.
+
+An outward resource-free request may capture a cell boundary. Capture moves
+the owned scope into the continuation; resume moves it back in its original
+order. Neither movement changes live-cell usage or duplicates a payload.
+Completion after resumption applies `E-Resource-Return` normally. Defensive
+discard checks retained live cells and clause capabilities before consuming
+any capture. Static checking additionally proves that discard skips no
+required resource completion outside the captured segment; execution does not
+rescan suspended source bodies to establish that proof.
+
+Cell capacity counts live owned payloads, including captured scopes, rather
+than total acquisitions. Normal release makes capacity reusable; a later
+acquisition still receives a fresh key. Deep normal completion and internal
+failure disposal release cells, captured control and environments iteratively.
+Internal disposal is not a source cleanup transition. Divergence remains
+divergence, and no abort, destructor callback, cancellation or foreign cleanup
+path is added. Resource-free Pure execution allocates no resource registry,
+resource frame or live cell.
+
 ## Observation
 
 Successful evaluation of the generated entry application retains the heap
@@ -611,6 +697,10 @@ the active rendering path renders as `<cycle>`. Removing a location from the
 active path after its subtree means shared acyclic data renders in full at each
 occurrence. Function values render as `<function>`.
 
+Successful observation retains no live resource scope or captured continuation.
+The observed heap may retain copied values and unused non-owning handle
+entries, but owns no released cell payload.
+
 A completed `newtype` value renders exactly as its representation value because
 no wrapper or constructor tag reaches the heap. The observation's separately
 retained closed result type still renders the nominal newtype spelling and its
@@ -620,7 +710,7 @@ nominal-registry lookup and adds no special newtype value case.
 
 Evaluation reports uninitialized access, alias loops, invalid locations, an
 impossible complete-pattern failure, malformed effect control, and captured-
-control capacity exhaustion as structured internal runtime failures. They are
+control or live-cell capacity exhaustion as structured internal runtime failures. They are
 not source-language error outcomes.
 
 The executable test `dynamic_cyclic_data_observation_is_finite` checks guarded

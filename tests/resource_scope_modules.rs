@@ -239,7 +239,7 @@ fn source_has_no_builtin_handle_constructor_or_pattern() {
 }
 
 #[test]
-fn cli_preserves_builtin_failure_categories_and_import_only_execution() {
+fn cli_preserves_builtin_failure_categories_and_resource_execution() {
     let tree = Tree::new();
     for (source, code, prefix) in [
         (
@@ -254,8 +254,8 @@ fn cli_preserves_builtin_failure_categories_and_import_only_execution() {
         ),
         (
             "import @builtin.cell (Handle)\nmain : Unit -> Int\nmain () = resource cell<R> c = 41 {\n42\n}\n",
-            2,
-            "core.validation.resource-proof-unavailable\n",
+            0,
+            "",
         ),
     ] {
         let entry = tree.write("entry.ash", source);

@@ -245,6 +245,14 @@ pub struct ResourceScopeNode {
 }
 
 impl ResourceScopeNode {
+    pub(crate) fn initializer(&self) -> NodeId {
+        self.initializer
+    }
+
+    pub(crate) fn body(&self) -> NodeId {
+        self.body
+    }
+
     pub(crate) fn new(
         acquisition: crate::resolved::CellAcquisition,
         handle: super::TypedBinder,

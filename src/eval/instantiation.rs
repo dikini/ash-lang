@@ -2,6 +2,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use super::super::value::ActivationKey;
 use super::RuntimeFailure;
 use crate::types::{
     ComputationType, EffectInstance, EffectRow, IterativeTypeOwner, Kind, Type, TypeVariableId,
@@ -59,6 +60,34 @@ fn capacity(_: ()) -> RuntimeFailure {
 }
 
 impl Instantiation {
+    // Validated Core contains no inference variables. Within this private
+    // runtime context only, that disjoint leaf namespace encodes activation
+    // atoms. Substitution and exact equality treat them opaquely; runtime
+    // metadata never goes through unification or back into checked Core.
+    pub(super) fn acquire(
+        &self,
+        identity: TypeVariableId,
+        key: ActivationKey,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, RuntimeFailure> {
+        self.apply(
+            &Self::default(),
+            &[(identity, Kind::Type)],
+            &[Type::Inference(crate::types::InferenceVariableId::new(
+                key.0,
+            ))],
+            &[],
+            work,
+        )
+    }
+
+    pub(super) fn activation(effect: &EffectInstance) -> Option<ActivationKey> {
+        match effect.arguments() {
+            [Type::Inference(identity)] => Some(ActivationKey(identity.value())),
+            _ => None,
+        }
+    }
+
     pub(super) fn apply(
         &self,
         caller: &Self,
@@ -195,6 +224,54 @@ impl Instantiation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activation_atoms_survive_generic_and_row_substitution_without_rebinding_outer_context() {
+        use crate::{
+            module::ModuleId,
+            types::{EffectId, EffectRowVariable},
+        };
+        let empty = Instantiation::default();
+        let identity = TypeVariableId::generated(0);
+        let parameter = TypeVariableId::generated(1);
+        let row_parameter = TypeVariableId::generated(2);
+        let effect = EffectId::new(ModuleId::new(0), 0);
+        let instance = |id| EffectInstance::new(effect, Box::new([Type::Variable(id)]));
+        let mut work = TypeWorkBudget::unbounded();
+        let outer = empty
+            .acquire(identity, ActivationKey(7), &mut work)
+            .unwrap();
+        let inner = outer
+            .acquire(identity, ActivationKey(8), &mut work)
+            .unwrap();
+        for (caller, key) in [(&outer, ActivationKey(7)), (&inner, ActivationKey(8))] {
+            let applied = empty
+                .apply(
+                    caller,
+                    &[(parameter, Kind::Type), (row_parameter, Kind::EffectRow)],
+                    &[Type::Variable(identity)],
+                    &[EffectRow::singleton(instance(identity))],
+                    &mut work,
+                )
+                .unwrap();
+            assert_eq!(
+                Instantiation::activation(
+                    &applied.effect(&instance(parameter), &mut work).unwrap()
+                ),
+                Some(key)
+            );
+            let row = EffectRow::open(EffectRowVariable::rigid(row_parameter), Box::new([]));
+            let row = applied.row(&row, &mut work).unwrap();
+            assert_eq!(row.known().len(), 1);
+            assert_eq!(Instantiation::activation(&row.known()[0]), Some(key));
+        }
+        assert_eq!(
+            Instantiation::activation(&outer.effect(&instance(identity), &mut work).unwrap()),
+            Some(ActivationKey(7))
+        );
+        assert!(empty.0.is_none());
+        assert_eq!(Instantiation::activation(&instance(identity)), None);
+    }
 
     #[test]
     fn instantiation_is_simultaneous_exact_atomic_and_retryable() {

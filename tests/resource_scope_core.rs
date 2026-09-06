@@ -4,33 +4,29 @@ use ash::{
     source::SourceFile,
 };
 
-// Source dependency proof permits publication, but the production entry point
-// must still reject execution until resource acquisition and release exist.
+// The production entry point independently validates resource ownership before
+// evaluating the acquired body, including unused resource-dependent closures.
 #[test]
-fn resource_programs_cannot_reach_execution_before_resource_runtime() {
+fn resource_programs_execute_after_independent_ownership_validation() {
     let path = std::env::temp_dir().join(format!(
         "ash-resource-admission-{}-{}.ash",
         std::process::id(),
         SourceFile::new("identity", "").unwrap().id().value(),
     ));
-    for body in [
-        "42",
-        "Cell.read c",
-        "let delayed = fn(ignored) {\nCell.read c\n}\n42",
+    for (body, expected) in [
+        ("42", "42"),
+        ("Cell.read c", "41"),
+        ("let delayed = fn(ignored) {\nCell.read c\n}\n42", "42"),
     ] {
         std::fs::write(&path, format!(
             "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = resource cell<R> c = 41 {{\n{body}\n}}\n"
         )).unwrap();
-        let failure = run_path(RunConfiguration {
+        let observation = run_path(RunConfiguration {
             entry: path.clone(),
             roots: ModuleRoots::empty(),
         })
-        .unwrap_err();
-        assert_eq!(
-            failure.reason_code(),
-            "core.validation.resource-proof-unavailable",
-            "{body}: {failure:?}"
-        );
+        .unwrap();
+        assert_eq!(observation.value().to_string(), expected, "{body}");
     }
     std::fs::remove_file(path).unwrap();
 }

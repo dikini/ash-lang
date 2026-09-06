@@ -2956,8 +2956,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         };
         self.elaborate_result(&result, &mut context)?;
         let publication = self.prepare_evidence_publication()?;
-        {
-            self.zonk_builder_types().map_err(TypeError::Internal)?;
+        self.zonk_builder_types().map_err(TypeError::Internal)?;
+        if self.capture_publication_required(module, checked_schemes)? {
             self.type_work
                 .charge(globals.len())
                 .map_err(|()| type_resource())?;
@@ -3029,6 +3029,40 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
         }
         Ok((facts.into_boxed_slice(), publication))
+    }
+
+    fn capture_publication_required(
+        &mut self,
+        module: &ResolvedModule,
+        schemes: &[CheckedGlobalScheme],
+    ) -> Result<bool, TypeError> {
+        // Effect bodies still need their local proofs, and implementation
+        // methods may carry dependencies independently of exported globals.
+        if F::EFFECTS || !self.implementation_capture_roots.is_empty() {
+            return Ok(true);
+        }
+        self.type_work
+            .charge(schemes.len())
+            .map_err(|()| type_resource())?;
+        let mut required = false;
+        for scheme in schemes {
+            let Some(candidate) = module.export_candidate().term(&scheme.spelling) else {
+                continue;
+            };
+            if candidate.source == crate::resolved::CandidateFactSource::Local {
+                if candidate.binder != scheme.binder
+                    || scheme.binder.module() != Some(module.module())
+                {
+                    return Err(invalid_state());
+                }
+                required = true;
+            } else if candidate.binder == scheme.binder {
+                return Err(invalid_state());
+            }
+        }
+        // A private Pure module has no portable-summary consumer. Whenever
+        // one exists, retain the complete graph, including private helpers.
+        Ok(required)
     }
 
     fn check_implementation_body(
@@ -9776,6 +9810,80 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
+    // Keep effect-only progress and result staging out of the shared
+    // expression dispatcher's fixed host-stack frame.
+    #[expect(
+        clippy::boxed_local,
+        reason = "unboxing in the caller enlarges the shared expression dispatcher's stack frame"
+    )]
+    fn step_perform_completion(
+        &mut self,
+        progress: Box<PerformProgress<'_>>,
+        values: &mut TypedNodeBuffer,
+    ) -> Result<(), TypeError> {
+        let operand = values.pop().ok_or_else(invalid_state)?;
+        values.push(self.finish_perform(*progress, operand)?);
+        Ok(())
+    }
+
+    fn schedule_resource<'a>(
+        &mut self,
+        resource: &'a crate::resolved::ResolvedResourceExpr,
+        span: Span,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+    ) -> Result<(), TypeError> {
+        self.type_work.charge(2).map_err(|()| type_resource())?;
+        tasks.0.try_reserve(2).map_err(|_| type_resource())?;
+        tasks.push(ElaborationTask::ResourceBody { resource, span });
+        tasks.push(ElaborationTask::Check {
+            expression: &resource.initializer,
+            expected: ProvenancedType {
+                ty: Type::Int,
+                provenance: TypeProvenance::atom(Some(resource.initializer.span)),
+            },
+            kind: CheckKind::General,
+        });
+        Ok(())
+    }
+
+    fn step_resource_body<'a>(
+        &mut self,
+        resource: &'a crate::resolved::ResolvedResourceExpr,
+        span: Span,
+        context: &mut TypeContext,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+        values: &mut TypedNodeBuffer,
+    ) -> Result<(), TypeError> {
+        let initializer = values.pop().ok_or_else(invalid_state)?;
+        self.type_work.charge(3).map_err(|()| type_resource())?;
+        tasks.0.try_reserve(2).map_err(|_| type_resource())?;
+        let handle = self.enter_resource_body(resource, context)?;
+        tasks.push(ElaborationTask::FinishResource(Box::new(
+            ResourceProgress {
+                resource,
+                span,
+                initializer,
+                handle,
+            },
+        )));
+        tasks.push(ElaborationTask::Synthesize {
+            expression: &resource.body,
+            cause: None,
+        });
+        Ok(())
+    }
+
+    fn step_resource_completion(
+        &mut self,
+        progress: Box<ResourceProgress<'_>>,
+        context: &mut TypeContext,
+        values: &mut TypedNodeBuffer,
+    ) -> Result<(), TypeError> {
+        let body = values.pop().ok_or_else(invalid_state)?;
+        values.push(self.finish_resource(*progress, body, context)?);
+        Ok(())
+    }
+
     fn elaborate_expression_with_context<'a>(
         &mut self,
         initial: ElaborationTask<'a>,
@@ -9809,30 +9917,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         while let Some(task) = tasks.pop() {
             match task {
                 ElaborationTask::FinishPerform(progress) => {
-                    let operand = values.pop().ok_or_else(invalid_state)?;
-                    values.push(self.finish_perform(*progress, operand)?);
+                    self.step_perform_completion(progress, &mut values)?;
                 }
                 ElaborationTask::ResourceBody { resource, span } => {
-                    let initializer = values.pop().ok_or_else(invalid_state)?;
-                    self.type_work.charge(3).map_err(|()| type_resource())?;
-                    tasks.0.try_reserve(2).map_err(|_| type_resource())?;
-                    let handle = self.enter_resource_body(resource, context)?;
-                    tasks.push(ElaborationTask::FinishResource(Box::new(
-                        ResourceProgress {
-                            resource,
-                            span,
-                            initializer,
-                            handle,
-                        },
-                    )));
-                    tasks.push(ElaborationTask::Synthesize {
-                        expression: &resource.body,
-                        cause: None,
-                    });
+                    self.step_resource_body(resource, span, context, &mut tasks, &mut values)?;
                 }
                 ElaborationTask::FinishResource(progress) => {
-                    let body = values.pop().ok_or_else(invalid_state)?;
-                    values.push(self.finish_resource(*progress, body, context)?);
+                    self.step_resource_completion(progress, context, &mut values)?;
                 }
                 ElaborationTask::Equation(task) => {
                     self.step_equation_task(
@@ -10319,20 +10410,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         )?;
                     }
                     ResolvedExprKind::Resource(resource) => {
-                        self.type_work.charge(2).map_err(|()| type_resource())?;
-                        tasks.0.try_reserve(2).map_err(|_| type_resource())?;
-                        tasks.push(ElaborationTask::ResourceBody {
-                            resource,
-                            span: current.span,
-                        });
-                        tasks.push(ElaborationTask::Check {
-                            expression: &resource.initializer,
-                            expected: ProvenancedType {
-                                ty: Type::Int,
-                                provenance: TypeProvenance::atom(Some(resource.initializer.span)),
-                            },
-                            kind: CheckKind::General,
-                        });
+                        self.schedule_resource(resource, current.span, &mut tasks)?;
                     }
                     ResolvedExprKind::Perform(request) => {
                         self.schedule_perform(request, current.span, &mut tasks)?;
@@ -24252,6 +24330,110 @@ mod tests {
             .enforce_selected_method_rigidity(check)
             .expect("the exact traversal and one concrete comparison should fit");
         assert_eq!(elaborator.type_work.used(), EXACT_TYPE_WORK);
+    }
+
+    #[test]
+    fn pure_capture_publication_demand_scan_is_exact_atomic_and_retryable() {
+        for public in [false, true] {
+            for width in [1, 64] {
+                let mut declarations = String::new();
+                for ordinal in 0..width {
+                    let visibility = if public && ordinal + 1 == width {
+                        "pub "
+                    } else {
+                        ""
+                    };
+                    declarations.push_str(&format!(
+                        "{visibility}value{ordinal} : Unit -> Int\nvalue{ordinal} () = 42\n"
+                    ));
+                }
+                let module =
+                    resolved_module_fixture("capture-demand.ash", &declarations, "Int", "42");
+                let mut elaborator = Elaborator::for_module(&module).unwrap();
+                let mut schemes = elaborator
+                    .checked_module_schemes(module.definitions())
+                    .unwrap();
+                let exact = schemes.len();
+                for limit in [0, exact - 1] {
+                    elaborator.type_work = TypeWorkBudget::with_limit(limit);
+                    assert!(matches!(
+                        elaborator.capture_publication_required(&module, &schemes),
+                        Err(TypeError::Internal(
+                            ElaborationFailure::TypeResourceExhausted
+                        ))
+                    ));
+                    assert_eq!(elaborator.type_work.used(), 0);
+                }
+                for _ in 0..2 {
+                    elaborator.type_work = TypeWorkBudget::with_limit(exact);
+                    assert_eq!(
+                        elaborator
+                            .capture_publication_required(&module, &schemes)
+                            .unwrap(),
+                        public
+                    );
+                    assert_eq!(elaborator.type_work.used(), exact);
+                }
+                if public {
+                    let last = schemes.len() - 2;
+                    schemes[last].binder = schemes[last + 1].binder;
+                    elaborator.type_work = TypeWorkBudget::with_limit(exact);
+                    assert_eq!(
+                        elaborator.capture_publication_required(&module, &schemes),
+                        Err(invalid_state()),
+                        "a public spelling cannot substitute a different local binder"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pure_capture_publication_retains_private_helpers_for_public_consumers() {
+        let module = resolved_module_fixture(
+            "public-pure-capture.ash",
+            "hidden : Unit -> Int\nhidden () = 42\npub exposed : Unit -> Int\nexposed () = hidden ()\n",
+            "Int",
+            "exposed ()",
+        );
+        let checked = check_module(module).unwrap();
+        for scheme in checked.schemes() {
+            assert_ne!(
+                scheme.capture,
+                crate::core::capture::CaptureValueSummary::default()
+            );
+        }
+        let module = resolved_module_fixture(
+            "method-pure-capture.ash",
+            "interface Read<A> {\nread : A -> Int\n}\nimpl Read<Unit> {\nread () = 42\n}\n",
+            "Int",
+            "read ()",
+        );
+        let checked = check_module(module).unwrap();
+        assert_ne!(
+            checked.implementation_facts()[0].methods[0].capture,
+            crate::core::capture::CaptureValueSummary::default(),
+            "implementation methods demand summaries without a public global"
+        );
+    }
+
+    #[test]
+    fn private_pure_module_keeps_unused_capture_summaries_empty() {
+        let resolved = resolved_module_fixture(
+            "private-pure-capture.ash",
+            "hidden : Unit -> Int\nhidden () = 42\n",
+            "Int",
+            "hidden ()",
+        );
+        let checked = check_module(resolved).expect("the private pure module checks");
+        assert_eq!(checked.schemes().len(), 2);
+        for scheme in checked.schemes() {
+            assert_eq!(
+                scheme.capture,
+                crate::core::capture::CaptureValueSummary::default(),
+                "a private pure module has no portable-summary consumer"
+            );
+        }
     }
 
     #[test]

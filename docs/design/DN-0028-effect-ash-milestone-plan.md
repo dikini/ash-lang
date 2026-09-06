@@ -637,6 +637,11 @@ not need to replace the capture representation.
 
 Prerequisites: integrated scoped exact evidence and checked-discard kernel.
 
+The safe-cell scope is now accepted and under product implementation and
+verification. Its [evidence record](effect-ash/resource-scope-evidence.md)
+tracks the retained boundary and remaining reviews; the 16-unit weight is
+not closed until full verification and local integration complete.
+
 The proposal must define acquisition syntax, static versus runtime freshness,
 the resource value, whether a separate runtime identity witness is necessary
 and what its last use would be, exact provider evidence, identity-local effect
@@ -742,6 +747,6 @@ settles sequential lexical identity, escape, and erased scope validation.
 Scoped exact evidence settles pure introduction, precedence, improvement,
 authentication, and erasure. The branch results are not current on `main`.
 The completed capture/discard checkpoint settles bounded continuation
-abandonment. Resource-scope composition remains a later
-proposal-owned question. This informative plan authorizes neither expansion
+abandonment. Resource-scope composition is now an accepted product transition
+under implementation and review. This informative plan authorizes neither expansion
 nor integration into `main`.

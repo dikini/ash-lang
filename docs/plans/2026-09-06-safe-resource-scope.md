@@ -28,8 +28,8 @@ typed Core and loop-driven evaluator.
 - [x] Step 2: sealed builtin cell API and acquisition syntax carriers.
 - [x] Step 3: acquisition typing, exact provider authority and Core structure.
 - [x] Step 4: stored resource dependencies and carried scope obligations.
-- [ ] Step 5: cell allocation, exact dispatch, retention and release.
-- [ ] Step 6: complete adversarial/resource/abstraction corpus and reviews.
+- [x] Step 5: cell allocation, exact dispatch, retention and release.
+- [x] Step 6: complete adversarial/resource/abstraction corpus and reviews.
 - [ ] Step 7: specification, evidence, full gate and transition cleanup.
 - [ ] Local integration, merged-tree verification and clean-worktree lifecycle.
 
@@ -847,3 +847,152 @@ Strict Clippy, formatting, diff checks, Markdown lint and all five local links
 pass. Step 4 is accepted for an unsigned local commit. The seven prepared
 runtime probes still reach the final execution guard; Step 5 must implement
 cell ownership, exact activation dispatch and release before opening it.
+
+Step 4 is retained in unsigned commit `a841d46`, with a clean post-commit
+worktree. A fresh high-reasoning sole writer now owns Step 5. Parent-owned
+documentation and independent verification continue separately; no integration,
+remote or tag changes have occurred.
+
+Step 5's first four durable tests fail at the expected final execution guard.
+Independent runtime probes expose an additional static interaction defect:
+an imported accessor succeeds directly and under a nested cell, but its call
+through a row-polymorphic tuple helper is classified as an outward dependent
+request payload. The debugger identifies the builtin read's payload check.
+Diagnose that exact request/owner substitution read-only alongside runtime
+work; serialize any correction through the sole product writer and retain
+the unchanged helper witness. Metadata-only same-site and copied-closure
+probes reach the expected guard.
+
+Initial runtime transitions pass the first four durable tests, and the parent
+independently executes all seven original probes plus direct/nested imported
+accessors, metadata-only same-site activation and a copied closure after release:
+all 11 return `42`. The uncommitted runtime increment removes the final execution
+guard. Frame-owned payloads and non-owning keys now execute; capacity/failure
+evidence, remaining interactions and both reviews still precede Step 5 acceptance.
+The separate static row-relay rejection remains under diagnosis.
+
+Debugger evidence now confirms the missing substitution dimension: the actual
+callback retains row tail `E`; its context has the concrete cell effect, but
+type-only substitution leaves the accessor's identity unspecialized. Retain
+exact per-row-variable facts in the existing finite control context and expand
+the referenced tail before matching formal effect arguments. Preserve distinct
+rows, unresolved ambiguity, lacks and charged interning; do not use handle
+ownership to grant a handler match. Serialize this correction after a coherent
+runtime pause, with unchanged local/imported positives, independent-row and
+outward-payload negatives, exact retries and transformed-Core verification.
+
+Runtime is frozen at a coherent 1,217-test focused checkpoint plus the unchanged
+small-stack child (1,082 library, 26 Effect runtime, 43 polymorphism, 13 resource
+runtime, 53 resource typing). The previous static writer now exclusively owns
+the row correction; the runtime writer performs no edits or builds until the
+handoff returns. The parent also reproduces the local relay rejection. Step 5
+still requires remaining runtime capacity/instantiation evidence, full checks,
+self-review and both independent reviews.
+
+Parent verification during the static handoff passes six runtime ownership
+tests, including the deep test in a fresh process, and executes a full source
+program with 24 nested acquisitions to `42`. The unchanged row-relay failure
+is now a durable regression test before implementation. Runtime success does
+not replace its static correction or the remaining Step 5 review gates.
+
+The first keyed-row correction passes its owning exact/retry unit and all six
+local/imported source variants. Parent verification runs the four unchanged
+failing CLI fixtures to `42`, plus separate `E`/`F` callback and handled-prefix
+row compositions. Owner-relative payload and discard positive/negative controls
+also pass independently. Empty-row normalization, ambiguity/lacks, finite
+context retention and transformed-Core checks remain before the handoff back.
+
+The canonical pure-function case exposed an unresolved empty row; its unchanged
+regression passes after binding that row to empty. Separate lacks, conflicting
+equations and finite argument-universe tests pass, as does an imported row-relay
+Core program after independent validation and execution of both rebuilds.
+Parent verification also passes those focused checks. A subsequent independent
+library run passes 1,087 tests and fails only the new row-universe scan regression:
+nullary effect entries were inspected before their work was charged. The static
+writer retains sole ownership while correcting that scan and rerunning the
+gates. This does not close Step 5 or change the default work limit.
+
+The scan correction now passes its regression, and the parent independently
+passes all 1,088 library tests. Effect predecessor suites, 56 resource typing
+tests plus the small-stack child, 13 resource runtime tests and strict Clippy
+also pass. The broad command stops at the old resource-admission test, which
+still expects execution to be disabled but receives `42`. The runtime writer
+must replace that transitional expectation and remove its obsolete validation
+reason along with the remaining runtime evidence. Documentation lint, diff
+checks and all five local task/plan links pass.
+
+Static self-review found the same missing instance charge while initially
+collecting type subtrees from known and lacks rows. The isolated nullary-row
+regression fails before the correction and passes after one precharge at that
+owning traversal. The final static gate passes 1,089 library tests and 56 source
+typing tests plus the child; the parent independently reruns all 1,089 library
+tests successfully. No semantic behavior or default ceiling changes in this
+last correction. Runtime evidence and full independent reviews remain open.
+
+Runtime now relinquishes product ownership for independent review. Its gates
+pass 1,093 library tests, 298 integration tests plus two child checks,
+75 specification examples, and strict Clippy/fmt/diff. The full architecture
+scan passed 31 cases and identified one missing shared-environment inventory
+entry; the corrected remaining test passes. The parent independently passes
+all 1,093 library tests and 14 runtime tests plus the child process.
+
+The parent prepares Step 7's documentation while reviewers check the frozen
+product: all eight proposal-named specification/tool areas and the evidence
+report are drafted. The exact documented CLI example passes its new harness
+test; Markdown lint and local target checks pass. One fresh high-reasoning
+semantic review covers the Step 5 increment and the complete Step 6 matrix,
+including downstream simplification. A separate medium-reasoning documentation
+audit checks the draft. Rust/resource review follows semantic approval, and
+the full closure gate remains required. No step is closed by this draft alone.
+
+Semantic review finds no product defect. Its five opaque transport and
+selected-evidence payload witnesses are now retained as driver-backed tests:
+three return `42`, two reject `type.resource-escape`. Focused and full
+library/typing gates pass, the parent repeats all five, and semantic re-review
+closes the evidence gap. The downstream reassessment finds no demonstrated
+contradiction requiring extra proof, existential or hook machinery. The
+documentation audit also closes after three inventory/selection corrections.
+A fresh high-reasoning Rust/resource review now checks the frozen product;
+full verification, checkpoint retention and local integration still follow.
+
+Final Rust/resource review reports one remaining proportional-work defect:
+formal row effects are scanned without charge when the actual callback is
+pure or has an open tail. The independent width-1/4,096 witness measures equal
+work on each path and fails before correction. No additional runtime or
+row-retention finding remains in the review's bounded set. The sole runtime
+writer is retaining and correcting this regression before re-review and the
+full verification command; no limit or semantic change is authorized.
+
+The two-line charge correction preserves closed-row accounting and passes
+the unchanged owning regression, all 22 control tests and full corrected
+library/typing/runtime gates. Strict Clippy/fmt/diff pass; parent library
+verification passes all 1,094 tests. Rust/resource re-review approves with no
+remaining finding. The parent now runs `CARGO_INCREMENTAL=0 cargo xtask verify`
+on the frozen corrected product before retaining the combined runtime,
+interaction and specification checkpoint. Documentation and its executable
+example test will be retained together, then transition cleanup follows.
+
+The full gate passes build, Clippy, library, CLI and architecture, then fails
+the unchanged synthesized-wrapper stack and 10,000-member cycle work witnesses.
+Running all unreached integration suites identifies three additional failures:
+nested supplied methods, deep recursive calls, and nominal metadata admission
+for an exported closure factory. These regressions must be corrected and
+re-reviewed before repeating the full gate; no test or production limit changes
+are authorized. Checkpoint retention and local integration remain open.
+
+All five predecessor regressions are now corrected without changing their
+tests or limits. Stack-phase extraction, consumer-based Pure summary publication,
+and capture-only external metadata collection each pass independent semantic
+and Rust/resource reviews. The final writer gate passes library (1,099), scoped
+evidence interactions (53), local newtypes (20), interface validation (2),
+resource runtime (14), typing (61), children and strict Clippy/fmt/diff. Parent
+repeats the owning tests and source controls. The product is frozen for a fresh
+complete `CARGO_INCREMENTAL=0 cargo xtask verify`; no integration has occurred.
+
+The final full verification exits successfully: 2,365 top-level tests in 67
+binaries, plus two reported resource child runs; formatting, metadata, build,
+strict Clippy and warning-denied rustdoc all pass. All 32 architecture checks
+pass. The verified source/test/specification surface is unchanged from the
+frozen reviewed tree. Step 5 and Step 6 close; retain this complete product,
+test, specification and evidence checkpoint before transition-artifact cleanup.
+Local integration and its clean-worktree lifecycle still follow.

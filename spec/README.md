@@ -90,8 +90,17 @@ Function computations carry rows of exact, parameterized effect identities.
 exact instance. Each selected clause must consume its non-escaping continuation
 capability exactly once on every normally completing path, with `resume` or
 checked `discard`. Discard abandons the suspended segment only when inference
-proves it carries no other unfinished continuation obligation; the clause then
+proves it abandons or skips no other unfinished continuation or resource
+obligation; the clause then
 continues with `Unit`.
+
+`resource cell<R> c = initializer { body }` acquires one scoped mutable integer
+cell through the compiler-owned `@builtin.cell` API. The scope owns release;
+handles provide reusable access while it remains live. Inferred dependencies
+prevent handles, captured access and identity-indexed operations from escaping
+their owner, including through request payloads. Copied integers may escape.
+Each execution has a fresh activation, and capture/resume moves the owned
+scope without duplication. Normal completion releases it once.
 
 The source path selected for execution is the entry module. It declares exactly
 one local, monomorphic, unconstrained `main : Unit -> R`, where `R` is closed.
@@ -133,8 +142,10 @@ patterns, exhaustive matches and equations, sequential bindings, method-only
 interfaces, explicit constraints, anonymous implementations, and pure and
 effectful expressions with single-use, non-escaping handler continuations.
 
-The effect kernel adds no providers, hooks, resource regions, automatic cleanup,
-escaping or multi-shot resume, asynchronous execution, or dynamic loading.
+Beyond the fixed sealed cell provider and acquisition form, the effect kernel
+adds no general provider or resource declarations, hooks, automatic cleanup,
+foreign resources, escaping or multi-shot resume, asynchronous execution, or
+dynamic loading.
 A linked nonempty effect row is a source rejection rather than an
 unhandled-operation runtime result.
 

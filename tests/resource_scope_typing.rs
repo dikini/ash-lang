@@ -77,6 +77,164 @@ fn assert_check(outcome: Result<(), String>, expected: Option<&str>) {
     }
 }
 
+fn assert_opaque_resource_witness(source: &str, escapes: bool) {
+    let tree = Tree::new();
+    fs::write(tree.0.join("helper.ash"), "pub opaque type Box<A> = Hidden(A)\npub pack<A> : A -> Box<A>\npack value = Hidden value\npub unpack<A> : Box<A> -> A\nunpack (Hidden value) = value\n\n").unwrap();
+    let entry = tree.0.join("entry.ash");
+    fs::write(&entry, source).unwrap();
+    let result = ash::driver::run_path(ash::driver::RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    });
+    if escapes {
+        assert_eq!(result.unwrap_err().reason_code(), "type.resource-escape");
+    } else {
+        assert_eq!(result.unwrap().value_display(), "42");
+    }
+}
+
+#[test]
+fn imported_opaque_wrapper_preserves_live_cell_access() {
+    assert_opaque_resource_witness(
+        "import @builtin.cell as Cell\nimport helper (pack, unpack)\nmain : Unit -> Int\nmain () = resource cell<R> c = 41 {\nlet hidden = pack c\nlet access = unpack hidden\nlet _ = Cell.write (access, 42)\nCell.read c\n}\n\n",
+        false,
+    );
+}
+
+#[test]
+fn imported_opaque_wrapper_allows_copied_closure_escape() {
+    assert_opaque_resource_witness(
+        "import @builtin.cell as Cell\nimport helper (pack, unpack)\nmain : Unit -> Int\nmain () = {\nlet escaped = resource cell<R> c = 41 {\nlet copied = Cell.read c\nlet later : Unit -> Int = fn(ignored) {\ncopied + 1\n}\npack later\n}\nlet call = unpack escaped\ncall ()\n}\n\n",
+        false,
+    );
+}
+
+#[test]
+fn imported_opaque_wrapper_rejects_hidden_resource_closure_escape() {
+    assert_opaque_resource_witness(
+        "import @builtin.cell as Cell\nimport helper (pack, unpack)\nmain : Unit -> Int\nmain () = {\nlet escaped = resource cell<R> c = 41 {\nlet later : Unit -> Int = fn(ignored) {\nlet held = c\n42\n}\npack later\n}\nlet call = unpack escaped\ncall ()\n}\n\n",
+        true,
+    );
+}
+
+#[test]
+fn opaque_request_payload_allows_copied_evidence_after_release() {
+    assert_opaque_resource_witness(
+        "import @builtin.cell as Cell\nimport helper (Box, pack, unpack)\ninterface Read<A> {\nread : A -> Int\n}\neffect Send {\nsend : Box<(Unit -> Int)> -> Unit\n}\nmain : Unit -> Int\nmain () = handle (resource cell<R> c = 41 {\nlet copied = Cell.read c\nnewtype Token = Token(Unit)\nlet token = Token(())\nwith Read<Token> {\nread ignored = copied + 1\n}\nlet later : Unit -> Int = fn(ignored) {\nread token\n}\nlet _ = perform Send.send (pack later)\n42\n}) with Send {\nsend payload => {\nlet _ = resume ()\nlet call = unpack payload\ncall ()\n}\n}\n\n",
+        false,
+    );
+}
+
+#[test]
+fn opaque_request_payload_rejects_resource_dependent_evidence() {
+    assert_opaque_resource_witness(
+        "import @builtin.cell as Cell\nimport helper (Box, pack, unpack)\ninterface Read<A> {\nread : A -> Int\n}\neffect Send {\nsend : Box<(Unit -> Int)> -> Unit\n}\nmain : Unit -> Int\nmain () = handle (resource cell<R> c = 41 {\nlet copied = Cell.read c\nnewtype Token = Token(Unit)\nlet token = Token(())\nwith Read<Token> {\nread ignored = handle (Cell.read c) with Cell.Ops<R> {\nread ignored => resume 42\nwrite ignored => resume ()\n}\n}\nlet later : Unit -> Int = fn(ignored) {\nread token\n}\nlet _ = perform Send.send (pack later)\n42\n}) with Send {\nsend payload => {\nlet _ = resume ()\nlet call = unpack payload\ncall ()\n}\n}\n\n",
+        true,
+    );
+}
+
+#[test]
+fn row_polymorphic_relay_preserves_imported_and_local_accessor_identity() {
+    const HELPER: &str = "import @builtin.cell as Cell\npub reader<R> : Cell.Handle<R> -> (Unit -> Int ! {Cell.Ops<R>}) where Cell.Provider<R>\nreader value = fn(ignored) {\nCell.read value\n}\npub relay<E : EffectRow, A> : ((Unit -> Int ! {| E}), A) -> Int ! {| E}\nrelay (action, ignored) = action ()\n";
+    for imported in [true, false] {
+        for (nested, annotated) in [(false, false), (true, false), (true, true)] {
+            let tree = Tree::new();
+            fs::write(tree.0.join("helper.ash"), HELPER).unwrap();
+            let header = if imported {
+                "import @builtin.cell as Cell\nimport helper (reader, relay)\n".to_owned()
+            } else {
+                HELPER.replace("pub ", "")
+            };
+            let binding = if annotated {
+                "let get : Unit -> Int ! {Cell.Ops<R>} = reader c"
+            } else {
+                "let get = reader c"
+            };
+            let body = if nested {
+                "resource cell<S> other = 999 {\nrelay (get, true) + get ()\n}"
+            } else {
+                "relay (get, true) + get ()"
+            };
+            let source = format!(
+                "{header}main : Unit -> Int\nmain () = resource cell<R> c = 21 {{\n{binding}\n{body}\n}}\n"
+            );
+            tree.check(&source).unwrap_or_else(|error| {
+                panic!("imported={imported} nested={nested} annotated={annotated}: {error}")
+            });
+            let result = ash::driver::run_path(ash::driver::RunConfiguration {
+                entry: tree.0.join("entry.ash"),
+                roots: ModuleRoots::empty(),
+            })
+            .unwrap();
+            assert_eq!(result.value().to_string(), "42");
+        }
+    }
+}
+
+#[test]
+fn row_relays_keep_distinct_rows_and_locally_handled_prefixes() {
+    for source in [
+        "import @builtin.cell as Cell\nreader<R> : Cell.Handle<R> -> (Unit -> Int ! {Cell.Ops<R>}) where Cell.Provider<R>\nreader value = fn(ignored) {\nCell.read value\n}\nchoose<E : EffectRow, F : EffectRow> : ((Unit -> Int ! {| E}), (Unit -> Int ! {| F})) -> (Unit -> Int ! {| F}) ! {| E}\nchoose (first, second) = {\nlet _ = first ()\nlet later : Unit -> Int ! {| F} = fn(ignored) {\nsecond ()\n}\nlater\n}\nmain : Unit -> Int\nmain () = resource cell<R> c = 40 {\nresource cell<S> other = 2 {\nlet first = reader c\nlet second = reader other\nlet selected = choose (first, second)\nCell.read c + selected ()\n}\n}\n",
+        "import @builtin.cell as Cell\neffect Mark {\nmark : Unit -> Unit\n}\nreader<R> : Cell.Handle<R> -> (Unit -> Int ! {Mark, Cell.Ops<R>}) where Cell.Provider<R>\nreader value = fn(ignored) {\nlet _ = perform Mark.mark ()\nCell.read value\n}\nrelay<E : EffectRow> : (Unit -> Int ! {Mark | E}) -> Int ! {| E}\nrelay action = handle (action ()) with Mark {\nmark ignored => resume ()\n}\nmain : Unit -> Int\nmain () = resource cell<R> c = 42 {\nlet get = reader c\nrelay get\n}\n",
+        "import @builtin.cell as Cell\nreader<R> : Cell.Handle<R> -> (Unit -> Int ! {Cell.Ops<R>}) where Cell.Provider<R>\nreader value = fn(ignored) {\nCell.read value\n}\nrelay<E : EffectRow> : (Unit -> Int ! {| E}) -> Int ! {| E}\nrelay action = action ()\nmain : Unit -> Int\nmain () = resource cell<R> c = 20 {\nresource cell<S> other = 2 {\nlet get = reader c\nlet first = handle (relay get) with Cell.Ops<R> {\nread ignored => resume 40\nwrite ignored => resume ()\n}\nfirst + Cell.read other\n}\n}\n",
+    ] {
+        let tree = Tree::new();
+        tree.check(source).unwrap();
+        let result = ash::driver::run_path(ash::driver::RunConfiguration {
+            entry: tree.0.join("entry.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap();
+        assert_eq!(result.value().to_string(), "42");
+    }
+}
+
+#[test]
+fn row_relay_preserves_payload_and_scope_completion_obligations() {
+    for copied in [false, true] {
+        let capture = if copied { "copied" } else { "let held = c\n21" };
+        let source = format!(
+            "import @builtin.cell as Cell\neffect Send {{\nsend : (Unit -> Int) -> Int\n}}\nrelay<E : EffectRow> : (Unit -> Int ! {{| E}}) -> Int ! {{| E}}\nrelay action = action ()\nmain : Unit -> Int\nmain () = handle (resource cell<R> c = 21 {{\nlet copied = Cell.read c\nlet payload : Unit -> Int = fn(ignored) {{\n{capture}\n}}\nlet send : Unit -> Int ! {{Send}} = fn(ignored) {{\nperform Send.send payload\n}}\nrelay send\n}}) with Send {{\nsend payload => {{\nlet result = resume 21\nresult + payload ()\n}}\n}}\n"
+        );
+        let tree = Tree::new();
+        assert_check(
+            tree.check(&source),
+            if copied { None } else { Some("ResourceEscape") },
+        );
+        if copied {
+            let result = ash::driver::run_path(ash::driver::RunConfiguration {
+                entry: tree.0.join("entry.ash"),
+                roots: ModuleRoots::empty(),
+            })
+            .unwrap();
+            assert_eq!(result.value().to_string(), "42");
+        }
+    }
+    for discard in [false, true] {
+        let completion = if discard {
+            "let _ = discard\n42"
+        } else {
+            "resume 42"
+        };
+        let source = format!(
+            "import @builtin.cell as Cell\neffect Stop {{\nstop : Unit -> Int\n}}\nrelay<E : EffectRow> : (Unit -> Int ! {{| E}}) -> Int ! {{| E}}\nrelay action = action ()\nmain : Unit -> Int\nmain () = handle (resource cell<R> c = 21 {{\nlet stop : Unit -> Int ! {{Stop}} = fn(ignored) {{\nperform Stop.stop ()\n}}\nrelay stop\n}}) with Stop {{\nstop ignored => {{\n{completion}\n}}\n}}\n"
+        );
+        let tree = Tree::new();
+        assert_check(
+            tree.check(&source),
+            if discard { Some("DiscardUnsafe") } else { None },
+        );
+        if !discard {
+            let result = ash::driver::run_path(ash::driver::RunConfiguration {
+                entry: tree.0.join("entry.ash"),
+                roots: ModuleRoots::empty(),
+            })
+            .unwrap();
+            assert_eq!(result.value().to_string(), "42");
+        }
+    }
+}
+
 #[test]
 fn discarded_strict_inputs_do_not_publish_unexecuted_resource_results() {
     for (shape, source) in [
@@ -156,18 +314,12 @@ fn resource_owners_publish_checked_summaries_through_real_imports() {
         fs::write(tree.0.join("owner.ash"), owner).unwrap();
         tree.check(entry)
             .unwrap_or_else(|error| panic!("implementation_only={implementation_only}: {error}"));
-        let failure = ash::driver::run_path(ash::driver::RunConfiguration {
+        let result = ash::driver::run_path(ash::driver::RunConfiguration {
             entry: tree.0.join("entry.ash"),
             roots: ModuleRoots::empty(),
         })
-        .unwrap_err();
-        assert!(
-            matches!(failure,
-                ash::driver::FileFailure::Pipeline(ash::driver::PipelineFailure::Validation(ref error))
-                    if error.reason() == ash::core::validate::ValidationReason::ResourceProofUnavailable
-            ),
-            "implementation_only={implementation_only}: {failure:?}"
-        );
+        .unwrap();
+        assert_eq!(result.value().to_string(), "42");
     }
 }
 

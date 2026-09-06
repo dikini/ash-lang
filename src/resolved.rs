@@ -11283,7 +11283,7 @@ impl ExportSummary {
                 .types(type_work)
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?
             {
-                collect_nominal_identities(ty, &mut referenced_nominals, type_work)
+                collect_capture_external_nominals(ty, &mut referenced_nominals, type_work)
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?;
             }
             collect_scheme_nominal_identities(
@@ -11338,7 +11338,7 @@ impl ExportSummary {
                     .types(type_work)
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?
                 {
-                    collect_nominal_identities(ty, &mut referenced_nominals, type_work)
+                    collect_capture_external_nominals(ty, &mut referenced_nominals, type_work)
                         .map_err(|()| ResolvedBuildFailure::TypeResource)?;
                 }
                 collect_scheme_nominal_identities(
@@ -14706,6 +14706,23 @@ pub(crate) fn collect_nominal_identities(
     output: &mut HashSet<NominalTypeId>,
     budget: &mut TypeWorkBudget,
 ) -> Result<(), ()> {
+    collect_nominal_identities_with(root, output, budget, false)
+}
+
+fn collect_capture_external_nominals(
+    root: &Type,
+    output: &mut HashSet<NominalTypeId>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), ()> {
+    collect_nominal_identities_with(root, output, budget, true)
+}
+
+fn collect_nominal_identities_with(
+    root: &Type,
+    output: &mut HashSet<NominalTypeId>,
+    budget: &mut TypeWorkBudget,
+    external_capture_facts: bool,
+) -> Result<(), ()> {
     budget.charge(1)?;
     let mut work = Vec::new();
     work.try_reserve(1).map_err(|_| ())?;
@@ -14713,7 +14730,11 @@ pub(crate) fn collect_nominal_identities(
     while let Some(ty) = work.pop() {
         match ty {
             Type::Nominal(id) => {
-                retain_nominal_identity(*id, output, budget)?;
+                // Lexical identities stay in the immutable defining graph;
+                // they are not ordinary hidden facts exported to its callers.
+                if !external_capture_facts || !id.is_lexical() {
+                    retain_nominal_identity(*id, output, budget)?;
+                }
             }
             Type::Application(function, argument) => {
                 budget.charge(2)?;
@@ -20722,6 +20743,51 @@ mod tests {
                 assert_eq!(exact.used(), REVERSE_EXACT);
             }
         }
+    }
+
+    #[test]
+    fn capture_external_nominal_collection_is_exact_deep_and_preserves_lexical_types() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let module = ModuleId::new(9_831);
+                let external = NominalTypeId::new(module, 0);
+                let lexical = NominalTypeId::lexical(module, 0);
+                let mut root =
+                    Type::Tuple(Box::new([Type::Nominal(external), Type::Nominal(lexical)]));
+                for _ in 0..32_768 {
+                    root = Type::Function(Box::new(Type::Nominal(lexical)), Box::new(root));
+                }
+                let root = crate::types::IterativeTypeOwner::new(root);
+                let run = |budget: &mut TypeWorkBudget| {
+                    let mut output = HashSet::new();
+                    collect_capture_external_nominals(&root, &mut output, budget)?;
+                    assert_eq!(output, HashSet::from([external]));
+                    Ok::<(), ()>(())
+                };
+                let mut measured = TypeWorkBudget::unbounded();
+                run(&mut measured).unwrap();
+                assert_eq!(measured.used(), 2 * 32_768 + 4);
+                for limit in [0, measured.used() - 1] {
+                    assert!(run(&mut TypeWorkBudget::with_limit(limit)).is_err());
+                }
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(measured.used());
+                    run(&mut exact).unwrap();
+                    assert_eq!(exact.used(), measured.used());
+                }
+                let mut ordinary = HashSet::new();
+                collect_nominal_identities(&root, &mut ordinary, &mut TypeWorkBudget::unbounded())
+                    .unwrap();
+                assert_eq!(
+                    ordinary,
+                    HashSet::from([external, lexical]),
+                    "capture inventory must not rewrite the immutable types"
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]

@@ -49,6 +49,14 @@ operations with their exact effect, operation, handler, and resume-owner
 identities. A row tail
 or effect argument is zonked before a checked summary or Core node is retained.
 
+A resource expression lowers to one Effect `Resource` carrier with an
+initializer and body. It retains the acquisition's identity binder, handle
+binder, exact builtin API relation, generated provider methods and causal
+origin. The initializer remains outside the acquired scope. The body receives
+the authenticated lexical provider, whose ordinary method functions request
+the corresponding `Ops<R>` operations. This is not a generic provider registry
+or an ordinary source `with` declaration. Pure Core admits no resource carrier.
+
 Resolution has already replaced source type spellings with stable nominal and
 type-parameter identities. Elaboration may introduce inference variables while
 checking, but it solves and removes every inference variable before constructing
@@ -241,9 +249,13 @@ Pure Core families. Effect Core adds only these operation-family nodes:
 - each clause retains its operation identity, checked irrefutable pattern,
   body, handler identity, and one resume-owner identity;
 - `Resume(handler, owner, value)` remains a clause-scoped Core operation rather
-  than a value or function; and
+  than a value or function;
 - `Discard(handler, owner)` is a clause-scoped, childless operation with value
-  type `Unit` and empty immediate row.
+  type `Unit` and empty immediate row; and
+- `Resource(acquisition, handle, initializer, body)` retains the authenticated
+  builtin relation, evaluates the initializer outside the acquired scope, and
+  removes exactly its `Ops<R>` instance from the body row before union with
+  the initializer row.
 
 Effect and operation declarations remain authenticated registry facts. Core
 contains no provider choice or runtime effect registration. Lowering does not
@@ -614,6 +626,9 @@ rejects every effect operation. Effect Core validation independently checks:
   and one shared handler result and output row;
 - each resume's handler and owner, input and result types, and output row;
 - each discard's handler and owner, `Unit` type, empty row and inferred safety;
+- each resource's builtin origin, unique acquisition identity and handle,
+  sealed provider and operation relation, initializer scope and `Int` type,
+  body scope, exact row discharge and result contract;
 - exactly-once structural completion through resume or discard, and barriers
   against escape into functions, recursive members, supplied methods, or nested
   clauses;
@@ -630,6 +645,22 @@ Capture validation independently derives request obligations from the actual
 linked Core control after ordinary validation. It does not trust an elaborator
 permission or imported summary in place of that derivation. A transformed
 program must re-establish the same safety property.
+
+Resource validation also reconstructs stored value and callable dependencies
+and resource-completion obligations from actual linked Core, even when there
+is no discard. It checks closing results, operation payloads crossing each
+owner and skipped completion, including restored control. Retained imported
+facts and elaborator results do not replace this independent derivation.
+Identity and folding transforms rebuild resource children and authentication
+facts and return to the same full check before execution. Forged builtin
+origins, identity/handle/provider relations, lexical owners, dependencies or
+rows cannot authorize evaluation.
+
+Static acquisition identities remain distinct from runtime activation keys.
+Core carries the former and contains no preallocated activation or mutable
+cell. Dynamic lexical instantiation binds each executed acquisition to a fresh
+activation; it cannot introduce an inference variable into validated Core or
+feed execution metadata back into source typing.
 
 For every resolved global with a nonempty outer binder list, validation
 requires its `TypeAbstraction` to be the immediate initializer of exactly one
@@ -710,7 +741,8 @@ binder, node, term-scope, and type-scope passes. It is neither reset between
 passes nor supplemented by a separate kind allowance. Core validation applies
 once to the whole linked Core program, including every module group and the
 generated entry application. Effect instances, rows, operations, clauses,
-resume owners, handler scopes, capture metadata and capture queries charge
+resume owners, handler scopes, resource relations, stored dependencies,
+capture metadata and capture queries charge
 that same ledger before retention or
 traversal. Failure of this boundary is an internal compiler failure, not a
 source-language typing result.

@@ -3981,7 +3981,7 @@ impl Resolver {
                     "imported implementation capture type scan exceeded its work budget",
                 )
             })? {
-                self.retain_type_nominals(ty, summary, span)?;
+                self.retain_capture_type_metadata(ty, summary, span)?;
             }
             for effect in method.capture.effects(&mut self.type_work).map_err(|()| {
                 error(
@@ -4221,7 +4221,7 @@ impl Resolver {
                 "imported capture type scan exceeded its work budget",
             )
         })? {
-            self.retain_type_nominals(ty, summary, span)?;
+            self.retain_capture_type_metadata(ty, summary, span)?;
         }
         for effect in exported
             .capture
@@ -4466,6 +4466,25 @@ impl Resolver {
         summary: &ExportSummary,
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
+        self.retain_type_nominals_with(scheme, summary, span, false)
+    }
+
+    fn retain_capture_type_metadata(
+        &mut self,
+        ty: &Type,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        self.retain_type_nominals_with(ty, summary, span, true)
+    }
+
+    fn retain_type_nominals_with(
+        &mut self,
+        scheme: &Type,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+        external_capture_facts: bool,
+    ) -> Result<(), ResolveError> {
         enum Task<'a> {
             Type(&'a Type),
             Sequence(std::slice::Iter<'a, Type>),
@@ -4518,6 +4537,12 @@ impl Resolver {
             };
             match ty {
                 Type::Nominal(id) => {
+                    // Only capture metadata may mention internal lexical IDs.
+                    // Keep traversing its complete types, including embedded
+                    // effect instances, but demand no ordinary fact for them.
+                    if external_capture_facts && id.is_lexical() {
+                        continue;
+                    }
                     let mut already_seen = false;
                     for retained in &seen {
                         self.type_work.charge(1).map_err(|()| {
@@ -10070,6 +10095,73 @@ mod tests {
     };
 
     static IMPORT_BUDGET_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn capture_type_metadata_excludes_only_lexical_fact_demand_and_retries_exactly() {
+        let source = SourceFile::new("capture-metadata", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let module = ModuleId::new(9_093);
+        let lexical = NominalTypeId::lexical(module, 0);
+        let missing = NominalTypeId::new(module, 0);
+        let summary =
+            ExportSummary::test_fixture(module, Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let root = Type::Tuple(Box::new([Type::Nominal(lexical), Type::Int]));
+        let run = |budget| {
+            let mut resolver = Resolver::with_type_work(ModuleId::new(9_094), budget);
+            let result = resolver.retain_capture_type_metadata(&root, &summary, span);
+            assert!(resolver.imported.nominal(lexical).is_none());
+            (result, resolver.type_work.used())
+        };
+        let (result, exact) = run(TypeWorkBudget::unbounded());
+        result.unwrap();
+        assert!(exact >= 3);
+        for limit in [0, exact - 1] {
+            assert_eq!(
+                run(TypeWorkBudget::with_limit(limit)).0.unwrap_err().reason,
+                ResolveReason::TypeResourceExhausted
+            );
+        }
+        for _ in 0..2 {
+            let (result, used) = run(TypeWorkBudget::with_limit(exact));
+            result.unwrap();
+            assert_eq!(used, exact);
+        }
+        let mut resolver = Resolver::new(ModuleId::new(9_094));
+        assert_eq!(
+            resolver
+                .retain_type_nominals(&root, &summary, span)
+                .unwrap_err()
+                .reason,
+            ResolveReason::InternalState,
+            "ordinary exported types must still require nominal facts"
+        );
+        assert_eq!(
+            resolver
+                .retain_capture_type_metadata(&Type::Nominal(missing), &summary, span)
+                .unwrap_err()
+                .reason,
+            ResolveReason::InternalState,
+            "a missing ordinary capture nominal is still invalid"
+        );
+        let effect_type = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Int,
+                crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                    crate::types::EffectId::new(module, 0),
+                    Box::new([]),
+                )),
+            ),
+        );
+        assert_eq!(
+            resolver
+                .retain_capture_type_metadata(&effect_type, &summary, span)
+                .unwrap_err()
+                .reason,
+            ResolveReason::InternalState,
+            "signature-only effects still require authenticated metadata"
+        );
+    }
 
     #[test]
     fn opaque_newtype_value_scheme_retains_canonical_closure_without_constructor_access() {

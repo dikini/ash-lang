@@ -137,6 +137,7 @@ fn runtime_class(program: &ValidatedProgram, event: &TraceEvent) -> &'static str
 
 fn runtime_value_class(value: &Value) -> &'static str {
     match value {
+        Value::ResourceHandle(_) => "resource-handle",
         Value::Integer(_) => "integer",
         Value::Boolean(_) => "boolean",
         Value::Unit => "unit",
@@ -159,6 +160,7 @@ const fn runtime_failure_class(failure: RuntimeFailure) -> &'static str {
         RuntimeFailure::InvalidControlState => "runtime.invalid-control-state",
         RuntimeFailure::HeapCapacity => "runtime.heap-capacity",
         RuntimeFailure::CapturedControlCapacity => "runtime.captured-control-capacity",
+        RuntimeFailure::ResourceCapacity => "runtime.resource-capacity",
         RuntimeFailure::InvalidLocation => "runtime.invalid-location",
         RuntimeFailure::UninitializedLocation => "runtime.uninitialized-location",
         RuntimeFailure::AliasLoop => "runtime.alias-loop",

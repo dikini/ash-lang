@@ -1877,6 +1877,20 @@ fn tool_success_example_has_exact_cli_observation() {
 }
 
 #[test]
+fn resource_cell_documentation_example_has_exact_cli_output() {
+    let text = "import @builtin.cell as Cell\n\nmain : Unit -> Int\nmain () = resource cell<R> c = 41 {\n    let _ = Cell.write (c, 42)\n    Cell.read c\n}\n";
+    let source = TempFile::write(text);
+    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .arg(source.path())
+        .output()
+        .expect("the documented resource executable should start");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"42 : Int\n");
+    assert!(output.stderr.is_empty());
+    assert_documented("docs/tools/ash.md", text);
+}
+
+#[test]
 fn tool_module_newtype_observation_has_exact_cli_output() {
     let source = TempFile::write(MODULE_NEWTYPE_MODULE);
     let output = Command::new(env!("CARGO_BIN_EXE_ash"))

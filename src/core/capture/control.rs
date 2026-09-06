@@ -27,8 +27,9 @@ use super::{
 use crate::{
     source::Span,
     types::{
-        EffectInstance, Type, TypeVariableId, TypeWorkBudget, clone_type_with_budget,
-        same_type_with_budget, substitute_type_variables_with,
+        EffectInstance, EffectRow, EffectRowVariable, Type, TypeVariableId, TypeWorkBudget,
+        clone_effect_row_with_budget, clone_type_with_budget, rebuild_effect_row_with_budget,
+        same_type_with_budget, substitute_type_and_row_variables_with,
     },
 };
 
@@ -682,8 +683,19 @@ struct Context {
     // Each replacement names an original type subtree; MAX is unproved.
     // There are no recursively extended substitution-context identities.
     bindings: Vec<(TypeVariableId, usize)>,
-    row: Vec<usize>,
-    open: bool,
+    // Exact row keys stay distinct even when their callbacks share a caller.
+    rows: Vec<RowBinding>,
+}
+
+#[derive(Debug, Eq, Hash, PartialEq)]
+struct RowBinding {
+    variable: TypeVariableId,
+    // Labels use only arguments in the same original type-subtree universe.
+    known: Vec<usize>,
+    tail: Option<EffectRowVariable>,
+    lacks: Vec<usize>,
+    // Conflicting equations never establish an empty or exact replacement.
+    unproved: bool,
 }
 
 pub(super) struct Analysis<'a> {
@@ -751,7 +763,19 @@ impl<'a> Analysis<'a> {
                     pending.try_reserve(2).map_err(|_| Failure::Resource)?;
                     pending.push(domain);
                     pending.push(result.value());
-                    for effect in result.effects().known() {
+                    charge(
+                        budget,
+                        result.effects().known().len()
+                            + result.effects().tail().map_or(0, |tail| tail.lacks().len()),
+                    )?;
+                    for effect in result.effects().known().iter().chain(
+                        result
+                            .effects()
+                            .tail()
+                            .into_iter()
+                            .flat_map(|tail| tail.lacks()),
+                    ) {
+                        charge(budget, effect.arguments().len())?;
                         pending
                             .try_reserve(effect.arguments().len())
                             .map_err(|_| Failure::Resource)?;
@@ -765,8 +789,7 @@ impl<'a> Analysis<'a> {
         contexts.try_reserve(1).map_err(|_| Failure::Resource)?;
         contexts.push(Context {
             bindings: Vec::new(),
-            row: Vec::new(),
-            open: true,
+            rows: Vec::new(),
         });
         Ok(Self {
             graph,
@@ -787,14 +810,13 @@ impl<'a> Analysis<'a> {
         })
     }
 
-    fn substitute(
+    fn type_replacements(
         &self,
-        ty: &Type,
-        context: usize,
+        bindings: &[(TypeVariableId, usize)],
         budget: &mut TypeWorkBudget,
-    ) -> Result<Type, Failure> {
+    ) -> Result<Substitutions, Failure> {
         let mut substitutions = Substitutions::default();
-        for (variable, target) in &self.contexts[context].bindings {
+        for (variable, target) in bindings {
             charge(budget, 1)?;
             if *target == usize::MAX {
                 continue;
@@ -809,12 +831,48 @@ impl<'a> Analysis<'a> {
                     .map_err(|_| Failure::Resource)?,
             );
         }
-        substitute_type_variables_with(
+        Ok(substitutions)
+    }
+
+    fn substitute(
+        &self,
+        ty: &Type,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Type, Failure> {
+        let substitutions = self.type_replacements(&self.contexts[context].bindings, budget)?;
+        let mut rows = HashMap::new();
+        for binding in &self.contexts[context].rows {
+            charge(budget, 1)?;
+            if binding.unproved || binding.tail == Some(EffectRowVariable::rigid(binding.variable))
+            {
+                continue;
+            }
+            let effect = |id: &usize| {
+                self.labels[*id]
+                    .effect
+                    .as_deref()
+                    .expect("exact row labels have instances")
+            };
+            let row = rebuild_effect_row_with_budget(
+                binding.known.iter().map(effect),
+                binding.tail,
+                binding.lacks.iter().map(effect),
+                clone_type_with_budget,
+                budget,
+            )
+            .map_err(|_| Failure::Resource)?;
+            rows.try_reserve(1).map_err(|_| Failure::Resource)?;
+            rows.insert(binding.variable, row);
+        }
+        substitute_type_and_row_variables_with(
             ty,
             &substitutions.0,
+            &rows,
             |count| charge(budget, count),
             || Failure::Resource,
-        )
+        )?
+        .map_err(|_| Failure::Invalid)
     }
 
     fn intern_label(
@@ -978,6 +1036,7 @@ impl<'a> Analysis<'a> {
         pending.try_reserve(1).map_err(|_| Failure::Resource)?;
         pending.push((&self.graph.callables[target].ty, actual));
         let mut bindings = Vec::new();
+        let mut row_equations = Vec::new();
         while let Some((formal, actual)) = pending.pop() {
             charge(budget, 1)?;
             if let Type::Variable(variable) = formal {
@@ -1003,9 +1062,29 @@ impl<'a> Analysis<'a> {
                 pending.try_reserve(2).map_err(|_| Failure::Resource)?;
                 pending.push((formal.domain(), actual.domain()));
                 pending.push((formal.value(), actual.value()));
-                if let (Some(formal), Some(actual)) = (formal.effects(), actual.effects()) {
+                if let Some(formal) = formal.effects() {
+                    let actual = actual.effects();
+                    if matches!(
+                        formal.tail().map(|tail| tail.variable()),
+                        Some(EffectRowVariable::Rigid(_))
+                    ) {
+                        charge(budget, 1)?;
+                        row_equations
+                            .try_reserve(1)
+                            .map_err(|_| Failure::Resource)?;
+                        row_equations.push((formal, actual));
+                    }
+                    charge(budget, formal.known().len())?;
                     for effect in formal.known() {
-                        charge(budget, actual.known().len() + 1)?;
+                        let Some(actual) = actual else {
+                            continue;
+                        };
+                        // An unresolved tail may contain another instance of this API.
+                        // Its known prefix alone cannot determine the target's identity.
+                        if actual.tail().is_some() {
+                            continue;
+                        }
+                        charge(budget, actual.known().len())?;
                         let mut matches = actual
                             .known()
                             .iter()
@@ -1041,43 +1120,69 @@ impl<'a> Analysis<'a> {
                 }
             }
         }
-        let mut row = Vec::new();
-        let mut open = false;
-        if let Some(effects) = actual
-            .function_view()
-            .and_then(|function| function.effects())
-        {
-            open = effects.tail().is_some() && self.contexts[context].open;
-            for effect in effects.known() {
-                let request = Request::effect(effect, *source, budget)?;
-                let label = self.intern_label(request, budget)?;
-                row.try_reserve(1).map_err(|_| Failure::Resource)?;
-                row.push(label);
-            }
-            if effects.tail().is_some() {
-                charge(budget, self.contexts[context].row.len())?;
-                for label in &self.contexts[context].row {
-                    row.try_reserve(1).map_err(|_| Failure::Resource)?;
-                    row.push(*label);
+        let mut rows: Vec<RowBinding> = Vec::new();
+        if !row_equations.is_empty() {
+            let substitutions = self.type_replacements(&bindings, budget)?;
+            for (formal, actual) in row_equations {
+                let Some(EffectRowVariable::Rigid(variable)) =
+                    formal.tail().map(|tail| tail.variable())
+                else {
+                    return Err(Failure::Invalid);
+                };
+                let formal = formal
+                    .substitute_type_variables_with_budget(&substitutions.0, budget)
+                    .map_err(|_| Failure::Resource)?;
+                let mut remainder = if let Some(actual) = actual {
+                    clone_effect_row_with_budget(actual, budget).map_err(|_| Failure::Resource)?
+                } else {
+                    EffectRow::empty()
+                };
+                let mut unproved = false;
+                for instance in formal.known() {
+                    match remainder
+                        .remove_exact_with_budget(instance, budget)
+                        .map_err(|_| Failure::Resource)?
+                    {
+                        Ok(rest) => remainder = rest,
+                        Err(_) => {
+                            unproved = true;
+                            break;
+                        }
+                    }
+                }
+                let incoming = self.row_binding(variable, &remainder, unproved, *source, budget)?;
+                charge(budget, rows.len())?;
+                if let Some(previous) = rows.iter_mut().find(|binding| binding.variable == variable)
+                {
+                    charge(
+                        budget,
+                        previous.known.len()
+                            + previous.lacks.len()
+                            + incoming.known.len()
+                            + incoming.lacks.len()
+                            + 1,
+                    )?;
+                    if *previous != incoming {
+                        previous.known.clear();
+                        previous.lacks.clear();
+                        previous.tail = None;
+                        previous.unproved = true;
+                    }
+                } else {
+                    charge(budget, 1)?;
+                    rows.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    rows.push(incoming);
                 }
             }
         }
-        charge(
-            budget,
-            row.len()
-                .saturating_mul(row.len().max(1).ilog2() as usize + 1),
-        )?;
-        row.sort_unstable();
-        row.dedup();
         // Binding traversal is determined by the retained formal type.
-        let incoming = Context {
-            bindings,
-            row,
-            open,
-        };
+        let incoming = Context { bindings, rows };
         let mut result = None;
         for (id, previous) in self.contexts.iter().enumerate() {
-            charge(budget, previous.bindings.len() + previous.row.len() + 1)?;
+            charge(budget, previous.bindings.len() + previous.rows.len() + 1)?;
+            for row in &previous.rows {
+                charge(budget, row.known.len() + row.lacks.len())?;
+            }
             if previous == &incoming {
                 result = Some(id);
                 break;
@@ -1099,6 +1204,77 @@ impl<'a> Analysis<'a> {
             .map_err(|_| Failure::Resource)?;
         self.call_cache.insert((code, target, context), result);
         Ok(result)
+    }
+
+    fn row_binding(
+        &mut self,
+        variable: TypeVariableId,
+        row: &EffectRow,
+        mut unproved: bool,
+        source: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<RowBinding, Failure> {
+        let mut known = Vec::new();
+        let mut lacks = Vec::new();
+        // Row substitutions must not recursively grow a new argument universe.
+        // As for ordinary bindings, exact arguments name original type subtrees.
+        charge(
+            budget,
+            row.known().len() + row.tail().map_or(0, |tail| tail.lacks().len()),
+        )?;
+        for instance in row
+            .known()
+            .iter()
+            .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+        {
+            charge(budget, instance.arguments().len())?;
+            for argument in instance.arguments() {
+                let mut found = false;
+                for original in &self.types {
+                    if same_type_with_budget(argument, original, budget)
+                        .map_err(|_| Failure::Resource)?
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                unproved |= !found;
+            }
+        }
+        if !unproved {
+            for (destination, instances) in [
+                (&mut known, row.known()),
+                (&mut lacks, row.tail().map_or(&[][..], |tail| tail.lacks())),
+            ] {
+                charge(budget, instances.len())?;
+                destination
+                    .try_reserve(instances.len())
+                    .map_err(|_| Failure::Resource)?;
+                for instance in instances {
+                    let label = Request::effect(instance, source, budget)?;
+                    destination.push(self.intern_label(label, budget)?);
+                }
+                charge(
+                    budget,
+                    destination
+                        .len()
+                        .saturating_mul(destination.len().max(1).ilog2() as usize + 1),
+                )?;
+                destination.sort_unstable();
+                destination.dedup();
+            }
+        }
+        Ok(RowBinding {
+            variable,
+            known,
+            tail: if unproved {
+                None
+            } else {
+                row.tail().map(|tail| tail.variable())
+            },
+            lacks,
+            unproved,
+        })
     }
 
     fn source(&self, event: Event) -> Span {
@@ -1400,15 +1576,13 @@ impl<'a> Analysis<'a> {
                                     labels.push(label);
                                 }
                                 if effects.tail().is_some() {
-                                    labels
-                                        .try_reserve(self.contexts[state.context].row.len() + 1)
-                                        .map_err(|_| Failure::Resource)?;
-                                    labels.extend(&self.contexts[state.context].row);
-                                    if self.contexts[state.context].open {
-                                        let label =
-                                            self.intern_label(Request::unknown(source), budget)?;
-                                        labels.push(label);
-                                    }
+                                    // Exact row bindings were expanded by substitute. Any
+                                    // remaining tail is unknown, not the enclosing call's row.
+                                    let label =
+                                        self.intern_label(Request::unknown(source), budget)?;
+                                    charge(budget, 1)?;
+                                    labels.try_reserve(1).map_err(|_| Failure::Resource)?;
+                                    labels.push(label);
                                 }
                                 for label in labels {
                                     let port = self
@@ -3275,6 +3449,576 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    #[test]
+    fn row_tail_contexts_bind_callback_identity_without_conflating_local_rows() {
+        use crate::types::EffectRowVariable;
+        let source = SourceFile::new("row-context", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let effect = EffectId::new(ModuleId::new(0), 0);
+        let row_e = TypeVariableId::new(0);
+        let row_f = TypeVariableId::new(1);
+        let identity = TypeVariableId::new(2);
+        let owner_a = TypeVariableId::new(3);
+        let owner_b = TypeVariableId::new(4);
+        let instance = |variable| EffectInstance::new(effect, Box::new([Type::Variable(variable)]));
+        let open = |variable| EffectRow::open(EffectRowVariable::rigid(variable), Box::new([]));
+        let closed = |variable| EffectRow::singleton(instance(variable));
+        let callback =
+            |row| Type::function_computation(Type::Unit, ComputationType::new(Type::Int, row));
+        let relay = |left, right, output| {
+            Type::function_computation(
+                Type::Tuple(vec![callback(left), callback(right)].into_boxed_slice()),
+                ComputationType::new(Type::Int, output),
+            )
+        };
+        let mut preparation = TypeWorkBudget::unbounded();
+        let graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: vec![
+                Callable {
+                    body: 0,
+                    ty: relay(open(row_e), open(row_f), open(row_e)),
+                    result: Value::default(),
+                },
+                Callable {
+                    body: 0,
+                    ty: callback(closed(identity)),
+                    result: Value::default(),
+                },
+            ],
+            types: TypeArguments(vec![
+                relay(closed(owner_a), closed(owner_b), closed(owner_a)),
+                callback(open(row_e)),
+                callback(open(row_f)),
+            ]),
+            code: vec![
+                Control::Return,
+                Control::Call {
+                    value: Value::default(),
+                    ty: 0,
+                    source: span,
+                },
+                Control::Call {
+                    value: Value::default(),
+                    ty: 1,
+                    source: span,
+                },
+                Control::Call {
+                    value: Value::default(),
+                    ty: 2,
+                    source: span,
+                },
+                Control::Request(
+                    Request::effect(&instance(identity), span, &mut preparation).unwrap(),
+                ),
+                Control::Request(
+                    Request::effect(&instance(owner_a), span, &mut preparation).unwrap(),
+                ),
+                Control::Request(
+                    Request::effect(&instance(owner_b), span, &mut preparation).unwrap(),
+                ),
+            ],
+        };
+        let run = |budget: &mut TypeWorkBudget| {
+            let mut analysis = Analysis::new(&graph, budget)?;
+            let relay = analysis.call_context(1, 0, 0, budget)?;
+            for (call, expected, unrelated) in [(2, 5, 6), (3, 6, 5)] {
+                let context = analysis.call_context(call, 1, relay, budget)?;
+                let request = analysis.label(4, context, budget)?;
+                let expected = analysis.label(expected, 0, budget)?;
+                let unrelated = analysis.label(unrelated, 0, budget)?;
+                assert_eq!(
+                    analysis.match_labels(request, expected, budget)?,
+                    (true, false),
+                    "the referenced row must supply the exact identity"
+                );
+                assert_ne!(
+                    analysis.match_labels(request, unrelated, budget)?,
+                    (true, false),
+                    "a locally handled F must not borrow enclosing E"
+                );
+            }
+            Ok::<(), Failure>(())
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        run(&mut measured).unwrap();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        for _ in 0..2 {
+            run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+        }
+    }
+
+    #[test]
+    fn formal_known_scan_preflights_pure_and_open_actual_rows_with_exact_retries() {
+        let source = SourceFile::new("formal-known-scan", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        for open in [false, true] {
+            let mut costs = Vec::new();
+            for width in [1, 4096] {
+                let actual = if open {
+                    Type::function_computation(
+                        Type::Unit,
+                        ComputationType::new(
+                            Type::Int,
+                            EffectRow::open(
+                                EffectRowVariable::rigid(TypeVariableId::new(0)),
+                                Box::new([]),
+                            ),
+                        ),
+                    )
+                } else {
+                    Type::Function(Box::new(Type::Unit), Box::new(Type::Int))
+                };
+                let formal = Type::function_computation(
+                    Type::Unit,
+                    ComputationType::new(
+                        Type::Int,
+                        EffectRow::closed(
+                            (0..width)
+                                .map(|ordinal| {
+                                    EffectInstance::new(
+                                        EffectId::new(ModuleId::new(0), ordinal),
+                                        Box::new([]),
+                                    )
+                                })
+                                .collect(),
+                        ),
+                    ),
+                );
+                let graph = SummaryGraph {
+                    effects: true,
+                    data: None,
+                    callables: vec![Callable {
+                        body: 0,
+                        ty: formal,
+                        result: Value::default(),
+                    }],
+                    types: TypeArguments(vec![actual]),
+                    code: vec![Control::Call {
+                        value: Value::default(),
+                        ty: 0,
+                        source: span,
+                    }],
+                };
+                let run = |budget: &mut TypeWorkBudget| {
+                    let mut analysis =
+                        Analysis::new(&graph, &mut TypeWorkBudget::unbounded()).unwrap();
+                    let outcome = analysis.call_context(0, 0, 0, budget);
+                    if outcome.is_err() {
+                        assert!(
+                            analysis.call_cache.is_empty(),
+                            "failed work must not cache a call context"
+                        );
+                        assert_eq!(
+                            analysis.contexts.len(),
+                            1,
+                            "failed work must not publish a context"
+                        );
+                    }
+                    assert_eq!(
+                        outcome?, 0,
+                        "pure and unresolved actual rows yield no identity binding"
+                    );
+                    Ok::<(), Failure>(())
+                };
+                let mut measured = TypeWorkBudget::unbounded();
+                run(&mut measured).unwrap();
+                assert!(
+                    measured.used() >= width as usize,
+                    "formal width {width}, open={open}: only {} work units charged",
+                    measured.used()
+                );
+                costs.push(measured.used());
+                for limit in [0, width as usize - 1, measured.used() - 1] {
+                    assert!(matches!(
+                        run(&mut TypeWorkBudget::with_limit(limit)),
+                        Err(Failure::Resource)
+                    ));
+                }
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(measured.used());
+                    run(&mut exact).unwrap();
+                    assert_eq!(exact.used(), measured.used());
+                }
+            }
+            assert_eq!(
+                costs[1] - costs[0],
+                4095,
+                "each formal label must have one admitted visit"
+            );
+        }
+    }
+
+    #[test]
+    fn row_context_records_empty_effects_from_erased_pure_function_types() {
+        use crate::types::EffectRowVariable;
+        let source = SourceFile::new("empty-row-context", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let row = TypeVariableId::new(0);
+        let callback = || {
+            Type::function_computation(
+                Type::Unit,
+                ComputationType::new(
+                    Type::Int,
+                    EffectRow::open(EffectRowVariable::rigid(row), Box::new([])),
+                ),
+            )
+        };
+        let pure = || Type::Function(Box::new(Type::Unit), Box::new(Type::Int));
+        let graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: vec![Callable {
+                body: 0,
+                ty: Type::function_computation(
+                    callback(),
+                    ComputationType::new(
+                        Type::Int,
+                        EffectRow::open(EffectRowVariable::rigid(row), Box::new([])),
+                    ),
+                ),
+                result: Value::default(),
+            }],
+            types: TypeArguments(vec![Type::Function(Box::new(pure()), Box::new(Type::Int))]),
+            code: vec![Control::Call {
+                value: Value::default(),
+                ty: 0,
+                source: span,
+            }],
+        };
+        let run = |budget: &mut TypeWorkBudget| {
+            let mut analysis = Analysis::new(&graph, budget)?;
+            let context = analysis.call_context(0, 0, 0, budget)?;
+            let actual = TypeArguments(vec![analysis.substitute(&callback(), context, budget)?]);
+            assert_eq!(actual.0[0], pure());
+            Ok::<(), Failure>(())
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        run(&mut measured).unwrap();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        for _ in 0..2 {
+            run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+        }
+    }
+
+    #[test]
+    fn row_type_universe_preflights_nullary_known_and_lacks_visits() {
+        const WIDTH: usize = 96;
+        let instance =
+            |ordinal| EffectInstance::new(EffectId::new(ModuleId::new(0), ordinal), Box::new([]));
+        let row = EffectRow::with_tail(
+            (0..WIDTH as u32).map(instance).collect(),
+            EffectRowVariable::rigid(TypeVariableId::new(0)),
+            (WIDTH as u32..2 * WIDTH as u32).map(instance).collect(),
+        );
+        let instances = row.known().len() + row.tail().unwrap().lacks().len();
+        let graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: Vec::new(),
+            types: TypeArguments(vec![Type::function_computation(
+                Type::Unit,
+                ComputationType::new(Type::Int, row),
+            )]),
+            code: Vec::new(),
+        };
+        for limit in [0, instances] {
+            let mut budget = TypeWorkBudget::with_limit(limit);
+            assert!(matches!(
+                Analysis::new(&graph, &mut budget),
+                Err(Failure::Resource)
+            ));
+            assert_eq!(budget.used(), usize::from(limit != 0));
+        }
+        let mut measured = TypeWorkBudget::unbounded();
+        Analysis::new(&graph, &mut measured).unwrap();
+        assert!(matches!(
+            Analysis::new(&graph, &mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        for _ in 0..2 {
+            Analysis::new(&graph, &mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+        }
+    }
+
+    #[test]
+    fn row_fact_universe_scan_preflights_nullary_and_empty_pool_work() {
+        const WIDTH: usize = 96;
+        let source = SourceFile::new("wide-row-facts", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let module = ModuleId::new(0);
+        let nullary = |ordinal| EffectInstance::new(EffectId::new(module, ordinal), Box::new([]));
+        let variable = TypeVariableId::new(0);
+        let graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: Vec::new(),
+            types: TypeArguments(Vec::new()),
+            code: Vec::new(),
+        };
+        for (arguments, already_unproved) in [(false, true), (false, false), (true, false)] {
+            let row = if arguments {
+                EffectRow::singleton(EffectInstance::new(
+                    EffectId::new(module, 0),
+                    vec![Type::Int; WIDTH].into_boxed_slice(),
+                ))
+            } else {
+                EffectRow::with_tail(
+                    (0..WIDTH as u32).map(nullary).collect(),
+                    EffectRowVariable::rigid(TypeVariableId::new(1)),
+                    (WIDTH as u32..2 * WIDTH as u32).map(nullary).collect(),
+                )
+            };
+            let run = |early: bool, budget: &mut TypeWorkBudget| {
+                let mut analysis = Analysis::new(&graph, &mut TypeWorkBudget::unbounded()).unwrap();
+                let outcome = analysis.row_binding(variable, &row, already_unproved, span, budget);
+                if early {
+                    assert!(
+                        analysis.labels.is_empty(),
+                        "the universe scan must be admitted before label publication"
+                    );
+                }
+                let binding = outcome?;
+                assert_eq!(binding.unproved, arguments || already_unproved);
+                Ok::<(), Failure>(())
+            };
+            let width = row.known().len() + row.tail().map_or(0, |tail| tail.lacks().len());
+            for limit in [0, if arguments { WIDTH } else { width - 1 }] {
+                let mut budget = TypeWorkBudget::with_limit(limit);
+                assert!(matches!(run(true, &mut budget), Err(Failure::Resource)));
+                assert_eq!(budget.used(), if arguments && limit != 0 { 1 } else { 0 });
+            }
+            let mut measured = TypeWorkBudget::unbounded();
+            run(false, &mut measured).unwrap();
+            assert!(matches!(
+                run(false, &mut TypeWorkBudget::with_limit(measured.used() - 1)),
+                Err(Failure::Resource)
+            ));
+            for _ in 0..2 {
+                run(false, &mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn keyed_row_facts_preserve_lacks_and_bound_the_argument_universe() {
+        const WIDTH: usize = 96;
+        let source = SourceFile::new("row-facts", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let effect = EffectId::new(ModuleId::new(0), 0);
+        let instance = |ty| EffectInstance::new(effect, Box::new([ty]));
+        let graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: Vec::new(),
+            types: TypeArguments(vec![Type::Int, Type::Bool]),
+            code: Vec::new(),
+        };
+        let run = |budget: &mut TypeWorkBudget| {
+            let mut analysis = Analysis::new(&graph, budget)?;
+            let row = EffectRow::singleton(instance(Type::Int));
+            let mut rows = Vec::new();
+            for index in 0..WIDTH {
+                rows.push(analysis.row_binding(
+                    TypeVariableId::new(index as u32),
+                    &row,
+                    false,
+                    span,
+                    budget,
+                )?);
+            }
+            analysis.contexts.push(Context {
+                bindings: Vec::new(),
+                rows,
+            });
+            let open = |lacks| {
+                Type::function_computation(
+                    Type::Unit,
+                    ComputationType::new(
+                        Type::Int,
+                        EffectRow::open(
+                            EffectRowVariable::rigid(TypeVariableId::new(0)),
+                            Box::new([instance(lacks)]),
+                        ),
+                    ),
+                )
+            };
+            let expanded =
+                TypeArguments(vec![analysis.substitute(&open(Type::Bool), 1, budget)?]);
+            assert!(
+                expanded.0[0]
+                    .function_view()
+                    .unwrap()
+                    .effects()
+                    .unwrap()
+                    .tail()
+                    .is_none()
+            );
+            match analysis.substitute(&open(Type::Int), 1, budget) {
+                Err(Failure::Invalid) => {}
+                Err(error) => return Err(error),
+                Ok(ty) => {
+                    let _owner = TypeArguments(vec![ty]);
+                    panic!("exact lacks must not be erased");
+                }
+            }
+            let novel = EffectRow::singleton(instance(Type::Tuple(Box::new([Type::Int]))));
+            let binding = analysis.row_binding(
+                TypeVariableId::new(WIDTH as u32),
+                &novel,
+                false,
+                span,
+                budget,
+            )?;
+            assert!(
+                binding.unproved && binding.known.is_empty(),
+                "new nested arguments cannot enlarge the finite type universe"
+            );
+            let alias = EffectRow::open(
+                EffectRowVariable::rigid(TypeVariableId::new(WIDTH as u32 + 1)),
+                Box::new([instance(Type::Bool)]),
+            );
+            let binding = analysis.row_binding(
+                TypeVariableId::new(WIDTH as u32),
+                &alias,
+                false,
+                span,
+                budget,
+            )?;
+            assert!(
+                !binding.unproved
+                    && binding.tail == alias.tail().map(|tail| tail.variable())
+                    && binding.lacks.len() == 1
+            );
+            Ok::<(), Failure>(())
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        run(&mut measured).unwrap();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        for _ in 0..2 {
+            run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+        }
+    }
+
+    #[test]
+    fn keyed_rows_keep_conflicting_and_multiple_instance_matches_unproved() {
+        let source = SourceFile::new("ambiguous-row", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let effect = EffectId::new(ModuleId::new(0), 0);
+        let row = TypeVariableId::new(0);
+        let identity = TypeVariableId::new(1);
+        let instance = |ty| EffectInstance::new(effect, Box::new([ty]));
+        let callback = |effects| {
+            Type::function_computation(Type::Unit, ComputationType::new(Type::Int, effects))
+        };
+        let open = || EffectRow::open(EffectRowVariable::rigid(row), Box::new([]));
+        for conflict in [false, true] {
+            let actual = if conflict {
+                EffectRow::singleton(instance(Type::Int))
+            } else {
+                EffectRow::closed(
+                    vec![instance(Type::Int), instance(Type::Bool)].into_boxed_slice(),
+                )
+            };
+            let mut preparation = TypeWorkBudget::unbounded();
+            let graph = SummaryGraph {
+                effects: true,
+                data: None,
+                callables: vec![
+                    Callable {
+                        body: 0,
+                        ty: Type::function_computation(
+                            callback(open()),
+                            ComputationType::new(Type::Int, open()),
+                        ),
+                        result: Value::default(),
+                    },
+                    Callable {
+                        body: 0,
+                        ty: callback(EffectRow::singleton(instance(Type::Variable(identity)))),
+                        result: Value::default(),
+                    },
+                ],
+                types: TypeArguments(vec![
+                    Type::function_computation(
+                        callback(actual.clone()),
+                        ComputationType::new(
+                            Type::Int,
+                            if conflict {
+                                EffectRow::singleton(instance(Type::Bool))
+                            } else {
+                                actual
+                            },
+                        ),
+                    ),
+                    callback(open()),
+                ]),
+                code: vec![
+                    Control::Call {
+                        value: Value::default(),
+                        ty: 0,
+                        source: span,
+                    },
+                    Control::Call {
+                        value: Value::default(),
+                        ty: 1,
+                        source: span,
+                    },
+                    Control::Request(
+                        Request::effect(
+                            &instance(Type::Variable(identity)),
+                            span,
+                            &mut preparation,
+                        )
+                        .unwrap(),
+                    ),
+                    Control::Request(
+                        Request::effect(&instance(Type::Int), span, &mut preparation).unwrap(),
+                    ),
+                    Control::Request(
+                        Request::effect(&instance(Type::Bool), span, &mut preparation).unwrap(),
+                    ),
+                ],
+            };
+            let run = |budget: &mut TypeWorkBudget| {
+                let mut analysis = Analysis::new(&graph, budget)?;
+                let relay = analysis.call_context(0, 0, 0, budget)?;
+                if conflict {
+                    assert!(analysis.contexts[relay].rows.iter().any(|row| row.unproved));
+                }
+                let context = analysis.call_context(1, 1, relay, budget)?;
+                let request = analysis.label(2, context, budget)?;
+                for concrete in [3, 4] {
+                    let handler = analysis.label(concrete, 0, budget)?;
+                    assert_eq!(
+                        analysis.match_labels(request, handler, budget)?,
+                        (true, true)
+                    );
+                }
+                Ok::<(), Failure>(())
+            };
+            let mut measured = TypeWorkBudget::unbounded();
+            run(&mut measured).unwrap();
+            assert!(matches!(
+                run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+                Err(Failure::Resource)
+            ));
+            for _ in 0..2 {
+                run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+            }
+        }
     }
 
     #[test]

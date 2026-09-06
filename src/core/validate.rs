@@ -215,8 +215,6 @@ pub enum ValidationReason {
     DiscardUnsafe,
     /// A stored value crosses the boundary of its resource owner.
     ResourceEscape,
-    /// Resource acquisition and release are not yet available for execution.
-    ResourceProofUnavailable,
 }
 
 impl fmt::Display for ValidationReason {
@@ -243,7 +241,6 @@ impl fmt::Display for ValidationReason {
             Self::EffectRow => "core.validation.effect-row",
             Self::Handler => "core.validation.handler",
             Self::Resume => "core.validation.resume",
-            Self::ResourceProofUnavailable => "core.validation.resource-proof-unavailable",
             Self::DiscardUnsafe => "core.validation.discard-unsafe",
             Self::ResourceEscape => "core.validation.resource-escape",
         })
@@ -7930,14 +7927,6 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 Some(NodeId::new(self.program.arena, unsafe_discard.node as u32)),
             ),
         })?;
-        if has_resource {
-            // Resource execution remains closed until acquisition and release
-            // exist. Safety analysis above must still inspect the actual Core.
-            return Err(ValidationError::new(
-                ValidationReason::ResourceProofUnavailable,
-                None,
-            ));
-        }
         Ok(())
     }
 
@@ -8908,7 +8897,7 @@ mod tests {
     }
 
     #[test]
-    fn cell_core_structure_reaches_only_the_explicit_proof_gate() {
+    fn cell_core_structure_validates_and_executes() {
         let (core, sources) = cell_core_fixture();
         let refs = sources.iter().collect::<Vec<_>>();
         let relation = core
@@ -8925,13 +8914,14 @@ mod tests {
             .collect::<Vec<_>>();
         let mut validator = super::Validator::new_modules(&core, &refs, &relation)
             .expect("resource module origins");
-        let error = validator
-            .run_effect()
-            .expect_err("resource execution remains unavailable");
+        validator.run_effect().expect("resource static proof");
+        let program = super::super::validate_effect_modules(core, &refs, &relation).unwrap();
         assert_eq!(
-            error.reason(),
-            super::ValidationReason::ResourceProofUnavailable,
-            "{error:?}"
+            crate::eval::evaluate_effect(&program)
+                .unwrap()
+                .value
+                .to_string(),
+            "42"
         );
     }
 
@@ -9035,7 +9025,7 @@ mod tests {
         core.nodes[core.root.index().unwrap()].ty = closure_type;
         assert_eq!(
             cell_core_reason(&core, &sources, 0).0,
-            ValidationReason::ResourceEscape
+            Some(ValidationReason::ResourceEscape)
         );
     }
 
@@ -9054,7 +9044,7 @@ mod tests {
         core.method_evidence_anchors = Box::new([]);
         assert_eq!(
             cell_core_reason(&core, &sources, 0).0,
-            ValidationReason::NodeType
+            Some(ValidationReason::NodeType)
         );
     }
 
@@ -9062,7 +9052,7 @@ mod tests {
         core: &super::super::effect::UnvalidatedEffectProgram,
         sources: &[SourceFile],
         used: usize,
-    ) -> (ValidationReason, usize) {
+    ) -> (Option<ValidationReason>, usize) {
         let refs = sources.iter().collect::<Vec<_>>();
         let relation = core
             .registry
@@ -9079,10 +9069,8 @@ mod tests {
         let mut validator =
             super::Validator::new_modules(core, &refs, &relation).expect("module origins");
         validator.type_work.set(used);
-        let error = validator
-            .run_effect()
-            .expect_err("resource execution unavailable");
-        (error.reason(), validator.type_work.get())
+        let reason = validator.run_effect().err().map(|error| error.reason());
+        (reason, validator.type_work.get())
     }
 
     #[test]
@@ -9131,7 +9119,7 @@ mod tests {
         ));
         assert_eq!(
             cell_core_reason(&core, &sources, 0).0,
-            ValidationReason::NodeType
+            Some(ValidationReason::NodeType)
         );
     }
 
@@ -9162,14 +9150,10 @@ mod tests {
                 _ => unreachable!(),
             }
             let reason = cell_core_reason(&core, &sources, 0).0;
+            assert_ne!(reason, None, "corruption {corruption}");
             assert_ne!(
                 reason,
-                ValidationReason::ResourceProofUnavailable,
-                "corruption {corruption}"
-            );
-            assert_ne!(
-                reason,
-                ValidationReason::Resource,
+                Some(ValidationReason::Resource),
                 "corruption {corruption}"
             );
         }
@@ -9188,9 +9172,28 @@ mod tests {
             })
             .unwrap();
         request.operation = crate::types::OperationId::new(request.effect.effect(), u32::MAX);
-        assert_ne!(
+        assert_ne!(cell_core_reason(&core, &sources, 0).0, None);
+    }
+
+    #[test]
+    fn effect_core_rejects_inference_atoms_in_resource_request_metadata() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (mut core, sources) = cell_core_fixture();
+        let request = core
+            .nodes
+            .iter_mut()
+            .find_map(|node| match &mut node.kind {
+                EffectExprKind::Operation(EffectOperation::Request(request)) => Some(request),
+                _ => None,
+            })
+            .unwrap();
+        request.effect = crate::types::EffectInstance::new(
+            request.effect.effect(),
+            Box::new([Type::Inference(crate::types::InferenceVariableId::new(0))]),
+        );
+        assert_eq!(
             cell_core_reason(&core, &sources, 0).0,
-            ValidationReason::ResourceProofUnavailable
+            Some(ValidationReason::TypeScope)
         );
     }
 
@@ -9198,51 +9201,51 @@ mod tests {
     fn cell_core_validation_work_is_exact_and_retryable() {
         let (core, sources) = cell_core_fixture();
         let (reason, work) = cell_core_reason(&core, &sources, 0);
-        assert_eq!(reason, ValidationReason::ResourceProofUnavailable);
+        assert_eq!(reason, None);
         assert_eq!(
             cell_core_reason(&core, &sources, CORE_VALIDATION_TYPE_WORK_LIMIT - work + 1).0,
-            ValidationReason::Resource
+            Some(ValidationReason::Resource)
         );
         for _ in 0..2 {
             assert_eq!(
                 cell_core_reason(&core, &sources, CORE_VALIDATION_TYPE_WORK_LIMIT - work).0,
-                ValidationReason::ResourceProofUnavailable
+                None
             );
         }
     }
 
-    // This test-only wrapper is structurally checked but lifetime-unproved.
-    // It exists solely to exercise validated-only transform entry points and
-    // must never be evaluated or escape this private fixture.
-    fn lifetime_unproved_cell_transform_fixture() -> (
+    fn validated_cell_transform_fixture() -> (
         super::super::effect::ValidatedEffectProgram,
         Vec<SourceFile>,
     ) {
         let (core, sources) = cell_core_fixture();
-        assert_eq!(
-            cell_core_reason(&core, &sources, 0).0,
-            ValidationReason::ResourceProofUnavailable
-        );
-        let (registry, catalog, anchors, arena, stored, root) = core.into_parts();
-        let nodes = stored
-            .into_iter()
-            .map(|node| CoreTypedExpr {
-                ty: node.ty,
-                effects: node.effects,
-                origin: node.origin.expect("structurally checked origin"),
-                kind: node.kind,
+        assert_eq!(cell_core_reason(&core, &sources, 0).0, None);
+        let refs = sources.iter().collect::<Vec<_>>();
+        let relation = core
+            .registry
+            .type_variables()
+            .map(|parameter| {
+                (
+                    parameter.id.module().unwrap(),
+                    parameter.origin.primary_span().source(),
+                )
             })
-            .collect();
-        (
-            ValidatedCoreProgram::new(CoreProgram::new(
-                registry, catalog, anchors, arena, nodes, root,
-            )),
-            sources,
-        )
+            .collect::<std::collections::BTreeMap<_, _>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let validated = super::super::validate_effect_modules(core, &refs, &relation).unwrap();
+        assert_eq!(
+            crate::eval::evaluate_effect(&validated)
+                .unwrap()
+                .value
+                .to_string(),
+            "42"
+        );
+        (validated, sources)
     }
 
     #[test]
-    fn cell_complete_transforms_revalidate_the_full_relation_without_execution() {
+    fn cell_complete_transforms_revalidate_and_execute_the_full_relation() {
         use super::super::effect::{EffectExprKind, EffectOperation};
         type Transform = fn(
             &super::super::effect::ValidatedEffectProgram,
@@ -9250,7 +9253,7 @@ mod tests {
             super::super::effect::UnvalidatedEffectProgram,
             crate::core::transform::TransformError,
         >;
-        let (program, sources) = lifetime_unproved_cell_transform_fixture();
+        let (program, sources) = validated_cell_transform_fixture();
         let EffectExprKind::Operation(EffectOperation::Resource(original)) =
             &program.node(program.root()).unwrap().kind
         else {
@@ -9268,9 +9271,32 @@ mod tests {
         ] {
             let mut rebuilt: super::super::effect::UnvalidatedEffectProgram =
                 transform(&program).expect("complete resource transform");
+            assert_eq!(cell_core_reason(&rebuilt, &sources, 0).0, None);
+            let refs = sources.iter().collect::<Vec<_>>();
+            let relation = rebuilt
+                .registry
+                .type_variables()
+                .map(|parameter| {
+                    (
+                        parameter.id.module().unwrap(),
+                        parameter.origin.primary_span().source(),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let executable = super::super::validate_effect_modules(
+                transform(&program).unwrap(),
+                &refs,
+                &relation,
+            )
+            .unwrap();
             assert_eq!(
-                cell_core_reason(&rebuilt, &sources, 0).0,
-                ValidationReason::ResourceProofUnavailable
+                crate::eval::evaluate_effect(&executable)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "42"
             );
             if fold {
                 assert!(rebuilt.nodes.len() < program.node_count());
@@ -9283,10 +9309,7 @@ mod tests {
             assert_eq!(resource.acquisition, original.acquisition);
             assert_eq!(resource.handle.ty(), original.handle.ty());
             resource.acquisition.methods.swap(0, 1);
-            assert_ne!(
-                cell_core_reason(&rebuilt, &sources, 0).0,
-                ValidationReason::ResourceProofUnavailable
-            );
+            assert_ne!(cell_core_reason(&rebuilt, &sources, 0).0, None);
         }
     }
 
@@ -9397,9 +9420,76 @@ mod tests {
     }
 
     #[test]
+    fn resource_row_relay_reconstructs_exact_contexts_after_both_rebuilds() {
+        let directory = LinkedValidationDirectory::create();
+        directory.write("helper.ash", "import @builtin.cell as Cell\npub reader<R> : Cell.Handle<R> -> (Unit -> Int ! {Cell.Ops<R>}) where Cell.Provider<R>\nreader value = fn(ignored) {\nCell.read value\n}\npub relay<E : EffectRow, A> : ((Unit -> Int ! {| E}), A) -> Int ! {| E}\nrelay (action, ignored) = action ()\n");
+        let entry = directory.write("entry.ash", "import @builtin.cell as Cell\nimport helper (reader, relay)\nmain : Unit -> Int\nmain () = resource cell<R> c = 21 {\nlet get = reader c\nresource cell<S> other = 999 {\nrelay (get, true) + get ()\n}\n}\n");
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+        let linked = crate::evidence_validation::validate_interface_evidence(linked).unwrap();
+        let mut elaborator =
+            crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let program = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let mut measured = Validator::new_modules(&program, &sources, &relation).unwrap();
+        measured.run_effect().unwrap();
+        let work = measured.type_work.get();
+        for remaining in [work - 1, work, work] {
+            let mut retry = Validator::new_modules(&program, &sources, &relation).unwrap();
+            retry
+                .type_work
+                .set(CORE_VALIDATION_TYPE_WORK_LIMIT - remaining);
+            assert_eq!(
+                retry.run_effect().err().map(|error| error.reason()),
+                if remaining < work {
+                    Some(ValidationReason::Resource)
+                } else {
+                    None
+                }
+            );
+        }
+        let validated =
+            super::super::validate_effect_modules(program, &sources, &relation).unwrap();
+        assert_eq!(
+            crate::eval::evaluate_effect(&validated)
+                .unwrap()
+                .value
+                .to_string(),
+            "42"
+        );
+        for fold in [false, true] {
+            let rebuilt = if fold {
+                crate::core::transform::fold_effect_literal_primitives(&validated).unwrap()
+            } else {
+                crate::core::transform::identity_effect_traversal(&validated).unwrap()
+            };
+            let executable =
+                super::super::validate_effect_modules(rebuilt, &sources, &relation).unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&executable)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "42"
+            );
+        }
+    }
+
+    #[test]
     fn published_resource_core_reconstructs_dependencies_after_every_rebuild() {
-        use super::super::effect::{EffectExprKind, EffectOperation, EffectOperationFamily};
-        use crate::core::dialect::{CoreProgram, CoreTypedExpr, ValidatedCoreProgram};
+        use super::super::effect::{EffectExprKind, EffectOperation};
         for payload in [false, true] {
             let directory = LinkedValidationDirectory::create();
             let (header, result, entry) = if payload {
@@ -9441,15 +9531,12 @@ mod tests {
                 Validator::new_modules(program, &sources, &relation)
                     .unwrap()
                     .run_effect()
-                    .unwrap_err()
-                    .reason()
+                    .err()
+                    .map(|error| error.reason())
             };
-            assert_eq!(reason(&program), ValidationReason::ResourceProofUnavailable);
+            assert_eq!(reason(&program), None);
             let mut measured = Validator::new_modules(&program, &sources, &relation).unwrap();
-            assert_eq!(
-                measured.run_effect().unwrap_err().reason(),
-                ValidationReason::ResourceProofUnavailable
-            );
+            measured.run_effect().unwrap();
             let work = measured.type_work.get();
             for remaining in [work - 1, work, work] {
                 let mut retry = Validator::new_modules(&program, &sources, &relation).unwrap();
@@ -9457,36 +9544,44 @@ mod tests {
                     .type_work
                     .set(CORE_VALIDATION_TYPE_WORK_LIMIT - remaining);
                 assert_eq!(
-                    retry.run_effect().unwrap_err().reason(),
+                    retry.run_effect().err().map(|error| error.reason()),
                     if remaining < work {
-                        ValidationReason::Resource
+                        Some(ValidationReason::Resource)
                     } else {
-                        ValidationReason::ResourceProofUnavailable
+                        None
                     }
                 );
             }
-            // This private transform-only wrapper has passed every static check.
-            // It is never executed or returned: runtime admission remains closed.
-            let (registry, catalog, anchors, arena, stored, root) = program.into_parts();
-            let nodes = stored
-                .into_iter()
-                .map(|node| CoreTypedExpr {
-                    ty: node.ty,
-                    effects: node.effects,
-                    origin: node.origin.unwrap(),
-                    kind: node.kind,
-                })
-                .collect();
-            let validated = ValidatedCoreProgram::<EffectOperationFamily>::new(CoreProgram::new(
-                registry, catalog, anchors, arena, nodes, root,
-            ));
+            let validated =
+                super::super::validate_effect_modules(program, &sources, &relation).unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&validated)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "42"
+            );
             for fold in [false, true] {
                 let mut rebuilt = if fold {
                     crate::core::transform::fold_effect_literal_primitives(&validated).unwrap()
                 } else {
                     crate::core::transform::identity_effect_traversal(&validated).unwrap()
                 };
-                assert_eq!(reason(&rebuilt), ValidationReason::ResourceProofUnavailable);
+                assert_eq!(reason(&rebuilt), None);
+                let executable = if fold {
+                    crate::core::transform::fold_effect_literal_primitives(&validated).unwrap()
+                } else {
+                    crate::core::transform::identity_effect_traversal(&validated).unwrap()
+                };
+                let executable =
+                    super::super::validate_effect_modules(executable, &sources, &relation).unwrap();
+                assert_eq!(
+                    crate::eval::evaluate_effect(&executable)
+                        .unwrap()
+                        .value
+                        .to_string(),
+                    "42"
+                );
                 let resource_index = rebuilt
                     .nodes
                     .iter()
@@ -9519,7 +9614,7 @@ mod tests {
                     }
                     assert_eq!(
                         reason(&rebuilt),
-                        ValidationReason::NodeType,
+                        Some(ValidationReason::NodeType),
                         "fold={fold}, swapped={swapped_methods}"
                     );
                     let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
@@ -9585,7 +9680,7 @@ mod tests {
                     ));
                 assert_eq!(
                     reason(&rebuilt),
-                    ValidationReason::ResourceEscape,
+                    Some(ValidationReason::ResourceEscape),
                     "fold={fold}"
                 );
             }

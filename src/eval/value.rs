@@ -135,6 +135,7 @@ impl ObservedValue {
                     active.remove(&location);
                 }
                 Task::Value(value) => match value {
+                    Value::ResourceHandle(_) => output.push_str("<resource-handle>"),
                     Value::Integer(value) => output.push_str(&value.to_string()),
                     Value::Boolean(value) => output.push_str(if value { "true" } else { "false" }),
                     Value::Unit => output.push_str("()"),
@@ -271,6 +272,8 @@ impl fmt::Debug for Closure {
 /// have no equality operation or observable identity.
 #[derive(Clone, Debug)]
 pub enum Value {
+    /// An opaque, non-owning access key for a live resource activation.
+    ResourceHandle(ActivationKey),
     /// An arbitrary-precision mathematical integer.
     Integer(Integer),
     /// A Boolean value.
@@ -297,6 +300,7 @@ pub enum Value {
 impl fmt::Display for Value {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ResourceHandle(_) => formatter.write_str("<resource-handle>"),
             Self::Integer(value) => value.fmt(formatter),
             Self::Boolean(value) => value.fmt(formatter),
             Self::Unit => formatter.write_str("()"),
@@ -308,3 +312,8 @@ impl fmt::Display for Value {
         }
     }
 }
+
+/// An evaluator-created activation identity with no public constructor.
+/// It carries no cell payload or ownership edge.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActivationKey(pub(super) u32);

@@ -45,7 +45,10 @@ effect kernel, as described
 by the [branch specification](../../spec/README.md). Local declarations have
 stable lexical identities and permit identity-free closure escape; they do
 not establish identities per execution. The wider milestone remains separate
-from integration into `main`. The remaining gaps are:
+from integration into `main`. Safe-cell acquisition, runtime activation and
+stored-dependency checking are now under product review, with their
+[evidence](effect-ash/resource-scope-evidence.md) and closure gates recorded
+separately. The gaps not yet closed on the retained integration branch are:
 
 - runtime-established fresh identities;
 - resource acquisition scopes, identity-indexed resource values, ownership or
