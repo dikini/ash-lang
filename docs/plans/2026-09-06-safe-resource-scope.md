@@ -1,0 +1,228 @@
+# Safe Resource Scope Implementation Plan
+
+> Execute in this task with subagent-driven development, one product writer,
+> and independent semantic then Rust/resource reviews after each increment.
+
+**Goal:** Implement [CP-0017](../proposals/CP-0017-safe-non-foreign-resource-scope.md).
+
+**Architecture:** Reuse exact lexical evidence, shared nominal/effect identity,
+the finite capture engine and the explicit evaluator. Add one sealed cell API,
+scope-owned runtime cells, and inferred stored resource dependencies. Preserve
+effect instantiation before adding dynamic acquisition bindings; keep Pure
+execution and ordinary local-newtype erasure unchanged.
+
+**Tech stack:** Rust; existing Ash loader, syntax/resolution, type/evidence,
+typed Core and loop-driven evaluator.
+
+**Owner:** [TASK-0027](../tasks/TASK-0027-implement-safe-resource-scope.md).
+
+**Base:** `387c4eff925d1d4fdbad08c3eb3c02028bb01035`.
+
+## Work and review boundary
+
+- [x] Read current authority, inspect implementation and compare alternatives.
+- [x] Obtain approval for scope-owned release with reusable access.
+- [x] Isolate the active checkout under `.worktree/safe-resource-scope`.
+- [ ] Fresh full baseline gate, before product edits.
+- [ ] Step 1: instantiated Effect execution across abstraction boundaries.
+- [ ] Step 2: sealed builtin cell API and acquisition syntax carriers.
+- [ ] Step 3: acquisition typing, exact provider authority and Core structure.
+- [ ] Step 4: stored resource dependencies and carried scope obligations.
+- [ ] Step 5: cell allocation, exact dispatch, retention and release.
+- [ ] Step 6: complete adversarial/resource/abstraction corpus and reviews.
+- [ ] Step 7: specification, evidence, full gate and transition cleanup.
+- [ ] Local integration, merged-tree verification and clean-worktree lifecycle.
+
+All compiler/runtime implementers and semantic/resource reviewers use high
+reasoning, never above high. Mechanical documentation checks use medium.
+The parent owns proposals, plans, specification, staging, commits and branches.
+Implementation agents own only their assigned product/test files. Review is
+read-only. There is never more than one product writer.
+
+Use unsigned commits with a per-command override, leaving configuration alone.
+Do not push, tag or merge main. Follow AD-0011 after the whole checkpoint closes.
+The original 16-unit forecast is not a spent-work budget; report concrete gates
+and remaining work rather than inventing notional units.
+
+Each step begins with a test that fails for the missing behavior. Run the
+unchanged witness after the smallest coherent implementation, add the owning
+negative/resource checks, self-review, then freeze for semantic review followed
+by Rust/resource review. Reproduce each actionable finding before fixing and
+re-review it. Only the parent commits reviewed checkpoints.
+
+## Step 1: Instantiated effect execution
+
+**Files:** `src/eval/machine.rs`, `src/eval/value.rs`, a small dedicated
+effect-instantiation module only if it simplifies ownership, and
+`tests/effect_runtime.rs`. The parent updates relevant dynamic/spec wording.
+
+1. Retain the confirmed generic-helper and returned-closure regressions. The
+   smallest complete program has `helper<T> : T -> Int ! {E<T>}`, performs
+   `E<T>.ask ()`, and is called as `helper 0` under an `E<Int>` handler returning
+   42. Run `cargo test --test effect_runtime generic -- --nocapture`; require
+   the reproduced `InvalidControlState`, not a source error.
+2. Preserve validated instantiation through Effect type application, lexical
+   closure creation/application, recursive templates, handler entry and
+   captured/restored control. Resolve request instances under request context
+   and handler instances under saved handler context. Do not weaken exact
+   equality, inspect runtime argument values to infer types, or use a mutable
+   global substitution. Pure type operations remain erased.
+3. Add distinct Int/Bool requests, higher-kinded arguments, row-bearing function
+   arguments, factory closures called after return, nested type applications,
+   generic recursion and generic implementation/method adapters. Preserve
+   strict order and predecessor effect traces.
+4. Make new context ownership fallible/bounded where it retains or scans
+   proportional work; add exact/one-short/retry and deep context/type teardown
+   under the owning existing machine/resource contract. Avoid a source-visible
+   type value or a generic runtime reflection system.
+5. Run `cargo test --lib --test effect_runtime --test effect_core --test
+   effect_modules --test effect_typing --test effect_diagnostics` as one shell
+   command, all-target Clippy, formatting and diff checks. Obtain both reviews.
+
+This is a prerequisite for the approved acquisition semantics, not permission
+to change all pure evidence erasure or implement resources in the first commit.
+
+## Step 2: Builtin API and source carriers
+
+**Files:** `src/module.rs`, `src/driver.rs`, module/resolve/resolved fact owners,
+`src/lexer/{mod,token}.rs`, `src/parser/{mod,grammar,expression,project}.rs`,
+`src/surface.rs`; new `tests/resource_scope_syntax.rs` and
+`tests/resource_scope_modules.rs`, plus existing module/CLI tests.
+
+1. Write direct `@builtin.cell` import, qualified/targeted API use and unknown
+   builtin/root-conflict negatives. Observe the current root-resolution failure.
+2. Admit one compiler-owned module origin and its fixed nominal/interface/effect
+   facts. Preserve graph budgets, deterministic module identity, source
+   provenance and canonical summary closure. Do not privilege a source file,
+   spelling or copied module text. Do not add a general builtin registry.
+3. Add the reserved `resource` expression and contextual `cell<R>` form with one
+   handle binder, initializer and block. Test projection and scope ownership;
+   require builtin dependency only when acquisition is used.
+4. Check generic `Handle<R>`, `Provider<R>` and `Ops<R>` schemes through direct
+   and facade imports. Reject source constructors, source impl/with provider
+   introduction, fake module origins and detached/tampered hidden facts.
+5. Until Step 3/4 proof exists, keep acquisition unavailable at executable
+   validation; do not lower it to an ordinary newtype or silently erase it.
+6. Run syntax/module/fact tests, existing module/CLI tests, library tests,
+   Clippy/fmt/diff and both reviews. Record actual new carrier owners in the
+   architecture inventory without weakening scanners.
+
+## Step 3: Static acquisition and Core authority
+
+**Files:** `src/resolve.rs`, `src/resolved.rs`, `src/kind.rs`, `src/elaborate.rs`,
+evidence selection/audit/validation owners, `src/core/{effect,dialect,mod,
+validate,transform}.rs`; `tests/resource_scope_typing.rs`,
+`tests/resource_scope_core.rs`, and module/evidence tests.
+
+1. Add typed acquisition with Int initializer, rigid Type identity, opaque handle
+   binder, exact generated Provider evidence and identity-local effect removal.
+   Write positive helper forwarding plus wrong-initializer, binder scope,
+   wrong-handle/provider and outward type/row escape negatives first.
+2. Add authenticated acquisition-origin facts separate from source lexical
+   methods. Reuse existing abstract-before-lexical selection and complete-goal
+   validation. Ordinary source evidence cannot mint the sealed relation.
+3. Add an Effect Core resource-scope operation and the minimum inert authority
+   facts its validator needs. Retain explicit initializer-before-scope order,
+   identity, handle, provider and effect ownership. Pure Core admits no resource
+   node. No resource payload is encoded as a constructible ordinary value.
+4. Independently check complete kinds, scope, result/row equations and authority;
+   cover owner/provider/type/operation/source tampering. Both transforms preserve
+   the relationships and revalidate. Keep unproved stored escape fail-closed
+   until the next step completes its proof.
+5. Run focused source/Core/evidence tests, library tests, Clippy/fmt/diff and
+   independent reviews. Review ambiguity/diagnostic precedence explicitly.
+
+## Step 4: Stored dependencies and control obligations
+
+**Files:** `src/core/capture.rs`, `src/core/capture/control.rs`, source summary
+publication/admission and final Core validation; resource typing/Core/module
+tests and existing capture/discard fixtures.
+
+1. Begin with a resource captured by an identity-free returned closure, then an
+   aggregate and a helper/factory return. Pair each with copied Int and constant
+   closure acceptance. A type-only local-nominal escape check is insufficient.
+2. Extend inferred values with resource dependencies and symbolic argument
+   relationships. Track aggregate fields, pattern projections, captures,
+   ordinary/recursive calls and imported summaries. Keep copied scalar results
+   dependency-free; preserve live outer dependencies across an inner scope.
+3. Include semantic effect/identity captures, not merely syntactic handle uses.
+   Authenticate retained metadata and propagate it through generic instantiation
+   without source capture annotations or loss at generalization.
+4. Add scope-owner obligations to the existing finite capture/control engine.
+   Distinguish recursive activations, nearest handler boundaries and selected
+   restored segments. Check normal scope exit and values transferred across
+   handler boundaries, not just a resource block's final syntax node.
+5. Reject discard that abandons or skips release, including affected owners
+   outside the immediate captured segment. Admit inside-scope safe discard,
+   outward resource-free requests followed by resume and consumed clause owners.
+6. Run resource analysis even in programs with no discard. Final Core reconstructs
+   facts independently from actual control; transformed/forged summaries cannot
+   authorize escape. Unknown relevant flows fail closed without rejecting all
+   known abstractions or ordinary resource-free predecessors.
+7. Require finite-work, exact/one-short/retry, wide aliases/import scans and deep
+   success/failure teardown. Run all capture/effect/resource tests, architecture,
+   library tests, Clippy/fmt/diff and both independent reviews.
+
+## Step 5: Runtime cells and generative activation
+
+**Files:** `src/eval/machine.rs`, `src/eval/value.rs`, Step 1 identity context;
+`tests/resource_scope_runtime.rs` and machine tests.
+
+1. Write read/write observation (42), two independent cells, nested release and
+   repeated-access tests. Require runtime RED before implementing the operation.
+2. Keep each mutable Int payload owned by its live resource scope, including
+   when that scope moves into a captured continuation. Runtime access handles
+   are non-owning activation keys. Unused closure environment entries and the
+   ordinary observed heap must not keep payload ownership after release.
+3. Create a fresh key after initializer evaluation. Bind the acquisition identity
+   in lexical effect context, preserving outer closures under same-site nested
+   activation. No first-class identity witness or global provider lookup.
+4. Dispatch the trusted cell interpreter by authenticated API and exact active
+   identity. Check operand handle agreement before reading/writing. User handlers
+   preserve ordinary exact lexical interception without gaining provider origin.
+5. Release once on normal scope return; move through capture/resume without
+   cloning. Discard defensively rejects a live resource obligation before
+   consuming any capture. No callback or general cleanup transition.
+6. Test live-cell capacity exact/one-short/retry/reuse, allocation failure without
+   partial authority, retained control, deep normal/failure disposal and resource-
+   free pure locality. Add acquisition/read/write/release observations to tests.
+7. Run resource and predecessor effect runtime/Core tests, library tests,
+   Clippy/fmt/diff and both independent reviews.
+
+## Step 6: Complete interaction and adversarial corpus
+
+Use fresh high-reasoning semantic review of the complete proposal matrix,
+then high-reasoning Rust/resource review. Test actual same-site reentrancy,
+closure-only identity capture, generic/imported factory flows, returned evidence
+methods, opaque/aggregate transport, outward request payloads, skipped scope
+completion and independent acquisitions. Cover malformed linked/Core authority
+and both transformed executable programs. Fix findings test-first with one
+writer and re-review; no requirement may be replaced by blanket rejection.
+
+## Step 7: Specification and local closure
+
+The parent updates every CP-named specification and tool area, adding executable
+examples and their required harness checks. Create
+`docs/design/effect-ash/resource-scope-evidence.md` with actual observations,
+resource formulas, review corrections and limitations. Update design/trajectory
+status without claiming main integration. Reassess simplification and downstream
+proof/existential/hook pressure without implementing those features.
+
+Run `cargo xtask verify`, Markdown lint, changed-link checks, manual authority
+and formal-notation review. Use a medium-reasoning independent documentation
+audit. Retain the verified checkpoint, then remove CP/task/plan and index entries.
+Recreate the integration worktree, merge locally with an explicit unsigned merge,
+verify the combined result, prove ancestry and cleanliness, and remove the
+completed feature worktree/branch. Preserve main's unrelated edits and all
+remote refs/tags.
+
+## Execution record
+
+Two read-only audits found the stored-resource and activation-context gaps.
+Independent contract review is closed: the proposal now explicitly rejects
+owner-relative request-payload escape and includes both positive controls.
+
+The first full baseline run exposed stale absolute executable paths in Cargo
+artifacts retained across the worktree move. Rebuilding the disposable `ash`
+package cache restored all 74 specification-example tests without source or
+test changes. The fresh full gate is running before product edits.
