@@ -98,6 +98,8 @@ pub enum NodeKind {
     HandlerClause,
     /// A loose-prefix resume expression.
     ResumeExpression,
+    /// One builtin cell acquisition with an identity binder and scoped body.
+    ResourceExpression,
     /// A primary-precedence operation request.
     PerformExpression,
     /// One effect-qualified operation reference.
@@ -737,6 +739,7 @@ fn token_name(kind: &TokenKind) -> &'static str {
         TokenKind::Handle => "handle",
         TokenKind::With => "with",
         TokenKind::Resume => "resume",
+        TokenKind::Resource => "resource",
         TokenKind::Discard => "discard",
         TokenKind::Import => "import",
         TokenKind::As => "as",

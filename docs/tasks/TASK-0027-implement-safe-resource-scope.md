@@ -70,8 +70,38 @@ exceed high. Keep commits unsigned per the user's instruction. Use the local
   Both independent reviews are closed. Documentation review corrected three
   stale erasure/frame statements; seven affected documents pass Markdown lint
   with the line-length exception for existing formal rules/tables, and 29 local
-  link targets were checked. Step 1 is ready to retain. Step 2 is next; no
-  acquisition syntax or builtin cell API is implemented yet.
+  link targets were checked. Step 1 is retained in unsigned commit `8810a44`.
+- Step 2's first three module tests reproduced the missing builtin import,
+  unknown builtin path and reserved-root preflight behavior.
+- The fixed API parsed and resolved, then reproduced an existing export-freezing
+  failure for public effectful methods. Identical filesystem source also fails.
+  The paired type comparison in `InterfaceConstraintBudget::charge_equal_types`
+  omits `EffectfulFunction` and rejects matching signatures. Step 2 includes the
+  narrow structural repair and its exact-work/row-identity controls.
+- After that repair, importing the ordinary API reproduces a second omission:
+  summary admission checks operation value kinds before registering the nominal
+  kinds those operations use. Step 2 moves those kind checks after registration,
+  preserving the earlier parameter-identity checks and malformed-fact rejection.
+- Step 2 now admits the fixed builtin through ordinary parsing and checking,
+  preserves its origin through targeted/facade imports, rejects source provider
+  introduction and ordinary handle construction, and projects resource syntax.
+  A direct targeted import of only `Handle` satisfies the acquisition dependency
+  check; facade-only access does not. Acquisition still rejects before resolved
+  publication; this is not an executable resource checkpoint.
+- The frozen Step 2 revision passed the parent's focused gate: 1,123
+  tests in 11 binaries, covering library, resource syntax/modules, CLI, module
+  loading/resolution/visibility/elaboration and existing Effect Core/modules.
+  The fresh-process 256 KiB wrapper regression also passed.
+- Semantic review closed without actionable findings. Independent CLI probes
+  also passed imported constrained forwarding and method-only facade use, and
+  distinguished direct method-only acquisition availability from facade-only
+  access. Rust/resource review also closed without actionable findings; its
+  eight targeted equality/builtin checks passed. All 32 architecture checks have
+  passing evidence: the final unchanged ownership scanner passed after the
+  test helper used `pop` followed by immediate iterative disposal. Parent
+  all-target Clippy, formatting, Markdown lint and diff checks passed.
+- Step 2 is ready to retain. Acquisition typing, lifetime checking and runtime
+  execution remain unimplemented.
 
 ## Verification
 

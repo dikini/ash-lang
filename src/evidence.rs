@@ -727,6 +727,11 @@ impl EvidenceSelector {
         constraint_work: &mut InterfaceConstraintBudget,
         type_work: &mut TypeWorkBudget,
     ) -> Result<(), SelectionFailure> {
+        if let Some(api) = crate::resolved::CellApi::for_module(fact.id.module())
+            && !api.interface(fact)
+        {
+            return Err(SelectionFailure::InvalidState);
+        }
         if fact.parameters.is_empty() {
             return Err(SelectionFailure::InvalidState);
         }
@@ -967,6 +972,9 @@ impl EvidenceSelector {
         type_work: &mut TypeWorkBudget,
     ) -> Result<(), SelectionFailure> {
         let fact = &imported.fact;
+        if fact.interface().module().is_builtin_cell() {
+            return Err(SelectionFailure::InvalidState);
+        }
         if self.implementation_indices.contains_key(&fact.id) {
             return Err(SelectionFailure::InvalidState);
         }
@@ -1110,6 +1118,7 @@ impl EvidenceSelector {
             .charge(resolved.prerequisites.len().saturating_add(1))
             .map_err(|()| SelectionFailure::ConstraintResource)?;
         if resolved.id != checked.id
+            || checked.interface().module().is_builtin_cell()
             || resolved.head.interface.id != checked.interface()
             || resolved.head.arguments.len() != checked.arguments().len()
             || !resolved.prerequisite_only_parameters.is_empty()

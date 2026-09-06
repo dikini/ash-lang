@@ -725,6 +725,12 @@ impl Drop for ResolvedMatchArmBuffer {
 /// The semantic reason that prevented name resolution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResolveReason {
+    /// Source evidence cannot introduce the compiler-owned cell provider.
+    SealedProvider,
+    /// Resource acquisition awaits independent identity and lifetime checking.
+    ResourceUnavailable,
+    /// Resource acquisition requires a direct compiler-owned cell dependency.
+    ResourceBuiltinRequired,
     /// An occurrence has no binding in lexical scope.
     UnknownName,
     /// The equation head repeats a different name from its interface.
@@ -786,6 +792,9 @@ pub enum ResolveReason {
 impl fmt::Display for ResolveReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::SealedProvider => "resolve.sealed-provider",
+            Self::ResourceUnavailable => "resolve.resource-unavailable",
+            Self::ResourceBuiltinRequired => "resolve.resource-builtin-required",
             Self::UnknownName => "resolve.unknown-name",
             Self::EquationNameMismatch => "resolve.equation-name-mismatch",
             Self::DuplicateGlobal => "resolve.duplicate-global",
@@ -1033,6 +1042,7 @@ fn resolve_module_names_with_budget(
                 )
             })?;
         direct_dependencies.extend(dependencies.iter().map(|dependency| {
+            resolver.builtin_cell_available |= dependency.edge.target().is_builtin_cell();
             DirectDependencyRoute::new(dependency.edge.target(), dependency.edge.import_span())
         }));
         resolver.install_imports(surface, dependencies)?;
@@ -1474,6 +1484,7 @@ fn surface_definition_name(definition: &SurfaceDefinition) -> &crate::surface::S
 
 struct Resolver {
     module: ModuleId,
+    builtin_cell_available: bool,
     next_binder: u32,
     next_type_variable: u32,
     next_lexical_nominal: u32,
@@ -1799,6 +1810,7 @@ impl Resolver {
         Self {
             module,
             next_binder: 0,
+            builtin_cell_available: false,
             next_type_variable: 0,
             next_lexical_nominal: 0,
             next_lexical_evidence: 0,
@@ -6462,6 +6474,13 @@ impl Resolver {
 
             let result = (|| -> Result<ResolvedImplementation, ResolveError> {
                 let head = self.resolve_interface_application(&implementation.head)?;
+                if head.interface.id.module().is_builtin_cell() {
+                    return Err(error(
+                        ResolveReason::SealedProvider,
+                        implementation.span,
+                        "only resource acquisition may introduce the builtin cell provider",
+                    ));
+                }
                 let prerequisites = ResolvedRequirementBuffer(
                     self.resolve_requirements(
                         RequirementOwner::Impl(pending.id),
@@ -8212,6 +8231,13 @@ impl Resolver {
                         )
                     })?;
                     let application = self.resolve_interface_application(&source.application)?;
+                    if application.interface.id.module().is_builtin_cell() {
+                        return Err(error(
+                            ResolveReason::SealedProvider,
+                            source.span,
+                            "only resource acquisition may introduce the builtin cell provider",
+                        ));
+                    }
                     let mut state = Box::new(PendingLexicalResolution {
                         source,
                         id,
@@ -8499,6 +8525,20 @@ impl Resolver {
         expressions: &mut ResolvedExpressionBuffer,
     ) -> Result<(), ResolveError> {
         match &expression.kind {
+            SurfaceExprKind::Resource(_) if !self.builtin_cell_available => {
+                return Err(error(
+                    ResolveReason::ResourceBuiltinRequired,
+                    expression.span,
+                    "resource acquisition requires a direct import of @builtin.cell",
+                ));
+            }
+            SurfaceExprKind::Resource(_) => {
+                return Err(error(
+                    ResolveReason::ResourceUnavailable,
+                    expression.span,
+                    "resource acquisition requires identity and lifetime checking before resolution can publish it",
+                ));
+            }
             SurfaceExprKind::Integer(value) => expressions.push(ResolvedExpr {
                 kind: ResolvedExprKind::Integer(value.clone()),
                 span: expression.span,

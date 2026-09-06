@@ -109,7 +109,21 @@ impl InterfaceConstraintBudget {
                     pending.push(Task::Type(domain));
                 }
                 Type::EffectfulFunction(domain, codomain) => {
-                    let children = codomain.effect_argument_count().saturating_add(2);
+                    let rows = codomain.effects();
+                    self.charge(
+                        rows.known().len().saturating_add(
+                            rows.tail()
+                                .map_or(0, |tail| tail.lacks().len().saturating_add(1)),
+                        ),
+                    )?;
+                    let arguments = rows
+                        .known()
+                        .iter()
+                        .chain(rows.tail().into_iter().flat_map(|tail| tail.lacks()))
+                        .try_fold(0usize, |count, member| {
+                            count.checked_add(member.arguments().len()).ok_or(())
+                        })?;
+                    let children = arguments.checked_add(2).ok_or(())?;
                     self.charge(children)?;
                     pending.try_reserve(children).map_err(|_| ())?;
                     for argument in codomain.effect_arguments() {
@@ -213,6 +227,57 @@ impl InterfaceConstraintBudget {
                     self.charge(1)?;
                     pending.try_reserve(1).map_err(|_| ())?;
                     pending.push(Task::Sequence(left.iter().zip(right.iter())));
+                }
+                (
+                    Type::EffectfulFunction(left_domain, left),
+                    Type::EffectfulFunction(right_domain, right),
+                ) => {
+                    let left_rows = left.effects();
+                    let right_rows = right.effects();
+                    self.charge(
+                        left_rows.known().len().saturating_add(
+                            left_rows
+                                .tail()
+                                .map_or(0, |tail| tail.lacks().len().saturating_add(1)),
+                        ),
+                    )?;
+                    if left_rows.known().len() != right_rows.known().len()
+                        || match (left_rows.tail(), right_rows.tail()) {
+                            (None, None) => false,
+                            (Some(left), Some(right)) => {
+                                left.variable() != right.variable()
+                                    || left.lacks().len() != right.lacks().len()
+                            }
+                            _ => true,
+                        }
+                    {
+                        return Ok(false);
+                    }
+                    let left_members = left_rows
+                        .known()
+                        .iter()
+                        .chain(left_rows.tail().into_iter().flat_map(|tail| tail.lacks()));
+                    let right_members = right_rows
+                        .known()
+                        .iter()
+                        .chain(right_rows.tail().into_iter().flat_map(|tail| tail.lacks()));
+                    let mut arguments = 0usize;
+                    for (left, right) in left_members.zip(right_members) {
+                        if left.effect() != right.effect()
+                            || left.arguments().len() != right.arguments().len()
+                        {
+                            return Ok(false);
+                        }
+                        arguments = arguments.checked_add(left.arguments().len()).ok_or(())?;
+                    }
+                    let children = arguments.checked_add(2).ok_or(())?;
+                    self.charge(children)?;
+                    pending.try_reserve(children).map_err(|_| ())?;
+                    for (left, right) in left.effect_arguments().zip(right.effect_arguments()) {
+                        pending.push(Task::Compare(left, right));
+                    }
+                    pending.push(Task::Compare(&left.value, &right.value));
+                    pending.push(Task::Compare(left_domain, right_domain));
                 }
                 (Type::Forall(left_parameters, left), Type::Forall(right_parameters, right))
                     if left_parameters.len() == right_parameters.len() =>
@@ -3020,6 +3085,109 @@ impl Drop for ConstrainedScheme {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn paired_effectful_type_equality_checks_rows_at_exact_work_boundaries() {
+        use crate::types::{ComputationType, EffectId, EffectInstance, EffectRow};
+        let effect = EffectId::new(crate::module::ModuleId::new(712), 0);
+        let make = |argument| {
+            crate::types::Type::function_computation(
+                crate::types::Type::Int,
+                ComputationType::new(
+                    crate::types::Type::Int,
+                    EffectRow::singleton(EffectInstance::new(effect, Box::new([argument]))),
+                ),
+            )
+        };
+        let left = make(crate::types::Type::Bool);
+        let right = make(crate::types::Type::Bool);
+        let different = make(crate::types::Type::Unit);
+        let mut measured = super::InterfaceConstraintBudget::default();
+        assert_eq!(measured.charge_equal_types(&left, &right), Ok(true));
+        let used = measured.used();
+        let mut traversal = super::InterfaceConstraintBudget::default();
+        traversal.charge_type(&left).unwrap();
+        assert_eq!(traversal.used(), used);
+        assert_eq!(
+            super::InterfaceConstraintBudget::with_limit(used - 1)
+                .charge_equal_types(&left, &right),
+            Err(())
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                super::InterfaceConstraintBudget::with_limit(used)
+                    .charge_equal_types(&left, &right),
+                Ok(true)
+            );
+        }
+        assert_eq!(
+            super::InterfaceConstraintBudget::default().charge_equal_types(&left, &different),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn effectful_type_equality_authenticates_known_tail_and_lacks_metadata() {
+        use crate::types::EffectRowVariable;
+        let module = ModuleId::new(713);
+        let tail_variable =
+            |local| EffectRowVariable::rigid(TypeVariableId::resolved(module, local));
+        let instance = |ordinal| EffectInstance::new(EffectId::new(module, ordinal), Box::new([]));
+        let function =
+            |row| Type::function_computation(Type::Unit, ComputationType::new(Type::Int, row));
+        let row = |tail, lacks| {
+            EffectRow::with_tail(
+                Box::new([instance(0)]),
+                tail_variable(tail),
+                Box::new([instance(lacks)]),
+            )
+        };
+        let left = function(row(0, 1));
+        for different in [
+            function(row(1, 1)),
+            function(row(0, 2)),
+            function(EffectRow::singleton(instance(0))),
+            function(EffectRow::with_tail(
+                Box::new([instance(3)]),
+                tail_variable(0),
+                Box::new([instance(1)]),
+            )),
+        ] {
+            assert_eq!(
+                InterfaceConstraintBudget::default().charge_equal_types(&left, &different),
+                Ok(false)
+            );
+        }
+        let wide = function(EffectRow::with_tail(
+            (0..128).map(instance).collect(),
+            tail_variable(0),
+            (128..256).map(instance).collect(),
+        ));
+        let mut measured = InterfaceConstraintBudget::default();
+        assert_eq!(measured.charge_equal_types(&wide, &wide), Ok(true));
+        let used = measured.used();
+        assert!(used > 256, "nullary labels still consume work");
+        let mut traversal = InterfaceConstraintBudget::default();
+        traversal.charge_type(&wide).unwrap();
+        assert_eq!(used, traversal.used());
+        for _ in 0..2 {
+            assert_eq!(
+                InterfaceConstraintBudget::with_limit(used - 1).charge_equal_types(&wide, &wide),
+                Err(())
+            );
+            assert_eq!(
+                InterfaceConstraintBudget::with_limit(used).charge_equal_types(&wide, &wide),
+                Ok(true)
+            );
+            assert_eq!(
+                InterfaceConstraintBudget::with_limit(used - 1).charge_type(&wide),
+                Err(())
+            );
+            assert_eq!(
+                InterfaceConstraintBudget::with_limit(used).charge_type(&wide),
+                Ok(())
+            );
+        }
+    }
     use std::any::TypeId;
 
     use super::*;

@@ -381,8 +381,23 @@ pub enum SurfaceExprKind {
     Handle(SurfaceHandleExpr),
     /// A resume request owned by the nearest operation clause.
     Resume(Box<SurfaceExpr>),
+    /// A parsed acquisition, pending resource identity and lifetime checking.
+    Resource(Box<SurfaceResourceExpr>),
     /// Nullary consumption of the nearest clause's captured continuation.
     Discard,
+}
+
+/// Source ownership of one builtin cell acquisition.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceResourceExpr {
+    /// The uppercase rigid identity binder, scoped only over `body`.
+    pub identity: SurfaceName,
+    /// The ordinary handle binder, scoped only over `body`.
+    pub handle: SurfaceName,
+    /// The primary initializer evaluated in the preceding scope.
+    pub initializer: SurfaceExpr,
+    /// The block owned by this acquisition.
+    pub body: SurfaceBlock,
 }
 
 /// One explicit source operation request.

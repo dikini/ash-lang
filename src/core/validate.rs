@@ -656,6 +656,17 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .try_reserve(module_sources.len())
             .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
         for (module, source) in module_sources.iter().copied() {
+            if let Some(api) = crate::resolved::CellApi::for_module(module) {
+                if !api.registry(&program.registry) {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                for ordinal in 0..2 {
+                    let id = crate::interface::MethodId::new(api.provider(), ordinal);
+                    if program.method_evidence.method(id).is_none() {
+                        return Err(ValidationError::new(ValidationReason::Registry, None));
+                    }
+                }
+            }
             if !validator.sources.contains_key(&source)
                 || relation.insert(module, source).is_some()
                 || !mapped_sources.insert(source)
@@ -1226,6 +1237,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut previous_interface_parameters = None;
         for method in catalog.methods() {
             self.charge_type_work(method.interface_parameters.len().saturating_add(1))?;
+            if let Some(api) = crate::resolved::CellApi::for_module(method.id.interface().module())
+                && !api.method(
+                    method.id,
+                    &method.interface_parameters,
+                    &method.parameters,
+                    &method.value_type,
+                )
+            {
+                return Err(ValidationError::new(ValidationReason::NodeType, None));
+            }
             if previous_method.is_some_and(|previous| previous >= method.id)
                 || method.interface_parameters.is_empty()
             {
@@ -1292,10 +1313,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         };
 
         for owner in catalog.implementation_owners() {
+            if owner.application.interface().module().is_builtin_cell() {
+                return Err(ValidationError::new(ValidationReason::NodeType, None));
+            }
             validate_application(self, owner.implementation.method(), &owner.application)?;
         }
         self.charge_type_work(catalog.lexical_owners().len())?;
         for owner in catalog.lexical_owners() {
+            if owner.application.interface().module().is_builtin_cell() {
+                return Err(ValidationError::new(ValidationReason::NodeType, None));
+            }
             self.charge_type_work(catalog.methods().len())?;
             validate_application(self, owner.method, &owner.application)?;
         }
@@ -3595,6 +3622,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
         let mut previous_nominal_end = None;
         for (index, nominal) in registry.nominals().iter().enumerate() {
+            if let Some(api) = crate::resolved::CellApi::for_module(nominal.id.module())
+                && (nominal.id != api.handle() || !api.registry(registry))
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
             let index = u32::try_from(index)
                 .map_err(|_| ValidationError::new(ValidationReason::Registry, None))?;
             let Some(module) = registry_module else {
@@ -3870,6 +3902,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
         for nominal in registry.nominals() {
             let module = nominal.id.module();
+            if let Some(api) = crate::resolved::CellApi::for_module(module)
+                && (nominal.id != api.handle() || !api.registry(registry))
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
             let Some(source) = relation.get(&module).copied() else {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             };
@@ -4245,6 +4282,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
             )?;
             let module = effect.id.module();
+            if let Some(api) = crate::resolved::CellApi::for_module(module)
+                && (!api.effect(effect) || !api.registry(&self.program.registry))
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
             let expected_source = module_sources
                 .and_then(|relation| relation.get(&module).copied())
                 .or_else(|| {
@@ -5796,6 +5838,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 return Ok(());
             }
             PureValue::Constructor(constructor) => {
+                if constructor.constructor().owner().module().is_builtin_cell() {
+                    return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                }
                 let Some(info) = self.program.registry.constructor(constructor.constructor())
                 else {
                     return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
@@ -6606,6 +6651,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     constructor,
                     payload,
                 } => {
+                    if constructor.owner().module().is_builtin_cell() {
+                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                    }
                     let Some((owner, arity)) =
                         self.nominal_application_head_and_arity(expected.as_type())?
                     else {
@@ -8596,6 +8644,103 @@ mod tests {
         program: UnvalidatedProgram,
         module_sources: Vec<(ModuleId, SourceId)>,
         globals: HashMap<String, (BinderId, Box<[crate::types::TypeVariableId]>)>,
+    }
+
+    #[test]
+    fn builtin_cell_core_requires_the_complete_method_catalogue() {
+        for remove_catalogue in [false, true] {
+            let directory = LinkedValidationDirectory::create();
+            let entry = directory.write(
+                "entry.ash",
+                "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = 42\n",
+            );
+            let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+            let linked =
+                link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+            let linked = validate_linked_facts_for_test(linked).unwrap();
+            let mut elaborator =
+                crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+            let typed = elaborator
+                .synthesize_effect_module_program(&linked)
+                .unwrap();
+            let mut program = elaborator.finish(typed.node).unwrap();
+            if remove_catalogue {
+                program.method_evidence = Arc::default();
+            }
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let relation = graph
+                .modules()
+                .iter()
+                .map(|module| (module.id(), module.source().id()))
+                .collect::<Vec<_>>();
+            let result = super::validate_effect_modules_family(program, &sources, &relation);
+            if remove_catalogue {
+                assert_eq!(result.unwrap_err().reason, ValidationReason::Registry);
+            } else {
+                result.unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn builtin_handle_constructor_and_pattern_are_rejected_independently() {
+        let directory = LinkedValidationDirectory::create();
+        let entry = directory.write(
+            "entry.ash",
+            "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = 42\n",
+        );
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let checked = checked_linked_validation_graph(&graph);
+        let registry = Arc::clone(checked[0].registry());
+        let constructor = registry.constructors()[0].id;
+        let parameter = registry.nominal_parameters(constructor.owner()).unwrap()[0].id;
+        let ty = Type::Application(
+            Box::new(Type::Nominal(constructor.owner())),
+            Box::new(Type::Variable(parameter)),
+        );
+        let origin = registry.constructors()[0].origin.clone();
+        let mut builder = CoreBuilder::with_registry(registry);
+        let scheme = Type::Forall(Box::new([(parameter, Kind::Type)]), Box::new(ty.clone()));
+        let root = builder
+            .constructor(constructor, scheme, origin.clone())
+            .unwrap();
+        let program = builder.finish(root).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let validator = Validator::new(&program, &sources);
+        let node = validator.node(root).unwrap();
+        let PureExprKind::Value(value) = &node.kind else {
+            unreachable!()
+        };
+        assert_eq!(
+            validator
+                .validate_value(root, node, value)
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Registry
+        );
+        let pattern = CorePattern::new(
+            ty.clone(),
+            origin,
+            CorePatternKind::Constructor {
+                constructor,
+                payload: None,
+            },
+        );
+        assert_eq!(
+            validator
+                .validate_pattern(&pattern, &ty, root)
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Pattern
+        );
     }
 
     impl LinkedCoreValidationFixture {

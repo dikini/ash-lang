@@ -31,6 +31,12 @@ pub const MODULE_OWNER_FACT_LIMIT: usize = 262_144;
 /// Maximum active traversal and owner-propagation work items.
 pub const MODULE_PENDING_LIMIT: usize = 16_384;
 
+const CELL_SOURCE: &str = concat!(
+    "pub opaque type Handle<R> = Hidden\n",
+    "pub effect Ops<R> {\nread : Handle<R> -> Int\nwrite : (Handle<R>, Int) -> Unit\n}\n",
+    "pub interface Provider<R> {\nread : Handle<R> -> Int ! {Ops<R>}\nwrite : (Handle<R>, Int) -> Unit ! {Ops<R>}\n}\n",
+);
+
 /// A validated name for one configured module root.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ModuleRootName(String);
@@ -99,6 +105,14 @@ impl ModuleRoots {
         let mut names = HashSet::new();
         for (name, path) in roots {
             let name = ModuleRootName::new(name)?;
+            if name.as_str() == "builtin" {
+                return Err(ModuleFailure::invocation(
+                    ModuleReason::ReservedRoot,
+                    None,
+                    Some(name.0),
+                    None,
+                ));
+            }
             if !names.insert(name.clone()) {
                 return Err(ModuleFailure::invocation(
                     ModuleReason::DuplicateRoot,
@@ -148,6 +162,7 @@ pub struct ModuleId {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum ModuleIdNamespace {
     Admitted,
+    BuiltinCell,
     DirectCoreSource,
 }
 
@@ -174,8 +189,15 @@ impl ModuleId {
     }
 
     fn index(self) -> usize {
-        debug_assert!(matches!(self.namespace, ModuleIdNamespace::Admitted));
+        debug_assert!(!matches!(
+            self.namespace,
+            ModuleIdNamespace::DirectCoreSource
+        ));
         self.value as usize
+    }
+
+    pub(crate) const fn is_builtin_cell(self) -> bool {
+        matches!(self.namespace, ModuleIdNamespace::BuiltinCell)
     }
 
     /// Returns the graph-local identity value.
@@ -199,6 +221,9 @@ impl fmt::Display for ModuleId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.namespace {
             ModuleIdNamespace::Admitted => write!(formatter, "{}:{}", self.graph, self.value),
+            ModuleIdNamespace::BuiltinCell => {
+                write!(formatter, "builtin.cell:{}:{}", self.graph, self.value)
+            }
             ModuleIdNamespace::DirectCoreSource => write!(formatter, "source:{}", self.value),
         }
     }
@@ -297,6 +322,10 @@ impl ModuleGraph {
 /// Stable module-loader reason families.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ModuleReason {
+    /// A configured root attempts to replace a compiler-owned module root.
+    ReservedRoot,
+    /// An absolute builtin import names no compiler-owned module.
+    UnknownBuiltin,
     /// An absolute import names no configured root.
     UnknownRoot,
     /// An imported source path does not exist.
@@ -320,6 +349,8 @@ pub enum ModuleReason {
 impl fmt::Display for ModuleReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::ReservedRoot => "invocation.reserved-root",
+            Self::UnknownBuiltin => "module.unknown-builtin",
             Self::UnknownRoot => "module.unknown-root",
             Self::NotFound => "module.not-found",
             Self::PathEscape => "module.path-escape",
@@ -843,6 +874,7 @@ pub fn load_module_graph(entry: &Path, roots: &ModuleRoots) -> Result<ModuleGrap
         next_import: 0,
     }];
     let mut dependency_order = Vec::new();
+    let mut builtin_cell = None;
 
     while let Some(frame) = frames.last() {
         let module = frame.module;
@@ -866,6 +898,38 @@ pub fn load_module_graph(entry: &Path, roots: &ModuleRoots) -> Result<ModuleGrap
             .last_mut()
             .expect("the loop observed one traversal frame")
             .next_import += 1;
+
+        if let SurfaceModulePath::Absolute { root, segments } = &import.path
+            && root.text == "builtin"
+        {
+            if segments.len() != 1 || segments[0].text != "cell" {
+                return Err(
+                    ModuleFailure::source(ModuleReason::UnknownBuiltin, import.span, None).into(),
+                );
+            }
+            let target = if let Some(id) = builtin_cell {
+                id
+            } else {
+                let id = admit_builtin_cell(
+                    graph_identity,
+                    import.span,
+                    &mut budget,
+                    &mut staged,
+                    &mut dependency_order,
+                )?;
+                builtin_cell = Some(id);
+                id
+            };
+            staged[module_index]
+                .dependencies
+                .try_reserve(1)
+                .map_err(|_| ModuleFailure::resource(ModuleResource::Edges))?;
+            staged[module_index].dependencies.push(ModuleDependency {
+                target,
+                import_span: import.span,
+            });
+            continue;
+        }
 
         let (target_path, owners, relative) =
             resolve_import(&staged[module_index], &import, roots)?;
@@ -932,6 +996,48 @@ pub fn load_module_graph(entry: &Path, roots: &ModuleRoots) -> Result<ModuleGrap
     })
 }
 
+fn admit_builtin_cell(
+    graph: u32,
+    import_span: Span,
+    budget: &mut GraphBudget,
+    staged: &mut Vec<StagedModule>,
+    dependency_order: &mut Vec<ModuleId>,
+) -> Result<ModuleId, LoadGraphError> {
+    budget.charge_sources()?;
+    staged
+        .try_reserve(1)
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    dependency_order
+        .try_reserve(1)
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    let path = PathBuf::from("@builtin.cell");
+    let (source, surface) = parse_surface_module(
+        &path,
+        CELL_SOURCE.to_owned(),
+        Some(import_span),
+        &mut budget.syntax_work,
+    )?;
+    let value = u32::try_from(staged.len())
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    let id = ModuleId {
+        namespace: ModuleIdNamespace::BuiltinCell,
+        graph,
+        value,
+    };
+    staged.push(StagedModule {
+        id,
+        canonical_path: path,
+        owners: OwnerSet::from_paths(&[], budget)?,
+        source,
+        surface,
+        dependencies: Vec::new(),
+        relative_edges: Vec::new(),
+        state: VisitState::Finished,
+    });
+    dependency_order.push(id);
+    Ok(id)
+}
+
 fn admit_module(
     canonical_path: PathBuf,
     owners: OwnerSet,
@@ -975,6 +1081,15 @@ fn load_surface_module(
         path: path.to_path_buf(),
         import_span,
     })?;
+    parse_surface_module(path, text, import_span, syntax_budget)
+}
+
+fn parse_surface_module(
+    path: &Path,
+    text: String,
+    import_span: Option<Span>,
+    syntax_budget: &mut SyntaxBudget,
+) -> Result<(SourceFile, SurfaceModule), LoadGraphError> {
     let source = SourceFile::new(path.to_string_lossy(), text).map_err(|error| {
         LoadGraphError::SourceModel {
             path: path.to_path_buf(),
@@ -1226,6 +1341,7 @@ fn is_reserved_word(name: &str) -> bool {
             | "interface"
             | "impl"
             | "where"
+            | "resource"
             | "_"
             | "Int"
             | "Bool"
@@ -1236,6 +1352,68 @@ fn is_reserved_word(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builtin_admission_charges_sources_before_publishing_and_retries() {
+        let source = SourceFile::new("importer", "import @builtin.cell as Cell\n").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 1).unwrap())
+            .unwrap();
+        for allowance in [0, 1, 1] {
+            let mut budget = GraphBudget::with_limits(GraphLimits {
+                sources: allowance,
+                ..GraphLimits::default()
+            });
+            let mut staged = Vec::new();
+            let mut order = Vec::new();
+            let result = admit_builtin_cell(17, span, &mut budget, &mut staged, &mut order);
+            if allowance == 0 {
+                assert_resource(result.map(|_| ()), ModuleResource::Sources);
+                assert!(staged.is_empty() && order.is_empty());
+            } else {
+                let id = result.unwrap();
+                assert_eq!(order, [id]);
+                assert!(id.is_builtin_cell());
+                assert_ne!(id, ModuleId::from(staged[0].source.id()));
+                assert_ne!(id, ModuleId::admitted(17, 0));
+                assert!(staged[0].dependencies.is_empty() && staged[0].relative_edges.is_empty());
+                assert_eq!(budget.owner_facts, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn builtin_and_resource_syntax_accept_exact_work_and_retry_after_one_short() {
+        for text in [
+            CELL_SOURCE,
+            "main : Unit -> Int\nmain () = resource cell<R> c = (1 + 2) {\n42\n}\n",
+        ] {
+            let path = Path::new("syntax-boundary");
+            let accepts = |limit| {
+                parse_surface_module(
+                    path,
+                    text.to_owned(),
+                    None,
+                    &mut SyntaxBudget::with_limit(limit),
+                )
+                .is_ok()
+            };
+            let (mut low, mut high) = (0, 10_000);
+            assert!(accepts(high));
+            while low + 1 < high {
+                let middle = (low + high) / 2;
+                if accepts(middle) {
+                    high = middle;
+                } else {
+                    low = middle;
+                }
+            }
+            for _ in 0..2 {
+                assert!(!accepts(high - 1));
+                assert!(accepts(high));
+            }
+        }
+    }
 
     #[test]
     fn graph_lookup_uses_identity_after_dependency_ordering() {

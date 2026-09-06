@@ -27,6 +27,81 @@ use super::{
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
+#[test]
+fn builtin_cell_summary_rejects_well_kinded_operation_tampering() {
+    use crate::resolved::BuiltinCellSummaryMutationForTest;
+    let tree = TempTree::create();
+    let graph = load(&tree, "import @builtin.cell as Cell\n", &[]);
+    let builtin = &graph.modules()[0];
+    let mut summary = check_module(resolve_module(builtin, &[]).unwrap())
+        .unwrap()
+        .into_exports();
+    summary.corrupt_builtin_fact_for_test(BuiltinCellSummaryMutationForTest::OperationResult);
+    let entry = graph.module(graph.entry()).unwrap();
+    let dependency = DependencyExports::new(&entry.dependencies()[0], &summary).unwrap();
+    let error = resolve_module(entry, &[dependency]).expect_err("builtin signature is fixed");
+    assert!(
+        matches!(error, ResolveModuleError::Resolution(ref error) if error.reason == ResolveReason::InternalState)
+    );
+}
+
+#[test]
+fn builtin_cell_facade_rejects_tampered_or_detached_hidden_facts() {
+    use crate::resolved::BuiltinCellSummaryMutationForTest::*;
+    for mutation in [
+        OperationResult,
+        ProviderResult,
+        MissingHandle,
+        MissingOps,
+        HandleKind,
+    ] {
+        let tree = TempTree::create();
+        tree.write("facade.ash", "pub import @builtin.cell (read)\n");
+        let graph = load(&tree, "import facade (read)\n", &[]);
+        let builtin = &graph.modules()[0];
+        let builtin_checked = check_module(resolve_module(builtin, &[]).unwrap()).unwrap();
+        let facade = &graph.modules()[1];
+        let dependency =
+            DependencyExports::new(&facade.dependencies()[0], builtin_checked.exports()).unwrap();
+        let mut summary = check_module(resolve_module(facade, &[dependency]).unwrap())
+            .unwrap()
+            .into_exports();
+        summary.corrupt_builtin_fact_for_test(mutation);
+        let entry = graph.module(graph.entry()).unwrap();
+        let dependency = DependencyExports::new(&entry.dependencies()[0], &summary).unwrap();
+        let error = resolve_module(entry, &[dependency])
+            .expect_err("selected method needs authentic complete hidden facts");
+        assert!(
+            matches!(error, ResolveModuleError::Resolution(ref error) if error.reason == ResolveReason::InternalState)
+        );
+    }
+}
+
+#[test]
+fn ordinary_effect_operation_summary_authenticates_retained_nominal_kinds() {
+    use crate::resolved::BuiltinCellSummaryMutationForTest::{HandleKind, MissingHandle};
+    for mutation in [HandleKind, MissingHandle] {
+        let tree = TempTree::create();
+        tree.write(
+            "cell.ash",
+            "pub opaque type Handle<R> = Hidden\npub effect Ops<R> {\nread : Handle<R> -> Int\n}\n",
+        );
+        let graph = load(&tree, "import cell as Cell\n", &[]);
+        let ordinary = &graph.modules()[0];
+        let mut summary = check_module(resolve_module(ordinary, &[]).unwrap())
+            .unwrap()
+            .into_exports();
+        summary.corrupt_builtin_fact_for_test(mutation);
+        let entry = graph.module(graph.entry()).unwrap();
+        let dependency = DependencyExports::new(&entry.dependencies()[0], &summary).unwrap();
+        let error = resolve_module(entry, &[dependency])
+            .expect_err("effect signatures require their retained nominal kinds");
+        assert!(
+            matches!(error, ResolveModuleError::Resolution(ref error) if error.reason == ResolveReason::InternalState)
+        );
+    }
+}
+
 struct TempTree(PathBuf);
 
 impl TempTree {

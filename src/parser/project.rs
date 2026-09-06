@@ -629,6 +629,19 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             shape.token(&TokenKind::Resume)?;
             shape.expression()?;
         }
+        NodeKind::ResourceExpression => {
+            shape.token(&TokenKind::Resource)?;
+            shape.token_matching(
+                |kind| matches!(kind, TokenKind::Identifier(name) if name == "cell"),
+            )?;
+            shape.token(&TokenKind::Less)?;
+            shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            shape.token(&TokenKind::Greater)?;
+            shape.node(NodeKind::Binder)?;
+            shape.token(&TokenKind::Equal)?;
+            shape.node(NodeKind::PrimaryExpression)?;
+            shape.node(NodeKind::Block)?;
+        }
         NodeKind::PerformExpression => {
             shape.token(&TokenKind::Perform)?;
             shape.node(NodeKind::OperationReference)?;
@@ -1740,6 +1753,28 @@ fn project_expression(
                     )?));
                     tasks.push(ExpressionTask::Visit(value));
                 }
+                NodeKind::ResourceExpression => {
+                    let identity = direct_tokens(node, tokens)
+                        .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+                        .ok_or(ProjectionError::MalformedTree(
+                            InternalReason::UnexpectedShape,
+                        ))?;
+                    let handle =
+                        project_binder(only_child_of_kind(node, NodeKind::Binder)?, tokens)?;
+                    tasks.push(ExpressionTask::FinishResource {
+                        identity: surface_name(identity)?,
+                        handle: handle.name,
+                        span: node_span(source, node, tokens)?,
+                    });
+                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                        node,
+                        NodeKind::Block,
+                    )?));
+                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                        node,
+                        NodeKind::PrimaryExpression,
+                    )?));
+                }
                 NodeKind::HandlerExpression => {
                     let body = expression_child(node)?;
                     let effect = project_effect_instance(
@@ -1917,6 +1952,27 @@ fn project_expression(
                     span,
                 });
             }
+            ExpressionTask::FinishResource {
+                identity,
+                handle,
+                span,
+            } => {
+                let (initializer, body) = take_expression_pair(&mut projected)?;
+                let SurfaceExprKind::Block(body) = body.kind else {
+                    return malformed(InternalReason::UnexpectedShape);
+                };
+                projected.push(SurfaceExpr {
+                    kind: SurfaceExprKind::Resource(Box::new(
+                        crate::surface::SurfaceResourceExpr {
+                            identity,
+                            handle,
+                            initializer,
+                            body,
+                        },
+                    )),
+                    span,
+                });
+            }
             ExpressionTask::FinishHandle {
                 effect,
                 clauses,
@@ -2089,6 +2145,11 @@ enum ExpressionTask<'a> {
         span: Span,
     },
     FinishResume(Span),
+    FinishResource {
+        identity: SurfaceName,
+        handle: SurfaceName,
+        span: Span,
+    },
     FinishHandle {
         effect: SurfaceEffectInstance,
         clauses: Vec<(SurfaceName, SurfacePattern, Span)>,
@@ -2966,6 +3027,7 @@ const fn is_expression_kind(kind: NodeKind) -> bool {
             | NodeKind::MatchExpression
             | NodeKind::HandlerExpression
             | NodeKind::ResumeExpression
+            | NodeKind::ResourceExpression
             | NodeKind::PerformExpression
             | NodeKind::TupleExpression
             | NodeKind::EqualityExpression

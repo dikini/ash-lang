@@ -28,6 +28,189 @@ use crate::{
     },
 };
 
+/// The fixed relation admitted by the loader's private builtin-cell origin.
+/// This descriptor contains identities only; ordinary registries own its facts.
+#[derive(Clone, Copy)]
+pub(crate) struct CellApi {
+    module: ModuleId,
+}
+
+impl CellApi {
+    pub(crate) fn for_module(module: ModuleId) -> Option<Self> {
+        module.is_builtin_cell().then_some(Self { module })
+    }
+
+    pub(crate) fn handle(self) -> NominalTypeId {
+        NominalTypeId::new(self.module, 0)
+    }
+
+    pub(crate) fn provider(self) -> InterfaceId {
+        InterfaceId::new(self.module, 0)
+    }
+
+    pub(crate) fn ops(self) -> EffectId {
+        EffectId::new(self.module, 0)
+    }
+
+    fn parameter(self, parameters: &[ResolvedTypeVariable], ordinal: u32) -> bool {
+        matches!(parameters, [parameter] if parameter.id == TypeVariableId::resolved(self.module, ordinal)
+            && parameter.kind == Kind::Type && parameter.spelling == "R")
+    }
+
+    pub(crate) fn nominal(
+        self,
+        nominal: &ResolvedNominalType,
+        parameters: &[ResolvedTypeVariable],
+    ) -> bool {
+        nominal.id == self.handle()
+            && nominal.declaration_kind == ResolvedNominalDeclarationKind::Data
+            && nominal.spelling == "Handle"
+            && nominal.constructors.as_ref() == [ConstructorId::new(self.handle(), 0)]
+            && nominal.representation.is_none()
+            && nominal.representation_provenance.is_none()
+            && self.parameter(parameters, 0)
+    }
+
+    pub(crate) fn constructor(self, constructor: &ResolvedConstructor) -> bool {
+        constructor.id == ConstructorId::new(self.handle(), 0)
+            && constructor.owner == self.handle()
+            && constructor.spelling == "Hidden"
+            && constructor.payload.is_none()
+    }
+
+    pub(crate) fn registry(self, registry: &ResolvedRegistry) -> bool {
+        let Some(nominal) = registry.nominal(self.handle()) else {
+            return false;
+        };
+        let Some(parameters) = registry.nominal_parameters(self.handle()) else {
+            return false;
+        };
+        let Some(constructor) = registry.constructor(ConstructorId::new(self.handle(), 0)) else {
+            return false;
+        };
+        let Some(effect) = registry.effect(self.ops()) else {
+            return false;
+        };
+        self.nominal(nominal, parameters) && self.constructor(constructor) && self.effect(effect)
+    }
+
+    fn exported_nominal(self, nominal: &ExportedType) -> bool {
+        nominal.id == self.handle()
+            && self.parameter(&nominal.parameters, 0)
+            && nominal.declaration_kind == ResolvedNominalDeclarationKind::Data
+            && nominal.constructor_count == 1
+            && nominal.parameter_count == 1
+            && nominal.access == ExportedTypeAccess::Opaque
+            && nominal.constructors.is_empty()
+            && nominal.representation.is_none()
+            && nominal.representation_provenance.is_none()
+    }
+
+    fn hidden_nominal(self, nominal: &ExportedHiddenType) -> bool {
+        nominal.id == self.handle()
+            && self.parameter(&nominal.parameters, 0)
+            && nominal.declaration_kind == ResolvedNominalDeclarationKind::Data
+            && nominal.constructor_count == 1
+            && nominal.parameter_count == 1
+            && nominal.access != ImportedTypeAccess::Transparent
+            && nominal.constructors.is_empty()
+            && nominal.representation.is_none()
+            && nominal.representation_provenance.is_none()
+    }
+
+    fn handle_type(self, ty: &Type, parameter: TypeVariableId) -> bool {
+        matches!(ty, Type::Application(head, argument)
+            if matches!(head.as_ref(), Type::Nominal(id) if *id == self.handle())
+                && matches!(argument.as_ref(), Type::Variable(id) if *id == parameter))
+    }
+
+    fn signature(self, ty: &Type, parameter: TypeVariableId, write: bool, method: bool) -> bool {
+        let Some(function) = ty.function_view() else {
+            return false;
+        };
+        if method {
+            let Some(row) = function.effects() else {
+                return false;
+            };
+            if row.tail().is_some()
+                || !matches!(row.known(), [instance]
+                if instance.effect() == self.ops()
+                    && matches!(instance.arguments(), [Type::Variable(id)] if *id == parameter))
+            {
+                return false;
+            }
+        } else if function.effects().is_some() {
+            return false;
+        }
+        if write {
+            matches!(function.domain(), Type::Tuple(fields) if matches!(fields.as_ref(), [handle, Type::Int] if self.handle_type(handle, parameter)))
+                && matches!(function.value(), Type::Unit)
+        } else {
+            self.handle_type(function.domain(), parameter) && matches!(function.value(), Type::Int)
+        }
+    }
+
+    pub(crate) fn effect(self, effect: &ResolvedEffectDeclaration) -> bool {
+        effect.id == self.ops()
+            && effect.public
+            && effect.spelling == "Ops"
+            && self.parameter(&effect.parameters, 1)
+            && effect.operations.len() == 2
+            && effect
+                .operations
+                .iter()
+                .enumerate()
+                .all(|(index, operation)| {
+                    operation.id == OperationId::new(self.ops(), index as u32)
+                        && operation.spelling == if index == 0 { "read" } else { "write" }
+                        && self.signature(
+                            &operation.annotation.ty,
+                            effect.parameters[0].id,
+                            index == 1,
+                            false,
+                        )
+                })
+    }
+
+    pub(crate) fn interface(self, interface: &CheckedInterfaceFact) -> bool {
+        interface.id == self.provider()
+            && interface.spelling == "Provider"
+            && self.parameter(&interface.parameters, 2)
+            && interface.determination().is_none()
+            && interface.methods.len() == 2
+            && interface.methods.iter().enumerate().all(|(index, method)| {
+                method.id == MethodId::new(self.provider(), index as u32)
+                    && method.spelling == if index == 0 { "read" } else { "write" }
+                    && method.type_parameters().is_empty()
+                    && self.signature(
+                        &method.value_type,
+                        interface.parameters[0].id,
+                        index == 1,
+                        true,
+                    )
+            })
+    }
+
+    pub(crate) fn method(
+        self,
+        id: MethodId,
+        interface_parameters: &[TypeVariableId],
+        parameters: &[(TypeVariableId, Kind)],
+        value_type: &Type,
+    ) -> bool {
+        let parameter = TypeVariableId::resolved(self.module, 2);
+        interface_parameters == [parameter]
+            && parameters.is_empty()
+            && (id == MethodId::new(self.provider(), 0) || id == MethodId::new(self.provider(), 1))
+            && self.signature(
+                value_type,
+                parameter,
+                id == MethodId::new(self.provider(), 1),
+                true,
+            )
+    }
+}
+
 #[cfg(test)]
 use crate::interface::EvidenceSelection;
 
@@ -8528,12 +8711,86 @@ fn authenticate_summary_determination_seed(
     Ok(Some(required))
 }
 
+#[cfg(test)]
+pub(crate) enum BuiltinCellSummaryMutationForTest {
+    OperationResult,
+    ProviderResult,
+    MissingHandle,
+    MissingOps,
+    HandleKind,
+}
+
 impl ExportSummary {
+    #[cfg(test)]
+    pub(crate) fn corrupt_builtin_fact_for_test(
+        &mut self,
+        mutation: BuiltinCellSummaryMutationForTest,
+    ) {
+        match mutation {
+            BuiltinCellSummaryMutationForTest::OperationResult => {
+                let operation = &mut self.effects[0].operations[0];
+                let Type::Function(_, result) = &mut operation.annotation.ty else {
+                    panic!("pure operation signature")
+                };
+                discard_type_iteratively(std::mem::replace(result.as_mut(), Type::Bool));
+            }
+            BuiltinCellSummaryMutationForTest::ProviderResult => {
+                let interface = self
+                    .interfaces
+                    .iter_mut()
+                    .chain(self.hidden_interfaces.iter_mut())
+                    .next()
+                    .unwrap();
+                let Type::EffectfulFunction(_, result) = &mut interface.methods[0].value_type
+                else {
+                    panic!("effectful method signature")
+                };
+                discard_type_iteratively(std::mem::replace(&mut result.value, Type::Bool));
+            }
+            BuiltinCellSummaryMutationForTest::MissingHandle => {
+                if let Some(displaced) = self.nominals.remove("Handle") {
+                    displaced.discard_iteratively();
+                }
+                self.nominal_order.clear();
+                self.nominal_names_by_id.clear();
+                if let Some(identity) = self.hidden_nominals.keys().next().copied() {
+                    if let Some(displaced) = self.hidden_nominals.remove(&identity) {
+                        displaced.discard_iteratively();
+                    }
+                    self.hidden_nominal_order.clear();
+                }
+            }
+            BuiltinCellSummaryMutationForTest::MissingOps => {
+                if let Some(displaced) = self.effects.pop() {
+                    discard_resolved_effect_iteratively(displaced);
+                }
+                self.effect_positions.clear();
+                self.effect_names.clear();
+                self.effect_name_order.clear();
+            }
+            BuiltinCellSummaryMutationForTest::HandleKind => {
+                if let Some(nominal) = self.nominals.values_mut().next() {
+                    drop(std::mem::replace(
+                        &mut nominal.parameters[0].kind,
+                        Kind::EffectRow,
+                    ));
+                } else {
+                    let nominal = self.hidden_nominals.values_mut().next().unwrap();
+                    drop(std::mem::replace(
+                        &mut nominal.parameters[0].kind,
+                        Kind::EffectRow,
+                    ));
+                }
+            }
+        }
+    }
+
     pub(crate) fn authenticate(
         &self,
         type_work: &mut TypeWorkBudget,
         constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     ) -> Result<(), ResolvedBuildFailure> {
+        self.authenticate_cell_facts()?;
         if self.terms.len() != self.term_order.len()
             || self.nominals.len() != self.nominal_order.len()
             || self.constructors.len() != self.constructor_order.len()
@@ -8696,6 +8953,11 @@ impl ExportSummary {
             named_effects.insert(*identity);
         }
         for (position, effect) in self.effects.iter().enumerate() {
+            if let Some(api) = CellApi::for_module(effect.id.module())
+                && (!api.effect(effect) || !self.has_cell_handle(api))
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
             if self.effect_positions.get(&effect.id) != Some(&position)
                 || (named_effects.contains(&effect.id) && !effect.public)
                 || effect.operations.is_empty()
@@ -8725,13 +8987,6 @@ impl ExportSummary {
                     effect.parameters.iter().map(|parameter| parameter.id),
                     type_work,
                 )?;
-                environments
-                    .expect_body_free_value_type_with_ledger(
-                        &operation.annotation.ty,
-                        operation.span,
-                        type_work,
-                    )
-                    .map_err(map_summary_kind_failure)?;
             }
         }
         let mut canonical_nominals = HashMap::<
@@ -8773,6 +9028,11 @@ impl ExportSummary {
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
 
         for (_, nominal) in self.nominals() {
+            if let Some(api) = CellApi::for_module(nominal.id.module())
+                && !api.exported_nominal(nominal)
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
             let canonical_representation = self.canonical_representations.get(&nominal.id);
             let (representation, representation_provenance) = match canonical_representation {
                 Some(fact) => (Some(&fact.representation), Some(&fact.provenance)),
@@ -8912,6 +9172,11 @@ impl ExportSummary {
             );
         }
         for nominal in self.hidden_nominals() {
+            if let Some(api) = CellApi::for_module(nominal.id.module())
+                && !api.hidden_nominal(nominal)
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
             if nominal.id.is_lexical()
                 || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
                     && !matches!(&nominal.origin, Origin::Source(_))
@@ -9003,6 +9268,20 @@ impl ExportSummary {
                     0,
                 ),
             );
+        }
+
+        // Operation signatures may name any retained nominal. Check their
+        // kinds only after the complete nominal environment is registered.
+        for effect in &self.effects {
+            for operation in &effect.operations {
+                environments
+                    .expect_body_free_value_type_with_ledger(
+                        &operation.annotation.ty,
+                        operation.span,
+                        type_work,
+                    )
+                    .map_err(map_summary_kind_failure)?;
+            }
         }
 
         constraint_work
@@ -9241,6 +9520,9 @@ impl ExportSummary {
         }
         for (position, implementation) in self.implementations.iter().enumerate() {
             let fact = &implementation.fact;
+            if fact.interface().module().is_builtin_cell() {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
             let authorization_is_well_formed = implementation
                 .authorization
                 .is_well_formed_for(self.module, fact, constraint_work)
@@ -9329,6 +9611,13 @@ impl ExportSummary {
         }
 
         for interface in self.interfaces.iter().chain(self.hidden_interfaces.iter()) {
+            if let Some(api) = CellApi::for_module(interface.id.module())
+                && (!api.interface(interface)
+                    || !self.has_cell_handle(api)
+                    || !self.effect_positions.contains_key(&api.ops()))
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
             if interface.methods.is_empty() {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
@@ -9400,6 +9689,9 @@ impl ExportSummary {
             .map(|(_, constructor)| constructor)
             .chain(self.hidden_constructors())
         {
+            if constructor.id.owner().module().is_builtin_cell() {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
             let Some((parameters, declaration_kind, _, family, access, _, _, _, _)) =
                 canonical_nominals.get(&constructor.id.owner())
             else {
@@ -11265,11 +11557,45 @@ impl ExportSummary {
             }
         }
 
+        summary.authenticate_cell_facts()?;
         Ok(summary)
     }
 
     pub(crate) fn term(&self, spelling: &str) -> Option<&ExportedGlobal> {
         self.terms.get(spelling)
+    }
+
+    fn authenticate_cell_facts(&self) -> Result<(), ResolvedBuildFailure> {
+        if let Some(api) = CellApi::for_module(self.module)
+            && (!self.terms.is_empty()
+                || self.nominals.len() != 1
+                || self
+                    .nominals
+                    .get("Handle")
+                    .is_none_or(|nominal| !api.exported_nominal(nominal))
+                || self.interface_names.len() != 1
+                || self.interface_names.get("Provider") != Some(&api.provider())
+                || self.effect_names.len() != 1
+                || self.effect_names.get("Ops") != Some(&api.ops())
+                || self.method_names.len() != 2
+                || self.method_names.get("read") != Some(&MethodId::new(api.provider(), 0))
+                || self.method_names.get("write") != Some(&MethodId::new(api.provider(), 1))
+                || !matches!(self.interfaces.as_slice(), [interface] if api.interface(interface))
+                || !matches!(self.effects.as_slice(), [effect] if api.effect(effect))
+                || !self.hidden_interfaces.is_empty()
+                || !self.hidden_nominals.is_empty()
+                || !self.constructors.is_empty()
+                || !self.hidden_constructors.is_empty()
+                || !self.implementations.is_empty())
+        {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        Ok(())
+    }
+
+    fn has_cell_handle(&self, api: CellApi) -> bool {
+        self.nominal_names_by_id.contains_key(&api.handle())
+            || self.hidden_nominals.contains_key(&api.handle())
     }
 
     pub(crate) fn nominal(&self, spelling: &str) -> Option<&ExportedType> {
@@ -15181,6 +15507,19 @@ fn validate_checked_registries<'a>(
     for checked in modules {
         let module = checked.module();
         let registry = checked.registry();
+        if let Some(api) = CellApi::for_module(module)
+            && (!api.registry(registry)
+                || registry.nominals.len() != 1
+                || registry.constructors.len() != 1
+                || registry.effects.len() != 1
+                || !registry.lexical_nominals.is_empty()
+                || !registry.lexical_constructors.is_empty()
+                || !checked.schemes().is_empty()
+                || !checked.implementation_facts().is_empty()
+                || !matches!(checked.interface_facts(), [interface] if api.interface(interface)))
+        {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
         if !module_ids.insert(module)
             || !registry.abstract_nominal_names.is_empty()
             || !registry.abstract_nominal_kinds.is_empty()
@@ -15352,7 +15691,9 @@ fn validate_checked_registries<'a>(
                 .ok_or(ResolvedBuildFailure::ConstraintResource)?;
         }
         for implementation in checked.implementation_facts() {
-            if implementation.id.module() != module {
+            if implementation.id.module() != module
+                || implementation.interface().module().is_builtin_cell()
+            {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
             local_variable_count = local_variable_count

@@ -17,6 +17,7 @@ pub(super) enum ExpressionPrefixForm {
     Match,
     Handler,
     Resume,
+    Resource,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -135,6 +136,7 @@ const CURRENT_ASH_DIALECT: ParserDialect = ParserDialect {
         ExpressionPrefixForm::Match,
         ExpressionPrefixForm::Handler,
         ExpressionPrefixForm::Resume,
+        ExpressionPrefixForm::Resource,
     ],
     expression: ExpressionDialect {
         primary_forms: &[
@@ -1552,6 +1554,7 @@ pub(super) fn expression(parser: &mut Parser<'_>) {
         Some(ExpressionPrefixForm::Match) => match_expression(parser),
         Some(ExpressionPrefixForm::Handler) => handler_expression(parser),
         Some(ExpressionPrefixForm::Resume) => resume_expression(parser),
+        Some(ExpressionPrefixForm::Resource) => resource_expression(parser),
         None => expression::operator_expression(parser),
     }
 }
@@ -1567,6 +1570,7 @@ fn expression_prefix_form(parser: &Parser<'_>) -> Option<ExpressionPrefixForm> {
             ExpressionPrefixForm::Match => parser.at(&TokenKind::Match),
             ExpressionPrefixForm::Handler => parser.at(&TokenKind::Handle),
             ExpressionPrefixForm::Resume => parser.at(&TokenKind::Resume),
+            ExpressionPrefixForm::Resource => parser.at(&TokenKind::Resource),
         })
 }
 
@@ -1574,6 +1578,24 @@ fn resume_expression(parser: &mut Parser<'_>) {
     parser.start(NodeKind::ResumeExpression);
     let _ = parser.bump();
     expression(parser);
+    parser.finish();
+}
+
+fn resource_expression(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::ResourceExpression);
+    let _ = parser.bump();
+    if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "cell") {
+        let _ = parser.bump();
+    } else {
+        parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);
+    }
+    let _ = parser.expect(&TokenKind::Less, ExpectedForm::Type);
+    expect_upper_identifier(parser);
+    let _ = parser.expect(&TokenKind::Greater, ExpectedForm::Greater);
+    binder(parser);
+    let _ = parser.expect(&TokenKind::Equal, ExpectedForm::Equal);
+    expression::primary_expression(parser);
+    block(parser);
     parser.finish();
 }
 
@@ -2526,6 +2548,7 @@ mod tests {
             ShadowPrefixForm::Existing(ExpressionPrefixForm::Match) => "match parser",
             ShadowPrefixForm::Existing(ExpressionPrefixForm::Handler) => "handler parser",
             ShadowPrefixForm::Existing(ExpressionPrefixForm::Resume) => "resume parser",
+            ShadowPrefixForm::Existing(ExpressionPrefixForm::Resource) => "resource parser",
             ShadowPrefixForm::Mock(node) => mock_nested_feature::parse(node),
         }
     }

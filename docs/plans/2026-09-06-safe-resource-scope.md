@@ -25,7 +25,7 @@ typed Core and loop-driven evaluator.
 - [x] Isolate the active checkout under `.worktree/safe-resource-scope`.
 - [x] Fresh full baseline gate, before product edits.
 - [x] Step 1: instantiated Effect execution across abstraction boundaries.
-- [ ] Step 2: sealed builtin cell API and acquisition syntax carriers.
+- [x] Step 2: sealed builtin cell API and acquisition syntax carriers.
 - [ ] Step 3: acquisition typing, exact provider authority and Core structure.
 - [ ] Step 4: stored resource dependencies and carried scope obligations.
 - [ ] Step 5: cell allocation, exact dispatch, retention and release.
@@ -111,6 +111,15 @@ to change all pure evidence erasure or implement resources in the first commit.
 `src/lexer/{mod,token}.rs`, `src/parser/{mod,grammar,expression,project}.rs`,
 `src/surface.rs`; new `tests/resource_scope_syntax.rs` and
 `tests/resource_scope_modules.rs`, plus existing module/CLI tests.
+The fixed API's public effectful methods also require a narrow `src/interface.rs`
+repair: `charge_equal_types` omits the effectful-function case and therefore
+rejects equal source/checked method signatures during ordinary export freezing.
+The identical filesystem module reproduces the failure. Preserve the helper's
+successful-work contract and exact row equality; do not redesign publication.
+After publication, ordinary import admission also checks operation signature
+kinds before registering the retained nominal kinds those signatures may use.
+Move that value-kind check after nominal registration in `src/resolved.rs`,
+preserving the earlier parameter-identity checks and malformed-summary rejection.
 
 1. Write direct `@builtin.cell` import, qualified/targeted API use and unknown
    builtin/root-conflict negatives. Observe the current root-resolution failure.
@@ -286,4 +295,26 @@ formatting, metadata, build, Clippy and rustdoc. Both independent reviews are
 closed. The documentation audit corrected three stale erasure/frame statements;
 seven affected documents pass Markdown lint with the line-length exception for
 existing formal rules and tables, and all 29 local link targets exist. Step 1
-is ready to retain; acquisition work has not started.
+is retained in unsigned commit `8810a44`.
+
+Step 2's first three module tests reproduced the missing builtin import,
+unknown builtin path and reserved-root preflight behavior. The loader now
+admits the fixed API through ordinary parsing and checking with a private
+builtin identity. Source provider introduction and ordinary handle construction
+reject; targeted and facade imports preserve the defining facts. Resource syntax
+projects, but acquisition still rejects before resolved publication. Direct
+targeted import of only `Handle` satisfies the dependency check; facade-only
+access does not.
+Resource execution and lifetime checking remain later steps.
+
+The frozen Step 2 revision passed the parent's focused 1,123-test gate in 11
+binaries and the fresh-process 256 KiB wrapper regression.
+
+Semantic review closed without actionable findings, including independent
+method-only facade/direct-import probes. Rust/resource review also closed
+without actionable findings; eight targeted equality/builtin checks passed. The
+final ownership scanner passed after the test-helper correction, completing
+passing evidence for all 32 architecture checks without scanner changes. Parent
+all-target Clippy, formatting, Markdown lint and diff checks passed.
+Step 2 is ready to retain. Acquisition typing, lifetime checking and runtime
+execution remain unimplemented.
