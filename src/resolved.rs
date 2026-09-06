@@ -407,6 +407,7 @@ impl Drop for ResolvedModule {
 /// One fully checked local global scheme retained for linking and exports.
 #[derive(Debug, Eq, PartialEq)]
 pub struct CheckedGlobalScheme {
+    pub(crate) capture: crate::core::capture::CaptureValueSummary,
     /// Stable binder identity.
     pub binder: BinderId,
     /// Source declaration spelling.
@@ -2684,7 +2685,8 @@ impl ResolvedModuleProgram {
                 | ResolvedExprKind::Match(_)
                 | ResolvedExprKind::Perform(_)
                 | ResolvedExprKind::Handle(_)
-                | ResolvedExprKind::Resume(_) => None,
+                | ResolvedExprKind::Resume(_)
+                | ResolvedExprKind::Discard(_) => None,
             })
         else {
             return false;
@@ -5182,6 +5184,7 @@ fn clone_checked_implementation_fact(
 /// One imported checked global scheme.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ImportedGlobalScheme {
+    pub(crate) capture: crate::core::capture::CaptureValueSummary,
     /// Stable defining binder identity.
     pub binder: BinderId,
     /// Fully zonked closed constrained rank-1 scheme.
@@ -5973,6 +5976,7 @@ impl ImportedTypeAccess {
 /// One checked public global in an immutable export summary.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ExportedGlobal {
+    pub(crate) capture: crate::core::capture::CaptureValueSummary,
     /// Stable binder identity from the defining module.
     pub binder: BinderId,
     /// Fully zonked closed constrained rank-1 scheme.
@@ -7513,11 +7517,16 @@ pub(crate) fn same_imported_global_fact_observing_nominals_with_budget(
 fn same_imported_global_fact_with_optional_nominal_observer(
     left: &ImportedGlobalScheme,
     right: &ExportedGlobal,
-    _type_work: &mut TypeWorkBudget,
+    type_work: &mut TypeWorkBudget,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     nominal_identities: Option<&mut MatchedNominalIdentities>,
 ) -> Result<bool, ResolvedBuildFailure> {
-    if left.binder != right.binder {
+    if left.binder != right.binder
+        || !left
+            .capture
+            .same_with_budget(&right.capture, type_work)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?
+    {
         return Ok(false);
     }
     let metadata_work = right
@@ -10018,7 +10027,7 @@ impl ExportSummary {
                 .terms
                 .get(spelling)
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
-            let (binder, scheme, origin) = match candidate.source {
+            let (binder, scheme, origin, capture) = match candidate.source {
                 CandidateFactSource::Local => {
                     let checked = checked_by_binder
                         .get(&candidate.binder)
@@ -10026,7 +10035,12 @@ impl ExportSummary {
                     if candidate.binder.module() != Some(resolved.module) {
                         return Err(ResolvedBuildFailure::InvalidState);
                     }
-                    (checked.binder, &checked.scheme, &checked.origin)
+                    (
+                        checked.binder,
+                        &checked.scheme,
+                        &checked.origin,
+                        &checked.capture,
+                    )
                 }
                 CandidateFactSource::Imported => {
                     let imported = resolved
@@ -10036,7 +10050,12 @@ impl ExportSummary {
                     if candidate.binder.module() == Some(resolved.module) {
                         return Err(ResolvedBuildFailure::InvalidState);
                     }
-                    (imported.binder, &imported.scheme, &imported.origin)
+                    (
+                        imported.binder,
+                        &imported.scheme,
+                        &imported.origin,
+                        &imported.capture,
+                    )
                 }
             };
             if binder != candidate.binder
@@ -10045,6 +10064,9 @@ impl ExportSummary {
                     .insert(
                         spelling.clone(),
                         ExportedGlobal {
+                            capture: capture
+                                .clone_with_budget(type_work)
+                                .map_err(|()| ResolvedBuildFailure::TypeResource)?,
                             binder,
                             scheme: scheme
                                 .clone_with_budget(type_work)
@@ -10915,6 +10937,14 @@ impl ExportSummary {
 
         let mut referenced_nominals = HashSet::new();
         for exported in summary.terms.values() {
+            for ty in exported
+                .capture
+                .types(type_work)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?
+            {
+                collect_nominal_identities(ty, &mut referenced_nominals, type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            }
             collect_scheme_nominal_identities(
                 &exported.scheme,
                 &mut referenced_nominals,
@@ -11123,6 +11153,27 @@ impl ExportSummary {
         if !resolved.effects.is_empty() || resolved.imported.effects().next().is_some() {
             let mut referenced_effects = HashSet::new();
             for exported in summary.terms.values() {
+                for effect in exported
+                    .capture
+                    .effects(type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                {
+                    type_work
+                        .charge(1)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    referenced_effects
+                        .try_reserve(1)
+                        .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                    referenced_effects.insert(effect);
+                }
+                for ty in exported
+                    .capture
+                    .types(type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                {
+                    collect_effect_identities(ty, &mut referenced_effects, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
                 collect_effect_identities(
                     &exported.scheme.value_type,
                     &mut referenced_effects,
@@ -11568,6 +11619,7 @@ impl ExportSummary {
                     (
                         spelling.to_owned(),
                         ExportedGlobal {
+                            capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
                             scheme: ConstrainedScheme::from_rank1_type(scheme),
                             origin,
@@ -13874,6 +13926,7 @@ impl ExportSummary {
         };
         discard_type_iteratively(std::mem::replace(&mut scheme.value_type, value_type));
         let exported = ExportedGlobal {
+            capture: source.capture.clone(),
             binder: source.binder,
             scheme,
             origin: source.origin.clone(),
@@ -17856,6 +17909,7 @@ pub(crate) fn lexical_method_capture_occurrences<'a>(
                 }
             }
             ResolvedExprKind::Resume(resume) => pending.push(&resume.value),
+            ResolvedExprKind::Discard(_) => {}
             ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
@@ -17948,6 +18002,15 @@ pub enum ResolvedExprKind {
     Handle(ResolvedHandleExpr),
     /// A use of the nearest clause-scoped resume capability.
     Resume(ResolvedResumeExpr),
+    /// Nullary consumption of the enclosing clause capability.
+    Discard(ResolvedDiscardExpr),
+}
+
+/// One resolved discard use, with no value operand.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolvedDiscardExpr {
+    /// Enclosing clause owner; absent only in malformed standalone probes.
+    pub owner: Option<ResumeId>,
 }
 
 /// Stable identity for one lexical handler clause's resume capability.
@@ -18309,6 +18372,7 @@ fn discard_resolved_body_work(
                 }
             }
             ResolvedExprKind::Resume(resume) => expressions.push(*resume.value),
+            ResolvedExprKind::Discard(_) => {}
         }
     }
     while let Some(pattern) = patterns.pop() {
@@ -20554,6 +20618,7 @@ mod tests {
         summary.terms.insert(
             "duplicate".to_owned(),
             ExportedGlobal {
+                capture: crate::core::capture::CaptureValueSummary::default(),
                 binder,
                 scheme: ConstrainedScheme {
                     type_parameters: Box::new([]),
@@ -20733,6 +20798,7 @@ mod tests {
                 summary.terms.insert(
                     "forged".to_owned(),
                     ExportedGlobal {
+                        capture: crate::core::capture::CaptureValueSummary::default(),
                         binder,
                         scheme: ConstrainedScheme {
                             type_parameters: Box::new([]),
@@ -21380,6 +21446,7 @@ mod tests {
                     summary.terms.insert(
                         spelling,
                         ExportedGlobal {
+                            capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
                             scheme: ConstrainedScheme {
                                 type_parameters: Box::new([]),
@@ -22007,6 +22074,7 @@ mod tests {
             .collect::<Vec<_>>();
         let global_binder = BinderId::resolved(module, 0);
         let global_scheme = CheckedGlobalScheme {
+            capture: crate::core::capture::CaptureValueSummary::default(),
             binder: global_binder,
             spelling: "wide".to_owned(),
             scheme: ConstrainedScheme {
@@ -22371,6 +22439,7 @@ mod tests {
             span: Span,
         ) -> CheckedGlobalScheme {
             CheckedGlobalScheme {
+                capture: crate::core::capture::CaptureValueSummary::default(),
                 binder: owner,
                 spelling: format!("global{}", owner.local()),
                 scheme: ConstrainedScheme {
@@ -22523,6 +22592,7 @@ mod tests {
         let span = modules[0].span;
         let empty_owner = BinderId::resolved(module, 2);
         modules[0].schemes.push(CheckedGlobalScheme {
+            capture: crate::core::capture::CaptureValueSummary::default(),
             binder: empty_owner,
             spelling: "empty".to_owned(),
             scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
@@ -24606,11 +24676,13 @@ mod tests {
             value_type: value_type(),
         };
         let imported_global = ImportedGlobalScheme {
+            capture: crate::core::capture::CaptureValueSummary::default(),
             binder,
             scheme: global_scheme(),
             origin: Origin::Source(span),
         };
         let mut exported_global = ExportedGlobal {
+            capture: crate::core::capture::CaptureValueSummary::default(),
             binder,
             scheme: global_scheme(),
             origin: Origin::Source(span),
@@ -24832,11 +24904,13 @@ mod tests {
                     origin
                 };
                 let imported = ImportedGlobalScheme {
+                    capture: crate::core::capture::CaptureValueSummary::default(),
                     binder: BinderId::resolved(module, 0),
                     scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
                     origin: deep_origin(),
                 };
                 let exported = ExportedGlobal {
+                    capture: crate::core::capture::CaptureValueSummary::default(),
                     binder: BinderId::resolved(module, 0),
                     scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
                     origin: deep_origin(),
@@ -24994,11 +25068,13 @@ mod tests {
                     value_type: public_value_type(),
                 };
                 let imported_global = ImportedGlobalScheme {
+                    capture: crate::core::capture::CaptureValueSummary::default(),
                     binder: BinderId::resolved(module, 0),
                     scheme: global_scheme(),
                     origin: Origin::Source(span),
                 };
                 let exported_global = ExportedGlobal {
+                    capture: crate::core::capture::CaptureValueSummary::default(),
                     binder: BinderId::resolved(module, 0),
                     scheme: global_scheme(),
                     origin: Origin::Source(span),
@@ -25321,11 +25397,13 @@ mod tests {
                     value_type: function_type(),
                 };
                 let imported_global = ImportedGlobalScheme {
+                    capture: crate::core::capture::CaptureValueSummary::default(),
                     binder,
                     scheme: global_scheme(),
                     origin: Origin::Source(span),
                 };
                 let mut exported_global = ExportedGlobal {
+                    capture: crate::core::capture::CaptureValueSummary::default(),
                     binder,
                     scheme: global_scheme(),
                     origin: Origin::Source(span),
@@ -25652,6 +25730,7 @@ mod tests {
                 imported
                     .insert_global(
                         ImportedGlobalScheme {
+                            capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
                             scheme: ConstrainedScheme::from_rank1_type(application_type(DEPTH)),
                             origin: generated_origin(&source, DEPTH),
@@ -25662,6 +25741,7 @@ mod tests {
                 imported
                     .insert_global(
                         ImportedGlobalScheme {
+                            capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
                             scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
                             origin: generated_origin(&source, 0),
@@ -25699,6 +25779,7 @@ mod tests {
                 assert_eq!(
                     imported.insert_global(
                         ImportedGlobalScheme {
+                            capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
                             scheme: ConstrainedScheme::from_rank1_type(application_type(DEPTH)),
                             origin: generated_origin(&source, DEPTH),
@@ -28302,6 +28383,7 @@ mod tests {
                     span,
                 });
                 let checked = [CheckedGlobalScheme {
+                    capture: crate::core::capture::CaptureValueSummary::default(),
                     binder,
                     spelling: "expose".to_owned(),
                     scheme: ConstrainedScheme {
@@ -28901,6 +28983,7 @@ mod tests {
                     deep = Type::Function(Box::new(Type::Unit), Box::new(deep));
                 }
                 let checked = [CheckedGlobalScheme {
+                    capture: crate::core::capture::CaptureValueSummary::default(),
                     binder,
                     spelling: "value".to_owned(),
                     scheme: ConstrainedScheme::from_rank1_type(deep),
@@ -29000,6 +29083,7 @@ mod tests {
                     span: value_span,
                 });
                 let checked = [CheckedGlobalScheme {
+                    capture: crate::core::capture::CaptureValueSummary::default(),
                     binder,
                     spelling: "value".to_owned(),
                     scheme: ConstrainedScheme::from_rank1_type(Type::Nominal(nominal)),
@@ -29245,6 +29329,7 @@ mod tests {
             span: global_span,
         });
         let checked_globals = [CheckedGlobalScheme {
+            capture: crate::core::capture::CaptureValueSummary::default(),
             binder,
             spelling: "apply".into(),
             scheme: ConstrainedScheme {

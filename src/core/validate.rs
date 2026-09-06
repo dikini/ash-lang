@@ -211,6 +211,8 @@ pub enum ValidationReason {
     Handler,
     /// A retained resume violates ownership, use, or non-escape.
     Resume,
+    /// Discard has no authenticated proof of capture safety.
+    DiscardUnsafe,
 }
 
 impl fmt::Display for ValidationReason {
@@ -237,6 +239,7 @@ impl fmt::Display for ValidationReason {
             Self::EffectRow => "core.validation.effect-row",
             Self::Handler => "core.validation.handler",
             Self::Resume => "core.validation.resume",
+            Self::DiscardUnsafe => "core.validation.discard-unsafe",
         })
     }
 }
@@ -564,13 +567,16 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
     fn resume_capability(
         kind: &Self::Kind,
     ) -> Option<(super::effect::HandlerId, crate::resolved::ResumeId)> {
-        let super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Resume(
-            resume,
-        )) = kind
-        else {
-            return None;
-        };
-        Some((resume.handler(), resume.owner()))
+        use super::effect::{EffectExprKind, EffectOperation};
+        match kind {
+            EffectExprKind::Operation(EffectOperation::Resume(resume)) => {
+                Some((resume.handler(), resume.owner()))
+            }
+            EffectExprKind::Operation(EffectOperation::Discard(discard)) => {
+                Some((discard.handler(), discard.owner()))
+            }
+            _ => None,
+        }
     }
 
     fn clause_capability(
@@ -7743,9 +7749,39 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             &type_binders,
             &authenticated_method_evidence,
         )?;
-        self.validate_effect_nodes(&type_binders)?;
+        let has_discard = self.validate_effect_nodes(&type_binders)?;
         self.validate_scopes()?;
-        self.validate_type_scopes()
+        self.validate_type_scopes()?;
+        if !has_discard {
+            return Ok(());
+        }
+        let mut capture_work = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let capture_result = super::capture::check_nodes(
+            &self.program.nodes,
+            &[],
+            &[],
+            |kind| match kind {
+                super::effect::EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            },
+            &mut capture_work,
+        );
+        self.charge_type_work(capture_work.used())?;
+        capture_result.map_err(|failure| match failure {
+            super::capture::Failure::Resource => {
+                ValidationError::new(ValidationReason::Resource, None)
+            }
+            super::capture::Failure::Invalid => {
+                ValidationError::new(ValidationReason::Handler, None)
+            }
+            super::capture::Failure::Unsafe(unsafe_discard) => ValidationError::new(
+                ValidationReason::DiscardUnsafe,
+                Some(NodeId::new(self.program.arena, unsafe_discard.node as u32)),
+            ),
+        })?;
+        Ok(())
     }
 
     fn effect_signature(
@@ -7955,11 +7991,12 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
     fn validate_effect_nodes(
         &mut self,
         type_binders: &CoreTypeBinders<'_>,
-    ) -> Result<(), ValidationError> {
+    ) -> Result<bool, ValidationError> {
         use super::effect::{EffectExprKind, EffectOperation, ResumeUse};
 
         let mut handler_ids = HashSet::new();
         let mut clause_contracts = HashMap::new();
+        let mut has_discard = false;
 
         for index in 0..self.program.nodes.len() {
             let id = node_id(self.program.arena, index)?;
@@ -8002,6 +8039,15 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                         return Err(ValidationError::new(ValidationReason::Resume, Some(id)));
                     }
                 }
+                EffectExprKind::Operation(EffectOperation::Discard(discard)) => {
+                    has_discard = true;
+                    if discard.use_state() != ResumeUse::Consumed
+                        || !self.same_type_charged(&node.ty, &Type::Unit)?
+                        || !node.effects.is_empty()
+                    {
+                        return Err(ValidationError::new(ValidationReason::Resume, Some(id)));
+                    }
+                }
                 EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
                     self.validate_effect_handler(
                         id,
@@ -8015,16 +8061,26 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             }
         }
         for (index, node) in self.program.nodes.iter().enumerate() {
-            let EffectExprKind::Operation(EffectOperation::Resume(resume)) = &node.kind else {
-                continue;
-            };
-            self.validate_effect_resume(
-                node_id(self.program.arena, index)?,
-                node,
-                resume,
-                type_binders,
-                &clause_contracts,
-            )?;
+            match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Resume(resume)) => self
+                    .validate_effect_resume(
+                        node_id(self.program.arena, index)?,
+                        node,
+                        resume,
+                        type_binders,
+                        &clause_contracts,
+                    )?,
+                EffectExprKind::Operation(EffectOperation::Discard(discard)) => {
+                    self.charge_type_work(1)?;
+                    if !clause_contracts.contains_key(&(discard.handler(), discard.owner())) {
+                        return Err(ValidationError::new(
+                            ValidationReason::Resume,
+                            Some(node_id(self.program.arena, index)?),
+                        ));
+                    }
+                }
+                _ => {}
+            }
         }
         if self.module_sources.is_some() && !self.node(self.program.root)?.effects.is_empty() {
             return Err(ValidationError::new(
@@ -8032,7 +8088,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 Some(self.program.root),
             ));
         }
-        Ok(())
+        Ok(has_discard)
     }
 
     fn validate_pure_effect_row(
@@ -8213,6 +8269,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                                 &node.effects
                             };
                             self.union_effect_rows_charged(&EffectRow::empty(), source, id)?
+                        }
+                        EffectExprKind::Operation(EffectOperation::Discard(_)) => {
+                            EffectRow::empty()
                         }
                         EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
                             let mut row = self.remove_effect_row_charged(

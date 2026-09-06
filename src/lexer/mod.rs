@@ -448,6 +448,7 @@ fn classify_word(word: &str) -> Option<TokenKind> {
         "handle" => Some(TokenKind::Handle),
         "with" => Some(TokenKind::With),
         "resume" => Some(TokenKind::Resume),
+        "discard" => Some(TokenKind::Discard),
         "import" => Some(TokenKind::Import),
         "as" => Some(TokenKind::As),
         "pub" => Some(TokenKind::Pub),

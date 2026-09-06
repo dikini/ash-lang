@@ -16,10 +16,9 @@ Resolution determines the meaning of an uppercase occurrence from its
 syntactic position and scope.
 
 The reserved words `fn`, `let`, `rec`, `and`, `type`, `newtype`, `interface`,
-`impl`, `effect`, `perform`, `handle`, `with`, `resume`, `where`, `match`,
-`import`, `as`, `pub`, `opaque`, `Int`, `Bool`, `Unit`, `true`, and `false`
-cannot be identifiers. A source binder that used one of the five effect-kernel
-spellings before they became reserved must be renamed. The single spelling `_` is the
+`impl`, `effect`, `perform`, `handle`, `with`, `resume`, `discard`, `where`,
+`match`, `import`, `as`, `pub`, `opaque`, `Int`, `Bool`, `Unit`, `true`, and
+`false` cannot be identifiers. The single spelling `_` is the
 wildcard token rather than an ordinary identifier; spellings such as `_tail`
 remain ordinary identifiers.
 

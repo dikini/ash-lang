@@ -44,8 +44,9 @@ synthesis as described below.
 Effect declarations also produce no runtime declaration node. A checked module
 summary retains each body-free effect identity, ordered fixed-kinded
 parameters, visibility, and ordered operation identities and types. `perform`,
-`handle`, handler clauses, and `resume` remain typed semantic operations with
-their exact effect, operation, handler, and resume-owner identities. A row tail
+`handle`, handler clauses, `resume`, and `discard` remain typed semantic
+operations with their exact effect, operation, handler, and resume-owner
+identities. A row tail
 or effect argument is zonked before a checked summary or Core node is retained.
 
 Resolution has already replaced source type spellings with stable nominal and
@@ -238,14 +239,25 @@ Pure Core families. Effect Core adds only these operation-family nodes:
 - `Handler(handler, body, effect_instance, clauses)` removes that instance from
   the body row and retains the shared output row;
 - each clause retains its operation identity, checked irrefutable pattern,
-  body, handler identity, and one resume-owner identity; and
+  body, handler identity, and one resume-owner identity;
 - `Resume(handler, owner, value)` remains a clause-scoped Core operation rather
-  than a value or function.
+  than a value or function; and
+- `Discard(handler, owner)` is a clause-scoped, childless operation with value
+  type `Unit` and empty immediate row.
 
 Effect and operation declarations remain authenticated registry facts. Core
 contains no provider choice or runtime effect registration. Lowering does not
 encode continuations as Rust closures or expose evaluator frames as Core data.
 The generated entry application is retained only with an empty row.
+
+Module checking infers private control summaries from typed semantic control
+and publishes them only after capture checking succeeds. A function summary
+retains possible calls, requests, handlers and completion control, rather than
+only a preselected outward-request list. Imported calls specialize retained
+type and effect identities before selecting handlers. Summary admission
+authenticates the defining function and those hidden identities. No source
+capture annotation, dependency source body, or runtime capture registry is
+introduced.
 
 When a polymorphic occurrence instantiates an `EffectRow` binder, the shared
 `TypeApplication` node retains one complete row argument alongside the ordinary
@@ -587,9 +599,11 @@ rejects every effect operation. Effect Core validation independently checks:
   substituted operation types;
 - exhaustive handler clauses, exact-instance removal, pattern scope and type,
   and one shared handler result and output row;
-- each resume's handler and owner, input and result types, output row,
-  exactly-once structural use, and barriers against escape into functions,
-  recursive members, or nested clauses;
+- each resume's handler and owner, input and result types, and output row;
+- each discard's handler and owner, `Unit` type, empty row and inferred safety;
+- exactly-once structural completion through resume or discard, and barriers
+  against escape into functions, recursive members, supplied methods, or nested
+  clauses;
 - handler nesting, dialect membership, provenance, child handles, and
   reachability; and
 - an empty row at the linked entry application.
@@ -599,6 +613,10 @@ transforms traverse the effect operation family, preserve or rebuild its
 authentication data, and return the result to the same independent validator.
 Effect nodes presented to Pure Core, or forged rows, identities, owners, or
 scope relations presented to Effect Core, fail before evaluation.
+Capture validation independently derives request obligations from the actual
+linked Core control after ordinary validation. It does not trust an elaborator
+permission or imported summary in place of that derivation. A transformed
+program must re-establish the same safety property.
 
 For every resolved global with a nonempty outer binder list, validation
 requires its `TypeAbstraction` to be the immediate initializer of exactly one
@@ -679,7 +697,8 @@ binder, node, term-scope, and type-scope passes. It is neither reset between
 passes nor supplemented by a separate kind allowance. Core validation applies
 once to the whole linked Core program, including every module group and the
 generated entry application. Effect instances, rows, operations, clauses,
-resume owners, and handler scopes charge that same ledger before retention or
+resume owners, handler scopes, capture metadata and capture queries charge
+that same ledger before retention or
 traversal. Failure of this boundary is an internal compiler failure, not a
 source-language typing result.
 

@@ -122,6 +122,35 @@ impl ResumeNode {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiscardNode {
+    pub(super) handler: HandlerId,
+    pub(super) owner: ResumeId,
+    pub(super) use_state: ResumeUse,
+}
+
+impl DiscardNode {
+    pub(crate) const fn new(handler: HandlerId, owner: ResumeId, use_state: ResumeUse) -> Self {
+        Self {
+            handler,
+            owner,
+            use_state,
+        }
+    }
+    #[must_use]
+    pub const fn handler(&self) -> HandlerId {
+        self.handler
+    }
+    #[must_use]
+    pub const fn owner(&self) -> ResumeId {
+        self.owner
+    }
+    #[must_use]
+    pub const fn use_state(&self) -> ResumeUse {
+        self.use_state
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EffectClause {
     pub(super) operation: OperationId,
     pub(super) resume: ResumeId,
@@ -210,6 +239,7 @@ pub enum EffectOperation {
     Request(RequestNode),
     Handler(HandlerNode),
     Resume(ResumeNode),
+    Discard(DiscardNode),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -290,7 +320,7 @@ impl CoreOperationFamily for EffectOperationFamily {
                 }
                 Some(&handler.effect)
             }
-            EffectOperation::Resume(_) => None,
+            EffectOperation::Resume(_) | EffectOperation::Discard(_) => None,
         };
         if let Some(instance) = instance {
             for argument in instance.arguments() {
@@ -313,6 +343,7 @@ impl CoreOperationFamily for EffectOperationFamily {
     fn child_count(kind: &Self::Kind) -> usize {
         match kind {
             EffectExprKind::Pure(kind) => kind.child_count(),
+            EffectExprKind::Operation(EffectOperation::Discard(_)) => 0,
             EffectExprKind::Operation(EffectOperation::Request(_) | EffectOperation::Resume(_)) => {
                 1
             }
@@ -323,6 +354,7 @@ impl CoreOperationFamily for EffectOperationFamily {
         match kind {
             EffectExprKind::Operation(EffectOperation::Handler(node)) => node.clauses.len(),
             EffectExprKind::Pure(_)
+            | EffectExprKind::Operation(EffectOperation::Discard(_))
             | EffectExprKind::Operation(EffectOperation::Request(_) | EffectOperation::Resume(_)) => {
                 0
             }
@@ -331,6 +363,7 @@ impl CoreOperationFamily for EffectOperationFamily {
     fn child_at(kind: &Self::Kind, index: usize) -> Option<NodeId> {
         match kind {
             EffectExprKind::Pure(kind) => kind.child_at(index),
+            EffectExprKind::Operation(EffectOperation::Discard(_)) => None,
             EffectExprKind::Operation(EffectOperation::Request(node)) => {
                 (index == 0).then_some(node.operand)
             }
@@ -356,7 +389,8 @@ impl CoreOperationFamily for EffectOperationFamily {
                     discard_type_iteratively(argument);
                 }
             }
-            EffectExprKind::Operation(EffectOperation::Resume(_)) => {}
+            EffectExprKind::Operation(EffectOperation::Resume(_) | EffectOperation::Discard(_)) => {
+            }
             EffectExprKind::Operation(EffectOperation::Handler(mut node)) => {
                 let placeholder = EffectInstance::new(node.effect.effect(), Box::new([]));
                 let (_, arguments) = std::mem::replace(&mut node.effect, placeholder).into_parts();
@@ -411,7 +445,9 @@ impl CoreBuilder<EffectOperationFamily> {
                     {
                         Equation::Replace
                     }
-                    EffectExprKind::Operation(EffectOperation::Resume(_)) => Equation::Keep,
+                    EffectExprKind::Operation(
+                        EffectOperation::Resume(_) | EffectOperation::Discard(_),
+                    ) => Equation::Keep,
                     EffectExprKind::Operation(EffectOperation::Request(request)) => {
                         Equation::Request(
                             request.operand,
@@ -539,6 +575,24 @@ impl CoreBuilder<EffectOperationFamily> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn discard(
+        &mut self,
+        handler: HandlerId,
+        owner: ResumeId,
+        use_state: ResumeUse,
+        result_type: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, super::BuildError> {
+        self.push_operation(
+            result_type,
+            effects,
+            origin,
+            EffectOperation::Discard(DiscardNode::new(handler, owner, use_state)),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn handler(
         &mut self,
         id: HandlerId,
@@ -651,6 +705,41 @@ mod tests {
         source::{ByteRange, SourceFile},
         types::{EffectId, TYPE_WORK_LIMIT},
     };
+
+    #[test]
+    fn discard_has_no_children_and_keeps_its_empty_row_during_recomputation() {
+        let source = SourceFile::new("discard-core.ash", "discard").unwrap();
+        let origin = Origin::Source(source.span(ByteRange::new(0, 7).unwrap()).unwrap());
+        let mut builder =
+            EffectCoreBuilder::with_effect_registry(Arc::new(ResolvedRegistry::default()));
+        let root = builder
+            .discard(
+                HandlerId::new(0),
+                ResumeId::new(0),
+                ResumeUse::Consumed,
+                Type::Unit,
+                EffectRow::empty(),
+                origin,
+            )
+            .unwrap();
+        let row = EffectRow::singleton(EffectInstance::new(
+            EffectId::new(ModuleId::new(0), 0),
+            Box::new([]),
+        ));
+        builder
+            .recompute_effect_rows_in_range(0..1, &row, HandlerId::new(0), ResumeId::new(0))
+            .unwrap();
+        let node = &builder.nodes[root.index().unwrap()];
+        assert_eq!(node.kind.child_count(), 0);
+        assert_eq!(node.kind.child_at(0), None);
+        assert_eq!(node.kind.child_at(usize::MAX), None);
+        assert_eq!(
+            EffectOperationFamily::operation_extra_edge_count(&node.kind),
+            0
+        );
+        assert_eq!(node.ty, Type::Unit);
+        assert!(node.effects.is_empty());
+    }
 
     fn range_fixture(
         depth: usize,

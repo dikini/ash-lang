@@ -133,10 +133,15 @@ spellings, checked constrained rank-1 schemes with kinded binders, accessible
 constructor and effect-operation facts, the public implementation closure with
 authorization routes, and hidden kind, identity, interface-shape, or
 effect-signature facts required to close those public facts. The compiler
-produces this body-free summary only after
+produces this source-body-free summary only after
 checking the complete module; Ash source does not declare it. It contains no
-dependency body, implementation body, forwarding declaration, or mutable
-dependency scope. Importing a scheme does not infer or generalize it again.
+dependency source body, implementation source body, forwarding declaration,
+or mutable dependency scope. Importing a scheme does not infer or generalize
+it again.
+Exported function values also retain compiler-inferred control summaries for
+capture checking. These summaries describe possible calls, requests and handler
+control; they do not import dependency source bodies. Admission authenticates
+their defining function identity and retained type and effect identities.
 
 Summary admission authenticates every retained type-variable identity against
 one defining kinded binder record and derives each nominal constructor kind
@@ -666,9 +671,10 @@ remainder, not to its initializer.
 
 Each handler clause receives one hidden `ResumeId` owned by that clause. The
 clause's operation pattern and resume capability scope only over its body;
-`resume` outside such a scope is `effect.resume-outside-clause`. A nested
-handler's handled expression remains in the outer clause scope, while each of
-the nested handler's clauses receives its own resume scope and cannot use the
+`resume` or `discard` outside such a scope is
+`effect.resume-outside-clause`. Both forms name that same hidden capability.
+A nested handler's handled expression remains in the outer clause scope.
+Each nested handler clause receives its own resume scope and cannot use the
 outer capability. Nested functions, recursive members, and supplied local
 evidence methods cannot capture a
 resume capability; static semantics owns the non-escape and exactly-once

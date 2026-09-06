@@ -50,6 +50,8 @@ pub enum TokenKind {
     With,
     /// The `resume` reserved word.
     Resume,
+    /// The `discard` reserved word.
+    Discard,
     /// The `import` reserved word.
     Import,
     /// The `as` reserved word.

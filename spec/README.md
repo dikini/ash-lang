@@ -87,8 +87,11 @@ resulting kind satisfies the context that owns the type.
 An effect declaration defines one module-owned API with one or more operations.
 Function computations carry rows of exact, parameterized effect identities.
 `perform` requests an operation, and an exhaustive lexical `handle` removes one
-exact instance. Each selected clause must consume its non-escaping `resume`
-capability exactly once on every normally completing path.
+exact instance. Each selected clause must consume its non-escaping continuation
+capability exactly once on every normally completing path, with `resume` or
+checked `discard`. Discard abandons the suspended segment only when inference
+proves it carries no other unfinished continuation obligation; the clause then
+continues with `Unit`.
 
 The source path selected for execution is the entry module. It declares exactly
 one local, monomorphic, unconstrained `main : Unit -> R`, where `R` is closed.
@@ -125,12 +128,12 @@ Within a module, Ash provides global and explicit local recursion, rank-1
 polymorphism, nominal data, allocation-free module and local `newtype`, structural tuples, constructor values, typed
 patterns, exhaustive matches and equations, sequential bindings, method-only
 interfaces, explicit constraints, anonymous implementations, and pure and
-effectful expressions with resume-required handlers.
+effectful expressions with single-use, non-escaping handler continuations.
 
-The effect kernel adds no providers, hooks, resource regions, checked discard, escaping
-or multi-shot resume, asynchronous execution, or dynamic loading. A linked
-nonempty effect row is a source rejection rather than an unhandled-operation
-runtime result.
+The effect kernel adds no providers, hooks, resource regions, automatic cleanup,
+escaping or multi-shot resume, asynchronous execution, or dynamic loading.
+A linked nonempty effect row is a source rejection rather than an
+unhandled-operation runtime result.
 
 ## Module examples
 
@@ -425,11 +428,12 @@ The program observes:
 (Box(true), Box(42)) : (Box<Bool>, Box<Int>)
 ```
 
-The method scheme is authenticated across both body-free summaries. Concrete
-evidence uses one generated adapter over the implementation method; its type
-operations erase through the existing evaluator rules. The source filename
-retained by the test corpus is `interface.ash`, but the executable tree stages
-that content as `api.ash` because `interface` is reserved in a module path.
+The method scheme is authenticated across both source-body-free summaries.
+Concrete evidence uses one generated adapter over the implementation method;
+its type operations erase through the existing evaluator rules. The source
+filename retained by the test corpus is `interface.ash`, but the executable
+tree stages that content as `api.ash` because `interface` is reserved in
+a module path.
 
 ### Opaque types and smart constructors
 

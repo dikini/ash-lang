@@ -271,6 +271,7 @@ fn occurrences_in_expressions(
                 expressions.extend(handler.clauses.iter().map(|clause| &clause.body));
             }
             ResolvedExprKind::Resume(resume) => expressions.push(&resume.value),
+            ResolvedExprKind::Discard(_) => {}
         }
     }
     occurrences

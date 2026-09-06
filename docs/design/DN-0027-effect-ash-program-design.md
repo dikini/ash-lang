@@ -303,11 +303,13 @@ identity, lexical escape, row, and handler questions. Their branch specification
 does not make those checkpoints current on `main`.
 
 The verified scoped-evidence checkpoint settles the bounded pure-evidence
-choices. The next planning questions concern the capture
-and checked-discard rules needed before safe resource scope. Exact capture-use
-authentication in the current evidence work does not add capture classes,
-ownership, lifetime checking, or permission to discard a continuation. Those
-questions remain owned by the later proposal capsules.
+choices. The completed
+[capture/discard checkpoint](effect-ash/capture-discard-evidence.md)
+implements inferred request obligations and consuming abandonment, with its
+reviews and full verification retained. Stored ordinary values remain
+unrestricted. Resource acquisition, lifetime and cleanup rules remain the next
+proposal-owned questions before safe resource scope; this checkpoint does not
+implement them.
 
 ## Supporting evidence
 

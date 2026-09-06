@@ -32,6 +32,12 @@ impl Drop for TempModule {
 }
 
 fn check_source(source: &str) -> ash::resolved::CheckedModule {
+    try_check_source(source).expect("the effect typing fixture should check")
+}
+
+fn try_check_source(
+    source: &str,
+) -> Result<ash::resolved::CheckedModule, ash::elaborate::TypeError> {
     let fixture = TempModule::write(source);
     let graph = load_module_graph(&fixture.0, &ModuleRoots::empty())
         .expect("the effect typing fixture should load");
@@ -41,7 +47,7 @@ fn check_source(source: &str) -> ash::resolved::CheckedModule {
         .find(|module| module.id() == graph.entry())
         .expect("the graph should retain its entry");
     let resolved = resolve_module(module, &[]).expect("the effect typing fixture should resolve");
-    check_module(resolved).expect("the effect typing fixture should check")
+    check_module(resolved)
 }
 
 fn latent_effects<'a>(checked: &'a ash::resolved::CheckedModule, spelling: &str) -> &'a EffectRow {
@@ -52,6 +58,266 @@ fn latent_effects<'a>(checked: &'a ash::resolved::CheckedModule, spelling: &str)
         .and_then(|scheme| scheme.scheme.value_type().function_view())
         .and_then(|function| function.effects())
         .expect("the checked function should retain a nonempty latent row")
+}
+
+#[test]
+fn cyclic_opaque_resumption_leaves_no_owner_after_normal_return() {
+    for (clause, accepted) in [
+        ("let _ = resume ()\nperform B.ask ()", true),
+        ("let _ = perform B.ask ()\nresume ()", false),
+    ] {
+        let source = format!(
+            "effect H {{\nask : Unit -> Unit\n}}\neffect B {{\nask : Unit -> Unit\n}}\n\
+             run : (Unit -> Unit ! {{H}}) -> Unit\nrun action = handle (handle (action ()) with H {{\nask ignored => {{\n{clause}\n}}\n}}) with B {{\nask ignored => discard\n}}\n\
+             main : Unit -> Unit\nmain () = ()\n"
+        );
+        let result = try_check_source(&source);
+        if accepted {
+            result.expect("opaque H control returns before known B, with every H owner consumed");
+        } else {
+            assert!(
+                matches!(result,Err(ash::elaborate::TypeError::Source(error)) if error.reason==ash::elaborate::TypeReason::DiscardUnsafe)
+            );
+        }
+    }
+}
+
+#[test]
+fn repeated_handler_requests_keep_consumed_owners_during_post_resume_work() {
+    for (request, accepted) in [
+        (
+            "let _ = perform A.ask ()\nlet _ = resume ()\nperform B.ask ()",
+            true,
+        ),
+        (
+            "let _ = perform A.ask ()\nlet _ = perform B.ask ()\nresume ()",
+            false,
+        ),
+    ] {
+        let source = format!(
+            "effect H {{\nask : Unit -> Unit\n}}\neffect A {{\nask : Unit -> Unit\n}}\neffect B {{\nask : Unit -> Unit\n}}\n\
+             twice : Unit -> Unit ! {{H}}\ntwice () = {{\nlet _ = perform H.ask ()\nperform H.ask ()\n}}\n\
+             run : Unit -> Unit ! {{A, B}}\nrun () = handle (twice ()) with H {{\nask ignored => {{\n{request}\n}}\n}}\n\
+             main : Unit -> Unit\nmain () = handle (handle (run ()) with A {{\nask ignored => handle ({{\nlet _ = resume ()\nperform B.ask ()\n}}) with B {{\nask ignored => discard\n}}\n}}) with B {{\nask ignored => resume ()\n}}\n"
+        );
+        let result = try_check_source(&source);
+        if accepted {
+            result.expect("every H owner is consumed before post-resume B work unwinds");
+        } else {
+            assert!(
+                matches!(result, Err(ash::elaborate::TypeError::Source(error)) if error.reason == ash::elaborate::TypeReason::DiscardUnsafe)
+            );
+        }
+    }
+}
+
+#[test]
+fn generic_local_discard_cannot_assume_distinct_type_parameters() {
+    for completion in ["discard", "resume ()"] {
+        let source = format!(
+            "effect E<T> {{\nask : Unit -> Unit\n}}\neffect A {{\nask : Unit -> Unit\n}}\neffect B {{\nask : Unit -> Unit\n}}\n\
+             route<T, U> : (T, U) -> Unit ! {{A, B, E<T>}}\nroute ignored = handle ({{\nlet _ = perform E<U>.ask ()\nlet _ = perform A.ask ()\nperform E<T>.ask ()\n}}) with E<U> {{\nask ignored => {{\nlet _ = perform B.ask ()\nresume ()\n}}\n}}\n\
+             invoke<T, U> : (T, U) -> Unit ! {{E<T>}}\ninvoke pair = handle (handle (route pair) with A {{\nask ignored => handle ({{\nlet _ = resume ()\nperform B.ask ()\n}}) with B {{\nask ignored => {completion}\n}}\n}}) with B {{\nask ignored => resume ()\n}}\n\
+             main : Unit -> Unit\nmain () = ()\n"
+        );
+        let result = try_check_source(&source);
+        if completion == "resume ()" {
+            result.expect("generic resume-only control has no abandonment obligation");
+        } else {
+            assert!(
+                matches!(result, Err(ash::elaborate::TypeError::Source(ref error)) if error.reason == ash::elaborate::TypeReason::DiscardUnsafe),
+                "generic discard must hold when T and U coincide: {result:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn unknown_request_loop_keeps_a_finite_resume_only_handler_summary() {
+    check_source(concat!(
+        "effect H {\nask : Unit -> Unit\n}\n",
+        "effect A {\nask : Unit -> Unit\n}\n",
+        "effect B {\nask : Unit -> Unit\n}\n",
+        "run : (Unit -> Unit ! {H}) -> Unit ! {A, B}\n",
+        "run action = handle (action ()) with H {\n",
+        "ask ignored => {\n",
+        "let _ = perform A.ask ()\n",
+        "let _ = resume ()\n",
+        "perform B.ask ()\n",
+        "}\n}\n",
+        "main : Unit -> Unit\nmain () = ()\n",
+    ));
+}
+
+#[test]
+fn discard_capture_boundary_accepts_direct_and_helper_requests() {
+    let mut failures = Vec::new();
+    for request in ["perform B.ask ()", "ask ()"] {
+        for (index, clause) in [
+            format!("{{\nlet _ = handle ({request}) with B {{\nask ignored => discard\n}}\nresume ()\n}}"),
+            format!("{{\nlet _ = resume ()\n{request}\n}}"),
+        ].into_iter().enumerate() {
+            let handled = format!("handle (perform A.ask ()) with A {{\nask ignored => {clause}\n}}");
+            let body = if index == 0 { handled } else {
+                format!("handle ({handled}) with B {{\nask ignored => discard\n}}")
+            };
+            if let Err(error) = try_check_source(&format!(
+                "effect A {{\nask : Unit -> Unit\n}}\neffect B {{\nask : Unit -> Unit\n}}\n\
+                 ask : Unit -> Unit ! {{B}}\nask () = perform B.ask ()\n\
+                 main : Unit -> Unit\nmain () = {body}\n"
+            )) { failures.push(error); }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "all direct/helper boundaries must check: {failures:?}"
+    );
+}
+
+#[test]
+fn discard_accepts_known_closure_alias_factory_and_recursive_helpers() {
+    let mut failures = Vec::new();
+    for helper in [
+        "let ask = fn(ignored) {\nperform B.ask ()\n}\nlet alias = ask\nalias ()",
+        "let factory : Unit -> (Unit -> Unit ! {B}) = fn(ignored) {\nfn(ignored) {\nperform B.ask ()\n}\n}\nlet ask = factory ()\nask ()",
+        "let rec ask : Int -> Unit ! {B} = fn(n) {\nmatch n == 2 {\ntrue => perform B.ask ()\nfalse => ask (n + 1)\n}\n}\nask 0",
+    ] {
+        if let Err(error) = try_check_source(&format!(
+            "effect B {{\nask : Unit -> Unit\n}}\nmain : Unit -> Unit\n\
+             main () = handle ({{\n{helper}\n}}) with B {{\nask ignored => discard\n}}\n"
+        )) {
+            failures.push(error);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "all known callables must check: {failures:?}"
+    );
+}
+
+#[test]
+fn discard_keeps_polymorphic_exact_effect_instances_separate() {
+    check_source(concat!(
+        "effect B<A : Type> {\nask : A -> Unit\n}\n",
+        "ask<A : Type> : A -> Unit ! {B<A>}\nask value = perform B<A>.ask value\n",
+        "main : Unit -> Unit\nmain () = handle (ask 1) with B<Int> {\nask ignored => discard\n}\n",
+    ));
+}
+
+#[test]
+fn discard_separates_unrelated_instantiations_and_stored_closures() {
+    check_source(concat!(
+        "effect A {\nask : Unit -> Unit\n}\neffect B<T : Type> {\nask : T -> Unit\n}\n",
+        "bad : Unit -> Unit ! {B<Bool>}\nbad () = handle (perform A.ask ()) with A {\n",
+        "ask ignored => {\nlet _ = perform B<Bool>.ask true\nresume ()\n}\n}\n",
+        "main : Unit -> Unit\nmain () = handle (handle ({\n",
+        "let stored : Unit -> Unit ! {B<Bool>} = fn(ignored) {\nbad ()\n}\n",
+        "let _ = perform B<Int>.ask 1\nbad ()\n}) with B<Int> {\nask ignored => discard\n",
+        "}) with B<Bool> {\nask ignored => resume ()\n}\n",
+    ));
+}
+
+#[test]
+fn discard_inside_a_clause_preserves_already_completed_outer_owner() {
+    check_source(concat!(
+        "effect A {\nask : Unit -> Unit\n}\neffect B {\nask : Unit -> Unit\n}\n",
+        "main : Unit -> Unit\nmain () = handle (perform A.ask ()) with A {\n",
+        "ask ignored => {\nlet _ = handle ({\nlet _ = resume ()\nperform B.ask ()\n}) with B {\nask ignored => discard\n}\n()\n}\n}\n",
+    ));
+}
+
+#[test]
+fn discard_accepts_restored_requests_without_live_owners() {
+    for computation in [
+        "{\nlet _ = perform A.ask ()\nperform B.ask ()\n}",
+        "handle (perform C.ask ()) with C {\nask ignored => {\nlet _ = perform A.ask ()\nlet _ = resume ()\nperform B.ask ()\n}\n}",
+        "handle (perform C.ask ()) with C {\nask ignored => {\nlet _ = perform B.ask ()\nlet _ = resume ()\nperform A.ask ()\n}\n}",
+    ] {
+        check_source(&format!(
+            "effect A {{\nask : Unit -> Unit\n}}\neffect B {{\nask : Unit -> Unit\n}}\neffect C {{\nask : Unit -> Unit\n}}\n\
+             main : Unit -> Unit\nmain () = handle (handle ({computation}) with A {{\nask ignored => handle ({{\nlet _ = resume ()\nperform B.ask ()\n}}) with B {{\nask ignored => discard\n}}\n}}) with B {{\nask ignored => resume ()\n}}\n"
+        ));
+    }
+}
+
+#[test]
+fn restored_continuations_reinstall_crossed_handler_filters() {
+    check_source(concat!(
+        "effect A {\nask : Unit -> Unit\n}\neffect B {\nask : Unit -> Unit\n}\neffect C {\nask : Unit -> Unit\n}\n",
+        "main : Unit -> Unit\nmain () = handle (handle (perform C.ask ()) with C {\n",
+        "ask ignored => {\nlet _ = handle ({\nlet _ = perform A.ask ()\nperform B.ask ()\n}) with B {\nask ignored => resume ()\n}\nresume ()\n}\n",
+        "}) with A {\nask ignored => handle ({\nlet _ = resume ()\nperform B.ask ()\n}) with B {\nask ignored => discard\n}\n}\n",
+    ));
+}
+
+#[test]
+fn separate_calls_of_one_helper_keep_capture_suffixes_separate() {
+    check_source(concat!(
+        "effect A {\nask : Unit -> Unit\n}\neffect B {\nask : Unit -> Unit\n}\neffect C {\nask : Unit -> Unit\n}\n",
+        "ask : Unit -> Unit ! {B}\nask () = perform B.ask ()\n",
+        "main : Unit -> Unit\nmain () = handle (handle (handle (perform C.ask ()) with C {\n",
+        "ask ignored => {\nlet _ = ask ()\nlet _ = resume ()\nlet _ = perform A.ask ()\nask ()\n}\n",
+        "}) with A {\nask ignored => handle ({\nlet _ = resume ()\nperform B.ask ()\n}) with B {\nask ignored => discard\n}\n}) with B {\nask ignored => resume ()\n}\n",
+    ));
+}
+
+#[test]
+fn nested_resumption_does_not_replay_a_prior_calls_suffix() {
+    check_source(include_str!("fixtures/effects/capture-prefix-before.ash"));
+}
+
+#[test]
+fn instantiated_unknown_open_row_does_not_taint_unrelated_effects() {
+    check_source(concat!(
+        "effect A {\nask : Unit -> Unit\n}\neffect B {\nask : Unit -> Unit\n}\n",
+        "relay<R : EffectRow> : (Unit -> Unit ! {| R}) -> Unit ! {| R}\nrelay action = action ()\n",
+        "ask : Unit -> Unit ! {A}\nask () = perform A.ask ()\n",
+        "main : Unit -> Unit\nmain () = handle (handle ({\nlet _ = perform B.ask ()\nrelay ask\n}) with B {\nask ignored => discard\n}) with A {\nask ignored => resume ()\n}\n",
+    ));
+}
+
+#[test]
+fn restored_handler_resumes_its_selected_capture_only() {
+    check_source(concat!(
+        "effect A {\nask : Unit -> Unit\n}\neffect B {\nask : Unit -> Unit\n}\neffect D {\nask : Unit -> Unit\n}\neffect E {\nask : Unit -> Unit\n}\n",
+        "askB : Unit -> Unit ! {B}\naskB () = perform B.ask ()\n",
+        "badD : Unit -> Unit ! {D}\nbadD () = handle (perform E.ask ()) with E {\nask ignored => {\nlet _ = perform D.ask ()\nresume ()\n}\n}\n",
+        "runB : Unit -> Unit ! {A, D}\nrunB () = handle ({\nlet _ = askB ()\nlet _ = badD ()\nlet _ = perform A.ask ()\naskB ()\n}) with B {\nask ignored => resume ()\n}\n",
+        "main : Unit -> Unit\nmain () = handle (handle (runB ()) with A {\nask ignored => handle ({\nlet _ = resume ()\nperform D.ask ()\n}) with D {\nask ignored => discard\n}\n}) with D {\nask ignored => resume ()\n}\n",
+    ));
+}
+
+#[test]
+fn discard_and_resume_branches_have_unit_completion_carriers() {
+    let fixture = TempModule::write(concat!(
+        "effect Stop {\nstop : Unit -> Unit\n}\n",
+        "main : Unit -> Unit\n",
+        "main () = handle (perform Stop.stop ()) with Stop {\n",
+        "stop ignored => match true {\ntrue => resume ()\nfalse => discard\n}\n}\n",
+    ));
+    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty()).expect("fixture should load");
+    let module = graph.module(graph.entry()).expect("entry should exist");
+    let resolved = resolve_module(module, &[]).expect("discard should resolve");
+    let ash::resolved::ResolvedDefinitionKind::Equational(main) = &resolved.definitions()[0].kind
+    else {
+        panic!("main should remain equational")
+    };
+    let body = &main.equations[0].body;
+    let mut elaborator = ash::elaborate::EffectElaborator::for_resolved_expression(&resolved, body)
+        .expect("carrier elaborator");
+    let typed = elaborator
+        .synthesize(body, &ash::elaborate::TypeContext::new())
+        .expect("both completion paths should type before capture proof");
+    assert_eq!(typed.ty, Type::Unit);
+    assert!(typed.effects.is_empty());
+    let program = elaborator.finish(typed.node).expect("carrier Core");
+    let validated = ash::core::validate_effect(program, &[module.source()])
+        .expect("independent Core inference proves both completion paths safe");
+    ash::core::validate_effect(
+        ash::core::transform::identity_effect_traversal(&validated).expect("identity transform"),
+        &[module.source()],
+    )
+    .expect("transformed discard revalidates");
 }
 
 #[test]

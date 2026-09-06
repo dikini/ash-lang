@@ -381,6 +381,8 @@ pub enum SurfaceExprKind {
     Handle(SurfaceHandleExpr),
     /// A resume request owned by the nearest operation clause.
     Resume(Box<SurfaceExpr>),
+    /// Nullary consumption of the nearest clause's captured continuation.
+    Discard,
 }
 
 /// One explicit source operation request.

@@ -67,6 +67,124 @@ fn checked_registry() -> (Arc<ResolvedRegistry>, SourceFile, EffectId, Operation
 }
 
 #[test]
+fn discard_core_checks_owners_types_rows_and_exact_once_before_safety() {
+    let (registry, source, effect, operation) = checked_registry();
+    let origin = Origin::Source(source.span(ByteRange::new(0, 6).unwrap()).unwrap());
+    for (case, expected) in [
+        ("canonical", None),
+        ("wrong-owner", Some(ValidationReason::Resume)),
+        ("wrong-handler", Some(ValidationReason::Resume)),
+        ("available", Some(ValidationReason::Resume)),
+        ("wrong-type", Some(ValidationReason::Resume)),
+        ("wrong-row", Some(ValidationReason::Resume)),
+        ("double", Some(ValidationReason::Resume)),
+        ("outside", Some(ValidationReason::Resume)),
+        ("closure", Some(ValidationReason::Resume)),
+    ] {
+        let mut builder = EffectCoreBuilder::with_effect_registry(Arc::clone(&registry));
+        let instance = EffectInstance::new(effect, Box::new([]));
+        let discard_type = if case == "wrong-type" {
+            Type::Bool
+        } else {
+            Type::Unit
+        };
+        let discard = builder
+            .discard(
+                HandlerId::new(u32::from(case == "wrong-handler")),
+                ResumeId::new(u32::from(case == "wrong-owner")),
+                if case == "available" {
+                    ResumeUse::Available
+                } else {
+                    ResumeUse::Consumed
+                },
+                discard_type.clone(),
+                if case == "wrong-row" {
+                    EffectRow::singleton(instance.clone())
+                } else {
+                    EffectRow::empty()
+                },
+                origin.clone(),
+            )
+            .expect("discard carrier");
+        let root = if case == "outside" {
+            discard
+        } else {
+            let operand = builder.unit(Type::Unit, origin.clone()).unwrap();
+            let requested = builder
+                .request(
+                    instance.clone(),
+                    operation,
+                    operand,
+                    Type::Int,
+                    EffectRow::singleton(instance.clone()),
+                    origin.clone(),
+                )
+                .unwrap();
+            let result = builder
+                .integer(
+                    Integer::parse_decimal("42").unwrap(),
+                    Type::Int,
+                    origin.clone(),
+                )
+                .unwrap();
+            let (initializer, initializer_type) = if case == "closure" {
+                let parameter = builder.binder(Type::Unit, origin.clone()).unwrap();
+                let ty = Type::Function(Box::new(Type::Unit), Box::new(Type::Unit));
+                (
+                    builder
+                        .function(parameter, discard, ty.clone(), origin.clone())
+                        .unwrap(),
+                    ty,
+                )
+            } else {
+                (discard, discard_type)
+            };
+            let binder = builder.binder(initializer_type, origin.clone()).unwrap();
+            let mut body = builder
+                .binding(binder, initializer, result, Type::Int, origin.clone())
+                .unwrap();
+            if case == "double" {
+                let binder = builder.binder(Type::Unit, origin.clone()).unwrap();
+                body = builder
+                    .binding(binder, discard, body, Type::Int, origin.clone())
+                    .unwrap();
+            }
+            let clause = EffectClause::new(
+                operation,
+                ResumeId::new(0),
+                CoreMatchArm::new(
+                    CorePattern::new(Type::Unit, origin.clone(), CorePatternKind::Wildcard),
+                    body,
+                    origin.clone(),
+                ),
+            );
+            builder
+                .handler(
+                    HandlerId::new(0),
+                    requested,
+                    instance,
+                    vec![clause],
+                    Type::Int,
+                    if case == "wrong-row" {
+                        EffectRow::singleton(EffectInstance::new(effect, Box::new([])))
+                    } else {
+                        EffectRow::empty()
+                    },
+                    origin.clone(),
+                )
+                .unwrap()
+        };
+        let result = validate_effect(builder.finish(root).unwrap(), &[&source]);
+        let Some(expected) = expected else {
+            result.expect("direct captured segment is discardable");
+            continue;
+        };
+        let error = result.expect_err("discard requires structural validity and capture proof");
+        assert_eq!(error.reason(), expected, "{case}: {error:?}");
+    }
+}
+
+#[test]
 fn checked_source_lowers_to_explicit_effect_core() {
     let directory = std::env::temp_dir().join(format!(
         "ash-effect-core-lowering-{}-{}",
@@ -164,6 +282,7 @@ fn checked_source_lowers_to_explicit_effect_core() {
                 EffectOperation::Request(_) => operations[0] += 1,
                 EffectOperation::Handler(_) => operations[1] += 1,
                 EffectOperation::Resume(_) => operations[2] += 1,
+                EffectOperation::Discard(_) => panic!("resume-only fixture cannot contain discard"),
             }
         }
         pending.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));

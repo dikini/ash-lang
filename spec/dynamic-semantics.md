@@ -408,7 +408,7 @@ over Boolean values. The left rules propagate a step in the left operand. The
 right rules apply only after the left operand is an integer value. The value
 rules compute the primitive result.
 
-## Effect handlers and resume
+## Effect handlers and completion
 
 `HANDLER(handler, instance, clauses, environment)` is an ordered lexical
 continuation boundary. `REQUEST(operation)` and `RESUME(handler, owner)` are
@@ -497,10 +497,32 @@ remaining clause control finishes, `E-Clause-Return` removes the consumed
 clause boundary and returns the clause value to `outer`. There is no transition
 that clones a captured continuation or changes `consumed` back to `live`.
 
+`discard` consumes the matching live owner without restoring its captured
+segment. It has no operand. Checked discard leaves the clause continuation and
+its surrounding control intact, and returns unit at the discard expression:
+
+```sequent
+E-Discard :=
+  split_owner(continuation, handler, owner) = clause_prefix, live(captured), outer
+  captured contains no other live clause capability
+  remaining = clause_prefix ++ CLAUSE(handler, owner, consumed) :: outer
+  ===>
+  CONFIG(heap, environment, discard(handler, owner), continuation) -> CONFIG(heap, environment, (), remaining)
+```
+
+The abandoned segment is disposed of without running suspended expressions,
+resuming with a dummy value, invoking cleanup, or terminating an enclosing
+handler. Its retained capture accounting is released exactly once. Consumed
+clause boundaries inside that segment add no live obligation. Preflight failure
+does not consume or partially release a capture. Disposal uses iterative work
+even for deeply nested captured control. After the remaining clause work,
+`E-Clause-Return` applies just as it does after resume.
+
 Static checking and Effect Core validation make an unmatched request, a
-missing owner, a second resume, or an invalid capture boundary unreachable from
-accepted source. If one appears after successful validation, evaluation
-reports an internal malformed-Core or machine failure. Ash has no source-level
+missing owner, a second completion, an unsafe discard, or an invalid capture
+boundary unreachable from accepted source. If one appears after successful
+validation, evaluation reports an internal malformed-Core or machine failure.
+Ash has no source-level
 unhandled-operation, abort, exception, cancellation, or unwind result.
 
 ## Observation
