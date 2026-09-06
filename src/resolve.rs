@@ -4142,6 +4142,16 @@ impl Resolver {
         self.imported
             .insert_global(
                 ImportedGlobalScheme {
+                    capture: exported
+                        .capture
+                        .clone_with_budget(&mut self.type_work)
+                        .map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                span,
+                                "imported capture summary retention exceeded its work budget",
+                            )
+                        })?,
                     binder: exported.binder,
                     scheme,
                     origin: exported.origin.clone(),
@@ -4158,6 +4168,35 @@ impl Resolver {
         self.global_requirement_counts
             .insert(exported.binder, exported.scheme.requirements.len());
         self.retain_scheme_nominals(&exported.scheme, summary, span)?;
+        for ty in exported.capture.types(&mut self.type_work).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "imported capture type scan exceeded its work budget",
+            )
+        })? {
+            self.retain_type_nominals(ty, summary, span)?;
+        }
+        for effect in exported
+            .capture
+            .effects(&mut self.type_work)
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported capture effect scan exceeded its work budget",
+                )
+            })?
+        {
+            let declaration = summary.effect_by_id(effect).ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "an exported capture graph references missing effect metadata",
+                )
+            })?;
+            self.retain_imported_effect(declaration, span)?;
+        }
         Ok(())
     }
 

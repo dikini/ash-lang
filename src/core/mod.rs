@@ -1,6 +1,7 @@
 //! Typed Core families and their independent validation boundary.
 
 pub mod binding;
+pub(crate) mod capture;
 pub mod data;
 pub mod dialect;
 pub mod effect;

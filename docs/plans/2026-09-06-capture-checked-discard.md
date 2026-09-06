@@ -22,7 +22,7 @@ check Core and reuse the explicit evaluator's moved continuation storage.
 - [x] Record accepted proposal and allocate unused task/plan IDs.
 - [x] Finish baseline verification before product edits.
 - [x] Step 1: explicit completion carriers and usage checks.
-- [ ] Step 2: inferred capture summaries and independent Core checking.
+- [x] Step 2: inferred capture summaries and independent Core checking.
 - [ ] Step 3: execution, accounting and complete adversarial corpus.
 - [ ] Step 4: specification, reviews, full gate and retained evidence.
 - [ ] Local integration and clean-checkout lifecycle after checkpoint closure.
@@ -74,10 +74,18 @@ Tests: `tests/effect_typing.rs`, `tests/effect_core.rs`,
    separately from request-carried live/unknown obligations. Compose known
    calls with lexical handler/owner state; join branches and recursive groups
    conservatively. Preserve exact effect identity and instantiated arguments.
+   Retain the captured residual associated with each request, including
+   restored handler boundaries and ordinary return to the caller. A resume
+   must use that residual, not the owning handler's whole request set. Preserve
+   this information across imports and keep callee consumption scoped to its
+   own activation.
 4. Add unknown higher-order/open-row negative cases and paired resume-only
    positives. Do not infer safety from a declared effect row alone.
 5. Independently reconstruct/check summaries in Core; add forged metadata,
    owner, type, row and transformed-Core tests before implementing each gate.
+   Include nested discard that skips outer completion, restored requests with
+   a live owner, consumed-before-capture and restored-inner-handler positives,
+   and corresponding imported-helper cases.
 6. Run focused tests, self-review, commit, then semantic and code reviews.
 
 ## Step 3: Runtime and resource boundary
@@ -148,3 +156,101 @@ validation means deriving facts again from final Core, not writing a second
 algorithm or trusting exported claims. A second source control-flow graph is
 unnecessary. Keep ordinary global and implementation method roots until the
 analysis finishes; missing callable evidence means unknown, not safe.
+
+### Step 2 unresolved representation boundary
+
+Selected-residual binding corrects the independently reproduced nonrecursive
+prefix-replay defects. The parent subsequently passed 990 library and 60
+focused tests, explicitly excluding two failing recursive activation tests,
+plus all-target Clippy. Both recursive tests fail with
+`TypeResourceExhausted`, not with their required acceptance or safety result.
+
+An additional tests-only resume-only fixture with an opaque repeating request
+also exhausts inference work. It has no recursive source function or discard.
+Its handler clause performs `A`, resumes the repeating `H` request, then
+performs `B`. Thus finite recursive-call summaries alone cannot establish
+termination: handler-induced return continuations also accumulate.
+
+Product edits were frozen at this point. The existing residuals are composition terms whose
+identities can grow with return depth. Neither a loop alias nor request-key
+history truncation establishes a sound finite replacement. A continuation
+graph is a candidate, not a proved or implemented solution. Any replacement
+must bound captured-continuation bindings as well as return positions, retain
+acyclic prefix precision and activation-local consumption, and preserve the
+accepted positive/negative corpus. No budget increase, precision restriction,
+runtime implementation or integration is authorized by these test outcomes.
+
+### Approved Step 2 redesign sequence
+
+The user subsequently approved the larger private-analysis redesign. The
+earlier freeze is lifted. The accepted CP-0016 behavior and complete checkpoint
+gate remain unchanged. Use one fresh implementation agent at high reasoning;
+the parent owns task documentation and independent review coordination.
+
+1. Reproduce the two `recursive_activations` tests in `effect_diagnostics`
+   and `unknown_request_loop_keeps_a_finite_resume_only_handler_summary` in
+   `effect_typing`. Keep their actual RED results; neither a larger limit nor
+   a safety rejection substitutes for required convergence and acceptance.
+2. Replace the private control analysis in `src/core/capture.rs`. Derive
+   control/frame positions from existing Core. Use finite graph identities for
+   returns and captured bindings, not nested composition terms or histories.
+   Request selection must retain the captured prefix through its nearest
+   matching handler. Resume consumes the selected owner occurrence and
+   reconnects that prefix to the clause's remaining work. Preserve live outer
+   recursive owners and already-consumed current owners separately. Keep
+   intrinsic opaque-request evidence local to the relevant capture; normal
+   callee return must not retain an immortal unknown-owner marker.
+3. Use a sparse, budgeted graph representation. State the finite allocation
+   domain and explain capture/consume/splice transitions before relying on
+   them for safety. Fresh/summary distinctions or frozen snapshots are tools
+   for this obligation, not extra language mechanisms. Do not add a source
+   CFG, a runtime value interpreter, or a second production analysis engine.
+4. Preserve the value prepass, type/effect helpers and checking entry points
+   where valid. In `src/resolved.rs`, `src/resolve.rs` and `src/elaborate.rs`,
+   adapt private summary payload/retention only as required. Settle export
+   substitution stability: either justify the closed request projection or
+   retain the necessary handler/control information. The independent final
+   Core pass still derives facts from actual Core, never a source proof flag.
+   The imported specialization pair now reproduces unsafe acceptance when
+   generic effect arguments become equal. Retain that pair, add its linked
+   Core counterpart, and cover generic bodies whose internal discard proof
+   would otherwise assume their type parameters can never coincide.
+5. Run the three loop regressions first, then the source/raw-Core prefix pairs,
+   restored-handler binding, unknown/known exact-effect pairs and imported
+   suffix/caller-return tests. Add a repeated-request handler pair observing
+   consumed owners before unwinding requests. Preserve diagnostic precedence.
+6. Retain finite-work, exact/one-short/retry, deep success/failure teardown and
+   compact import numbering evidence. Adapt `tests/architecture.rs` only for
+   actual new carrier ownership. Run the library and focused effect tests,
+   architecture guards, formatting, all-target Clippy and diff checks.
+7. Freeze the resulting implementation for independent semantic review,
+   then independent Rust/resource review. Fix and re-review findings. Retain
+   a coherent Step 2 commit only after the gate passes; then execute the
+   existing runtime Step 3 and complete Step 4.
+
+The replacement retains complete control, rather than an evaluated request
+projection. Consequently, publication with no local or retained imported
+discard needs only structural compilation and authentication, not an
+abandonment query. Callers that contain discard still query the retained
+control after specialization. This does not publish a partial permission or
+skip ordinary exact-once validation. The cyclic opaque-request test includes
+discard and pairs safe post-resume work with unsafe pre-resume work, so this
+simplification does not replace testing the cyclic abandonment query.
+
+### Step 2 verified inference checkpoint
+
+The parent independently passed 996 library and 68 focused tests, including
+the seven unchanged runtime tests; all-target Clippy, formatting and diff
+checks also passed. All 32 architecture tests passed in 272.23 seconds.
+
+Independent semantic review passed. Resource review identified and then
+verified fixes for partial callable-initialization cleanup, accumulated
+binding-scan charging and filtered metadata-scan charging. Each has a
+reproduced failure and passing small-stack or exact/one-short/retry regression.
+Semantic approval still holds after these resource-only changes. The ownership
+scanner now distinguishes Rust precise-capture syntax from imports; a
+regression verifies real aliases before, inside and after the function still
+resolve to their type owner. Independent review found no remaining issue.
+
+This closes the inference gate, not CP-0016. Runtime discard, the specification,
+the final full verification gate and local integration remain outstanding.

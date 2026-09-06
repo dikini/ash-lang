@@ -71,15 +71,15 @@ fn discard_core_checks_owners_types_rows_and_exact_once_before_safety() {
     let (registry, source, effect, operation) = checked_registry();
     let origin = Origin::Source(source.span(ByteRange::new(0, 6).unwrap()).unwrap());
     for (case, expected) in [
-        ("canonical", ValidationReason::DiscardUnsafe),
-        ("wrong-owner", ValidationReason::Resume),
-        ("wrong-handler", ValidationReason::Resume),
-        ("available", ValidationReason::Resume),
-        ("wrong-type", ValidationReason::Resume),
-        ("wrong-row", ValidationReason::Resume),
-        ("double", ValidationReason::Resume),
-        ("outside", ValidationReason::Resume),
-        ("closure", ValidationReason::Resume),
+        ("canonical", None),
+        ("wrong-owner", Some(ValidationReason::Resume)),
+        ("wrong-handler", Some(ValidationReason::Resume)),
+        ("available", Some(ValidationReason::Resume)),
+        ("wrong-type", Some(ValidationReason::Resume)),
+        ("wrong-row", Some(ValidationReason::Resume)),
+        ("double", Some(ValidationReason::Resume)),
+        ("outside", Some(ValidationReason::Resume)),
+        ("closure", Some(ValidationReason::Resume)),
     ] {
         let mut builder = EffectCoreBuilder::with_effect_registry(Arc::clone(&registry));
         let instance = EffectInstance::new(effect, Box::new([]));
@@ -174,8 +174,12 @@ fn discard_core_checks_owners_types_rows_and_exact_once_before_safety() {
                 )
                 .unwrap()
         };
-        let error = validate_effect(builder.finish(root).unwrap(), &[&source])
-            .expect_err("discard requires structural validity and capture proof");
+        let result = validate_effect(builder.finish(root).unwrap(), &[&source]);
+        let Some(expected) = expected else {
+            result.expect("direct captured segment is discardable");
+            continue;
+        };
+        let error = result.expect_err("discard requires structural validity and capture proof");
         assert_eq!(error.reason(), expected, "{case}: {error:?}");
     }
 }

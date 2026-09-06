@@ -59,6 +59,177 @@ fn typing_reason(source: &str) -> TypeReason {
     }
 }
 
+#[test]
+fn discard_rejects_direct_and_helper_requests_crossing_a_live_owner() {
+    for request in ["perform B.ask ()", "ask ()"] {
+        let source = format!(
+            "effect A {{\nask : Unit -> Unit\n}}\neffect B {{\nask : Unit -> Unit\n}}\n\
+             ask : Unit -> Unit ! {{B}}\nask () = perform B.ask ()\n\
+             main : Unit -> Unit\nmain () = handle (handle (perform A.ask ()) with A {{\n\
+             ask ignored => {{\nlet _ = {request}\nresume ()\n}}\n}}) with B {{\nask ignored => discard\n}}\n"
+        );
+        let TypeError::Source(error) = typing_error(&source) else {
+            panic!("expected capture diagnostic")
+        };
+        assert_eq!(error.reason, TypeReason::DiscardUnsafe);
+        assert!(
+            error.related.len() >= 2,
+            "request and live owner causes: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn discard_instantiates_a_polymorphic_helpers_internal_obligation() {
+    let source = concat!(
+        "effect A {\nask : Unit -> Unit\n}\neffect B<T : Type> {\nask : T -> Unit\n}\n",
+        "ask<T : Type> : T -> Unit ! {B<T>}\nask value = handle (perform A.ask ()) with A {\n",
+        "ask ignored => {\nlet _ = perform B<T>.ask value\nresume ()\n}\n}\n",
+        "main : Unit -> Unit\nmain () = handle (ask 1) with B<Int> {\nask ignored => discard\n}\n",
+    );
+    assert_eq!(typing_reason(source), TypeReason::DiscardUnsafe);
+}
+
+#[test]
+fn ordinary_typing_rejects_ambiguous_row_only_specialization_before_capture() {
+    let source = concat!(
+        "effect A {\nask : Unit -> Unit\n}\neffect B<T : Type> {\nask : Unit -> Unit\n}\n",
+        "ask<T : Type> : Unit -> Unit ! {B<T>, B<Int>}\nask () = handle (perform A.ask ()) with A {\n",
+        "ask ignored => {\nlet _ = perform B<T>.ask ()\nlet _ = resume ()\nperform B<Int>.ask ()\n}\n}\n",
+        "main : Unit -> Unit\nmain () = {\nlet action : Unit -> Unit ! {B<Bool>, B<Int>} = ask\n",
+        "handle (handle (action ()) with B<Bool> {\nask ignored => discard\n}) with B<Int> {\nask ignored => resume ()\n}\n}\n",
+    );
+    assert_eq!(typing_reason(source), TypeReason::BindingInitializer);
+}
+
+#[test]
+fn discard_rejects_same_effect_outward_delegation() {
+    assert_eq!(
+        typing_reason(concat!(
+            "effect B {\nask : Unit -> Unit\n}\nmain : Unit -> Unit\n",
+            "main () = handle (handle (perform B.ask ()) with B {\nask ignored => {\n",
+            "let _ = perform B.ask ()\nresume ()\n}\n}) with B {\nask ignored => discard\n}\n",
+        )),
+        TypeReason::DiscardUnsafe
+    );
+}
+
+#[test]
+fn discard_cannot_skip_an_outer_clauses_scheduled_completion() {
+    assert_eq!(
+        typing_reason(concat!(
+            "effect A {\nask : Unit -> Unit\n}\neffect B {\nask : Unit -> Unit\n}\n",
+            "main : Unit -> Unit\nmain () = handle (perform A.ask ()) with A {\n",
+            "ask ignored => {\nlet _ = handle ({\nlet _ = perform B.ask ()\nresume ()\n}) with B {\nask ignored => discard\n}\n()\n}\n}\n",
+        )),
+        TypeReason::DiscardUnsafe
+    );
+}
+
+#[test]
+fn discard_checks_requests_in_a_restored_continuation() {
+    assert_eq!(
+        typing_reason(concat!(
+            "effect A {\nask : Unit -> Unit\n}\neffect B {\nask : Unit -> Unit\n}\neffect C {\nask : Unit -> Unit\n}\n",
+            "main : Unit -> Unit\nmain () = handle (handle (handle (perform C.ask ()) with C {\n",
+            "ask ignored => {\nlet _ = perform A.ask ()\nlet _ = perform B.ask ()\nresume ()\n}\n",
+            "}) with A {\nask ignored => handle ({\nlet _ = resume ()\nperform B.ask ()\n}) with B {\nask ignored => discard\n}\n",
+            "}) with B {\nask ignored => resume ()\n}\n",
+        )),
+        TypeReason::DiscardUnsafe
+    );
+}
+
+#[test]
+fn unknown_higher_order_and_open_row_calls_block_discard_only() {
+    for signature in [
+        "relay : (Unit -> Unit ! {B}) -> Unit ! {B}",
+        "relay<R : EffectRow> : (Unit -> Unit ! {| R}) -> Unit ! {| R}",
+    ] {
+        for completion in ["discard", "resume ()"] {
+            let source = format!(
+                "effect B {{\nask : Unit -> Unit\n}}\n{signature}\nrelay action = action ()\n\
+                 ask : Unit -> Unit ! {{B}}\nask () = perform B.ask ()\n\
+                 main : Unit -> Unit\nmain () = handle (relay ask) with B {{\nask ignored => {completion}\n}}\n"
+            );
+            let result = check_module(resolved_source(&source));
+            if completion == "discard" {
+                assert!(
+                    matches!(result, Err(TypeError::Source(error)) if error.reason == TypeReason::DiscardUnsafe)
+                );
+            } else {
+                result.expect("unknown capture obligations must not reject resume-only code");
+            }
+        }
+    }
+}
+
+#[test]
+fn opaque_request_loop_exposes_a_live_owner_to_the_clients_discard() {
+    let source = concat!(
+        "effect H {\nask : Unit -> Unit\n}\neffect A {\nask : Unit -> Unit\n}\neffect B {\nask : Unit -> Unit\n}\n",
+        "run : (Unit -> Unit ! {H}) -> Unit ! {A, B}\nrun action = handle (action ()) with H {\n",
+        "ask ignored => {\nlet _ = perform A.ask ()\nlet _ = perform B.ask ()\nresume ()\n}\n}\n",
+        "guard : (Unit -> Unit ! {H}) -> Unit\nguard action = handle (handle (run action) with A {\nask ignored => resume ()\n}) with B {\nask ignored => discard\n}\n",
+        "main : Unit -> Unit\nmain () = ()\n",
+    );
+    assert_eq!(typing_reason(source), TypeReason::DiscardUnsafe);
+}
+
+#[test]
+fn unknown_calls_retain_admitted_requests_after_resumption() {
+    for completion in ["discard", "resume ()"] {
+        let source = format!(
+            "effect A {{\nask : Unit -> Unit\n}}\neffect B {{\nask : Unit -> Unit\n}}\n\
+             relay : (Unit -> Unit ! {{A, B}}) -> Unit\nrelay action = handle (handle (action ()) with A {{\n\
+             ask ignored => handle ({{\nlet _ = resume ()\nperform B.ask ()\n}}) with B {{\nask ignored => {completion}\n}}\n\
+             }}) with B {{\nask ignored => resume ()\n}}\nmain : Unit -> Unit\nmain () = ()\n"
+        );
+        let result = check_module(resolved_source(&source));
+        if completion == "discard" {
+            assert!(
+                matches!(result, Err(TypeError::Source(ref error)) if error.reason == TypeReason::DiscardUnsafe),
+                "{result:?}"
+            );
+        } else {
+            result.expect("unknown resumed requests do not prohibit resume-only handlers");
+        }
+    }
+}
+
+#[test]
+fn recursive_activations_do_not_share_clause_consumption() {
+    let source = recursive_activation_source(
+        "let _ = match n == 2 {\ntrue => perform A.ask ()\nfalse => relay (n + 1)\n}\nlet _ = resume ()\nperform B.ask ()",
+    );
+    assert_eq!(typing_reason(&source), TypeReason::DiscardUnsafe);
+}
+
+#[test]
+fn recursive_activations_preserve_preceding_clause_consumption() {
+    let source = recursive_activation_source(
+        "let _ = resume ()\nlet _ = match n == 2 {\ntrue => perform A.ask ()\nfalse => relay (n + 1)\n}\nperform B.ask ()",
+    );
+    check_module(resolved_source(&source))
+        .expect("consumption preceding recursive activation remains safe");
+}
+
+fn recursive_activation_source(clause: &str) -> String {
+    format!(
+        "effect A {{\nask : Unit -> Unit\n}}\neffect B {{\nask : Unit -> Unit\n}}\neffect C {{\nask : Unit -> Unit\n}}\n\
+             relay : Int -> Unit ! {{A, B}}\nrelay n = handle (perform C.ask ()) with C {{\nask ignored => {{\n{clause}\n}}\n}}\n\
+             main : Unit -> Unit\nmain () = handle (handle (relay 0) with A {{\nask ignored => handle ({{\nlet _ = resume ()\nperform B.ask ()\n}}) with B {{\nask ignored => discard\n}}\n}}) with B {{\nask ignored => resume ()\n}}\n"
+    )
+}
+
+#[test]
+fn nested_resumption_rejects_a_live_owner_in_the_selected_suffix() {
+    assert_eq!(
+        typing_reason(include_str!("fixtures/effects/capture-prefix-after.ash")),
+        TypeReason::DiscardUnsafe
+    );
+}
+
 fn main_body(module: &ResolvedModule) -> &ResolvedExpr {
     let definition = module
         .definitions()
@@ -141,15 +312,12 @@ fn discard_outside_a_clause_is_a_resolution_error() {
 }
 
 #[test]
-fn discard_publication_fails_closed_after_ordinary_typing() {
+fn safe_discard_publication_preserves_ordinary_type_error_precedence() {
     for body in [
         "{\nlet _ = discard\n42\n}",
         "match true {\ntrue => resume 1\nfalse => {\nlet _ = discard\n2\n}\n}",
     ] {
-        let TypeError::Source(error) = typing_error(&handler_source(body)) else {
-            panic!("expected discard safety diagnostic")
-        };
-        assert_eq!(error.reason.to_string(), "effect.discard-unsafe");
+        check_module(resolved_source(&handler_source(body))).expect("safe discard should publish");
     }
     assert!(matches!(
         typing_error(&handler_source("discard")),

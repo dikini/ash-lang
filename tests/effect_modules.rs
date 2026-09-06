@@ -58,6 +58,10 @@ fn module_named<'a>(graph: &'a ModuleGraph, file_name: &str) -> &'a LoadedModule
 }
 
 fn check_graph(graph: &ModuleGraph) -> Vec<CheckedModule> {
+    try_check_graph(graph).expect("the successful effect module should check")
+}
+
+fn try_check_graph(graph: &ModuleGraph) -> Result<Vec<CheckedModule>, ash::elaborate::TypeError> {
     let mut checked = Vec::new();
     for module in graph.modules() {
         let dependencies = module
@@ -74,9 +78,173 @@ fn check_graph(graph: &ModuleGraph) -> Vec<CheckedModule> {
             .collect::<Vec<_>>();
         let resolved = resolve_module(module, &dependencies)
             .expect("the successful effect module fixture should resolve");
-        checked.push(check_module(resolved).expect("the successful effect module should check"));
+        checked.push(check_module(resolved)?);
     }
-    checked
+    Ok(checked)
+}
+
+#[test]
+fn imported_handlers_are_selected_after_type_specialization() {
+    let tree = ModuleTree::create();
+    tree.write("helper.ash", concat!(
+        "pub effect E<T> {\nask : Unit -> Unit\n}\npub effect A {\nask : Unit -> Unit\n}\npub effect B {\nask : Unit -> Unit\n}\n",
+        "pub route<T, U> : (T, U) -> Unit ! {A, B, E<T>}\n",
+        "route ignored = handle ({\nlet _ = perform E<U>.ask ()\nlet _ = perform A.ask ()\nperform E<T>.ask ()\n}) with E<U> {\n",
+        "ask ignored => {\nlet _ = perform B.ask ()\nresume ()\n}\n}\n",
+    ));
+    for (argument, accepted) in [("(1, true)", true), ("(1, 1)", false)] {
+        let entry = tree.write("entry.ash", &(format!(
+            "import helper (E, A, B, route)\ninvoke : Unit -> Unit ! {{A, B}}\ninvoke () = handle (route {argument}) with E<Int> {{\nask ignored => resume ()\n}}\nmain : Unit -> Unit\nmain () = handle (handle (invoke ()) with A {{\n",
+        ) + concat!(
+            "ask ignored => handle ({\nlet _ = resume ()\nperform B.ask ()\n}) with B {\nask ignored => discard\n}\n",
+            "}) with B {\nask ignored => resume ()\n}\n",
+        )));
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let result = try_check_graph(&graph);
+        if accepted {
+            result.expect("distinct exact instances retain the earlier capture boundary");
+        } else {
+            assert!(
+                matches!(result, Err(ash::elaborate::TypeError::Source(ref error))
+                if error.reason == ash::elaborate::TypeReason::DiscardUnsafe),
+                "{result:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn imported_residual_graphs_preserve_live_and_completed_clause_owners() {
+    let tree = ModuleTree::create();
+    for (clause, accepted) in [
+        (
+            "let _ = perform A.ask ()\nlet _ = perform B.ask ()\nresume ()",
+            false,
+        ),
+        (
+            "let _ = perform A.ask ()\nlet _ = resume ()\nperform B.ask ()",
+            true,
+        ),
+        (
+            "let _ = perform B.ask ()\nlet _ = resume ()\nperform A.ask ()",
+            true,
+        ),
+    ] {
+        tree.write("helper.ash", &format!(
+            "pub effect A {{\nask : Unit -> Unit\n}}\npub effect B {{\nask : Unit -> Unit\n}}\neffect C {{\nask : Unit -> Unit\n}}\n\
+             pub ask : Unit -> Unit ! {{A, B}}\nask () = handle (perform C.ask ()) with C {{\nask ignored => {{\n{clause}\n}}\n}}\n"
+        ));
+        tree.write("facade.ash", "pub import helper (A, B, ask)\n");
+        let entry = tree.write("entry.ash", concat!(
+            "import facade (A, B, ask)\nmain : Unit -> Unit\nmain () = handle (handle (ask ()) with A {\n",
+            "ask ignored => handle ({\nlet _ = resume ()\nperform B.ask ()\n}) with B {\nask ignored => discard\n}\n",
+            "}) with B {\nask ignored => resume ()\n}\n",
+        ));
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let result = try_check_graph(&graph);
+        if accepted {
+            result.expect("imported known suffix has no live owner");
+        } else {
+            assert!(
+                matches!(result, Err(ash::elaborate::TypeError::Source(error)) if error.reason == ash::elaborate::TypeReason::DiscardUnsafe)
+            );
+        }
+    }
+}
+
+#[test]
+fn imported_residual_returns_continue_into_the_callers_suffix() {
+    let tree = ModuleTree::create();
+    tree.write("helper.ash", "pub effect A {\nask : Unit -> Unit\n}\npub ask : Unit -> Unit ! {A}\nask () = perform A.ask ()\n");
+    for (tail, accepted) in [
+        ("let _ = perform B.ask ()\nresume ()", false),
+        ("let _ = resume ()\nperform B.ask ()", true),
+    ] {
+        let entry = tree.write("entry.ash", &format!(
+            "import helper (A, ask)\neffect B {{\nask : Unit -> Unit\n}}\neffect C {{\nask : Unit -> Unit\n}}\n\
+             main : Unit -> Unit\nmain () = handle (handle (handle (perform C.ask ()) with C {{\nask ignored => {{\nlet _ = ask ()\n{tail}\n}}\n\
+             }}) with A {{\nask ignored => handle ({{\nlet _ = resume ()\nperform B.ask ()\n}}) with B {{\nask ignored => discard\n}}\n}}) with B {{\nask ignored => resume ()\n}}\n"
+        ));
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let result = try_check_graph(&graph);
+        if accepted {
+            result.expect("the caller completes its owner before B");
+        } else {
+            assert!(
+                matches!(result, Err(ash::elaborate::TypeError::Source(error)) if error.reason == ash::elaborate::TypeReason::DiscardUnsafe)
+            );
+        }
+    }
+}
+
+#[test]
+fn discard_summary_survives_import_and_facade_reexport() {
+    let tree = ModuleTree::create();
+    tree.write("helper.ash", concat!(
+        "pub effect B {\nask : Unit -> Unit\n}\n",
+        "pub ask : Unit -> Unit ! {B}\nask () = perform B.ask ()\n",
+        "pub factory : Unit -> (Unit -> Unit ! {B})\nfactory () = fn(ignored) {\nperform B.ask ()\n}\n",
+    ));
+    tree.write("facade.ash", "pub import helper (B, ask, factory)\n");
+    for helper in ["ask ()", "{\nlet request = factory ()\nrequest ()\n}"] {
+        let entry = tree.write("entry.ash", &format!(
+            "import facade (B, ask, factory)\nmain : Unit -> Unit\nmain () = handle ({helper}) with B {{\nask ignored => discard\n}}\n"
+        ));
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).expect("capture imports load");
+        check_graph(&graph);
+    }
+}
+
+#[test]
+fn capture_summaries_cover_helpers_importing_only_effect_declarations() {
+    let tree = ModuleTree::create();
+    tree.write("effects.ash", "pub effect B {\nask : Unit -> Unit\n}\n");
+    tree.write(
+        "helpers.ash",
+        concat!(
+            "import effects (B)\n",
+            "pub ask : Unit -> Unit ! {B}\nask () = perform B.ask ()\n",
+            "effect A {\nask : Unit -> Unit\n}\n",
+            "pub bad : Unit -> Unit ! {B}\nbad () = handle (perform A.ask ()) with A {\n",
+            "ask ignored => {\nlet _ = perform B.ask ()\nresume ()\n}\n}\n",
+        ),
+    );
+    for (callee, accepted) in [("ask", true), ("bad", false)] {
+        let entry = tree.write("entry.ash", &format!(
+            "import effects (B)\nimport helpers (ask, bad)\nmain : Unit -> Unit\nmain () = handle ({callee} ()) with B {{\nask ignored => discard\n}}\n"
+        ));
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let mut checked: Vec<CheckedModule> = Vec::new();
+        let mut failure = None;
+        for module in graph.modules() {
+            let dependencies: Vec<_> = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    let dependency = checked
+                        .iter()
+                        .find(|module| module.module() == edge.target())
+                        .unwrap();
+                    DependencyExports::new(edge, dependency.exports()).unwrap()
+                })
+                .collect();
+            let resolved = resolve_module(module, &dependencies).unwrap();
+            match check_module(resolved) {
+                Ok(module) => checked.push(module),
+                Err(error) => {
+                    failure = Some(error);
+                    break;
+                }
+            }
+        }
+        if accepted {
+            assert!(failure.is_none(), "{failure:?}");
+        } else {
+            assert!(
+                matches!(failure, Some(ash::elaborate::TypeError::Source(error)) if error.reason == ash::elaborate::TypeReason::DiscardUnsafe)
+            );
+        }
+    }
 }
 
 fn resolve_graph_error(graph: &ModuleGraph) -> ResolveModuleError {

@@ -1796,7 +1796,6 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     coverage_work: UsefulnessBudget,
     base_context: TypeContext,
     active_resumes: Vec<ActiveResume>,
-    first_unproved_discard: Option<Span>,
     // Addresses identify only immutably borrowed source occurrences during one
     // module synthesis. They are never dereferenced or retained in Core.
     lexical_capture_uses: Vec<LexicalCaptureUse>,
@@ -1815,6 +1814,7 @@ pub type EffectElaborator = CoreElaborator<EffectOperationFamily>;
 )]
 pub trait CoreLoweringFamily: CoreOperationFamily {
     const EFFECTS: bool;
+    fn capture_operation(kind: &Self::Kind) -> Option<&EffectOperation>;
     #[allow(
         clippy::result_unit_err,
         reason = "the unit error preserves the shared type-work budget boundary"
@@ -1859,6 +1859,9 @@ pub trait CoreLoweringFamily: CoreOperationFamily {
 )]
 impl CoreLoweringFamily for PureOperationFamily {
     const EFFECTS: bool = false;
+    fn capture_operation(_kind: &Self::Kind) -> Option<&EffectOperation> {
+        None
+    }
     fn project_type(ty: &Type, budget: &mut TypeWorkBudget) -> Result<Type, ()> {
         pure_core_type_with_budget(ty, budget)
     }
@@ -1898,6 +1901,12 @@ impl CoreLoweringFamily for PureOperationFamily {
 )]
 impl CoreLoweringFamily for EffectOperationFamily {
     const EFFECTS: bool = true;
+    fn capture_operation(kind: &Self::Kind) -> Option<&EffectOperation> {
+        match kind {
+            EffectExprKind::Operation(operation) => Some(operation),
+            EffectExprKind::Pure(_) => None,
+        }
+    }
     fn project_type(ty: &Type, budget: &mut TypeWorkBudget) -> Result<Type, ()> {
         clone_type_with_budget(ty, budget)
     }
@@ -2006,7 +2015,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         origin: Origin,
         operation: EffectOperation,
     ) -> Result<NodeId, BuildError> {
-        if self.purpose == ElaborationPurpose::ModuleCheck {
+        if self.purpose == ElaborationPurpose::ModuleCheck && !F::EFFECTS {
             drop(effects);
             EffectOperationFamily::discard_metadata(EffectExprKind::Operation(operation));
             self.builder.unit(ty, origin)
@@ -2042,7 +2051,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
-            first_unproved_discard: None,
             lexical_capture_uses: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
@@ -2136,7 +2144,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             coverage_work,
             base_context,
             active_resumes: Vec::new(),
-            first_unproved_discard: None,
             lexical_capture_uses: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
@@ -2197,7 +2204,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
-            first_unproved_discard: None,
             lexical_capture_uses: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
@@ -2639,7 +2645,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             coverage_work: UsefulnessBudget::default(),
             base_context: TypeContext::new(),
             active_resumes: Vec::new(),
-            first_unproved_discard: None,
             lexical_capture_uses: Vec::new(),
             expected_effect_rows: Vec::new(),
             next_handler: 0,
@@ -2816,7 +2821,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     fn check_module_bodies(
         &mut self,
         module: &ResolvedModule,
-        checked_schemes: &[CheckedGlobalScheme],
+        checked_schemes: &mut [CheckedGlobalScheme],
         checked_interfaces: &[CheckedInterface],
         checked_implementations: &[CheckedImplementation],
         constraint_work: &mut InterfaceConstraintBudget,
@@ -2838,7 +2843,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     fn check_module_bodies_with_owned_budget(
         &mut self,
         module: &ResolvedModule,
-        checked_schemes: &[CheckedGlobalScheme],
+        checked_schemes: &mut [CheckedGlobalScheme],
         checked_interfaces: &[CheckedInterface],
         checked_implementations: &[CheckedImplementation],
     ) -> Result<(Box<[CheckedImplementationFact]>, PendingEvidencePublication), TypeError> {
@@ -2907,18 +2912,52 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             return Err(invalid_state());
         }
 
-        let (_, mut context) = self.finish_prepared_definitions(globals)?;
+        let (globals, mut context) = self.finish_prepared_definitions(globals)?;
         let result = ResolvedExpr {
             kind: ResolvedExprKind::Unit,
             span: module.span(),
         };
         self.elaborate_result(&result, &mut context)?;
-        if let Some(span) = self.first_unproved_discard {
-            return Err(inference_failure(
-                TypeReason::DiscardUnsafe,
-                span,
-                "discard requires proof that the captured continuation has no unfinished obligations",
-            ));
+        if F::EFFECTS {
+            self.zonk_builder_types().map_err(TypeError::Internal)?;
+            self.type_work
+                .charge(globals.len())
+                .map_err(|()| type_resource())?;
+            let mut roots = Vec::new();
+            roots
+                .try_reserve_exact(globals.len())
+                .map_err(|_| type_resource())?;
+            roots.extend(
+                globals
+                    .iter()
+                    .map(|global| (global.binder.id(), global.initializer)),
+            );
+            let mut imports = Vec::new();
+            for global in module.imported_facts().globals() {
+                self.type_work.charge(1).map_err(|()| type_resource())?;
+                imports.try_reserve(1).map_err(|_| type_resource())?;
+                imports.push((global.binder, &global.capture));
+            }
+            let captures = crate::core::capture::check_builder(
+                &self.builder,
+                &roots,
+                &imports,
+                F::capture_operation,
+                &mut self.type_work,
+            )
+            .map_err(capture_failure)?;
+            if roots.len() != checked_schemes.len() {
+                return Err(invalid_state());
+            }
+            for (((binder, _), capture), scheme) in
+                roots.iter().zip(captures).zip(checked_schemes.iter_mut())
+            {
+                self.type_work.charge(1).map_err(|()| type_resource())?;
+                if scheme.binder != *binder {
+                    return Err(invalid_state());
+                }
+                scheme.capture = capture;
+            }
         }
         let publication = self.prepare_evidence_publication()?;
         Ok((facts.into_boxed_slice(), publication))
@@ -3321,6 +3360,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 value_type: body,
             };
             checked.0.push(CheckedGlobalScheme {
+                capture: crate::core::capture::CaptureValueSummary::default(),
                 binder: name.id,
                 spelling: name.spelling.clone(),
                 scheme,
@@ -3350,6 +3390,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         if self.state == ElaboratorState::Poisoned || !root_is_authorized {
             return Err(ElaborationFailure::InvalidState);
         }
+        self.zonk_builder_types()?;
+        self.builder.finish(root).map_err(Into::into)
+    }
+
+    fn zonk_builder_types(&mut self) -> Result<(), ElaborationFailure> {
         if self.builder.requires_type_rewrite() {
             let solutions = &self.inference_solutions;
             let inference_variables = &self.inference_variables;
@@ -3382,7 +3427,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 },
             )?;
         }
-        self.builder.finish(root).map_err(Into::into)
+        Ok(())
     }
 
     fn fresh_inference(&mut self, kind: &Kind, origin: Span) -> Result<Type, TypeError> {
@@ -8163,14 +8208,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             Origin::Source(span),
             operation,
         )?;
-        // Module checking erases effect Core. Keep the source proof boundary
-        // closed until request-capture inference can authenticate this use.
-        if self.first_unproved_discard.is_none() {
-            self.type_work
-                .charge(1)
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            self.first_unproved_discard = Some(span);
-        }
         let provenance = self.at_span_provenance(&Type::Unit, span)?;
         Ok(TypedNode {
             node,
@@ -9944,6 +9981,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         primary: Box::new(Origin::Source(whole_span)),
                         related: vec![operator_span],
                     };
+                    let effects = self.union_effects(&left.effects, &right.effects, whole_span)?;
                     let node = self.builder.primitive(
                         primitive,
                         left.node,
@@ -9951,7 +9989,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         ty.clone(),
                         origin,
                     )?;
-                    let effects = self.union_effects(&left.effects, &right.effects, whole_span)?;
                     values.push(TypedNode {
                         node,
                         ty,
@@ -10510,6 +10547,24 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
             let core_body_type = self.clone_type(&body.ty)?;
             let declaration = retained_declarations.pop().ok_or_else(invalid_state)?;
+            // Source row formation owns ambiguous unions, before the Core
+            // builder independently derives the same strict computation row.
+            let checked_effects = if F::EFFECTS {
+                match declaration.0.as_ref().ok_or_else(invalid_state)? {
+                    ElaboratedDeclaration::Binding {
+                        effects, origin, ..
+                    }
+                    | ElaboratedDeclaration::PatternBinding {
+                        effects, origin, ..
+                    }
+                    | ElaboratedDeclaration::Recursive {
+                        effects, origin, ..
+                    } => Some(self.union_effects(effects, &body.effects, origin.primary_span())?),
+                    _ => None,
+                }
+            } else {
+                None
+            };
             match &source_declarations[retained_declarations.len()] {
                 ResolvedLocalDeclaration::Evidence(_) => {}
                 ResolvedLocalDeclaration::Binding(binding) => {
@@ -10648,7 +10703,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     result_span,
                 )?,
             };
-            let effects = self.union_effects(&initializer_effects, &body.effects, effect_span)?;
+            let effects = match checked_effects {
+                Some(effects) => effects,
+                None => self.union_effects(&initializer_effects, &body.effects, effect_span)?,
+            };
             body.set_node(node);
             body.replace_effects(effects);
         }
@@ -16117,6 +16175,42 @@ pub fn check_module(resolved: ResolvedModule) -> Result<CheckedModule, TypeError
 
 /// Checks one module while sharing type-work accounting across a graph pass.
 pub(crate) fn check_module_with_budget(
+    resolved: ResolvedModule,
+    type_work: &mut TypeWorkBudget,
+    coverage_work: &mut UsefulnessBudget,
+    constraint_work: &mut InterfaceConstraintBudget,
+) -> Result<CheckedModule, TypeError> {
+    let mut effects = !resolved.effects().is_empty()
+        || !resolved.registry().effects().is_empty()
+        || resolved.imported_facts().effects().next().is_some();
+    if !effects {
+        for variable in resolved.registry().type_variables() {
+            type_work.charge(1).map_err(|()| type_resource())?;
+            effects |= matches!(variable.kind, Kind::EffectRow);
+        }
+        for imported in resolved.imported_facts().globals() {
+            type_work.charge(1).map_err(|()| type_resource())?;
+            effects |= imported.capture.is_retained();
+        }
+    }
+    if effects {
+        check_module_with_budget_family::<EffectOperationFamily>(
+            resolved,
+            type_work,
+            coverage_work,
+            constraint_work,
+        )
+    } else {
+        check_module_with_budget_family::<PureOperationFamily>(
+            resolved,
+            type_work,
+            coverage_work,
+            constraint_work,
+        )
+    }
+}
+
+fn check_module_with_budget_family<F: CoreLoweringFamily>(
     mut resolved: ResolvedModule,
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut UsefulnessBudget,
@@ -16138,7 +16232,7 @@ pub(crate) fn check_module_with_budget(
         constraint_work,
         type_work,
     )?;
-    let mut elaborator = Elaborator::for_module_with_registry(
+    let mut elaborator = CoreElaborator::<F>::for_module_with_registry(
         &resolved,
         registry,
         type_work.clone(),
@@ -16151,7 +16245,7 @@ pub(crate) fn check_module_with_budget(
             &mut elaborator.type_work,
             constraint_work,
         )?;
-        let schemes = elaborator.checked_module_schemes(resolved.definitions())?;
+        let mut schemes = elaborator.checked_module_schemes(resolved.definitions())?;
         elaborator.selection = Some(build_evidence_selector(
             &resolved,
             &elaborator.registry,
@@ -16163,7 +16257,7 @@ pub(crate) fn check_module_with_budget(
         )?);
         let (implementation_facts, publication) = elaborator.check_module_bodies(
             &resolved,
-            &schemes,
+            &mut schemes,
             &checked_interfaces,
             &checked_implementations,
             constraint_work,
@@ -20226,6 +20320,34 @@ fn inference_failure(reason: TypeReason, span: Span, message: &str) -> TypeError
         reason,
         SourceLabel::new(span, message),
     )))
+}
+
+fn capture_failure(failure: crate::core::capture::Failure) -> TypeError {
+    use crate::core::capture::Failure;
+    match failure {
+        Failure::Invalid => invalid_state(),
+        Failure::Resource => type_resource(),
+        Failure::Unsafe(unsafe_discard) => {
+            let mut diagnostic = Diagnostic::new(
+                TypeReason::DiscardUnsafe,
+                SourceLabel::new(
+                    unsafe_discard.discard,
+                    "discard requires proof that the captured continuation has no unfinished obligations",
+                ),
+            );
+            diagnostic.related.push(SourceLabel::new(
+                unsafe_discard.request,
+                "this request or call can capture the continuation",
+            ));
+            if let Some(owner) = unsafe_discard.owner {
+                diagnostic.related.push(SourceLabel::new(
+                    owner,
+                    "this clause still has an unfinished completion capability",
+                ));
+            }
+            TypeError::Source(Box::new(diagnostic))
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30368,7 +30490,7 @@ mod tests {
             UsefulnessBudget::default(),
         )
         .expect("binder reservation should fit");
-        let schemes = elaborator
+        let mut schemes = elaborator
             .checked_module_schemes(program.definitions())
             .expect("the declared global schemes should fit");
         let mut selector = EvidenceSelector::new();
@@ -30387,7 +30509,7 @@ mod tests {
         elaborator
             .check_module_bodies(
                 &program,
-                &schemes,
+                &mut schemes,
                 &[],
                 &[],
                 &mut InterfaceConstraintBudget::default(),

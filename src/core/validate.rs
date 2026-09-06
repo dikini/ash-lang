@@ -7749,16 +7749,38 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             &type_binders,
             &authenticated_method_evidence,
         )?;
-        let unproved_discard = self.validate_effect_nodes(&type_binders)?;
+        let has_discard = self.validate_effect_nodes(&type_binders)?;
         self.validate_scopes()?;
         self.validate_type_scopes()?;
-        // No discard is executable before independent capture proof exists.
-        if let Some(discard) = unproved_discard {
-            return Err(ValidationError::new(
-                ValidationReason::DiscardUnsafe,
-                Some(discard),
-            ));
+        if !has_discard {
+            return Ok(());
         }
+        let mut capture_work = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let capture_result = super::capture::check_nodes(
+            &self.program.nodes,
+            &[],
+            &[],
+            |kind| match kind {
+                super::effect::EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            },
+            &mut capture_work,
+        );
+        self.charge_type_work(capture_work.used())?;
+        capture_result.map_err(|failure| match failure {
+            super::capture::Failure::Resource => {
+                ValidationError::new(ValidationReason::Resource, None)
+            }
+            super::capture::Failure::Invalid => {
+                ValidationError::new(ValidationReason::Handler, None)
+            }
+            super::capture::Failure::Unsafe(unsafe_discard) => ValidationError::new(
+                ValidationReason::DiscardUnsafe,
+                Some(NodeId::new(self.program.arena, unsafe_discard.node as u32)),
+            ),
+        })?;
         Ok(())
     }
 
@@ -7969,12 +7991,12 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
     fn validate_effect_nodes(
         &mut self,
         type_binders: &CoreTypeBinders<'_>,
-    ) -> Result<Option<NodeId>, ValidationError> {
+    ) -> Result<bool, ValidationError> {
         use super::effect::{EffectExprKind, EffectOperation, ResumeUse};
 
         let mut handler_ids = HashSet::new();
         let mut clause_contracts = HashMap::new();
-        let mut unproved_discard = None;
+        let mut has_discard = false;
 
         for index in 0..self.program.nodes.len() {
             let id = node_id(self.program.arena, index)?;
@@ -8018,10 +8040,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     }
                 }
                 EffectExprKind::Operation(EffectOperation::Discard(discard)) => {
-                    if unproved_discard.is_none() {
-                        self.charge_type_work(1)?;
-                        unproved_discard = Some(id);
-                    }
+                    has_discard = true;
                     if discard.use_state() != ResumeUse::Consumed
                         || !self.same_type_charged(&node.ty, &Type::Unit)?
                         || !node.effects.is_empty()
@@ -8069,7 +8088,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 Some(self.program.root),
             ));
         }
-        Ok(unproved_discard)
+        Ok(has_discard)
     }
 
     fn validate_pure_effect_row(
