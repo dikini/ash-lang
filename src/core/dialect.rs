@@ -81,6 +81,7 @@ pub(crate) struct MethodEvidenceCatalog {
 #[derive(Debug)]
 #[cfg_attr(test, derive(Clone))]
 pub(crate) struct MethodEvidenceLexicalOwner {
+    pub(crate) acquisition: Option<crate::resolved::CellAcquisition>,
     pub(crate) source_parameters: Box<[TypeVariableId]>,
     pub(crate) source: crate::interface::LexicalEvidenceId,
     pub(crate) method: MethodId,
@@ -4449,6 +4450,7 @@ mod tests {
             .collect(),
         );
         catalog.set_lexical_owners(vec![MethodEvidenceLexicalOwner {
+            acquisition: None,
             source_parameters: Box::new([]),
             source: crate::interface::LexicalEvidenceId::new(ModuleId::new(0), 0),
             method,

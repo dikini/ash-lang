@@ -1802,14 +1802,14 @@ thread_local! {
 }
 
 #[cfg(test)]
-fn reset_type_discard_observation() {
+pub(crate) fn reset_type_discard_observation() {
     TYPE_DISCARD_VISITS.set(0);
     TYPE_DISCARD_PENDING.set(0);
     TYPE_DISCARD_PENDING_PEAK.set(0);
 }
 
 #[cfg(test)]
-fn type_discard_visits() -> usize {
+pub(crate) fn type_discard_visits() -> usize {
     TYPE_DISCARD_VISITS.get()
 }
 

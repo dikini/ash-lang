@@ -2866,6 +2866,7 @@ impl ResolvedModuleProgram {
                 | ResolvedExprKind::Block(_)
                 | ResolvedExprKind::Function(_)
                 | ResolvedExprKind::Match(_)
+                | ResolvedExprKind::Resource(_)
                 | ResolvedExprKind::Perform(_)
                 | ResolvedExprKind::Handle(_)
                 | ResolvedExprKind::Resume(_)
@@ -7752,12 +7753,14 @@ pub(crate) fn same_imported_nominal_closure_with_constraint_budget(
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
     let defining_spelling_matches =
         !left.display_is_private || left.display_spelling.as_deref() == right.display_spelling;
+    // Access belongs to the selected import route, not the defining nominal
+    // fact. Comparing a hidden signature closure must not downgrade or reject
+    // the source access already retained through a different route.
     if left.id != right.id
         || left.declaration_kind != right.declaration_kind
         || left.parameter_count != right.parameter_count
         || left.constructor_count != right.constructor_count
         || left.parameters.len() != right.parameters.len()
-        || left.access.rank() > right.access.rank()
         || (!left.constructors.is_empty()
             && !right.constructors.is_empty()
             && left.constructors.as_ref() != right.constructors)
@@ -18075,6 +18078,8 @@ pub enum ResolvedLocalDeclaration {
 /// A resolved sequential source of exact evidence.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedLexicalEvidence {
+    /// Compiler-owned acquisition authority; absent for every source `with`.
+    pub(crate) acquisition: Option<CellAcquisition>,
     pub(crate) checked: crate::interface::LexicalEvidenceSlot,
     /// Module-qualified lexical identity.
     pub id: crate::interface::LexicalEvidenceId,
@@ -18237,6 +18242,13 @@ pub(crate) fn lexical_method_capture_occurrences<'a>(
                     pending.push(&arm.body);
                 }
             }
+            ResolvedExprKind::Resource(resource) => {
+                budget.charge(1)?;
+                bound.try_reserve(1).map_err(|_| ())?;
+                bound.insert(resource.handle.id);
+                pending.push(&resource.initializer);
+                pending.push(&resource.body);
+            }
             ResolvedExprKind::Perform(request) => pending.push(&request.operand),
             ResolvedExprKind::Handle(handler) => {
                 budget.charge(handler.clauses.len())?;
@@ -18345,6 +18357,100 @@ pub enum ResolvedExprKind {
     Resume(ResolvedResumeExpr),
     /// Nullary consumption of the enclosing clause capability.
     Discard(ResolvedDiscardExpr),
+    /// A scoped cell acquisition with a rigid, nongeneralized identity.
+    Resource(Box<ResolvedResourceExpr>),
+}
+
+/// The fixed relation owned by a cell acquisition, never by source evidence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CellAcquisition {
+    pub(crate) builtin: ModuleId,
+    pub(crate) identity: TypeVariableId,
+    pub(crate) handle: BinderId,
+    pub(crate) provider: crate::interface::LexicalEvidenceId,
+    pub(crate) methods: [BinderId; 2],
+    pub(crate) span: Span,
+}
+
+impl CellAcquisition {
+    pub(crate) fn api(self) -> Option<CellApi> {
+        CellApi::for_module(self.builtin)
+    }
+
+    pub(crate) fn owns(self, resource: &ResolvedResourceExpr) -> bool {
+        let ResolvedExprKind::Block(body) = &resource.body.kind else {
+            return false;
+        };
+        let [ResolvedLocalDeclaration::Evidence(source)] = body.declarations.as_slice() else {
+            return false;
+        };
+        self.supplies(source)
+            && self == resource.acquisition
+            && self.identity == resource.identity.id
+            && resource.identity.kind == Kind::Type
+            && self.span.cover(resource.identity.origin.primary_span()) == Some(self.span)
+            && self.span.cover(resource.handle.origin.primary_span()) == Some(self.span)
+            && self.handle == resource.handle.id
+            && self.identity.module() == Some(self.provider.module())
+            && self.handle.module() == Some(self.provider.module())
+            && self.methods[0] != self.methods[1]
+            && self.methods.iter().all(|method| {
+                method.module() == Some(self.provider.module()) && *method != self.handle
+            })
+            && self.api().is_some()
+    }
+
+    /// Authenticates only the fixed generated forwarding equations. The caller
+    /// must additionally establish this acquisition as the active body owner.
+    pub(crate) fn supplies(self, source: &ResolvedLexicalEvidence) -> bool {
+        let Some(api) = self.api() else { return false };
+        if source.acquisition != Some(self)
+            || source.id != self.provider
+            || source.span != self.span
+            || source.application.interface.id != api.provider()
+            || !matches!(source.application.arguments.as_ref(), [argument] if argument.ty == Type::Variable(self.identity))
+            || source.method_groups.len() != 2
+        {
+            return false;
+        }
+        source.method_groups.iter().enumerate().all(|(ordinal, group)| {
+            if group.binder.id != self.methods[ordinal] || !group.contextual_parameters.is_empty()
+                || group.identity.is_some() || group.method != Some(MethodId::new(api.provider(), ordinal as u32))
+            { return false; }
+            let [equation] = group.equations.as_ref() else { return false };
+            let [pattern] = equation.patterns.as_slice() else { return false };
+            let ResolvedPatternKind::Binder(parameter) = &pattern.kind else { return false };
+            let ResolvedExprKind::Perform(request) = &equation.body.kind else { return false };
+            let ResolvedExprKind::Occurrence(operand) = &request.operand.kind else { return false };
+            equation.name.binder == group.binder.id
+                && group.span == self.span
+                && equation.span == self.span
+                && equation.name.origin.primary_span() == self.span
+                && request.origin.primary_span() == self.span
+                && request.effect.origin.primary_span() == self.span
+                && operand.origin.primary_span() == self.span
+                && request.operation == crate::types::OperationId::new(api.ops(), ordinal as u32)
+                && request.effect.instance.effect() == api.ops()
+                && matches!(request.effect.instance.arguments(), [Type::Variable(identity)] if *identity == self.identity)
+                && operand.term == ResolvedTermName::Global(parameter.id)
+                && operand.evidence.is_empty()
+                && parameter.id.module() == Some(self.provider.module())
+        })
+    }
+}
+
+/// Resolved ownership of the initializer and the identity-scoped body.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedResourceExpr {
+    pub(crate) acquisition: CellAcquisition,
+    /// The rigid kind-Type identity owned by this acquisition.
+    pub identity: ResolvedTypeVariable,
+    /// The body-local handle binder.
+    pub handle: Binder,
+    /// The initializer in the preceding term and type scope.
+    pub initializer: Box<ResolvedExpr>,
+    /// The body, including compiler-owned exact provider methods.
+    pub body: Box<ResolvedExpr>,
 }
 
 /// One resolved discard use, with no value operand.
@@ -18712,6 +18818,12 @@ fn discard_resolved_body_work(
                     expressions.push(clause.body);
                 }
             }
+            ResolvedExprKind::Resource(resource) => {
+                discard_resolved_type_variable(resource.identity);
+                discard_binder(resource.handle);
+                expressions.push(*resource.initializer);
+                expressions.push(*resource.body);
+            }
             ResolvedExprKind::Resume(resume) => expressions.push(*resume.value),
             ResolvedExprKind::Discard(_) => {}
         }
@@ -18972,6 +19084,7 @@ mod tests {
             kind: ResolvedExprKind::Block(ResolvedBlock {
                 declarations: vec![ResolvedLocalDeclaration::Evidence(Box::new(
                     ResolvedLexicalEvidence {
+                        acquisition: None,
                         checked: crate::interface::LexicalEvidenceSlot::default(),
                         id: crate::interface::LexicalEvidenceId::new(module, 1),
                         application: ResolvedInterfaceApplication {

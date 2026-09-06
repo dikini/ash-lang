@@ -100,8 +100,98 @@ exceed high. Keep commits unsigned per the user's instruction. Use the local
   passing evidence: the final unchanged ownership scanner passed after the
   test helper used `pop` followed by immediate iterative disposal. Parent
   all-target Clippy, formatting, Markdown lint and diff checks passed.
-- Step 2 is ready to retain. Acquisition typing, lifetime checking and runtime
-  execution remain unimplemented.
+- Step 2 is retained in unsigned commit `0ae5203`. The worktree was clean after
+  the commit; main and integration refs are unchanged.
+- Step 3 is active with one high-reasoning product writer. It adds acquisition
+  typing and independently checked Core authority. Stored-dependency analysis
+  and runtime execution remain later steps; executable resource admission must
+  stay closed until their required checks exist.
+- Step 3's six initial source test groups reproduce the existing resolution
+  rejection. The selected boundary scopes the rigid identity and handle over
+  the body only, reuses lexical evidence selection with a distinct acquisition
+  origin, and leaves source `with` eligibility unchanged. Typed structure gets
+  internal positive controls; production checked-module publication remains
+  explicitly unavailable until stored-dependency analysis exists. No persisted
+  proof-status carrier or unchecked public success API is introduced.
+- Step 3 reached its first compiling boundary. Direct/helper and targeted
+  acquisition cases reach the later publication guard after typing; unrelated
+  provider requirements and exposed-handle escape reject earlier. Initial test
+  expectations were corrected to the ordinary argument diagnostic and the
+  transitional publication guard, and the malformed closure fixture was
+  corrected. The parent's rerun passed all six source groups. A new
+  fresh-process test of 24 nested acquisitions on a 256 KiB stack aborts.
+  The trace locates the failure in the second elaboration-driver frame, entered
+  by the new resource initializer path after loading and resolution completed.
+  The correction schedules resource initializer/body/finish work on the existing
+  task driver, without changing stack or depth limits. The writer's internal
+  typed-structure controls pass direct read and distinct nested initializer/body
+  effect instances. Core ownership and adversarial checks remain in progress.
+- Loop-driven resource scheduling removed the first recursive driver path.
+  The unchanged stack witness then reached the existing `perform` operand
+  check and overflowed on its recursive driver call. The second trace confirms
+  that path. Step 3 includes the narrow operand/check/finish scheduling repair
+  with ordinary `perform` controls; signature, diagnostic, row, result and
+  handler behavior are preserved. No stack or syntax limit is raised.
+- The unchanged 24-acquisition fresh-process witness passed after both scheduling
+  corrections; the parent independently reran it at 256 KiB. Temporary phase
+  prints were removed. The complete Core fixture checks both provider owners
+  and their exact generated requests. Identity and folding transformations
+  independently reach the same explicit proof-unavailable guard; their private
+  test fixture is never evaluated and creates no production admission path.
+- The Step 3 library gate passed all 1,033 tests. Its escape scan exposed one
+  reused helper that counted effect arguments before charging nullary label
+  width. The narrow precharge correction has exact/one-short/retry evidence.
+  Focused integration, ownership and lint gates remain in progress, followed by
+  independent semantic and Rust/resource reviews. Step 3 is not yet frozen.
+- The focused helper/facade test exposed an import-route defect even without
+  acquisition. The direct route retains `Handle` with opaque access; the helper's
+  hidden closure retains identical defining metadata with hidden access. The
+  closure comparator incorrectly rejects the latter when the former arrived
+  first. Step 3 includes the narrow separation of route access from canonical
+  closure equality, without changing name visibility or access merging.
+- A private fixture now exercises the actual linked resource/header traversal:
+  the authentic body passes, while detached or initializer-moved evidence,
+  changed acquisition ownership and a missing body identity reject. The same
+  check has exact/one-short/retry evidence. It constructs no resource-bearing
+  `CheckedModule` and does not bypass production publication. Full publication,
+  linking and surplus-owner integration remain explicit Step 4 gates.
+- Step 3 is frozen for semantic review. The writer's final gate passed 1,034
+  library tests and 344 tests across 21 integration binaries. The parent's
+  independent gate passed 1,137 tests across 11 binaries. Both fresh-process
+  256 KiB controls pass, as do parent all-target Clippy and diff checks.
+  Architecture evidence consists of the earlier full 32 checks and a current
+  31-check refresh; the unchanged ownership-mutation test is not rerun in that
+  refresh. No lifetime or execution support is claimed by this checkpoint.
+- Semantic review found one diagnostic defect: immediate resource escape points
+  at the whole acquisition, and both immediate and deferred errors omit the
+  known acquisition label. The parent reproduced it with the compiled CLI.
+  The sole writer is correcting primary/related spans with direct, latent-row
+  and deferred controls. Invalid body typing still takes precedence; no separate
+  precedence or authority defect was established. Re-review is required.
+- Direct-result and deferred label corrections passed re-review. The same
+  finding remains for an immediate outward effect row: an earlier `Escape<R>`
+  request is incorrectly attributed to the body's final resource-free literal.
+  Separate the value-result location from the outward body-computation location;
+  no general provenance analysis is needed. Add that row-specific regression.
+- Semantic re-review closed all findings after the immediate-row correction.
+  The parent's fresh corrected-revision gate passed 1,212 tests in 13 binaries,
+  and workspace all-target Clippy passed. Rust/resource review is active; the
+  product revision remains frozen. Step 3 is not committed yet.
+- Rust/resource review found two raw deep-type clones retained across new
+  fallible operations: the scheduled `perform` domain and the resource result's
+  Core type. Both need the existing iterative owner until transfer. The reviewer
+  established the deterministic work-exhaustion paths but did not claim a newly
+  reproduced stack overflow. The writer is adding guarded ownership and deep,
+  small-stack exhaustion/retry controls. No broader predecessor cleanup is
+  included; resource re-review is required.
+- Resource re-review closed both ownership findings. Existing test-only disposal
+  counters observed the missing 513-cell domain and 259-cell result before the
+  guards; unchanged exhaustion and fresh exact retries pass on 256 KiB workers.
+  The resource fixture remains within the existing Core payload-depth limit.
+  The final parent gate passed 1,214 tests in 13 binaries, workspace all-target
+  Clippy, and the fresh Pure stack regression. Both independent reviews are
+  closed. Step 3 is complete within its explicit structural boundary, with
+  production resource publication and execution still unavailable.
 
 ## Verification
 

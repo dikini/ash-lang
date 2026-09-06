@@ -364,6 +364,7 @@ pub(crate) struct UnsafeDiscard {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Failure {
     Resource,
+    ResourceProofUnavailable(Span),
     Invalid,
     Unsafe(UnsafeDiscard),
 }
@@ -536,6 +537,9 @@ fn compile<F: CoreOperationFamily>(
                 Control::Sequence(sequence)
             }
             _ => match operation(&node.kind) {
+                Some(EffectOperation::Resource(resource)) => {
+                    return Err(Failure::ResourceProofUnavailable(resource.acquisition.span));
+                }
                 Some(EffectOperation::Request(request)) => {
                     graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
                     let perform = graph.code.len();
@@ -642,7 +646,11 @@ pub(super) fn check_nodes<F: CoreOperationFamily>(
     bindings.extend(globals.iter().map(|(binder, node)| (*binder, index(*node))));
     let imported = ImportedCallables::new(imports, nodes.len(), budget)?;
     let mut has_discard = false;
+    let mut resource_scope = None;
     for node in nodes {
+        if let Some(EffectOperation::Resource(resource)) = operation(&node.kind) {
+            resource_scope.get_or_insert(resource.acquisition.span);
+        }
         has_discard |= matches!(operation(&node.kind), Some(EffectOperation::Discard(_)));
         match F::pure(&node.kind) {
             Some(PureExprKind::Computation(PureComputation::Bind(binding))) => {
@@ -660,6 +668,10 @@ pub(super) fn check_nodes<F: CoreOperationFamily>(
             }
             _ => {}
         }
+    }
+
+    if let Some(span) = resource_scope {
+        return Err(Failure::ResourceProofUnavailable(span));
     }
 
     // Resume-only final Core needs no abandonment proof. Module publication

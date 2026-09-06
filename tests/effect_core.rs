@@ -368,6 +368,9 @@ fn checked_source_lowers_to_explicit_effect_core() {
                 EffectOperation::Handler(_) => operations[1] += 1,
                 EffectOperation::Resume(_) => operations[2] += 1,
                 EffectOperation::Discard(_) => panic!("resume-only fixture cannot contain discard"),
+                EffectOperation::Resource(_) => {
+                    panic!("resume-only fixture cannot contain resource")
+                }
             }
         }
         pending.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));

@@ -162,7 +162,7 @@ fn source_cannot_introduce_the_builtin_provider() {
 }
 
 #[test]
-fn acquisition_is_not_published_by_resolution() {
+fn acquisition_resolution_requires_a_direct_builtin_dependency() {
     let tree = Tree::new();
     let entry = tree.write(
         "entry.ash",
@@ -170,7 +170,7 @@ fn acquisition_is_not_published_by_resolution() {
     );
     let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
     let error = resolve_module(graph.module(graph.entry()).unwrap(), &[])
-        .expect_err("resource proofs are not implemented");
+        .expect_err("a direct builtin dependency is required");
     assert!(
         format!("{error:?}").contains("ResourceBuiltinRequired"),
         "{error:?}"
@@ -182,7 +182,7 @@ fn direct_targeted_import_satisfies_acquisition_availability_but_a_facade_does_n
     let tree = Tree::new();
     tree.write("facade.ash", "pub import @builtin.cell (Handle)\n");
     for (import, reason) in [
-        ("@builtin.cell", "ResourceUnavailable"),
+        ("@builtin.cell", "ResourceProofUnavailable"),
         ("facade", "ResourceBuiltinRequired"),
     ] {
         let entry = tree.write("entry.ash", &format!("import {import} (Handle)\nmain : Unit -> Int\nmain () = resource cell<R> c = 41 {{\n42\n}}\n"));
@@ -206,7 +206,11 @@ fn direct_targeted_import_satisfies_acquisition_availability_but_a_facade_does_n
                 .collect::<Vec<_>>();
             let result = resolve_module(module, &dependencies);
             if module.id() == graph.entry() {
-                assert!(format!("{:?}", result.unwrap_err()).contains(reason));
+                let error = match result {
+                    Ok(resolved) => format!("{:?}", check_module(resolved).unwrap_err()),
+                    Err(error) => format!("{error:?}"),
+                };
+                assert!(error.contains(reason), "{error}");
             } else {
                 checked.push(check_module(result.unwrap()).unwrap());
             }
@@ -253,7 +257,7 @@ fn cli_preserves_builtin_failure_categories_and_import_only_execution() {
         (
             "import @builtin.cell (Handle)\nmain : Unit -> Int\nmain () = resource cell<R> c = 41 {\n42\n}\n",
             1,
-            "resolve.resource-unavailable\n",
+            "resource.proof-unavailable\n",
         ),
     ] {
         let entry = tree.write("entry.ash", source);

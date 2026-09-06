@@ -118,6 +118,10 @@ pub enum TypeReason {
     NewtypeRecursiveRepresentation,
     /// A local nominal identity occurs in the outward computation.
     LocalNominalEscape,
+    /// A resource-owned rigid identity occurs outside its acquisition.
+    ResourceEscape,
+    /// Stored resource dependency proof is not available in this increment.
+    ResourceProofUnavailable,
     /// An effect-row union has no unqualified principal result.
     AmbiguousEffectRow,
     /// A handler body does not request the exact handled instance.
@@ -343,6 +347,8 @@ impl fmt::Display for TypeReason {
                 formatter.write_str("newtype.recursive-representation")
             }
             Self::LocalNominalEscape => formatter.write_str("type.local-nominal-escape"),
+            Self::ResourceEscape => formatter.write_str("type.resource-escape"),
+            Self::ResourceProofUnavailable => formatter.write_str("resource.proof-unavailable"),
             Self::AmbiguousEffectRow => formatter.write_str("effect.row-union-ambiguous"),
             Self::MissingHandledEffect => formatter.write_str("effect.handler-missing-input"),
             Self::HandlerCoverage => formatter.write_str("effect.handler-coverage"),
@@ -1786,6 +1792,8 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     row_inference_solutions: RowInferenceSolutionMap,
     authenticated_inference_solutions: HashSet<InferenceVariableId>,
     deferred_local_nominal_escapes: Vec<(NominalTypeId, InferenceVariableId, Span)>,
+    deferred_resource_escapes: Vec<(TypeVariableId, InferenceVariableId, Span, Span)>,
+    active_acquisitions: Vec<crate::resolved::CellAcquisition>,
     monomorphic_recursive: HashSet<BinderId>,
     current_implementation_method: Option<CurrentImplementationMethod>,
     method_binders: HashMap<MethodId, BinderId>,
@@ -1924,6 +1932,9 @@ impl CoreLoweringFamily for EffectOperationFamily {
         operation: EffectOperation,
     ) -> Result<NodeId, BuildError> {
         match operation {
+            EffectOperation::Resource(resource) => {
+                builder.resource_scope(resource, ty, effects, origin)
+            }
             EffectOperation::Request(request) => {
                 let (effect, operation, operand) = request.into_parts();
                 builder.request(effect, operation, operand, ty, effects, origin)
@@ -2041,6 +2052,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_solutions: RowInferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
+            deferred_resource_escapes: Vec::new(),
+            active_acquisitions: Vec::new(),
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
             method_binders: HashMap::new(),
@@ -2134,6 +2147,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_solutions: RowInferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
+            deferred_resource_escapes: Vec::new(),
+            active_acquisitions: Vec::new(),
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
             method_binders: HashMap::new(),
@@ -2194,6 +2209,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_solutions: RowInferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
+            deferred_resource_escapes: Vec::new(),
+            active_acquisitions: Vec::new(),
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
             method_binders: HashMap::new(),
@@ -2635,6 +2652,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             row_inference_solutions: RowInferenceSolutionMap::default(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
+            deferred_resource_escapes: Vec::new(),
+            active_acquisitions: Vec::new(),
             monomorphic_recursive: HashSet::new(),
             current_implementation_method: None,
             method_binders: HashMap::new(),
@@ -7969,6 +7988,94 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
+    fn defer_resource_escape(
+        &mut self,
+        owner: TypeVariableId,
+        ty: &Type,
+        span: Span,
+        acquisition: Span,
+    ) -> Result<(), TypeError> {
+        let variables =
+            collect_unsolved_inference(ty, &mut self.type_work).map_err(|()| type_resource())?;
+        self.type_work
+            .charge(variables.len().checked_mul(4).ok_or_else(type_resource)?)
+            .map_err(|()| type_resource())?;
+        self.deferred_resource_escapes
+            .try_reserve(variables.len())
+            .map_err(|_| type_resource())?;
+        self.deferred_resource_escapes.extend(
+            variables
+                .into_iter()
+                .map(|variable| (owner, variable, span, acquisition)),
+        );
+        Ok(())
+    }
+
+    fn check_deferred_resource_escapes(&mut self) -> Result<(), TypeError> {
+        let mut escaped = None;
+        for index in 0..self.deferred_resource_escapes.len() {
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            let (owner, variable, span, acquisition) = self.deferred_resource_escapes[index];
+            let is_row = self
+                .inference_variables
+                .fact(variable, &mut self.type_work)
+                .map_err(inference_registry_error)?
+                .kind
+                == Kind::EffectRow;
+            let ty = if is_row {
+                self.type_work.charge(4).map_err(|()| type_resource())?;
+                let row = self.zonk_effect_row(&EffectRow::open(
+                    EffectRowVariable::inference(variable),
+                    Box::new([]),
+                ))?;
+                IterativeTypeOwner::new(Type::function_computation(
+                    Type::Unit,
+                    ComputationType::new(Type::Unit, row),
+                ))
+            } else {
+                IterativeTypeOwner::new(self.zonk(&Type::Inference(variable))?)
+            };
+            if type_contains_variable(&ty, owner, &mut self.constraint_work)
+                .map_err(|()| constraint_resource())?
+                && escaped.is_none_or(|(previous, _): (Span, Span)| {
+                    span.range().start() < previous.range().start()
+                })
+            {
+                escaped = Some((span, acquisition));
+            }
+        }
+        if let Some((span, acquisition)) = escaped {
+            return Err(self.resource_escape_failure(
+                span,
+                acquisition,
+                "this outward inference contains a resource identity",
+            ));
+        }
+        self.deferred_resource_escapes.clear();
+        Ok(())
+    }
+
+    fn resource_escape_failure(
+        &mut self,
+        span: Span,
+        acquisition: Span,
+        message: &str,
+    ) -> TypeError {
+        if self.constraint_work.charge(1).is_err() {
+            return constraint_resource();
+        }
+        let mut diagnostic =
+            Diagnostic::new(TypeReason::ResourceEscape, SourceLabel::new(span, message));
+        if diagnostic.related.try_reserve_exact(1).is_err() {
+            return constraint_resource();
+        }
+        diagnostic.related.push(SourceLabel::new(
+            acquisition,
+            "this resource is acquired here",
+        ));
+        TypeError::Source(Box::new(diagnostic))
+    }
+
     fn elaborate_result(
         &mut self,
         result_expression: &ResolvedExpr,
@@ -7982,6 +8089,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             context,
         )?);
         self.check_deferred_local_nominal_escapes()?;
+        self.check_deferred_resource_escapes()?;
         let (zonked_result, result_is_ambiguous) = self.zonk_with_status(&result.ty)?;
         let zonked_result = IterativeTypeOwner::new(zonked_result);
         if result_is_ambiguous {
@@ -8122,12 +8230,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         ))
     }
 
-    fn synthesize_perform(
+    fn schedule_perform<'a>(
         &mut self,
-        request: &crate::resolved::ResolvedPerformExpr,
+        request: &'a crate::resolved::ResolvedPerformExpr,
         span: Span,
-        context: &mut TypeContext,
-    ) -> Result<TypedNode, TypeError> {
+        tasks: &mut ElaborationTaskBuffer<'a>,
+    ) -> Result<(), TypeError> {
         let (domain, result) = self.operation_signature(
             &request.effect.instance,
             request.operation,
@@ -8135,19 +8243,36 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         )?;
         let domain = IterativeTypeOwner::new(domain);
         let result = IterativeTypeOwner::new(result);
-        let expected_domain = self.clone_type(&domain)?;
+        let expected_domain = IterativeTypeOwner::new(self.clone_type(&domain)?);
         let expected_provenance = self.at_span_provenance(&domain, request.effect.span)?;
-        let operand = TypedNodeOwner::new(self.elaborate_expression_with_context(
-            ElaborationTask::Check {
-                expression: &request.operand,
-                expected: ProvenancedType {
-                    ty: expected_domain,
-                    provenance: expected_provenance,
-                },
-                kind: CheckKind::General,
+        self.type_work.charge(3).map_err(|()| type_resource())?;
+        tasks.0.try_reserve(2).map_err(|_| type_resource())?;
+        tasks.push(ElaborationTask::FinishPerform(Box::new(PerformProgress {
+            request,
+            span,
+            result,
+        })));
+        tasks.push(ElaborationTask::Check {
+            expression: &request.operand,
+            expected: ProvenancedType {
+                ty: expected_domain.into_inner(),
+                provenance: expected_provenance,
             },
-            context,
-        )?);
+            kind: CheckKind::General,
+        });
+        Ok(())
+    }
+
+    fn finish_perform(
+        &mut self,
+        progress: PerformProgress<'_>,
+        operand: TypedNodeOwner,
+    ) -> Result<TypedNode, TypeError> {
+        let PerformProgress {
+            request,
+            span,
+            result,
+        } = progress;
         let requested = EffectRow::singleton(
             clone_effect_instance_with_budget(&request.effect.instance, &mut self.type_work)
                 .map_err(|error| TypeError::Internal(error.into()))?,
@@ -8293,6 +8418,172 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             ty,
             effects,
             provenance,
+        })
+    }
+
+    fn enter_resource_body(
+        &mut self,
+        resource: &crate::resolved::ResolvedResourceExpr,
+        context: &mut TypeContext,
+    ) -> Result<TypedBinder, TypeError> {
+        self.constraint_work
+            .charge(1)
+            .map_err(|()| constraint_resource())?;
+        if !F::EFFECTS || !resource.acquisition.owns(resource) {
+            return Err(invalid_state());
+        }
+        let api = resource.acquisition.api().ok_or_else(invalid_state)?;
+        self.type_work
+            .charge(5)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        context
+            .binders
+            .try_reserve(1)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        self.active_acquisitions
+            .try_reserve(1)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let handle_type = IterativeTypeOwner::new(Type::Application(
+            Box::new(Type::Nominal(api.handle())),
+            Box::new(Type::Variable(resource.identity.id)),
+        ));
+        let handle_provenance =
+            self.at_span_provenance(&handle_type, resource.handle.origin.primary_span())?;
+        let handle_fact = self.clone_type(&handle_type)?;
+        if context.insert_with_provenance(resource.handle.id, handle_fact, handle_provenance)? {
+            return Err(invalid_state());
+        }
+        self.active_acquisitions.push(resource.acquisition);
+        self.builder
+            .resolved_binder(
+                resource.handle.id,
+                handle_type.into_inner(),
+                resource.handle.origin.clone(),
+            )
+            .map_err(Into::into)
+    }
+
+    fn finish_resource(
+        &mut self,
+        progress: ResourceProgress<'_>,
+        body: TypedNodeOwner,
+        context: &mut TypeContext,
+    ) -> Result<TypedNode, TypeError> {
+        let ResourceProgress {
+            resource,
+            span,
+            initializer,
+            handle,
+        } = progress;
+        if self.active_acquisitions.pop() != Some(resource.acquisition) {
+            return Err(invalid_state());
+        }
+        context.remove_and_discard(resource.handle.id);
+        let api = resource.acquisition.api().ok_or_else(invalid_state)?;
+        // Precharge the fixed instance, outward-row type wrapper, and boxed
+        // resource operation before constructing their owned metadata.
+        self.type_work
+            .charge(6)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let body_effects = self.zonk_effect_row(&body.effects)?;
+        let instance =
+            EffectInstance::new(api.ops(), Box::new([Type::Variable(resource.identity.id)]));
+        let outward = match body_effects
+            .remove_exact_with_budget(&instance, &mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+        {
+            Ok(row) => row,
+            Err(crate::types::EffectRowError::Missing) => body_effects,
+            Err(_) => {
+                return Err(inference_failure(
+                    TypeReason::AmbiguousEffectRow,
+                    span,
+                    "this resource body has an ambiguous outward effect row",
+                ));
+            }
+        };
+        let ty = IterativeTypeOwner::new(self.zonk(&body.ty)?);
+        let effects = self.union_effects(&initializer.effects, &outward, span)?;
+        let row_type = IterativeTypeOwner::new(Type::function_computation(
+            Type::Unit,
+            ComputationType::new(Type::Unit, self.core_effect_row(&effects)?),
+        ));
+        // The provider wrapper contains the original user computation. Its
+        // immediate row belongs to that body, while its value comes from the
+        // final result expression of any forwarding source blocks.
+        self.constraint_work
+            .charge(1)
+            .map_err(|()| constraint_resource())?;
+        let ResolvedExprKind::Block(wrapper) = &resource.body.kind else {
+            return Err(invalid_state());
+        };
+        let computation_span = wrapper.result.span;
+        let mut escaping = &*wrapper.result;
+        loop {
+            self.constraint_work
+                .charge(1)
+                .map_err(|()| constraint_resource())?;
+            let ResolvedExprKind::Block(block) = &escaping.kind else {
+                break;
+            };
+            escaping = &block.result;
+        }
+        let escape_span = escaping.span;
+        for (outward_type, outward_span) in [(&*ty, escape_span), (&*row_type, computation_span)] {
+            self.defer_resource_escape(resource.identity.id, outward_type, outward_span, span)?;
+            if type_contains_variable(
+                outward_type,
+                resource.identity.id,
+                &mut self.constraint_work,
+            )
+            .map_err(|()| constraint_resource())?
+            {
+                return Err(self.resource_escape_failure(
+                    outward_span,
+                    span,
+                    "this outward computation contains the resource identity",
+                ));
+            }
+        }
+        self.type_work
+            .charge(context.binders.capacity())
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        for fact in context.binders.values() {
+            let fact_type = IterativeTypeOwner::new(self.zonk(&fact.ty)?);
+            self.defer_resource_escape(
+                resource.identity.id,
+                &fact_type,
+                fact.provenance.span().unwrap_or(escape_span),
+                span,
+            )?;
+            if type_contains_variable(&fact_type, resource.identity.id, &mut self.constraint_work)
+                .map_err(|()| constraint_resource())?
+            {
+                return Err(self.resource_escape_failure(
+                    fact.provenance.span().unwrap_or(escape_span),
+                    span,
+                    "an enclosing binding contains the resource identity",
+                ));
+            }
+        }
+        let core_type = IterativeTypeOwner::new(self.clone_type(&ty)?);
+        let core_effects = self.core_effect_row(&effects)?;
+        let node = self.push_effect_core(
+            core_type.into_inner(),
+            core_effects,
+            Origin::Source(span),
+            EffectOperation::Resource(Box::new(crate::core::effect::ResourceScopeNode::new(
+                resource.acquisition,
+                handle,
+                initializer.node,
+                body.node,
+            ))),
+        )?;
+        Ok(TypedNode {
+            node,
+            ty: ty.into_inner(),
+            effects,
+            provenance: body.provenance.clone(),
         })
     }
 
@@ -8691,7 +8982,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
             }
         }
-        if !nominals.iter().any(|nominal| nominal.is_lexical()) {
+        let acquired = if let Some(owner) = source.acquisition {
+            self.constraint_work
+                .charge(2)
+                .map_err(|()| constraint_resource())?;
+            if self.active_acquisitions.last() != Some(&owner) || !owner.supplies(source) {
+                return Err(invalid_state());
+            }
+            true
+        } else {
+            false
+        };
+        if !acquired && !nominals.iter().any(|nominal| nominal.is_lexical()) {
             return Err(lexical_evidence_error(
                 InterfaceReason::EvidenceMissingLocalKey,
                 source.application.span,
@@ -8987,6 +9289,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             source
                 .checked
                 .fill(crate::interface::CheckedLexicalEvidence {
+                    acquisition: source.acquisition,
                     id: source.id,
                     application: fact_application,
                     methods: checked_methods.into_boxed_slice(),
@@ -9086,6 +9389,21 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         initial: ElaborationTask<'a>,
         context: &mut TypeContext,
     ) -> Result<TypedNode, TypeError> {
+        let checkpoint = self.active_acquisitions.len();
+        let result = self.elaborate_expression_work(initial, context);
+        while self.active_acquisitions.len() > checkpoint {
+            if let Some(acquisition) = self.active_acquisitions.pop() {
+                context.remove_and_discard(acquisition.handle);
+            }
+        }
+        result
+    }
+
+    fn elaborate_expression_work<'a>(
+        &mut self,
+        initial: ElaborationTask<'a>,
+        context: &mut TypeContext,
+    ) -> Result<TypedNode, TypeError> {
         let mut tasks = ElaborationTaskBuffer(vec![initial]);
         let mut values = TypedNodeBuffer(Vec::new());
         #[cfg(test)]
@@ -9098,6 +9416,32 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut declarations = ElaboratedDeclarationBuffer(Vec::new());
         while let Some(task) = tasks.pop() {
             match task {
+                ElaborationTask::FinishPerform(progress) => {
+                    let operand = values.pop().ok_or_else(invalid_state)?;
+                    values.push(self.finish_perform(*progress, operand)?);
+                }
+                ElaborationTask::ResourceBody { resource, span } => {
+                    let initializer = values.pop().ok_or_else(invalid_state)?;
+                    self.type_work.charge(3).map_err(|()| type_resource())?;
+                    tasks.0.try_reserve(2).map_err(|_| type_resource())?;
+                    let handle = self.enter_resource_body(resource, context)?;
+                    tasks.push(ElaborationTask::FinishResource(Box::new(
+                        ResourceProgress {
+                            resource,
+                            span,
+                            initializer,
+                            handle,
+                        },
+                    )));
+                    tasks.push(ElaborationTask::Synthesize {
+                        expression: &resource.body,
+                        cause: None,
+                    });
+                }
+                ElaborationTask::FinishResource(progress) => {
+                    let body = values.pop().ok_or_else(invalid_state)?;
+                    values.push(self.finish_resource(*progress, body, context)?);
+                }
                 ElaborationTask::Equation(task) => {
                     self.step_equation_task(
                         task,
@@ -9581,9 +9925,24 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             &mut self.type_work,
                         )?;
                     }
+                    ResolvedExprKind::Resource(resource) => {
+                        self.type_work.charge(2).map_err(|()| type_resource())?;
+                        tasks.0.try_reserve(2).map_err(|_| type_resource())?;
+                        tasks.push(ElaborationTask::ResourceBody {
+                            resource,
+                            span: current.span,
+                        });
+                        tasks.push(ElaborationTask::Check {
+                            expression: &resource.initializer,
+                            expected: ProvenancedType {
+                                ty: Type::Int,
+                                provenance: TypeProvenance::atom(Some(resource.initializer.span)),
+                            },
+                            kind: CheckKind::General,
+                        });
+                    }
                     ResolvedExprKind::Perform(request) => {
-                        let typed = self.synthesize_perform(request, current.span, context)?;
-                        values.push(typed);
+                        self.schedule_perform(request, current.span, &mut tasks)?;
                     }
                     ResolvedExprKind::Handle(handler) => {
                         let typed = self.synthesize_handler(handler, current.span, context)?;
@@ -15840,6 +16199,13 @@ where
                 pending.push(domain);
             }
             Type::EffectfulFunction(domain, codomain) => {
+                let rows = codomain.effects();
+                budget.charge(
+                    rows.known().len().saturating_add(
+                        rows.tail()
+                            .map_or(0, |tail| tail.lacks().len().saturating_add(1)),
+                    ),
+                )?;
                 if let Some(crate::types::EffectRowVariable::Rigid(variable)) =
                     codomain.tail_variable()
                     && visit(variable, budget)?
@@ -16752,6 +17118,12 @@ enum EquationTask<'a> {
 }
 
 enum ElaborationTask<'a> {
+    FinishPerform(Box<PerformProgress<'a>>),
+    ResourceBody {
+        resource: &'a crate::resolved::ResolvedResourceExpr,
+        span: Span,
+    },
+    FinishResource(Box<ResourceProgress<'a>>),
     Equation(EquationTask<'a>),
     RetainLocalNewtype(NominalTypeId),
     Synthesize {
@@ -17128,6 +17500,19 @@ enum ElaboratedDeclaration {
         origin: Origin,
     },
     Newtype(NominalTypeId),
+}
+
+struct ResourceProgress<'a> {
+    resource: &'a crate::resolved::ResolvedResourceExpr,
+    span: Span,
+    initializer: TypedNodeOwner,
+    handle: TypedBinder,
+}
+
+struct PerformProgress<'a> {
+    request: &'a crate::resolved::ResolvedPerformExpr,
+    span: Span,
+    result: IterativeTypeOwner,
 }
 
 struct ElaborationTaskBuffer<'a>(Vec<ElaborationTask<'a>>);
@@ -18071,6 +18456,9 @@ fn discard_match_progress(progress: Box<MatchProgress<'_>>) {
 fn discard_elaboration_task(task: ElaborationTask<'_>) {
     match task {
         ElaborationTask::Equation(_) => {}
+        ElaborationTask::ResourceBody { .. }
+        | ElaborationTask::FinishResource(_)
+        | ElaborationTask::FinishPerform(_) => {}
         ElaborationTask::RetainLocalNewtype(_)
         | ElaborationTask::Synthesize { .. }
         | ElaborationTask::AfterApplicationFunction { .. }
@@ -19137,6 +19525,10 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
             ResolvedExprKind::Match(match_expression) => {
                 work.push(&match_expression.scrutinee);
                 work.extend(match_expression.arms.iter().map(|arm| &arm.body));
+            }
+            ResolvedExprKind::Resource(resource) => {
+                work.push(&resource.body);
+                work.push(&resource.initializer);
             }
             ResolvedExprKind::Perform(request) => work.push(&request.operand),
             ResolvedExprKind::Handle(handler) => {
@@ -20337,6 +20729,11 @@ fn capture_failure(failure: crate::core::capture::Failure) -> TypeError {
     match failure {
         Failure::Invalid => invalid_state(),
         Failure::Resource => type_resource(),
+        Failure::ResourceProofUnavailable(span) => inference_failure(
+            TypeReason::ResourceProofUnavailable,
+            span,
+            "resource scope requires stored-dependency proof before publication",
+        ),
         Failure::Unsafe(unsafe_discard) => {
             let mut diagnostic = Diagnostic::new(
                 TypeReason::DiscardUnsafe,
@@ -20485,6 +20882,10 @@ fn resume_usage_with_budget(
                 ResolvedExprKind::Match(matched) => {
                     push(&mut tasks, Task::BeginMatch(&matched.arms), budget)?;
                     push(&mut tasks, Task::Visit(&matched.scrutinee), budget)?;
+                }
+                ResolvedExprKind::Resource(resource) => {
+                    push(&mut tasks, Task::Visit(&resource.body), budget)?;
+                    push(&mut tasks, Task::Visit(&resource.initializer), budget)?;
                 }
                 ResolvedExprKind::Perform(request) => {
                     push(&mut tasks, Task::Visit(&request.operand), budget)?;
@@ -20682,6 +21083,10 @@ fn contains_resume_owner_with_budget(
                 if discard.owner == Some(owner) {
                     return Ok(true);
                 }
+            }
+            ResolvedExprKind::Resource(resource) => {
+                schedule(&mut pending, &resource.body, budget)?;
+                schedule(&mut pending, &resource.initializer, budget)?;
             }
             ResolvedExprKind::Tuple(elements) => {
                 for element in elements {
@@ -20949,7 +21354,8 @@ pub(crate) fn checked_program_contains_effect_syntax(
 
     while let Some(expression) = work.pop() {
         match &expression.kind {
-            ResolvedExprKind::Perform(_)
+            ResolvedExprKind::Resource(_)
+            | ResolvedExprKind::Perform(_)
             | ResolvedExprKind::Handle(_)
             | ResolvedExprKind::Resume(_)
             | ResolvedExprKind::Discard(_) => return Ok(true),
@@ -21113,6 +21519,11 @@ fn collect_expression_binders(binders: &mut Vec<BinderId>, mut expressions: Vec<
                     expressions.push(&arm.body);
                 }
             }
+            ResolvedExprKind::Resource(resource) => {
+                binders.push(resource.handle.id);
+                expressions.push(&resource.body);
+                expressions.push(&resource.initializer);
+            }
             ResolvedExprKind::Perform(request) => expressions.push(&request.operand),
             ResolvedExprKind::Handle(handler) => {
                 expressions.push(&handler.body);
@@ -21182,6 +21593,21 @@ fn collect_pattern_binders(
             | crate::resolved::ResolvedPatternKind::Unit => {}
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn cell_resource_core_fixture_for_test() -> (
+    crate::core::effect::UnvalidatedEffectProgram,
+    ResolvedModule,
+    Vec<crate::source::SourceFile>,
+    Arc<ResolvedRegistry>,
+) {
+    tests::cell_resource_core_fixture()
+}
+
+#[cfg(test)]
+pub(crate) fn cell_resource_linked_header_fixture_for_test() -> ResolvedModuleProgram {
+    tests::cell_resource_linked_header_fixture()
 }
 
 #[cfg(test)]
@@ -21970,6 +22396,535 @@ mod tests {
         assert_eq!(wrapper.interface.name.spelling, "main");
         assert_eq!(wrapper.equations.len(), 1);
         resolved
+    }
+
+    fn cell_resource_fixture(result: &str) -> ResolvedModule {
+        cell_resource_fixture_sources(result).0
+    }
+
+    fn cell_resource_fixture_sources(
+        result: &str,
+    ) -> (
+        ResolvedModule,
+        Vec<SourceFile>,
+        Arc<ResolvedRegistry>,
+        Vec<CheckedModule>,
+    ) {
+        let text =
+            format!("import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = {result}\n");
+        let file = ModuleFixtureFile::write("cell-resource-typed.ash", &text);
+        let graph = load_module_graph(&file.0, &ModuleRoots::empty()).expect("resource graph");
+        let mut checked = Vec::<CheckedModule>::new();
+        for loaded in graph.modules() {
+            let dependencies = loaded
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    crate::resolve::DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|module| module.module() == edge.target())
+                            .expect("dependency")
+                            .exports(),
+                    )
+                    .expect("exports")
+                })
+                .collect::<Vec<_>>();
+            let module = resolve_module(loaded, &dependencies).expect("resource resolution");
+            if loaded.id() == graph.entry() {
+                let registry = ResolvedRegistry::combine_checked(
+                    &checked,
+                    &mut TypeWorkBudget::default(),
+                    &mut InterfaceConstraintBudget::default(),
+                )
+                .expect("complete builtin registry")
+                .with_additional_type_variables(
+                    module
+                        .registry()
+                        .type_variables()
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                );
+                return (
+                    module,
+                    graph
+                        .modules()
+                        .iter()
+                        .map(|module| module.source().clone())
+                        .collect(),
+                    Arc::new(registry),
+                    checked,
+                );
+            }
+            checked.push(check_module(module).expect("builtin checks"));
+        }
+        panic!("entry module");
+    }
+
+    fn cell_resource_elaborator(module: &ResolvedModule) -> CoreElaborator<EffectOperationFamily> {
+        let mut elaborator = CoreElaborator::<EffectOperationFamily>::for_module(module)
+            .expect("resource elaborator");
+        elaborator.purpose = ElaborationPurpose::ModuleCheck;
+        elaborator.selection = Some(
+            build_evidence_selector(
+                module,
+                &elaborator.registry,
+                &[],
+                &[],
+                &[],
+                &mut elaborator.type_work,
+                &mut elaborator.constraint_work,
+            )
+            .expect("builtin selector"),
+        );
+        elaborator
+    }
+
+    pub(crate) fn cell_resource_core_fixture() -> (
+        crate::core::effect::UnvalidatedEffectProgram,
+        ResolvedModule,
+        Vec<SourceFile>,
+        Arc<ResolvedRegistry>,
+    ) {
+        let (module, sources, registry, _) =
+            cell_resource_fixture_sources("resource cell<R> c = (40 + 1) {\n42\n}");
+        let mut elaborator = cell_resource_elaborator(&module);
+        let mut context = elaborator.base_context.clone();
+        let typed = elaborator
+            .elaborate_expression_with_context(
+                ElaborationTask::Synthesize {
+                    expression: fixture_result(&module),
+                    cause: None,
+                },
+                &mut context,
+            )
+            .expect("resource typed structure");
+        let core = elaborator
+            .builder
+            .finish(typed.node)
+            .expect("resource arena");
+        (core, module, sources, registry)
+    }
+
+    // Only the builtin becomes a checked group. The resource result is typed
+    // internal input for linked header tests, never a published module.
+    pub(crate) fn cell_resource_linked_header_fixture() -> ResolvedModuleProgram {
+        let (module, _, registry, checked) =
+            cell_resource_fixture_sources("resource cell<R> c = 41 {\n42\n}");
+        let mut elaborator = cell_resource_elaborator(&module);
+        let mut context = elaborator.base_context.clone();
+        drop(TypedNodeOwner::new(
+            elaborator
+                .elaborate_expression_with_context(
+                    ElaborationTask::Synthesize {
+                        expression: fixture_result(&module),
+                        cause: None,
+                    },
+                    &mut context,
+                )
+                .expect("structurally typed resource header input"),
+        ));
+        let groups = checked
+            .into_iter()
+            .map(|module| {
+                module
+                    .into_group(&mut InterfaceConstraintBudget::default())
+                    .unwrap()
+            })
+            .collect();
+        ResolvedModuleProgram::new(
+            registry,
+            groups,
+            module.module(),
+            fixture_result(&module).clone(),
+        )
+    }
+
+    #[test]
+    fn resource_typed_structure_preserves_initializer_and_exact_body_row() {
+        for source in [
+            "resource cell<R> c = 41 {\nCell.read c\n}",
+            "resource cell<A> a = 41 {\nresource cell<B> b = (Cell.read a) {\nCell.read b\n}\n}",
+        ] {
+            let module = cell_resource_fixture(source);
+            let mut elaborator = cell_resource_elaborator(&module);
+            let mut context = elaborator.base_context.clone();
+            let typed = elaborator
+                .elaborate_expression_with_context(
+                    ElaborationTask::Synthesize {
+                        expression: fixture_result(&module),
+                        cause: None,
+                    },
+                    &mut context,
+                )
+                .expect("resource typed structure");
+            assert_eq!(typed.ty, Type::Int);
+            assert!(typed.effects.is_empty());
+            let _core = elaborator
+                .builder
+                .finish(typed.node)
+                .expect("resource arena");
+        }
+    }
+
+    #[test]
+    fn resource_elaboration_work_is_exact_retryable_and_restores_scope_on_failure() {
+        fn run(limit: Option<(usize, bool)>) -> (Result<(), TypeError>, usize, usize, usize) {
+            let module = cell_resource_fixture(
+                "resource cell<A> a = 41 {\nresource cell<B> b = (Cell.read a) {\nCell.read b\n}\n}",
+            );
+            let mut elaborator = cell_resource_elaborator(&module);
+            elaborator.type_work = TypeWorkBudget::with_limit(
+                limit
+                    .filter(|(_, constraints)| !constraints)
+                    .map_or(usize::MAX, |(limit, _)| limit),
+            );
+            elaborator.constraint_work = InterfaceConstraintBudget::with_limit(
+                limit
+                    .filter(|(_, constraints)| *constraints)
+                    .map_or(usize::MAX, |(limit, _)| limit),
+            );
+            let mut context = elaborator.base_context.clone();
+            let result = elaborator
+                .elaborate_expression_with_context(
+                    ElaborationTask::Synthesize {
+                        expression: fixture_result(&module),
+                        cause: None,
+                    },
+                    &mut context,
+                )
+                .map(|typed| drop(TypedNodeOwner::new(typed)));
+            (
+                result,
+                elaborator.type_work.used(),
+                elaborator.constraint_work.used(),
+                elaborator.active_acquisitions.len(),
+            )
+        }
+        let (result, types, constraints, scopes) = run(None);
+        result.expect("calibration");
+        assert_eq!(scopes, 0);
+        for (work, constraints) in [(types, false), (constraints, true)] {
+            let (short, _, _, scopes) = run(Some((work - 1, constraints)));
+            assert!(short.is_err());
+            assert_eq!(scopes, 0);
+            for _ in 0..2 {
+                let (exact, _, _, scopes) = run(Some((work, constraints)));
+                exact.expect("fresh exact retry");
+                assert_eq!(scopes, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn perform_scheduling_keeps_cloned_domain_owned_across_exact_failures() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 256;
+                const DOMAIN_CELLS: usize = 2 * DEPTH + 1;
+                let source =
+                    SourceFile::new("perform-owned-domain.ash", "perform E.send ()").unwrap();
+                let span = source
+                    .span(ByteRange::new(0, source.text().len() as u32).unwrap())
+                    .unwrap();
+                let effect = crate::types::EffectId::new(ModuleId::from(source.id()), 0);
+                let operation = crate::types::OperationId::new(effect, 0);
+                let registry = Arc::new(ResolvedRegistry::default().with_effects(vec![
+                    crate::resolved::ResolvedEffectDeclaration {
+                        id: effect,
+                        public: false,
+                        spelling: "E".into(),
+                        parameters: Box::new([]),
+                        operations: Box::new([crate::resolved::ResolvedEffectOperation {
+                            id: operation,
+                            spelling: "send".into(),
+                            annotation: ResolvedType {
+                                ty: Type::Function(
+                                    Box::new(nested_function_type(DEPTH)),
+                                    Box::new(Type::Unit),
+                                ),
+                                provenance: ResolvedTypeProvenance::new(
+                                    vec![ResolvedTypeProvenanceNode::Fact(span)],
+                                    0,
+                                ),
+                                origin: Origin::Source(span),
+                                span,
+                            },
+                            origin: Origin::Source(span),
+                            span,
+                        }]),
+                        origin: Origin::Source(span),
+                        span,
+                    },
+                ]));
+                let request = crate::resolved::ResolvedPerformExpr {
+                    effect: crate::resolved::ResolvedEffectInstance {
+                        instance: EffectInstance::new(effect, Box::new([])),
+                        origin: Origin::Source(span),
+                        span,
+                    },
+                    operation,
+                    spelling: "send".into(),
+                    operand: Box::new(ResolvedExpr {
+                        kind: ResolvedExprKind::Unit,
+                        span,
+                    }),
+                    origin: Origin::Source(span),
+                };
+                let run = |limit| {
+                    let mut elaborator = EffectElaborator::new();
+                    elaborator.registry = Arc::clone(&registry);
+                    elaborator.type_work = TypeWorkBudget::with_limit(limit);
+                    let mut tasks = ElaborationTaskBuffer(Vec::new());
+                    crate::types::reset_type_discard_observation();
+                    let result = elaborator.schedule_perform(&request, span, &mut tasks);
+                    let work = elaborator.type_work.used();
+                    drop(tasks);
+                    let visits = crate::types::type_discard_visits();
+                    (result, work, visits)
+                };
+                let (result, exact, complete_visits) = run(usize::MAX);
+                result.unwrap();
+                for limit in [exact - 3 - DOMAIN_CELLS, exact - 3, exact - 1] {
+                    let (result, used, visits) = run(limit);
+                    assert!(matches!(
+                        result,
+                        Err(TypeError::Internal(
+                            ElaborationFailure::TypeResourceExhausted
+                        ))
+                    ));
+                    assert!(used <= limit);
+                    assert_eq!(
+                        visits, complete_visits,
+                        "complete domain clone must be dismantled at boundary {limit}"
+                    );
+                }
+                for _ in 0..2 {
+                    let (result, used, visits) = run(exact);
+                    result.unwrap();
+                    assert_eq!(used, exact);
+                    assert_eq!(visits, complete_visits);
+                }
+                crate::resolved::discard_resolved_expression_iteratively(ResolvedExpr {
+                    kind: ResolvedExprKind::Perform(request),
+                    span,
+                });
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn resource_finish_keeps_cloned_result_owned_across_exact_row_failure() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                fn run(limit: usize) -> (Result<(), TypeError>, usize, usize) {
+                    const DEPTH: usize = crate::core::dialect::CORE_PAYLOAD_DEPTH_LIMIT - 2;
+                    let module = cell_resource_fixture("resource cell<R> c = 41 {\n42\n}");
+                    let ResolvedExprKind::Resource(resource) = &fixture_result(&module).kind else {
+                        panic!("resource")
+                    };
+                    let span = resource.acquisition.span;
+                    let mut elaborator = cell_resource_elaborator(&module);
+                    let mut context = elaborator.base_context.clone();
+                    let initializer = TypedNodeOwner::new(
+                        elaborator
+                            .elaborate_expression_with_context(
+                                ElaborationTask::Synthesize {
+                                    expression: &resource.initializer,
+                                    cause: None,
+                                },
+                                &mut context,
+                            )
+                            .unwrap(),
+                    );
+                    let handle = elaborator
+                        .enter_resource_body(resource, &mut context)
+                        .unwrap();
+                    let parameter = elaborator
+                        .builder
+                        .binder(nested_function_type(DEPTH), Origin::Source(span))
+                        .unwrap();
+                    let unit = elaborator
+                        .builder
+                        .unit(Type::Unit, Origin::Source(span))
+                        .unwrap();
+                    let ty = IterativeTypeOwner::new(Type::Function(
+                        Box::new(nested_function_type(DEPTH)),
+                        Box::new(Type::Unit),
+                    ));
+                    let core_type = elaborator.clone_type(&ty).unwrap();
+                    let node = elaborator
+                        .builder
+                        .function(parameter, unit, core_type, Origin::Source(span))
+                        .unwrap();
+                    let provenance = elaborator.at_span_provenance(&ty, span).unwrap();
+                    let body = TypedNodeOwner::new(TypedNode {
+                        node,
+                        ty: ty.into_inner(),
+                        effects: EffectRow::empty(),
+                        provenance,
+                    });
+                    elaborator.type_work = TypeWorkBudget::with_limit(limit);
+                    crate::types::reset_type_discard_observation();
+                    let result = elaborator
+                        .finish_resource(
+                            ResourceProgress {
+                                resource,
+                                span,
+                                initializer,
+                                handle,
+                            },
+                            body,
+                            &mut context,
+                        )
+                        .map(|typed| drop(TypedNodeOwner::new(typed)));
+                    let used = elaborator.type_work.used();
+                    drop(context);
+                    drop(elaborator);
+                    (result, used, crate::types::type_discard_visits())
+                }
+                let (result, exact, complete_visits) = run(usize::MAX);
+                result.unwrap();
+                let (result, used, visits) = run(exact - 1);
+                assert!(matches!(
+                    result,
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                ));
+                assert_eq!(
+                    used,
+                    exact - 1,
+                    "the empty-row clone must be the failing unit"
+                );
+                assert_eq!(
+                    visits, complete_visits,
+                    "the final cloned result must be dismantled iteratively"
+                );
+                for _ in 0..2 {
+                    let (result, used, visits) = run(exact);
+                    result.unwrap();
+                    assert_eq!(used, exact);
+                    assert_eq!(visits, complete_visits);
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn resource_escape_scan_precharges_nullary_row_labels() {
+        let module = cell_resource_fixture("resource cell<R> c = 41 {\n42\n}");
+        let ty = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Unit,
+                crate::types::EffectRow::closed(
+                    (0..64)
+                        .map(|index| {
+                            crate::types::EffectInstance::new(
+                                crate::types::EffectId::new(module.module(), index),
+                                Box::new([]),
+                            )
+                        })
+                        .collect(),
+                ),
+            ),
+        );
+        let mut budget = InterfaceConstraintBudget::with_limit(63);
+        assert!(visit_type_variables(&ty, &mut budget, |_, _| Ok(false)).is_err());
+        let mut measured = InterfaceConstraintBudget::default();
+        assert!(!visit_type_variables(&ty, &mut measured, |_, _| Ok(false)).unwrap());
+        let work = measured.used();
+        for limit in [work - 1, work, work] {
+            let mut budget = InterfaceConstraintBudget::with_limit(limit);
+            assert_eq!(
+                visit_type_variables(&ty, &mut budget, |_, _| Ok(false)).is_ok(),
+                limit == work
+            );
+        }
+    }
+
+    fn assert_resource_escape_result_labels(result: &str) {
+        let module = cell_resource_fixture(&format!("resource cell<R> c = 41 {{\n{result}\n}}"));
+        let expression = fixture_result(&module);
+        let ResolvedExprKind::Resource(resource) = &expression.kind else {
+            panic!("resource")
+        };
+        let mut escaping = &*resource.body;
+        while let ResolvedExprKind::Block(block) = &escaping.kind {
+            escaping = &block.result;
+        }
+        let mut elaborator = cell_resource_elaborator(&module);
+        let mut context = elaborator.base_context.clone();
+        let error = elaborator
+            .elaborate_expression_with_context(
+                ElaborationTask::Synthesize {
+                    expression,
+                    cause: None,
+                },
+                &mut context,
+            )
+            .unwrap_err();
+        let TypeError::Source(diagnostic) = error else {
+            panic!("resource diagnostic")
+        };
+        assert_eq!(diagnostic.reason, TypeReason::ResourceEscape);
+        assert_eq!(diagnostic.primary.span(), escaping.span, "{result}");
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(diagnostic.related[0].span(), resource.acquisition.span);
+    }
+
+    #[test]
+    fn resource_escape_diagnostic_labels_result_and_acquisition() {
+        assert_resource_escape_result_labels("c");
+    }
+
+    #[test]
+    fn resource_escape_diagnostic_labels_latent_row_result_and_acquisition() {
+        assert_resource_escape_result_labels(
+            "{\nlet read_later : Unit -> Int ! {Cell.Ops<R>} = fn(ignored) {\nCell.read c\n}\nread_later\n}",
+        );
+    }
+
+    #[test]
+    fn resource_escape_rechecks_an_outward_inference_solved_after_scope_exit() {
+        let module = cell_resource_fixture("resource cell<R> c = 41 {\n42\n}");
+        let ResolvedExprKind::Resource(resource) = &fixture_result(&module).kind else {
+            panic!("resource")
+        };
+        let mut elaborator = cell_resource_elaborator(&module);
+        let inferred = elaborator
+            .fresh_inference(&Kind::Type, resource.acquisition.span)
+            .unwrap();
+        elaborator
+            .defer_resource_escape(
+                resource.identity.id,
+                &inferred,
+                resource.handle.origin.primary_span(),
+                resource.acquisition.span,
+            )
+            .unwrap();
+        elaborator
+            .unify(&inferred, &Type::Variable(resource.identity.id))
+            .unwrap();
+        let error = elaborator.check_deferred_resource_escapes().unwrap_err();
+        let TypeError::Source(diagnostic) = error else {
+            panic!("resource diagnostic")
+        };
+        assert_eq!(diagnostic.reason, TypeReason::ResourceEscape);
+        assert_eq!(
+            diagnostic.primary.span(),
+            resource.handle.origin.primary_span()
+        );
+        assert_eq!(diagnostic.related.len(), 1);
+        assert_eq!(diagnostic.related[0].span(), resource.acquisition.span);
     }
 
     #[test]

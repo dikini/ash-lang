@@ -213,6 +213,8 @@ pub enum ValidationReason {
     Resume,
     /// Discard has no authenticated proof of capture safety.
     DiscardUnsafe,
+    /// Stored resource dependencies have not yet been proved safe.
+    ResourceProofUnavailable,
 }
 
 impl fmt::Display for ValidationReason {
@@ -239,6 +241,7 @@ impl fmt::Display for ValidationReason {
             Self::EffectRow => "core.validation.effect-row",
             Self::Handler => "core.validation.handler",
             Self::Resume => "core.validation.resume",
+            Self::ResourceProofUnavailable => "core.validation.resource-proof-unavailable",
             Self::DiscardUnsafe => "core.validation.discard-unsafe",
         })
     }
@@ -540,6 +543,9 @@ struct ScopeRequirement {
 type ScopeRequirements = HashMap<ScopeRequirementKey, ScopeRequirement>;
 
 pub(super) trait ScopeFamily: CoreOperationFamily {
+    fn resource_scope(_kind: &Self::Kind) -> Option<&super::effect::ResourceScopeNode> {
+        None
+    }
     fn resume_capability(
         _kind: &Self::Kind,
     ) -> Option<(super::effect::HandlerId, crate::resolved::ResumeId)> {
@@ -564,6 +570,14 @@ pub(super) trait ScopeFamily: CoreOperationFamily {
 impl ScopeFamily for PureOperationFamily {}
 
 impl ScopeFamily for super::effect::EffectOperationFamily {
+    fn resource_scope(kind: &Self::Kind) -> Option<&super::effect::ResourceScopeNode> {
+        match kind {
+            super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Resource(
+                resource,
+            )) => Some(resource),
+            _ => None,
+        }
+    }
     fn resume_capability(
         kind: &Self::Kind,
     ) -> Option<(super::effect::HandlerId, crate::resolved::ResumeId)> {
@@ -600,6 +614,11 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
         child: usize,
         visit: &mut dyn FnMut(BinderId),
     ) {
+        if child == 1
+            && let Some(resource) = Self::resource_scope(kind)
+        {
+            visit(resource.handle.id());
+        }
         let super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Handler(
             handler,
         )) = kind
@@ -1321,6 +1340,39 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         self.charge_type_work(catalog.lexical_owners().len())?;
         for owner in catalog.lexical_owners() {
             if owner.application.interface().module().is_builtin_cell() {
+                let acquisition = owner
+                    .acquisition
+                    .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, None))?;
+                let api = acquisition
+                    .api()
+                    .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, None))?;
+                let ordinal = usize::try_from(owner.method.declaration())
+                    .map_err(|_| ValidationError::new(ValidationReason::NodeType, None))?;
+                if owner.source != acquisition.provider
+                    || owner.method.interface() != api.provider()
+                    || acquisition.methods.get(ordinal) != Some(&owner.binder)
+                    || !owner.source_parameters.is_empty()
+                    || !owner.captures.is_empty()
+                    || !matches!(owner.application.arguments(), [Type::Variable(identity)] if *identity == acquisition.identity)
+                {
+                    return Err(ValidationError::new(ValidationReason::NodeType, None));
+                }
+                let mut found = false;
+                for node in &self.program.nodes {
+                    self.charge_type_work(1)?;
+                    if let Some(resource) = F::resource_scope(&node.kind)
+                        && resource.acquisition == acquisition
+                    {
+                        if found {
+                            return Err(ValidationError::new(ValidationReason::NodeType, None));
+                        }
+                        found = true;
+                    }
+                }
+                if !found {
+                    return Err(ValidationError::new(ValidationReason::NodeType, None));
+                }
+            } else if owner.acquisition.is_some() {
                 return Err(ValidationError::new(ValidationReason::NodeType, None));
             }
             self.charge_type_work(catalog.methods().len())?;
@@ -5639,6 +5691,26 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut definitions = HashMap::new();
         let mut consumed_rows = 0_usize;
         for (index, node) in self.program.nodes.iter().enumerate() {
+            if let Some(resource) = F::resource_scope(&node.kind) {
+                let id = node_id(self.program.arena, index)?;
+                self.charge_type_work(1)?;
+                let parameter = resource.acquisition.identity;
+                let canonical = self
+                    .program
+                    .registry
+                    .type_variable(parameter)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+                if canonical.kind != Kind::Type
+                    || nominal_parameter_owners.contains_key(&parameter)
+                    || definitions.contains_key(&parameter)
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                }
+                definitions
+                    .try_reserve(1)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+                definitions.insert(parameter, (&canonical.kind, id));
+            }
             let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
                 F::pure(&node.kind)
             else {
@@ -6852,12 +6924,17 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         let child = F::child_at(&node.kind, child_index).ok_or_else(|| {
                             ValidationError::new(ValidationReason::TypeScope, Some(id))
                         })?;
-                        let child_free = self.take_type_scope_requirements(
+                        let mut child_free = self.take_type_scope_requirements(
                             &mut requirements,
                             &mut remaining_uses,
                             child,
                             id,
                         )?;
+                        if child_index == 1
+                            && let Some(resource) = F::resource_scope(&node.kind)
+                        {
+                            child_free.remove(&resource.acquisition.identity);
+                        }
                         self.merge_type_scope_requirements(&mut free, child_free)?;
                     }
                     match F::pure(&node.kind) {
@@ -6959,7 +7036,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     }
                     let mut metadata_error = None;
                     F::visit_operation_type_metadata(&node.kind, &mut |metadata| {
-                        if metadata_error.is_some() {
+                        // The resource handle's exact type is authenticated at
+                        // its node; its sole variable is owned by that node.
+                        if metadata_error.is_some() || F::resource_scope(&node.kind).is_some() {
                             return;
                         }
                         metadata_error = match metadata {
@@ -7801,6 +7880,20 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         self.validate_effect_abstraction_shapes(&authenticated_method_evidence)?;
         self.validate_scopes()?;
         self.validate_type_scopes()?;
+        for node in &self.program.nodes {
+            self.charge_type_work(1)?;
+            if matches!(
+                &node.kind,
+                super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Resource(
+                    _
+                ))
+            ) {
+                return Err(ValidationError::new(
+                    ValidationReason::ResourceProofUnavailable,
+                    None,
+                ));
+            }
+        }
         if !has_discard {
             return Ok(());
         }
@@ -7821,6 +7914,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         capture_result.map_err(|failure| match failure {
             super::capture::Failure::Resource => {
                 ValidationError::new(ValidationReason::Resource, None)
+            }
+            super::capture::Failure::ResourceProofUnavailable(_) => {
+                ValidationError::new(ValidationReason::ResourceProofUnavailable, None)
             }
             super::capture::Failure::Invalid => {
                 ValidationError::new(ValidationReason::Handler, None)
@@ -8037,6 +8133,123 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         Ok(())
     }
 
+    fn resource_outward_row(
+        &self,
+        body: &EffectRow,
+        acquisition: crate::resolved::CellAcquisition,
+        id: NodeId,
+    ) -> Result<EffectRow, ValidationError> {
+        let api = acquisition
+            .api()
+            .ok_or_else(|| ValidationError::new(ValidationReason::EffectIdentity, Some(id)))?;
+        self.charge_type_work(2)?;
+        let instance =
+            EffectInstance::new(api.ops(), Box::new([Type::Variable(acquisition.identity)]));
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let result = body.remove_exact_with_budget(&instance, &mut budget);
+        self.charge_type_work(budget.used())?;
+        match result.map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))? {
+            Ok(row) => Ok(row),
+            Err(crate::types::EffectRowError::Missing) => {
+                self.union_effect_rows_charged(&EffectRow::empty(), body, id)
+            }
+            Err(_) => Err(ValidationError::new(ValidationReason::EffectRow, Some(id))),
+        }
+    }
+
+    fn validate_resource_node(
+        &self,
+        id: NodeId,
+        node: &super::dialect::StoredNode<super::effect::EffectOperationFamily>,
+        resource: &super::effect::ResourceScopeNode,
+    ) -> Result<(), ValidationError> {
+        let authority = resource.acquisition;
+        let api = authority
+            .api()
+            .ok_or_else(|| ValidationError::new(ValidationReason::EffectIdentity, Some(id)))?;
+        let initializer = self.node(resource.initializer)?;
+        let body = self.node(resource.body)?;
+        if authority.handle != resource.handle.id()
+            || authority.handle.module() != Some(authority.provider.module())
+            || authority.identity.module() != Some(authority.provider.module())
+            || Some(authority.span) != node.origin.as_ref().map(Origin::primary_span)
+            || !matches!(resource.handle.ty(), Type::Application(head, argument) if **head == Type::Nominal(api.handle()) && **argument == Type::Variable(authority.identity))
+            || !self.same_type_charged(&initializer.ty, &Type::Int)?
+            || !self.same_type_charged(&body.ty, &node.ty)?
+        {
+            return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+        }
+        let outward = self.resource_outward_row(&body.effects, authority, id)?;
+        let expected = self.union_effect_rows_charged(&initializer.effects, &outward, id)?;
+        if !self.same_effect_row_charged(&node.effects, &expected, id)? {
+            return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+        }
+        if authority.methods[0] == authority.methods[1] {
+            return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+        }
+        for (ordinal, binder) in authority.methods.iter().enumerate() {
+            self.charge_type_work(self.program.method_evidence.lexical_owners().len())?;
+            let mut owner_count = 0;
+            for owner in self.program.method_evidence.lexical_owners() {
+                if owner.acquisition == Some(authority)
+                    && owner.binder == *binder
+                    && owner.method
+                        == crate::interface::MethodId::new(api.provider(), ordinal as u32)
+                {
+                    owner_count += 1;
+                }
+            }
+            if owner_count != 1 {
+                return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+            }
+            let mut definition_count = 0;
+            for stored in &self.program.nodes {
+                self.charge_type_work(1)?;
+                let Some(PureExprKind::Computation(PureComputation::Bind(binding))) =
+                    super::effect::EffectOperationFamily::pure(&stored.kind)
+                else {
+                    continue;
+                };
+                if binding.binder().id() != *binder {
+                    continue;
+                }
+                definition_count += 1;
+                let Some(PureExprKind::Value(PureValue::Function(function))) =
+                    super::effect::EffectOperationFamily::pure(
+                        &self.node(binding.initializer())?.kind,
+                    )
+                else {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                };
+                let super::effect::EffectExprKind::Operation(
+                    super::effect::EffectOperation::Request(request),
+                ) = &self.node(function.body())?.kind
+                else {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                };
+                let Some(PureExprKind::Variable(operand)) =
+                    super::effect::EffectOperationFamily::pure(&self.node(request.operand())?.kind)
+                else {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                };
+                if request.operation() != OperationId::new(api.ops(), ordinal as u32)
+                    || request.effect().effect() != api.ops()
+                    || !matches!(request.effect().arguments(), [Type::Variable(identity)] if *identity == authority.identity)
+                    || operand.binder() != function.parameter().id()
+                    || binding.binder().origin().primary_span() != authority.span
+                {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+            }
+            if definition_count != 1 {
+                return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+            }
+        }
+        Ok(())
+    }
+
     fn validate_effect_nodes(
         &mut self,
         type_binders: &CoreTypeBinders<'_>,
@@ -8062,6 +8275,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     self.validate_pure_effect_row(id, node)?;
                 }
                 EffectExprKind::Pure(_) => self.validate_pure_effect_row(id, node)?,
+                EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
+                    self.validate_resource_node(id, node, resource)?;
+                }
                 EffectExprKind::Operation(EffectOperation::Request(request)) => {
                     self.validate_effect_instance(&request.effect, type_binders, id)?;
                     let (domain, result) = self.effect_signature(
@@ -8366,6 +8582,18 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                                 row
                             }
                         },
+                        EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
+                            let outward = self.resource_outward_row(
+                                child_row(resource.body)?,
+                                resource.acquisition,
+                                id,
+                            )?;
+                            self.union_effect_rows_charged(
+                                child_row(resource.initializer)?,
+                                &outward,
+                                id,
+                            )?
+                        }
                         EffectExprKind::Operation(EffectOperation::Request(request)) => {
                             let requested =
                                 self.singleton_effect_row_charged(request.effect(), id)?;
@@ -8580,6 +8808,372 @@ fn node_id(arena: super::dialect::ArenaId, index: usize) -> Result<NodeId, Valid
 
 #[cfg(test)]
 mod tests {
+    fn cell_core_fixture() -> (
+        super::super::effect::UnvalidatedEffectProgram,
+        Vec<crate::source::SourceFile>,
+    ) {
+        use super::super::dialect::{
+            MethodEvidenceAnchor, MethodEvidenceAnchorRole, MethodEvidenceCatalog,
+            MethodEvidenceExpectation, MethodEvidenceExpectedRole, MethodEvidenceLexicalOwner,
+            MethodEvidenceMethod,
+        };
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (mut core, module, sources, registry) =
+            crate::elaborate::cell_resource_core_fixture_for_test();
+        core.registry = registry;
+        let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+            &core.nodes[core.root.index().unwrap()].kind
+        else {
+            panic!("resource root")
+        };
+        let authority = resource.acquisition;
+        let interface = module
+            .imported_facts()
+            .interface(authority.api().unwrap().provider())
+            .unwrap();
+        let methods = interface
+            .methods
+            .iter()
+            .map(|method| MethodEvidenceMethod {
+                id: method.id,
+                interface_parameters: interface
+                    .parameters
+                    .iter()
+                    .map(|parameter| parameter.id)
+                    .collect(),
+                parameters: method
+                    .type_parameters
+                    .iter()
+                    .map(|parameter| (parameter.id, parameter.kind.clone()))
+                    .collect(),
+                value_type: method.value_type.clone(),
+            })
+            .collect();
+        let owners: Vec<_> = authority
+            .methods
+            .iter()
+            .enumerate()
+            .map(|(ordinal, binder)| MethodEvidenceLexicalOwner {
+                acquisition: Some(authority),
+                source_parameters: Box::new([]),
+                source: authority.provider,
+                method: crate::interface::MethodId::new(interface.id, ordinal as u32),
+                binder: *binder,
+                application: crate::interface::InterfaceApplication::new(
+                    interface.id,
+                    Box::new([crate::types::Type::Variable(authority.identity)]),
+                ),
+                captures: Box::new([]),
+            })
+            .collect();
+        let expectations = owners
+            .iter()
+            .enumerate()
+            .map(|(owner, row)| MethodEvidenceExpectation {
+                occurrence: None,
+                method: row.method,
+                role: MethodEvidenceExpectedRole::LexicalOwner { owner },
+            })
+            .collect();
+        let anchors = owners.iter().enumerate().map(|(expectation, row)| {
+            let index = core.nodes.iter().position(|node| matches!(super::super::effect::EffectOperationFamily::pure(&node.kind), Some(super::PureExprKind::Computation(super::PureComputation::Bind(binding))) if binding.binder().id() == row.binder)).unwrap();
+            MethodEvidenceAnchor { node: super::node_id(core.arena, index).unwrap(), owner: None, requirement: None, method: row.method,
+                application: row.application.clone_with_budget(&mut crate::types::TypeWorkBudget::default()).unwrap(), role: MethodEvidenceAnchorRole::LexicalOwner { source: row.source, binder: row.binder }, occurrence: None, expectation }
+        }).collect();
+        let mut catalog = MethodEvidenceCatalog::new(
+            methods,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            expectations,
+        );
+        catalog.set_lexical_owners(owners);
+        core.method_evidence = std::sync::Arc::new(catalog);
+        core.method_evidence_anchors = anchors;
+        (core, sources)
+    }
+
+    #[test]
+    fn cell_core_structure_reaches_only_the_explicit_proof_gate() {
+        let (core, sources) = cell_core_fixture();
+        let refs = sources.iter().collect::<Vec<_>>();
+        let relation = core
+            .registry
+            .type_variables()
+            .map(|parameter| {
+                (
+                    parameter.id.module().unwrap(),
+                    parameter.origin.primary_span().source(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let mut validator = super::Validator::new_modules(&core, &refs, &relation)
+            .expect("resource module origins");
+        let error = validator
+            .run_effect()
+            .expect_err("resource execution remains unavailable");
+        assert_eq!(
+            error.reason(),
+            super::ValidationReason::ResourceProofUnavailable,
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn cell_core_requires_both_provider_owners_even_for_constant_body() {
+        let (mut core, sources) = cell_core_fixture();
+        core.method_evidence = Arc::new(super::super::dialect::MethodEvidenceCatalog::new(
+            core.method_evidence.methods().to_vec(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ));
+        core.method_evidence_anchors = Box::new([]);
+        assert_eq!(
+            cell_core_reason(&core, &sources, 0).0,
+            ValidationReason::NodeType
+        );
+    }
+
+    fn cell_core_reason(
+        core: &super::super::effect::UnvalidatedEffectProgram,
+        sources: &[SourceFile],
+        used: usize,
+    ) -> (ValidationReason, usize) {
+        let refs = sources.iter().collect::<Vec<_>>();
+        let relation = core
+            .registry
+            .type_variables()
+            .map(|parameter| {
+                (
+                    parameter.id.module().unwrap(),
+                    parameter.origin.primary_span().source(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let mut validator =
+            super::Validator::new_modules(core, &refs, &relation).expect("module origins");
+        validator.type_work.set(used);
+        let error = validator
+            .run_effect()
+            .expect_err("resource execution unavailable");
+        (error.reason(), validator.type_work.get())
+    }
+
+    #[test]
+    fn cell_core_rejects_a_well_typed_replacement_provider_computation() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (mut core, sources) = cell_core_fixture();
+        let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+            &core.nodes[core.root.index().unwrap()].kind
+        else {
+            panic!("resource")
+        };
+        let integer = resource.initializer;
+        let function_index = core
+            .nodes
+            .iter()
+            .position(|node| {
+                matches!(
+                    &node.kind,
+                    EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(_)))
+                )
+            })
+            .unwrap();
+        let EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(function))) =
+            &core.nodes[function_index].kind
+        else {
+            unreachable!()
+        };
+        let request = function.body();
+        let parameter = function.parameter().clone();
+        let added = node_id(core.arena, core.nodes.len()).unwrap();
+        core.nodes.push(StoredNode {
+            dialect: core.nodes[request.index().unwrap()].dialect,
+            ty: Type::Int,
+            effects: core.nodes[request.index().unwrap()].effects.clone(),
+            origin: core.nodes[request.index().unwrap()].origin.clone(),
+            kind: EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Primitive(
+                crate::core::primitive::PrimitiveNode::new(
+                    crate::core::Primitive::Add,
+                    request,
+                    integer,
+                ),
+            ))),
+        });
+        core.nodes[function_index].kind = EffectExprKind::Pure(PureExprKind::Value(
+            PureValue::Function(FunctionNode::new(parameter, added)),
+        ));
+        assert_eq!(
+            cell_core_reason(&core, &sources, 0).0,
+            ValidationReason::NodeType
+        );
+    }
+
+    #[test]
+    fn cell_core_rejects_detached_brand_provider_and_source_authority() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for corruption in 0..5 {
+            let (mut core, sources) = cell_core_fixture();
+            let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+                &mut core.nodes[core.root.index().unwrap()].kind
+            else {
+                panic!("resource")
+            };
+            match corruption {
+                0 => resource.acquisition.identity = crate::types::TypeVariableId::generated(999),
+                1 => {
+                    resource.acquisition.provider = crate::interface::LexicalEvidenceId::new(
+                        resource.acquisition.provider.module(),
+                        u32::MAX,
+                    )
+                }
+                2 => resource.acquisition.builtin = resource.acquisition.handle.module().unwrap(),
+                3 => {
+                    resource.acquisition.span =
+                        sources[0].span(ByteRange::new(0, 1).unwrap()).unwrap()
+                }
+                4 => resource.acquisition.handle = resource.acquisition.methods[0],
+                _ => unreachable!(),
+            }
+            let reason = cell_core_reason(&core, &sources, 0).0;
+            assert_ne!(
+                reason,
+                ValidationReason::ResourceProofUnavailable,
+                "corruption {corruption}"
+            );
+            assert_ne!(
+                reason,
+                ValidationReason::Resource,
+                "corruption {corruption}"
+            );
+        }
+    }
+
+    #[test]
+    fn cell_core_rejects_a_request_with_the_wrong_operation_fact() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (mut core, sources) = cell_core_fixture();
+        let request = core
+            .nodes
+            .iter_mut()
+            .find_map(|node| match &mut node.kind {
+                EffectExprKind::Operation(EffectOperation::Request(request)) => Some(request),
+                _ => None,
+            })
+            .unwrap();
+        request.operation = crate::types::OperationId::new(request.effect.effect(), u32::MAX);
+        assert_ne!(
+            cell_core_reason(&core, &sources, 0).0,
+            ValidationReason::ResourceProofUnavailable
+        );
+    }
+
+    #[test]
+    fn cell_core_validation_work_is_exact_and_retryable() {
+        let (core, sources) = cell_core_fixture();
+        let (reason, work) = cell_core_reason(&core, &sources, 0);
+        assert_eq!(reason, ValidationReason::ResourceProofUnavailable);
+        assert_eq!(
+            cell_core_reason(&core, &sources, CORE_VALIDATION_TYPE_WORK_LIMIT - work + 1).0,
+            ValidationReason::Resource
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                cell_core_reason(&core, &sources, CORE_VALIDATION_TYPE_WORK_LIMIT - work).0,
+                ValidationReason::ResourceProofUnavailable
+            );
+        }
+    }
+
+    // This test-only wrapper is structurally checked but lifetime-unproved.
+    // It exists solely to exercise validated-only transform entry points and
+    // must never be evaluated or escape this private fixture.
+    fn lifetime_unproved_cell_transform_fixture() -> (
+        super::super::effect::ValidatedEffectProgram,
+        Vec<SourceFile>,
+    ) {
+        let (core, sources) = cell_core_fixture();
+        assert_eq!(
+            cell_core_reason(&core, &sources, 0).0,
+            ValidationReason::ResourceProofUnavailable
+        );
+        let (registry, catalog, anchors, arena, stored, root) = core.into_parts();
+        let nodes = stored
+            .into_iter()
+            .map(|node| CoreTypedExpr {
+                ty: node.ty,
+                effects: node.effects,
+                origin: node.origin.expect("structurally checked origin"),
+                kind: node.kind,
+            })
+            .collect();
+        (
+            ValidatedCoreProgram::new(CoreProgram::new(
+                registry, catalog, anchors, arena, nodes, root,
+            )),
+            sources,
+        )
+    }
+
+    #[test]
+    fn cell_complete_transforms_revalidate_the_full_relation_without_execution() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        type Transform = fn(
+            &super::super::effect::ValidatedEffectProgram,
+        ) -> Result<
+            super::super::effect::UnvalidatedEffectProgram,
+            crate::core::transform::TransformError,
+        >;
+        let (program, sources) = lifetime_unproved_cell_transform_fixture();
+        let EffectExprKind::Operation(EffectOperation::Resource(original)) =
+            &program.node(program.root()).unwrap().kind
+        else {
+            panic!("resource")
+        };
+        for (fold, transform) in [
+            (
+                false,
+                crate::core::transform::identity_effect_traversal as Transform,
+            ),
+            (
+                true,
+                crate::core::transform::fold_effect_literal_primitives as Transform,
+            ),
+        ] {
+            let mut rebuilt: super::super::effect::UnvalidatedEffectProgram =
+                transform(&program).expect("complete resource transform");
+            assert_eq!(
+                cell_core_reason(&rebuilt, &sources, 0).0,
+                ValidationReason::ResourceProofUnavailable
+            );
+            if fold {
+                assert!(rebuilt.nodes.len() < program.node_count());
+            }
+            let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+                &mut rebuilt.nodes[rebuilt.root.index().unwrap()].kind
+            else {
+                panic!("resource")
+            };
+            assert_eq!(resource.acquisition, original.acquisition);
+            assert_eq!(resource.handle.ty(), original.handle.ty());
+            resource.acquisition.methods.swap(0, 1);
+            assert_ne!(
+                cell_core_reason(&rebuilt, &sources, 0).0,
+                ValidationReason::ResourceProofUnavailable
+            );
+        }
+    }
+
     use super::*;
     use crate::{
         core::{

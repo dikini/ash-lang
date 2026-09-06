@@ -52,7 +52,7 @@ use crate::{
         same_imported_global_fact_observing_nominals_with_budget,
         same_imported_nominal_closure_with_constraint_budget,
     },
-    source::{Origin, discard_origin_iteratively},
+    source::{Origin, Span, discard_origin_iteratively},
     surface::{
         BinaryExpr, SurfaceBinding, SurfaceBlock, SurfaceConstructorDeclaration,
         SurfaceDeclarationIndex, SurfaceDefinition, SurfaceDefinitionKind,
@@ -727,8 +727,6 @@ impl Drop for ResolvedMatchArmBuffer {
 pub enum ResolveReason {
     /// Source evidence cannot introduce the compiler-owned cell provider.
     SealedProvider,
-    /// Resource acquisition awaits independent identity and lifetime checking.
-    ResourceUnavailable,
     /// Resource acquisition requires a direct compiler-owned cell dependency.
     ResourceBuiltinRequired,
     /// An occurrence has no binding in lexical scope.
@@ -793,7 +791,6 @@ impl fmt::Display for ResolveReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::SealedProvider => "resolve.sealed-provider",
-            Self::ResourceUnavailable => "resolve.resource-unavailable",
             Self::ResourceBuiltinRequired => "resolve.resource-builtin-required",
             Self::UnknownName => "resolve.unknown-name",
             Self::EquationNameMismatch => "resolve.equation-name-mismatch",
@@ -1042,7 +1039,9 @@ fn resolve_module_names_with_budget(
                 )
             })?;
         direct_dependencies.extend(dependencies.iter().map(|dependency| {
-            resolver.builtin_cell_available |= dependency.edge.target().is_builtin_cell();
+            if dependency.edge.target().is_builtin_cell() {
+                resolver.builtin_cell = Some(dependency.edge.target());
+            }
             DirectDependencyRoute::new(dependency.edge.target(), dependency.edge.import_span())
         }));
         resolver.install_imports(surface, dependencies)?;
@@ -1484,7 +1483,7 @@ fn surface_definition_name(definition: &SurfaceDefinition) -> &crate::surface::S
 
 struct Resolver {
     module: ModuleId,
-    builtin_cell_available: bool,
+    builtin_cell: Option<ModuleId>,
     next_binder: u32,
     next_type_variable: u32,
     next_lexical_nominal: u32,
@@ -1810,7 +1809,7 @@ impl Resolver {
         Self {
             module,
             next_binder: 0,
-            builtin_cell_available: false,
+            builtin_cell: None,
             next_type_variable: 0,
             next_lexical_nominal: 0,
             next_lexical_evidence: 0,
@@ -8018,17 +8017,187 @@ impl Resolver {
         ))
     }
 
+    fn finish_resource_expression(
+        &mut self,
+        identity: ResolvedTypeVariable,
+        handle: Binder,
+        initializer: ResolvedExpressionOwner,
+        body: ResolvedExpressionOwner,
+        span: Span,
+    ) -> Result<ResolvedExpr, ResolveError> {
+        use crate::resolved::{
+            CellAcquisition, CellApi, ResolvedEffectInstance, ResolvedPerformExpr,
+            ResolvedResourceExpr,
+        };
+        let builtin = self.builtin_cell.ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                span,
+                "resource builtin origin is missing",
+            )
+        })?;
+        let api = CellApi::for_module(builtin).ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                span,
+                "resource builtin origin is invalid",
+            )
+        })?;
+        // The fixed two-method source retains two equations, patterns, operands,
+        // effect arguments and one complete provider application.
+        self.type_work.charge(24).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource provider construction exceeded its budget",
+            )
+        })?;
+        self.constraint_work.charge(3).map_err(|()| {
+            error(
+                ResolveReason::ConstraintResourceExhausted,
+                span,
+                "resource provider construction exceeded its budget",
+            )
+        })?;
+        let provider =
+            crate::interface::LexicalEvidenceId::new(self.module, self.next_lexical_evidence);
+        self.next_lexical_evidence =
+            self.next_lexical_evidence.checked_add(1).ok_or_else(|| {
+                error(
+                    ResolveReason::BinderIdExhausted,
+                    span,
+                    "resource provider identities exhausted",
+                )
+            })?;
+        let mut groups = ResolvedImplementationMethodGroupBuffer(Vec::new());
+        groups.0.try_reserve(2).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource methods could not be reserved",
+            )
+        })?;
+        let mut method_binders = [handle.id; 2];
+        for (ordinal, spelling) in ["read", "write"].into_iter().enumerate() {
+            let binder = self.allocate_binder(spelling, span)?;
+            method_binders[ordinal] = binder.id;
+            let parameter = self.allocate_binder("value", span)?;
+            let operand = ResolvedExpr {
+                kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
+                    term: ResolvedTermName::Global(parameter.id),
+                    spelling: parameter.spelling.clone(),
+                    origin: Origin::Source(span),
+                    import_span: None,
+                    evidence: Box::new([]),
+                }),
+                span,
+            };
+            let request = ResolvedExpr {
+                kind: ResolvedExprKind::Perform(ResolvedPerformExpr {
+                    effect: ResolvedEffectInstance {
+                        instance: crate::types::EffectInstance::new(
+                            api.ops(),
+                            Box::new([Type::Variable(identity.id)]),
+                        ),
+                        origin: Origin::Source(span),
+                        span,
+                    },
+                    operation: crate::types::OperationId::new(api.ops(), ordinal as u32),
+                    spelling: spelling.to_owned(),
+                    operand: Box::new(operand),
+                    origin: Origin::Source(span),
+                }),
+                span,
+            };
+            groups.0.push(ResolvedImplementationMethodGroup {
+                contextual_parameters: Box::new([]),
+                method: Some(crate::interface::MethodId::new(
+                    api.provider(),
+                    ordinal as u32,
+                )),
+                identity: None,
+                equations: Box::new([ResolvedEquation {
+                    name: crate::resolved::ResolvedEquationHead {
+                        binder: binder.id,
+                        spelling: spelling.to_owned(),
+                        origin: Origin::Source(span),
+                    },
+                    patterns: vec![ResolvedPattern {
+                        kind: ResolvedPatternKind::Binder(parameter),
+                        span,
+                    }],
+                    body: request,
+                    span,
+                }]),
+                binder,
+                span,
+            });
+        }
+        let acquisition = CellAcquisition {
+            builtin,
+            identity: identity.id,
+            handle: handle.id,
+            provider,
+            methods: method_binders,
+            span,
+        };
+        let generated = crate::resolved::ResolvedLexicalEvidence {
+            acquisition: Some(acquisition),
+            checked: crate::interface::LexicalEvidenceSlot::default(),
+            id: provider,
+            application: crate::resolved::ResolvedInterfaceApplication {
+                interface: crate::resolved::ResolvedInterfaceOccurrence {
+                    id: api.provider(),
+                    spelling: "Provider".to_owned(),
+                    origin: Origin::Source(span),
+                },
+                arguments: Box::new([ResolvedType {
+                    ty: Type::Variable(identity.id),
+                    provenance: crate::resolved::ResolvedTypeProvenance::new(
+                        vec![crate::resolved::ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                }]),
+                span,
+            },
+            method_groups: groups.into_boxed_slice(),
+            span,
+        };
+        let body = ResolvedExpr {
+            kind: ResolvedExprKind::Block(ResolvedBlock {
+                declarations: vec![ResolvedLocalDeclaration::Evidence(Box::new(generated))],
+                result: Box::new(body.into_inner()),
+                span,
+            }),
+            span,
+        };
+        Ok(ResolvedExpr {
+            kind: ResolvedExprKind::Resource(Box::new(ResolvedResourceExpr {
+                acquisition,
+                identity,
+                handle,
+                initializer: Box::new(initializer.into_inner()),
+                body: Box::new(body),
+            })),
+            span,
+        })
+    }
+
     fn resolve_expr(&mut self, expression: &SurfaceExpr) -> Result<ResolvedExpr, ResolveError> {
         self.resolve_work(ResolveTask::VisitExpr(expression))
     }
 
     fn resolve_work<'a>(&mut self, initial: ResolveTask<'a>) -> Result<ResolvedExpr, ResolveError> {
         let scope_checkpoint = self.scopes.len();
+        let type_scope_checkpoint = self.type_scopes.len();
         let nominal_scope_checkpoint = self.lexical_nominal_scopes.len();
         let constructor_scope_checkpoint = self.lexical_constructor_scopes.len();
         let result = self.resolve_work_inner(initial);
         if result.is_err() {
             self.scopes.truncate(scope_checkpoint);
+            self.type_scopes.truncate(type_scope_checkpoint);
             self.lexical_nominal_scopes
                 .truncate(nominal_scope_checkpoint);
             self.lexical_constructor_scopes
@@ -8084,6 +8253,128 @@ impl Resolver {
                             }
                         }
                     }
+                }
+                ResolveTask::ResourceInitializer { source, span } => {
+                    let initializer = expressions.pop_owned().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            span,
+                            "resource initializer is missing",
+                        )
+                    })?;
+                    let identity =
+                        self.allocate_type_variable(&source.identity, None, Kind::Type)?;
+                    let handle = self.allocate_binder(&source.handle.text, source.handle.span)?;
+                    self.type_work.charge(4).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "resource scope retention exceeded its budget",
+                        )
+                    })?;
+                    self.lexical_method_parameters
+                        .0
+                        .try_reserve(1)
+                        .map_err(|_| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                span,
+                                "resource identity retention could not be reserved",
+                            )
+                        })?;
+                    let retained = self.clone_type_variable_for_retention(
+                        &identity,
+                        span,
+                        "resource identity retention exceeded its budget",
+                    )?;
+                    self.lexical_method_parameters.push(retained);
+                    let scope_checkpoint = self.scopes.len();
+                    let type_scope_checkpoint = self.type_scopes.len();
+                    let mut terms = HashMap::new();
+                    terms.try_reserve(1).map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "resource handle scope could not be reserved",
+                        )
+                    })?;
+                    terms.insert(
+                        handle.spelling.clone(),
+                        ResolvedTermBinding::local(ResolvedTermName::Global(handle.id)),
+                    );
+                    let mut types = HashMap::new();
+                    types.try_reserve(1).map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "resource type scope could not be reserved",
+                        )
+                    })?;
+                    types.insert(identity.spelling.clone(), identity.id);
+                    self.scopes.try_reserve(1).map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "resource scope could not be reserved",
+                        )
+                    })?;
+                    self.type_scopes.try_reserve(1).map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "resource type scope could not be reserved",
+                        )
+                    })?;
+                    self.scopes.push(terms);
+                    self.type_scopes.push(types);
+                    tasks.0.try_reserve(2).map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "resource body scheduling could not be reserved",
+                        )
+                    })?;
+                    self.type_work.charge(1).map_err(|()| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            span,
+                            "resource initializer ownership exceeded its type-work budget",
+                        )
+                    })?;
+                    tasks.push(ResolveTask::FinishResource {
+                        identity,
+                        handle,
+                        initializer: Box::new(initializer),
+                        scope_checkpoint,
+                        type_scope_checkpoint,
+                        span,
+                    });
+                    tasks.push(ResolveTask::VisitBlock(&source.body));
+                }
+                ResolveTask::FinishResource {
+                    identity,
+                    handle,
+                    initializer,
+                    scope_checkpoint,
+                    type_scope_checkpoint,
+                    span,
+                } => {
+                    let body = expressions.pop_owned().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            span,
+                            "resource body is missing",
+                        )
+                    })?;
+                    self.scopes.truncate(scope_checkpoint);
+                    self.type_scopes.truncate(type_scope_checkpoint);
+                    expressions.push(self.finish_resource_expression(
+                        identity,
+                        handle,
+                        *initializer,
+                        body,
+                        span,
+                    )?);
                 }
                 ResolveTask::VisitRecursiveGroup(group) => {
                     let mut first_members = HashMap::with_capacity(group.members.len());
@@ -8280,6 +8571,7 @@ impl Resolver {
                         }
                         if state.next == state.source.equations.len() {
                             let evidence = crate::resolved::ResolvedLexicalEvidence {
+                                acquisition: None,
                                 checked: crate::interface::LexicalEvidenceSlot::default(),
                                 id: state.id,
                                 application: state.application.take().ok_or_else(|| {
@@ -8525,19 +8817,33 @@ impl Resolver {
         expressions: &mut ResolvedExpressionBuffer,
     ) -> Result<(), ResolveError> {
         match &expression.kind {
-            SurfaceExprKind::Resource(_) if !self.builtin_cell_available => {
+            SurfaceExprKind::Resource(_) if self.builtin_cell.is_none() => {
                 return Err(error(
                     ResolveReason::ResourceBuiltinRequired,
                     expression.span,
                     "resource acquisition requires a direct import of @builtin.cell",
                 ));
             }
-            SurfaceExprKind::Resource(_) => {
-                return Err(error(
-                    ResolveReason::ResourceUnavailable,
-                    expression.span,
-                    "resource acquisition requires identity and lifetime checking before resolution can publish it",
-                ));
+            SurfaceExprKind::Resource(source) => {
+                self.type_work.charge(2).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "resource resolution work exceeded its budget",
+                    )
+                })?;
+                tasks.0.try_reserve(2).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "resource resolution work could not be reserved",
+                    )
+                })?;
+                tasks.push(ResolveTask::ResourceInitializer {
+                    source,
+                    span: expression.span,
+                });
+                tasks.push(ResolveTask::VisitExpr(&source.initializer));
             }
             SurfaceExprKind::Integer(value) => expressions.push(ResolvedExpr {
                 kind: ResolvedExprKind::Integer(value.clone()),
@@ -8959,6 +9265,18 @@ impl Drop for PendingLexicalResolution<'_> {
 
 enum ResolveTask<'a> {
     VisitExpr(&'a SurfaceExpr),
+    ResourceInitializer {
+        source: &'a crate::surface::SurfaceResourceExpr,
+        span: Span,
+    },
+    FinishResource {
+        identity: ResolvedTypeVariable,
+        handle: Binder,
+        initializer: Box<ResolvedExpressionOwner>,
+        scope_checkpoint: usize,
+        type_scope_checkpoint: usize,
+        span: Span,
+    },
     VisitBlock(&'a SurfaceBlock),
     VisitRecursiveGroup(&'a SurfaceRecursiveGroup),
     FinishApplication {
@@ -9037,6 +9355,8 @@ impl ResolveTask<'_> {
             Self::VisitBlock(block) => block.span,
             Self::VisitRecursiveGroup(group) => group.span,
             Self::FinishApplication { span }
+            | Self::ResourceInitializer { span, .. }
+            | Self::FinishResource { span, .. }
             | Self::FinishBinary { span, .. }
             | Self::FinishBlock { span, .. }
             | Self::FinishFunction { span, .. }

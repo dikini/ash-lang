@@ -256,6 +256,10 @@ fn method_occurrences(definition: &CheckedDefinition, method: MethodId) -> Vec<&
                 expressions.extend(handler.clauses.iter().map(|clause| &clause.body));
             }
             ResolvedExprKind::Resume(resume) => expressions.push(&resume.value),
+            ResolvedExprKind::Resource(resource) => {
+                expressions.push(&resource.initializer);
+                expressions.push(&resource.body);
+            }
         }
     }
     slots.reverse();

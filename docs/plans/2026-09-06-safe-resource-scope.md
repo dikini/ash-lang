@@ -26,7 +26,7 @@ typed Core and loop-driven evaluator.
 - [x] Fresh full baseline gate, before product edits.
 - [x] Step 1: instantiated Effect execution across abstraction boundaries.
 - [x] Step 2: sealed builtin cell API and acquisition syntax carriers.
-- [ ] Step 3: acquisition typing, exact provider authority and Core structure.
+- [x] Step 3: acquisition typing, exact provider authority and Core structure.
 - [ ] Step 4: stored resource dependencies and carried scope obligations.
 - [ ] Step 5: cell allocation, exact dispatch, retention and release.
 - [ ] Step 6: complete adversarial/resource/abstraction corpus and reviews.
@@ -154,6 +154,18 @@ preserving the earlier parameter-identity checks and malformed-summary rejection
 evidence selection/audit/validation owners, `src/core/{effect,dialect,mod,
 validate,transform}.rs`; `tests/resource_scope_typing.rs`,
 `tests/resource_scope_core.rs`, and module/evidence tests.
+The 256 KiB nested-acquisition witness requires loop-driven resource checking.
+After removing that new recursive driver call, its trace reaches the existing
+`perform` operand check, which also re-enters the large driver. Include the narrow
+`perform` operand/check/finish scheduling correction, preserving operation
+signature checking, ordinary operand diagnostics and exact row/result construction.
+Retain an ordinary `perform` control and leave handler behavior and limits alone.
+The helper/facade positive also exposes a nominal-closure comparison that treats
+route-local access as defining metadata: a direct opaque type and an identical
+hidden fact reached through a helper disagree. Exclude access from that closure
+comparison while retaining canonical identity, shape and provenance checks.
+Keep name exposure and access merging unchanged; cover both import orders,
+an ordinary opaque-type control and hidden-name/constructor rejection.
 
 1. Add typed acquisition with Int initializer, rigid Type identity, opaque handle
    binder, exact generated Provider evidence and identity-local effect removal.
@@ -200,6 +212,11 @@ tests and existing capture/discard fixtures.
    facts independently from actual control; transformed/forged summaries cannot
    authorize escape. Unknown relevant flows fail closed without rejecting all
    known abstractions or ordinary resource-free predecessors.
+   Replace Step 3's publication guard only after this proof exists. Exercise
+   full resource-bearing checked-module publication, linking and acquisition
+   binder ownership; Step 3's private linked-header fixture is not evidence for
+   that complete path. Retain the final executable guard until runtime support
+   is present.
 7. Require finite-work, exact/one-short/retry, wide aliases/import scans and deep
    success/failure teardown. Run all capture/effect/resource tests, architecture,
    library tests, Clippy/fmt/diff and both independent reviews.
@@ -316,5 +333,36 @@ without actionable findings; eight targeted equality/builtin checks passed. The
 final ownership scanner passed after the test-helper correction, completing
 passing evidence for all 32 architecture checks without scanner changes. Parent
 all-target Clippy, formatting, Markdown lint and diff checks passed.
-Step 2 is ready to retain. Acquisition typing, lifetime checking and runtime
-execution remain unimplemented.
+Step 2 is retained in unsigned commit `0ae5203`; its worktree was clean after
+the commit and the main/integration refs are unchanged. Step 3 is active with
+one high-reasoning writer, beginning with acquisition typing and independent
+Core authority. Executable resource admission stays closed pending the later
+stored-dependency and runtime steps.
+
+Step 3's six initial source regression groups reproduce the resolution guard.
+The implementation boundary scopes the rigid identity and handle over the body
+only, reuses lexical selection with a distinct acquisition origin, and preserves
+ordinary source `with` eligibility. Internal typed-structure positives do not
+authorize checked-module publication: that stays explicitly unavailable until
+Step 4 supplies stored-dependency analysis. No retained proof-status carrier
+or public unchecked-success API is needed.
+
+Step 3's first frozen writer gate passed 1,034
+library tests and 344 tests in 21 integration binaries; the parent's independent
+gate passed 1,137 tests in 11 binaries. Both 256 KiB controls and parent all-target
+Clippy passed. Architecture has the earlier full 32-check pass and a current
+31-check refresh excluding the unchanged mutation test. Private linked-header
+and full-transform fixtures cover the intermediate structural boundary without
+publishing or executing a resource program. Both independent reviews must close
+before the parent retains this increment.
+
+Semantic review closed after correcting escape locations and related acquisition
+labels, including the distinction between returned values and immediate outward
+effect rows. The corrected parent gate passed 1,212 tests in 13 binaries and
+all-target Clippy. Rust/resource review found two new error paths retaining raw
+deep-type clones. Existing iterative guards now cover them; exact failure/retry
+tests observed the missing disposal visits before correction and pass unchanged
+afterward. Resource re-review closed both findings. The final parent gate passed
+1,214 tests in 13 binaries, workspace all-target Clippy, and the fresh Pure
+256 KiB regression. Step 3 is complete within its explicit structural boundary;
+stored-dependency proof and runtime support remain Steps 4 and 5.

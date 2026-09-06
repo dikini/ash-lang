@@ -2091,6 +2091,7 @@ impl Eq for LexicalEvidenceSlot {}
 
 #[derive(Debug)]
 pub(crate) struct CheckedLexicalEvidence {
+    pub(crate) acquisition: Option<crate::resolved::CellAcquisition>,
     pub(crate) id: LexicalEvidenceId,
     pub(crate) application: InterfaceApplication,
     pub(crate) methods: Box<[CheckedLexicalMethod]>,

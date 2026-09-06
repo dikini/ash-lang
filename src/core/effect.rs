@@ -234,8 +234,35 @@ impl HandlerNode {
     }
 }
 
+/// An acquisition owns its rigid identity and body-local handle. Its integer
+/// initializer is a preceding-scope child, not an ordinary constructor payload.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResourceScopeNode {
+    pub(crate) acquisition: crate::resolved::CellAcquisition,
+    pub(super) handle: super::TypedBinder,
+    pub(super) initializer: NodeId,
+    pub(super) body: NodeId,
+}
+
+impl ResourceScopeNode {
+    pub(crate) fn new(
+        acquisition: crate::resolved::CellAcquisition,
+        handle: super::TypedBinder,
+        initializer: NodeId,
+        body: NodeId,
+    ) -> Self {
+        Self {
+            acquisition,
+            handle,
+            initializer,
+            body,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EffectOperation {
+    Resource(Box<ResourceScopeNode>),
     Request(RequestNode),
     Handler(HandlerNode),
     Resume(ResumeNode),
@@ -293,6 +320,9 @@ impl CoreOperationFamily for EffectOperationFamily {
         kind: &'a Self::Kind,
         visit: &mut dyn FnMut(&'a super::TypedBinder),
     ) {
+        if let EffectExprKind::Operation(EffectOperation::Resource(resource)) = kind {
+            visit(&resource.handle);
+        }
         let EffectExprKind::Operation(EffectOperation::Handler(handler)) = kind else {
             return;
         };
@@ -311,6 +341,12 @@ impl CoreOperationFamily for EffectOperationFamily {
             return;
         };
         let instance = match operation {
+            EffectOperation::Resource(resource) => {
+                visit(super::dialect::OperationTypeMetadata::Type(
+                    resource.handle.ty(),
+                ));
+                None
+            }
             EffectOperation::Request(request) => Some(&request.effect),
             EffectOperation::Handler(handler) => {
                 for clause in &handler.clauses {
@@ -339,6 +375,11 @@ impl CoreOperationFamily for EffectOperationFamily {
         charge: &mut dyn FnMut(usize) -> Result<(), super::BuildError>,
     ) -> Result<(), super::BuildError> {
         let instance = match kind {
+            EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
+                charge(1)?;
+                resource.handle.rewrite_type(&mut |ty| rewrite(ty))?;
+                return Ok(());
+            }
             EffectExprKind::Operation(EffectOperation::Request(request)) => &mut request.effect,
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
                 charge(handler.clauses.len())?;
@@ -388,6 +429,7 @@ impl CoreOperationFamily for EffectOperationFamily {
     fn child_count(kind: &Self::Kind) -> usize {
         match kind {
             EffectExprKind::Pure(kind) => kind.child_count(),
+            EffectExprKind::Operation(EffectOperation::Resource(_)) => 2,
             EffectExprKind::Operation(EffectOperation::Discard(_)) => 0,
             EffectExprKind::Operation(EffectOperation::Request(_) | EffectOperation::Resume(_)) => {
                 1
@@ -399,6 +441,7 @@ impl CoreOperationFamily for EffectOperationFamily {
         match kind {
             EffectExprKind::Operation(EffectOperation::Handler(node)) => node.clauses.len(),
             EffectExprKind::Pure(_)
+            | EffectExprKind::Operation(EffectOperation::Resource(_))
             | EffectExprKind::Operation(EffectOperation::Discard(_))
             | EffectExprKind::Operation(EffectOperation::Request(_) | EffectOperation::Resume(_)) => {
                 0
@@ -408,6 +451,11 @@ impl CoreOperationFamily for EffectOperationFamily {
     fn child_at(kind: &Self::Kind, index: usize) -> Option<NodeId> {
         match kind {
             EffectExprKind::Pure(kind) => kind.child_at(index),
+            EffectExprKind::Operation(EffectOperation::Resource(resource)) => match index {
+                0 => Some(resource.initializer),
+                1 => Some(resource.body),
+                _ => None,
+            },
             EffectExprKind::Operation(EffectOperation::Discard(_)) => None,
             EffectExprKind::Operation(EffectOperation::Request(node)) => {
                 (index == 0).then_some(node.operand)
@@ -427,6 +475,7 @@ impl CoreOperationFamily for EffectOperationFamily {
     fn discard_metadata(kind: Self::Kind) {
         match kind {
             EffectExprKind::Pure(kind) => discard_pure_expr_kind_metadata(kind),
+            EffectExprKind::Operation(EffectOperation::Resource(resource)) => drop(resource),
             EffectExprKind::Operation(EffectOperation::Request(mut node)) => {
                 let placeholder = EffectInstance::new(node.effect.effect(), Box::new([]));
                 let (_, arguments) = std::mem::replace(&mut node.effect, placeholder).into_parts();
@@ -454,6 +503,15 @@ pub type UnvalidatedEffectProgram = UnvalidatedCoreProgram<EffectOperationFamily
 pub type ValidatedEffectProgram = ValidatedCoreProgram<EffectOperationFamily>;
 
 impl CoreBuilder<EffectOperationFamily> {
+    pub(crate) fn resource_scope(
+        &mut self,
+        resource: Box<ResourceScopeNode>,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, super::BuildError> {
+        self.push_operation(ty, effects, origin, EffectOperation::Resource(resource))
+    }
     pub fn with_effect_registry(registry: Arc<ResolvedRegistry>) -> Self {
         Self::with_registry_for_family(registry)
     }
@@ -470,6 +528,7 @@ impl CoreBuilder<EffectOperationFamily> {
             Replace,
             Request(NodeId, EffectInstance),
             Handler(EffectInstance, usize),
+            Resource(crate::resolved::CellAcquisition, NodeId, NodeId),
             Keep,
         }
 
@@ -484,6 +543,13 @@ impl CoreBuilder<EffectOperationFamily> {
             for index in range {
                 self.charge_effect_metadata(1)?;
                 let equation = match &self.nodes[index].kind {
+                    EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
+                        Equation::Resource(
+                            resource.acquisition,
+                            resource.initializer,
+                            resource.body,
+                        )
+                    }
                     EffectExprKind::Pure(_) => Equation::Pure,
                     EffectExprKind::Operation(EffectOperation::Resume(resume))
                         if resume.handler == handler && resume.owner == owner =>
@@ -510,6 +576,37 @@ impl CoreBuilder<EffectOperationFamily> {
                     }
                 };
                 let effects = match equation {
+                    Equation::Resource(acquisition, initializer, body) => {
+                        self.charge_effect_metadata(2)?;
+                        let api = acquisition.api().ok_or(super::BuildError::InvalidPayload)?;
+                        let instance = EffectInstance::new(
+                            api.ops(),
+                            Box::new([Type::Variable(acquisition.identity)]),
+                        );
+                        let body = &self
+                            .nodes
+                            .get(body.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?
+                            .effects;
+                        let outward = match body
+                            .remove_exact_with_budget(&instance, &mut self.type_work)
+                            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                        {
+                            Ok(row) => row,
+                            Err(crate::types::EffectRowError::Missing) => {
+                                clone_effect_row_with_budget(body, &mut self.type_work)
+                                    .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                            }
+                            Err(_) => return Err(super::BuildError::InvalidPayload),
+                        };
+                        self.nodes
+                            .get(initializer.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?
+                            .effects
+                            .union_with_budget(&outward, &mut self.type_work)
+                            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                            .map_err(|_| super::BuildError::InvalidPayload)?
+                    }
                     Equation::Pure => self.infer_pure_effects_at(index)?,
                     Equation::Replace => clone_effect_row_with_budget(output, &mut self.type_work)
                         .map_err(|()| super::BuildError::TypeWorkExceeded)?,
