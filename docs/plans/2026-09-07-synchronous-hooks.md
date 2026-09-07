@@ -22,7 +22,7 @@ typed Effect Core, finite capture analysis and explicit evaluator.
 
 - [x] Accepted contract and separate implementation authorization.
 - [x] Clean product checkout under `.worktree/synchronous-hooks`.
-- [ ] Fresh full baseline verification before source or test edits.
+- [x] Fresh full baseline verification before source or test edits.
 - [ ] Step 1: primary syntax, projection and fail-closed staging.
 - [ ] Step 2: authenticated, executable hook roots and absent-target rows.
 - [ ] Step 3: registration typing, generated forwarding and completion proof.
@@ -102,9 +102,12 @@ existing real lexer/parser/projection test pattern, not as a semantic template.
 6. Run the following gate, formatting, strict Clippy and both reviews:
 
    ```text
-   CARGO_INCREMENTAL=0 cargo test --lib --test hooks_syntax --test lexer --test parser --test provenance --test resource_scope_syntax --test effect_modules
+   CARGO_INCREMENTAL=0 cargo test --lib --test hooks_syntax --test lexer \
+     --test parser --test provenance --test resource_scope_syntax \
+     --test effect_modules
    cargo fmt --all -- --check
-   CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets --all-features -- -D warnings
+   CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets --all-features \
+     -- -D warnings
    git diff --check
    ```
 
@@ -256,3 +259,8 @@ The product branch starts at the accepted proposal tip. Only task/plan/status
 documentation changes precede the fresh full baseline gate. No implementation
 step is complete at plan creation. The original nine-unit milestone weight
 remains open until the complete verified local checkpoint closes.
+
+The fresh baseline completed with exit status zero before product edits:
+`CARGO_INCREMENTAL=0 cargo xtask verify`, including 1,099 library tests, all
+integration suites, strict Clippy and rustdoc. Step 1 may now modify product
+source and tests under its fail-closed boundary.

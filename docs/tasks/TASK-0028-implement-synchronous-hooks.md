@@ -38,10 +38,12 @@ Do not push, tag, merge `main`, or change signing configuration.
   feature branch; the integration ref remains at the starting tip.
 - Refreshed only disposable Ash/xtask build artifacts after moving the checkout,
   so path-dependent test binaries do not retain the preceding checkout path.
-- Fresh full baseline verification is running before product edits.
+- Fresh `CARGO_INCREMENTAL=0 cargo xtask verify` baseline passed before product
+  edits, including 1,099 library tests, all integration suites and rustdoc.
 - The read-only high-reasoning implementation map and parent-owned execution
   plan are complete. The medium documentation audit passes after linking the
-  lifecycle decision. No hook product implementation is complete yet.
+  lifecycle decision. Step 1 syntax implementation is underway; no hook product
+  increment is complete yet.
 
 ## Verification
 
