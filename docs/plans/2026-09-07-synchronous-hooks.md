@@ -24,7 +24,7 @@ typed Effect Core, finite capture analysis and explicit evaluator.
 - [x] Clean product checkout under `.worktree/synchronous-hooks`.
 - [x] Fresh full baseline verification before source or test edits.
 - [x] Step 1: primary syntax, projection and fail-closed staging.
-- [ ] Step 2: authenticated, executable hook roots and absent-target rows.
+- [x] Step 2: authenticated, executable hook roots and absent-target rows.
 - [ ] Step 3: registration typing, generated forwarding and completion proof.
 - [ ] Step 4: runtime registration ownership and complete source execution.
 - [ ] Step 5: full interaction corpus, specification, reviews and verification.
@@ -272,3 +272,15 @@ syntax tests and 93 predecessor tests passed, as did formatting, strict Clippy,
 the bidirectional architecture inventory check and diff checks. The inventory
 adds only nine actual fields; its scanner and limits are unchanged. Both forms
 remain rejected at resolution until their later typed authority is implemented.
+
+Step 2 passed independent high-reasoning semantic and Rust/resource review after
+correcting exact-row diagnostic precedence, identity-pattern origin checking and
+two partial-target-clone failure paths. The final parent gate passed 1,111 library
+tests and 176 focused hook/effect/resource tests, formatting and strict Clippy.
+All 32 architecture checks passed before the final root-only clone correction;
+that correction changes no carriers. Original RED witnesses cover unavailable
+roots, the two semantic gaps and small-stack partial-clone failure. GREEN
+evidence includes exact/one-short/fresh-retry work, row rollback, imported
+open-lacks helpers, both transforms and the predecessor-shaped 24-root pipeline
+on a 256 KiB stack. The full driver wrapper is not covered by that stack claim.
+Registration remains rejected until its completion proof and runtime are ready.

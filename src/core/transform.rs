@@ -107,31 +107,43 @@ impl TransformFamily for EffectOperationFamily {
                 expression.origin.clone(),
             ),
             EffectOperation::Handler(node) => {
+                let effect = clone_effect_instance(builder, node.effect())?;
+                let root = node
+                    .hook_root()
+                    .map(|root| {
+                        builder.charge_effect_metadata(1)?;
+                        Ok::<_, TransformError>(
+                            root.with_target(clone_effect_instance(builder, &root.target)?),
+                        )
+                    })
+                    .transpose()?;
+                let body = remap(remapped, node.body())?;
                 let mut clauses = Vec::new();
                 builder.charge_effect_metadata(node.clauses().len())?;
                 clauses
                     .try_reserve_exact(node.clauses().len())
                     .map_err(|_| TransformError::Build(BuildError::TypeWorkExceeded))?;
                 for clause in node.clauses() {
+                    let clause_body = remap(remapped, clause.body())?;
                     clauses.push(EffectClause::new(
                         clause.operation(),
                         clause.resume(),
                         CoreMatchArm::new(
                             rebuild_pattern(builder, clause.pattern())?,
-                            remap(remapped, clause.body())?,
+                            clause_body,
                             clause.origin().clone(),
                         ),
                     ));
                 }
-                let effect = clone_effect_instance(builder, node.effect())?;
-                builder.handler(
+                builder.handler_with_root(
                     node.id(),
-                    remap(remapped, node.body())?,
+                    body,
                     effect,
                     clauses,
                     ty.into_inner(),
                     effects,
                     expression.origin.clone(),
+                    root,
                 )
             }
         }
@@ -561,6 +573,17 @@ fn rebuild_node<F: TransformFamily>(
             let function = remap(remapped, node.function())?;
             let argument = remap(remapped, node.argument())?;
             let origin = expression.origin.clone();
+            if !F::REQUIRES_EMPTY_ROWS {
+                let effects = builder.clone_effect_row_for_rebuild(expression.effects())?;
+                return builder
+                    .application_with_effects(
+                        super::function::ApplicationNode::new(function, argument),
+                        ty.into_inner(),
+                        effects,
+                        origin,
+                    )
+                    .map_err(TransformError::from);
+            }
             builder
                 .application(function, argument, ty.into_inner(), origin)
                 .map_err(TransformError::from)

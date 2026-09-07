@@ -125,6 +125,8 @@ pub enum TypeReason {
     AmbiguousEffectRow,
     /// A handler body does not request the exact handled instance.
     MissingHandledEffect,
+    /// The target lacks a declared single endomorphic publication API.
+    HookApi,
     /// Handler clauses do not cover each operation exactly once.
     HandlerCoverage,
     /// A handler operation pattern can fail.
@@ -349,6 +351,7 @@ impl fmt::Display for TypeReason {
             Self::ResourceEscape => formatter.write_str("type.resource-escape"),
             Self::AmbiguousEffectRow => formatter.write_str("effect.row-union-ambiguous"),
             Self::MissingHandledEffect => formatter.write_str("effect.handler-missing-input"),
+            Self::HookApi => formatter.write_str("type.hook-api"),
             Self::HandlerCoverage => formatter.write_str("effect.handler-coverage"),
             Self::RefutableHandlerPattern => {
                 formatter.write_str("effect.handler-refutable-pattern")
@@ -1954,8 +1957,8 @@ impl CoreLoweringFamily for EffectOperationFamily {
                 origin,
             ),
             EffectOperation::Handler(handler) => {
-                let (id, body, effect, clauses) = handler.into_parts();
-                builder.handler(id, body, effect, clauses, ty, effects, origin)
+                let (id, body, effect, clauses, root) = handler.into_parts();
+                builder.handler_with_root(id, body, effect, clauses, ty, effects, origin, root)
             }
         }
     }
@@ -8998,24 +9001,137 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         context: &mut TypeContext,
     ) -> Result<TypedNode, TypeError> {
         let rewrite_checkpoint = self.builder.type_rewrite_checkpoint();
-        let body = TypedNodeOwner::new(self.elaborate_expression_with_context(
+        let body = self.elaborate_expression_with_context(
             ElaborationTask::Synthesize {
                 expression: &handler.body,
                 cause: None,
             },
             context,
-        )?);
-        let mut output = body
+        )?;
+        self.finish_handler(handler, span, context, body, rewrite_checkpoint)
+    }
+
+    fn finish_handler(
+        &mut self,
+        handler: &crate::resolved::ResolvedHandleExpr,
+        span: Span,
+        context: &mut TypeContext,
+        body: TypedNode,
+        rewrite_checkpoint: crate::core::dialect::TypeRewriteCheckpoint,
+    ) -> Result<TypedNode, TypeError> {
+        let body = TypedNodeOwner::new(body);
+        if let Some(root) = &handler.hook_root {
+            self.type_work
+                .charge(6)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let [clause] = &*handler.clauses else {
+                return Err(invalid_state());
+            };
+            let ResolvedPatternKind::Binder(input) = &clause.pattern.kind else {
+                return Err(invalid_state());
+            };
+            let ResolvedExprKind::Resume(resume) = &clause.body.kind else {
+                return Err(invalid_state());
+            };
+            let ResolvedExprKind::Occurrence(value) = &resume.value.kind else {
+                return Err(invalid_state());
+            };
+            if root.span != span
+                || root.target_span != handler.effect.span
+                || crate::types::compare_effect_instances_with_budget(
+                    &root.target,
+                    &handler.effect.instance,
+                    &mut self.type_work,
+                )
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+                    != std::cmp::Ordering::Equal
+                || root.operation.owner() != handler.effect.instance.effect()
+                || root.operation != clause.operation
+                || clause.spelling != "publish"
+                || root.input != input.id
+                || value.global_binder() != Some(root.input)
+                || root.resume != clause.resume
+                || resume.owner != Some(root.resume)
+                || root.target_span != clause.span
+                || root.target_span != clause.pattern.span
+                || root.target_span != clause.body.span
+                || root.target_span != resume.value.span
+                || input.origin.primary_span() != root.target_span
+                || value.origin.primary_span() != root.target_span
+                || root.target_span.source() != root.span.source()
+                || root.target_span.range().start() < root.span.range().start()
+                || root.target_span.range().end() > root.span.range().end()
+            {
+                return Err(invalid_state());
+            }
+            let declaration = self
+                .registry
+                .effect(handler.effect.instance.effect())
+                .ok_or_else(invalid_state)?;
+            if declaration.parameters.len() != handler.effect.instance.arguments().len() {
+                return Err(inference_failure(
+                    TypeReason::HandlerCoverage,
+                    handler.effect.span,
+                    "this effect instance does not match its declaration",
+                ));
+            }
+        }
+        let mut output = match body
             .effects
             .remove_exact_with_budget(&handler.effect.instance, &mut self.type_work)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
-            .map_err(|_| {
-                inference_failure(
-                    TypeReason::MissingHandledEffect,
+        {
+            Ok(row) => row,
+            Err(crate::types::EffectRowError::Missing) if handler.hook_root.is_some() => {
+                clone_effect_row_with_budget(&body.effects, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
+            }
+            Err(_) => {
+                return Err(inference_failure(
+                    if handler.hook_root.is_some() {
+                        TypeReason::AmbiguousEffectRow
+                    } else {
+                        TypeReason::MissingHandledEffect
+                    },
                     handler.effect.span,
                     "the handled computation does not request this exact effect instance",
-                )
-            })?;
+                ));
+            }
+        };
+        if let Some(root) = &handler.hook_root {
+            self.type_work
+                .charge(1)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let declaration = self
+                .registry
+                .effect(handler.effect.instance.effect())
+                .ok_or_else(invalid_state)?;
+            let valid = if let [operation] = &*declaration.operations {
+                if let Some(function) = operation.annotation.ty.function_view() {
+                    operation.spelling == "publish"
+                        && same_type_with_budget(
+                            function.domain(),
+                            function.value(),
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            if !valid {
+                return Err(inference_failure(
+                    TypeReason::HookApi,
+                    handler.effect.span,
+                    "a hook API must declare exactly publish with equal domain and result under its own parameters",
+                ));
+            }
+            return self.lower_hook_identity(root, body, output, rewrite_checkpoint);
+        }
         let result_type = IterativeTypeOwner::new(self.clone_type(&body.ty)?);
         let declaration = self
             .registry
@@ -9194,6 +9310,102 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(TypedNode {
             node,
             ty,
+            effects: output,
+            provenance,
+        })
+    }
+
+    fn lower_hook_identity(
+        &mut self,
+        root: &crate::resolved::HookRootContract,
+        body: TypedNodeOwner,
+        output: EffectRow,
+        rewrite_checkpoint: crate::core::dialect::TypeRewriteCheckpoint,
+    ) -> Result<TypedNode, TypeError> {
+        self.zonk_builder_types_since(Some(rewrite_checkpoint), false)
+            .map_err(TypeError::Internal)?;
+        let output = zonk_core_effect_row(
+            &output,
+            &self.inference_solutions,
+            &self.row_inference_solutions,
+            &self.inference_variables,
+            &self.authenticated_inference_solutions,
+            &mut self.type_work,
+            false,
+        )?;
+        let (domain, result) =
+            self.operation_signature(&root.target, root.operation, root.target_span)?;
+        let domain = IterativeTypeOwner::new(domain);
+        drop(IterativeTypeOwner::new(result));
+        let payload = IterativeTypeOwner::new(self.pure_core_type(&domain)?);
+        let binder_type = self.clone_type(&payload)?;
+        let binder = self.builder.resolved_binder(
+            root.input,
+            binder_type,
+            Origin::Source(root.target_span),
+        )?;
+        let pattern = CorePatternOwner::new(Some(CorePattern::new(
+            payload.into_inner(),
+            Origin::Source(root.target_span),
+            CorePatternKind::Binder(binder),
+        )));
+        let variable_type = self.clone_type(&pattern.ty)?;
+        let variable =
+            self.builder
+                .variable(root.input, variable_type, Origin::Source(root.target_span))?;
+        let handler = HandlerId::new(self.next_handler);
+        self.next_handler = self.next_handler.checked_add(1).ok_or_else(invalid_state)?;
+        let result_type = IterativeTypeOwner::new(self.pure_core_type(&body.ty)?);
+        let resume_effects = self.core_effect_row(&output)?;
+        let resume = self.push_effect_core(
+            result_type.into_inner(),
+            resume_effects,
+            Origin::Source(root.target_span),
+            EffectOperation::Resume(ResumeNode::new(
+                handler,
+                root.resume,
+                ResumeUse::Consumed,
+                variable,
+            )),
+        )?;
+        self.type_work
+            .charge(1)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let mut clauses = Vec::new();
+        clauses
+            .try_reserve_exact(1)
+            .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let effect =
+            crate::types::clone_effect_instance_with_budget(&root.target, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let retained_root = root
+            .clone_with_budget(&mut self.type_work)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let ty = IterativeTypeOwner::new(self.clone_type(&body.ty)?);
+        let core_type = IterativeTypeOwner::new(self.pure_core_type(&ty)?);
+        let core_effects = self.core_effect_row(&output)?;
+        clauses.push(EffectClause::new(
+            root.operation,
+            root.resume,
+            CoreMatchArm::new(
+                pattern.into_inner(),
+                resume,
+                Origin::Source(root.target_span),
+            ),
+        ));
+        let node = self.push_effect_core(
+            core_type.into_inner(),
+            core_effects,
+            Origin::Source(root.span),
+            EffectOperation::Handler(
+                HandlerNode::new(handler, body.node, effect, clauses)
+                    .with_hook_root(Some(retained_root)),
+            ),
+        )?;
+        let provenance = self.at_span_provenance(&ty, root.span)?;
+        Ok(TypedNode {
+            node,
+            ty: ty.into_inner(),
             effects: output,
             provenance,
         })
@@ -9919,6 +10131,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ElaborationTask::FinishPerform(progress) => {
                     self.step_perform_completion(progress, &mut values)?;
                 }
+                ElaborationTask::FinishHookBody {
+                    handler,
+                    span,
+                    rewrite_checkpoint,
+                } => {
+                    let body = values.pop().ok_or_else(invalid_state)?.into_inner();
+                    values.push(self.finish_handler(
+                        handler,
+                        span,
+                        context,
+                        body,
+                        rewrite_checkpoint,
+                    )?);
+                }
                 ElaborationTask::ResourceBody { resource, span } => {
                     self.step_resource_body(resource, span, context, &mut tasks, &mut values)?;
                 }
@@ -10414,6 +10640,23 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     }
                     ResolvedExprKind::Perform(request) => {
                         self.schedule_perform(request, current.span, &mut tasks)?;
+                    }
+                    ResolvedExprKind::Handle(handler) if handler.hook_root.is_some() => {
+                        self.type_work.charge(2).map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                        tasks.0.try_reserve(2).map_err(|_| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                        tasks.push(ElaborationTask::FinishHookBody {
+                            handler,
+                            span: current.span,
+                            rewrite_checkpoint: self.builder.type_rewrite_checkpoint(),
+                        });
+                        tasks.push(ElaborationTask::Synthesize {
+                            expression: &handler.body,
+                            cause: None,
+                        });
                     }
                     ResolvedExprKind::Handle(handler) => {
                         let typed = self.synthesize_handler(handler, current.span, context)?;
@@ -17596,6 +17839,11 @@ enum EquationTask<'a> {
 
 enum ElaborationTask<'a> {
     FinishPerform(Box<PerformProgress<'a>>),
+    FinishHookBody {
+        handler: &'a crate::resolved::ResolvedHandleExpr,
+        span: Span,
+        rewrite_checkpoint: crate::core::dialect::TypeRewriteCheckpoint,
+    },
     ResourceBody {
         resource: &'a crate::resolved::ResolvedResourceExpr,
         span: Span,
@@ -18934,6 +19182,7 @@ fn discard_elaboration_task(task: ElaborationTask<'_>) {
     match task {
         ElaborationTask::Equation(_) => {}
         ElaborationTask::ResourceBody { .. }
+        | ElaborationTask::FinishHookBody { .. }
         | ElaborationTask::FinishResource(_)
         | ElaborationTask::FinishPerform(_) => {}
         ElaborationTask::RetainLocalNewtype(_)
@@ -23197,6 +23446,7 @@ mod tests {
                 ]));
                 let request = crate::resolved::ResolvedPerformExpr {
                     effect: crate::resolved::ResolvedEffectInstance {
+                        argument_provenance: Box::new([]),
                         instance: EffectInstance::new(effect, Box::new([])),
                         origin: Origin::Source(span),
                         span,
@@ -32922,6 +33172,43 @@ mod tests {
             retry.zonk_builder_types().is_err(),
             "strict final admission still rejects the unresolved identity"
         );
+    }
+
+    #[test]
+    fn hook_body_and_identity_elaboration_are_exact_and_fresh_retryable() {
+        let (module, _, _, _) = cell_module_fixture_sources(
+            "effect Adjust<T, U> {\npublish : (Unit -> Int) -> (Unit -> Int)\n}\nmain : Unit -> Int\nmain () = hook Adjust<(Int, Bool), Unit> {\n42\n}\n",
+        );
+        let run = |limit| {
+            let mut elaborator = cell_resource_elaborator(&module);
+            elaborator.type_work = TypeWorkBudget::with_limit(limit);
+            let mut context = elaborator.base_context.clone();
+            let result = elaborator
+                .elaborate_expression_with_context(
+                    ElaborationTask::Synthesize {
+                        expression: fixture_result(&module),
+                        cause: None,
+                    },
+                    &mut context,
+                )
+                .map(|typed| drop(TypedNodeOwner::new(typed)));
+            (result, elaborator.type_work.used())
+        };
+        let (result, exact) = run(usize::MAX);
+        result.unwrap();
+        assert!(exact > 0);
+        for limit in 0..exact {
+            assert_eq!(
+                run(limit).0,
+                Err(TypeError::Internal(
+                    ElaborationFailure::TypeResourceExhausted
+                )),
+                "limit {limit}"
+            );
+        }
+        for _ in 0..2 {
+            assert_eq!(run(exact), (Ok(()), exact));
+        }
     }
 
     #[test]

@@ -18573,6 +18573,8 @@ impl ResumeId {
 pub struct ResolvedEffectInstance {
     /// Canonical semantic instance.
     pub instance: crate::types::EffectInstance,
+    /// Original source provenance for each written type argument.
+    pub argument_provenance: Box<[ResolvedTypeProvenance]>,
     /// Causal source provenance.
     pub origin: Origin,
     /// Complete instance span.
@@ -18597,12 +18599,53 @@ pub struct ResolvedPerformExpr {
 /// One resolved lexical handler.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedHandleExpr {
+    /// Compiler-owned identity clause and source relation of an empty hook root.
+    pub hook_root: Option<HookRootContract>,
     /// Handled computation.
     pub body: Box<ResolvedExpr>,
     /// Exact handled instance.
     pub effect: ResolvedEffectInstance,
     /// Source-ordered clauses.
     pub clauses: Vec<ResolvedHandlerClause>,
+}
+
+/// The source root and its fresh identity-clause capabilities.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HookRootContract {
+    /// Independently retained exact source target, including phantom arguments.
+    pub target: crate::types::EffectInstance,
+    /// Complete source scope.
+    pub span: Span,
+    /// Exact target occurrence.
+    pub target_span: Span,
+    /// Declared publication identity.
+    pub operation: crate::types::OperationId,
+    /// Hidden publication input.
+    pub input: BinderId,
+    /// Hidden identity continuation.
+    pub resume: ResumeId,
+}
+
+impl HookRootContract {
+    pub(crate) fn with_target(&self, target: crate::types::EffectInstance) -> Self {
+        Self {
+            target,
+            span: self.span,
+            target_span: self.target_span,
+            operation: self.operation,
+            input: self.input,
+            resume: self.resume,
+        }
+    }
+
+    pub(crate) fn clone_with_budget(
+        &self,
+        budget: &mut crate::types::TypeWorkBudget,
+    ) -> Result<Self, ()> {
+        budget.charge(1)?;
+        let target = crate::types::clone_effect_instance_with_budget(&self.target, budget)?;
+        Ok(self.with_target(target))
+    }
 }
 
 /// One resolved operation clause.

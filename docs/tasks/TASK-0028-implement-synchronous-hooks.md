@@ -47,7 +47,32 @@ Do not push, tag, merge `main`, or change signing configuration.
   Rust/resource review. The parent repeated the focused tests (1,101 library,
   seven hook syntax and 93 predecessor tests), formatting, strict Clippy and
   narrow architecture inventory check successfully. Both forms still reject
-  at resolution; executable roots are next.
+  at resolution at that checkpoint.
+- Step 2 began with real-driver identity-publication and unused-root witnesses.
+  Both reached the expected temporary resolution rejection before product
+  changes. Root implementation is undergoing final checks; registration remains
+  unavailable.
+- The implementer's combined hook/effect/resource integration gate passes:
+  open-lacks admission and ambiguity rejection, imported helper transforms,
+  phantom target retention, generic resource/control cases, kind precedence,
+  source spans and the fresh-child 24-root/256-KiB direct pipeline. The corrected
+  five-field architecture inventory passes its focused check.
+- The parent pre-review-correction repeat passed 1,109 library tests, all 32
+  architecture tests and 175 focused integration tests. Semantic review found
+  row-error precedence and pattern-origin authentication gaps; the implementer
+  also found a root-only partial-clone disposal issue. Both semantic regressions
+  reproduced their failures before correction. All three fixes are applied and
+  semantic re-review passes. The implementer's post-fix gate passes 1,110 library
+  and 176 focused tests plus strict Clippy, inventory, formatting and diff checks.
+  The parent repeated that gate successfully, including all 32 architecture
+  tests. Rust/resource review found one remaining partial-clone failure path
+  when an ordinary handler recomputes rows through a nested hook root. Its
+  root-only correction passes Rust/resource re-review. The unchanged regression
+  first overflowed during partial-clone disposal, then passed rollback,
+  one-short exhaustion and two exact-budget retries in a fresh 256 KiB child.
+  The final parent repeat passed 1,111 library and 176 focused integration tests,
+  formatting, strict Clippy, Markdown lint and diff checks. Step 2 is ready for
+  its unsigned checkpoint; registration remains unavailable.
 
 ## Verification
 
@@ -67,6 +92,42 @@ local merge, merged-checkout verification and clean feature-worktree removal.
 Preserve unrelated main-checkout changes and all remote refs/tags.
 
 ## Discoveries
+
+Resolved effect occurrences discarded argument type provenance. Hook-target
+kind checking needs that original source information: the body-free kind API
+deliberately reports malformed types as internal failures. Retain provenance on
+the existing resolved occurrence, with charged ownership, and scope the new
+kind check to hook targets. Registration can reuse the same source carrier.
+
+The 24-root pipeline on a 256 KiB stack follows the existing resource-scope
+control. Phase isolation found root resolution recursion first; explicit root
+body scheduling removed that overflow. Module checking then exposed new-root
+recursion in elaboration. Explicit body scheduling and direct construction of
+the known typed identity clause remove that recursion; independent Core still
+checks the clause relationships. Standalone load/resolve/check now succeeds at
+that depth and stack size. The remaining `run_path` wrapper overflow also occurs
+with 24 resource cells. The final fresh-child witness therefore follows the
+predecessor's direct load/resolve/check/link/validate/evaluate/dispose helper,
+without that wrapper. Ordinary handler behavior and the original
+24-scope/256-KiB bounds are unchanged; this does not claim small-stack support
+for the full driver wrapper.
+
+The open-row root witness exposed a pre-existing Core subset comparison issue:
+written known row members imply tail lacks facts, but the comparison treated
+implicit and explicitly retained facts differently. A focused non-hook
+regression now covers the charged normalization correction, unrelated lacks
+rejection, exact work, one-short exhaustion and fresh retries. Root rows remain
+least rows; the correction adds no new lacks assumption.
+The same witness then reached a separate Core row-reconstruction failure:
+source checking uses a lacks fact from the enclosing function annotation, while
+the Core parameter type retains the unqualified tail. Reconstruction of that
+existing lexical authority now uses the row variable's existing abstraction
+owner and its independently checked `Forall` contract. Current row formation
+already makes written members absent from that lexical tail. The correction
+stays in charged Effect validation and preserves exact known members and
+tail identity; descendant computed rows cannot justify their own added facts.
+The helper witness passes through imports and both transforms; it has not been
+replaced by an easier row case.
 
 The surface tree has no separate iterative ownership API. Step 1 reuses the
 existing iterative CST/projection paths and checks accepted surface disposal on

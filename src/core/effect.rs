@@ -193,6 +193,7 @@ impl EffectClause {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HandlerNode {
+    pub(super) hook_root: Option<crate::resolved::HookRootContract>,
     pub(super) id: HandlerId,
     pub(super) body: NodeId,
     pub(super) effect: EffectInstance,
@@ -207,6 +208,7 @@ impl HandlerNode {
         clauses: Vec<EffectClause>,
     ) -> Self {
         Self {
+            hook_root: None,
             id,
             body,
             effect,
@@ -229,8 +231,33 @@ impl HandlerNode {
     pub const fn clauses(&self) -> &[EffectClause] {
         &self.clauses
     }
-    pub(crate) fn into_parts(self) -> (HandlerId, NodeId, EffectInstance, Vec<EffectClause>) {
-        (self.id, self.body, self.effect, self.clauses.into_vec())
+    #[must_use]
+    pub const fn hook_root(&self) -> Option<&crate::resolved::HookRootContract> {
+        self.hook_root.as_ref()
+    }
+    pub(crate) fn with_hook_root(
+        mut self,
+        root: Option<crate::resolved::HookRootContract>,
+    ) -> Self {
+        self.hook_root = root;
+        self
+    }
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        HandlerId,
+        NodeId,
+        EffectInstance,
+        Vec<EffectClause>,
+        Option<crate::resolved::HookRootContract>,
+    ) {
+        (
+            self.id,
+            self.body,
+            self.effect,
+            self.clauses.into_vec(),
+            self.hook_root,
+        )
     }
 }
 
@@ -357,6 +384,11 @@ impl CoreOperationFamily for EffectOperationFamily {
             }
             EffectOperation::Request(request) => Some(&request.effect),
             EffectOperation::Handler(handler) => {
+                if let Some(root) = &handler.hook_root {
+                    for argument in root.target.arguments() {
+                        visit(super::dialect::OperationTypeMetadata::Type(argument));
+                    }
+                }
                 for clause in &handler.clauses {
                     visit(super::dialect::OperationTypeMetadata::Pattern(
                         clause.pattern(),
@@ -390,6 +422,9 @@ impl CoreOperationFamily for EffectOperationFamily {
             }
             EffectExprKind::Operation(EffectOperation::Request(request)) => &mut request.effect,
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
+                if let Some(root) = &mut handler.hook_root {
+                    rewrite_effect_instance(&mut root.target, rewrite, charge)?;
+                }
                 charge(handler.clauses.len())?;
                 for clause in &mut handler.clauses {
                     clause
@@ -401,30 +436,7 @@ impl CoreOperationFamily for EffectOperationFamily {
             }
             _ => return Ok(()),
         };
-        let count = instance.arguments().len();
-        charge(
-            count
-                .checked_mul(2)
-                .ok_or(super::BuildError::TypeWorkExceeded)?,
-        )?;
-        let mut staged = Vec::new();
-        staged
-            .try_reserve(count)
-            .map_err(|_| super::BuildError::TypeWorkExceeded)?;
-        for argument in instance.arguments() {
-            staged.push(crate::types::IterativeTypeOwner::new(rewrite(argument)?));
-        }
-        let mut arguments = Vec::new();
-        arguments
-            .try_reserve(count)
-            .map_err(|_| super::BuildError::TypeWorkExceeded)?;
-        arguments.extend(
-            staged
-                .into_iter()
-                .map(crate::types::IterativeTypeOwner::into_inner),
-        );
-        *instance = EffectInstance::new(instance.effect(), arguments.into_boxed_slice());
-        Ok(())
+        rewrite_effect_instance(instance, rewrite, charge)
     }
 
     fn effect_row(effects: &Self::Effects) -> &EffectRow {
@@ -535,7 +547,7 @@ impl CoreBuilder<EffectOperationFamily> {
             Pure,
             Replace,
             Request(NodeId, EffectInstance),
-            Handler(EffectInstance, usize),
+            Handler(EffectInstance, usize, bool),
             Resource(crate::resolved::CellAcquisition, NodeId, NodeId),
             Keep,
         }
@@ -578,8 +590,20 @@ impl CoreBuilder<EffectOperationFamily> {
                     }
                     EffectExprKind::Operation(EffectOperation::Handler(nested)) => {
                         Equation::Handler(
-                            clone_effect_instance_with_budget(&nested.effect, &mut self.type_work)?,
+                            if nested.hook_root.is_some() {
+                                crate::types::clone_effect_instance_with_budget(
+                                    &nested.effect,
+                                    &mut self.type_work,
+                                )
+                                .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                            } else {
+                                clone_effect_instance_with_budget(
+                                    &nested.effect,
+                                    &mut self.type_work,
+                                )?
+                            },
                             nested.clauses.len(),
+                            nested.hook_root.is_some(),
                         )
                     }
                 };
@@ -628,19 +652,27 @@ impl CoreBuilder<EffectOperationFamily> {
                             .map_err(|()| super::BuildError::TypeWorkExceeded)?
                             .map_err(|_| super::BuildError::InvalidPayload)?
                     }
-                    Equation::Handler(effect, clause_count) => {
+                    Equation::Handler(effect, clause_count, hook_root) => {
                         self.charge_effect_metadata(clause_count)?;
                         let body = EffectOperationFamily::child_at(&self.nodes[index].kind, 0)
                             .ok_or(super::BuildError::InvalidPayload)?
                             .index()?;
-                        let mut effects = self
+                        let body_effects = &self
                             .nodes
                             .get(body)
                             .ok_or(super::BuildError::InvalidNodeId)?
-                            .effects
+                            .effects;
+                        let mut effects = match body_effects
                             .remove_exact_with_budget(&effect, &mut self.type_work)
                             .map_err(|()| super::BuildError::TypeWorkExceeded)?
-                            .map_err(|_| super::BuildError::InvalidPayload)?;
+                        {
+                            Ok(row) => row,
+                            Err(crate::types::EffectRowError::Missing) if hook_root => {
+                                clone_effect_row_with_budget(body_effects, &mut self.type_work)
+                                    .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                            }
+                            Err(_) => return Err(super::BuildError::InvalidPayload),
+                        };
                         for clause in 0..clause_count {
                             let body = EffectOperationFamily::child_at(
                                 &self.nodes[index].kind,
@@ -753,6 +785,30 @@ impl CoreBuilder<EffectOperationFamily> {
         effects: EffectRow,
         origin: Origin,
     ) -> Result<NodeId, super::BuildError> {
+        self.handler_with_root(
+            id,
+            body,
+            effect,
+            clauses,
+            result_type,
+            effects,
+            origin,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn handler_with_root(
+        &mut self,
+        id: HandlerId,
+        body: NodeId,
+        effect: EffectInstance,
+        clauses: Vec<EffectClause>,
+        result_type: Type,
+        effects: EffectRow,
+        origin: Origin,
+        hook_root: Option<crate::resolved::HookRootContract>,
+    ) -> Result<NodeId, super::BuildError> {
         let effect = match self.admit_effect_instance(effect) {
             Ok(effect) => effect,
             Err(error) => {
@@ -763,7 +819,11 @@ impl CoreBuilder<EffectOperationFamily> {
                 return Err(error);
             }
         };
-        if let Err(error) = self.charge_effect_metadata(clauses.len()) {
+        if let Err(error) = self.charge_effect_metadata(
+            clauses
+                .len()
+                .saturating_add(usize::from(hook_root.is_some())),
+        ) {
             drop(effect);
             drop(clauses);
             discard_type_iteratively(result_type);
@@ -801,9 +861,42 @@ impl CoreBuilder<EffectOperationFamily> {
             result_type,
             effects,
             origin,
-            EffectOperation::Handler(HandlerNode::new(id, body, effect, clauses)),
+            EffectOperation::Handler(
+                HandlerNode::new(id, body, effect, clauses).with_hook_root(hook_root),
+            ),
         )
     }
+}
+
+fn rewrite_effect_instance(
+    instance: &mut EffectInstance,
+    rewrite: &mut dyn FnMut(&Type) -> Result<Type, super::BuildError>,
+    charge: &mut dyn FnMut(usize) -> Result<(), super::BuildError>,
+) -> Result<(), super::BuildError> {
+    let count = instance.arguments().len();
+    charge(
+        count
+            .checked_mul(2)
+            .ok_or(super::BuildError::TypeWorkExceeded)?,
+    )?;
+    let mut staged = Vec::new();
+    staged
+        .try_reserve(count)
+        .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+    for argument in instance.arguments() {
+        staged.push(crate::types::IterativeTypeOwner::new(rewrite(argument)?));
+    }
+    let mut arguments = Vec::new();
+    arguments
+        .try_reserve(count)
+        .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+    arguments.extend(
+        staged
+            .into_iter()
+            .map(crate::types::IterativeTypeOwner::into_inner),
+    );
+    *instance = EffectInstance::new(instance.effect(), arguments.into_boxed_slice());
+    Ok(())
 }
 
 pub(crate) fn clone_effect_instance_with_budget(
@@ -980,6 +1073,195 @@ mod tests {
     }
 
     #[test]
+    fn nested_hook_recompute_owns_partial_target_clones() {
+        const CHILD: &str = "ASH_HOOK_RECOMPUTE_STACK_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "core::effect::tests::nested_hook_recompute_owns_partial_target_clones",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .status()
+                .unwrap();
+            assert!(
+                status.success(),
+                "fresh hook recomputation process: {status}"
+            );
+            return;
+        }
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let fixture = || {
+                    let source =
+                        SourceFile::new("nested-hook-range", "hook Mark<A, B> { 42 }").unwrap();
+                    let span = source
+                        .span(ByteRange::new(0, source.text().len() as u32).unwrap())
+                        .unwrap();
+                    let origin = Origin::Source(span);
+                    let effect = EffectId::new(ModuleId::new(0), 0);
+                    let target = || {
+                        let mut argument = Type::Unit;
+                        for _ in 0..32_000 {
+                            argument = Type::Application(Box::new(argument), Box::new(Type::Unit));
+                        }
+                        EffectInstance::new(effect, Box::new([argument, Type::Unit]))
+                    };
+                    let mut builder = EffectCoreBuilder::with_effect_registry(Arc::new(
+                        ResolvedRegistry::default(),
+                    ));
+                    let value = builder
+                        .integer(
+                            Integer::parse_decimal("42").unwrap(),
+                            Type::Int,
+                            origin.clone(),
+                        )
+                        .unwrap();
+                    let binder = builder.binder(Type::Int, origin.clone()).unwrap();
+                    let input = binder.id();
+                    let variable = builder.variable(input, Type::Int, origin.clone()).unwrap();
+                    let identity = builder
+                        .resume(
+                            HandlerId::new(1),
+                            ResumeId::new(1),
+                            ResumeUse::Consumed,
+                            variable,
+                            Type::Int,
+                            EffectRow::empty(),
+                            origin.clone(),
+                        )
+                        .unwrap();
+                    let start = builder.node_checkpoint();
+                    let resume = builder
+                        .resume(
+                            HandlerId::new(0),
+                            ResumeId::new(0),
+                            ResumeUse::Consumed,
+                            value,
+                            Type::Int,
+                            EffectRow::empty(),
+                            origin.clone(),
+                        )
+                        .unwrap();
+                    let root = builder
+                        .handler_with_root(
+                            HandlerId::new(1),
+                            resume,
+                            target(),
+                            vec![EffectClause::new(
+                                OperationId::new(effect, 0),
+                                ResumeId::new(1),
+                                CoreMatchArm::new(
+                                    CorePattern::new(
+                                        Type::Int,
+                                        origin.clone(),
+                                        crate::core::CorePatternKind::Binder(binder),
+                                    ),
+                                    identity,
+                                    origin.clone(),
+                                ),
+                            )],
+                            Type::Int,
+                            EffectRow::empty(),
+                            origin,
+                            Some(crate::resolved::HookRootContract {
+                                target: target(),
+                                span,
+                                target_span: span,
+                                operation: OperationId::new(effect, 0),
+                                input,
+                                resume: ResumeId::new(1),
+                            }),
+                        )
+                        .unwrap();
+                    let output = EffectRow::singleton(EffectInstance::new(
+                        EffectId::new(ModuleId::new(0), 1),
+                        Box::new([]),
+                    ));
+                    (
+                        builder,
+                        start..root.index().unwrap() + 1,
+                        output,
+                        root,
+                        resume,
+                    )
+                };
+                let (mut prefix, range, output, root, _) = fixture();
+                let before = prefix.type_work.used();
+                recompute(&mut prefix, range.start..root.index().unwrap(), &output).unwrap();
+                let prefix_work = prefix.type_work.used() - before;
+                let EffectExprKind::Operation(EffectOperation::Handler(handler)) =
+                    &prefix.nodes[root.index().unwrap()].kind
+                else {
+                    unreachable!()
+                };
+                let mut clone_work = TypeWorkBudget::unbounded();
+                drop(crate::types::IterativeTypeOwner::new(
+                    clone_type_with_budget(&handler.effect.arguments()[0], &mut clone_work)
+                        .unwrap(),
+                ));
+                // One extra range slot, the hook node, two argument slots, and the
+                // complete first clone. The second argument has no work remaining.
+                let after_first_clone = prefix_work + 1 + 1 + 2 + clone_work.used();
+                drop(prefix);
+                let (mut short, range, output, _, _) = fixture();
+                let retained = short
+                    .nodes
+                    .iter()
+                    .map(|node| node.effects.clone())
+                    .collect::<Vec<_>>();
+                short
+                    .charge_type_work_for_test(
+                        TYPE_WORK_LIMIT - short.type_work.used() - after_first_clone,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    recompute(&mut short, range, &output),
+                    Err(super::super::BuildError::TypeWorkExceeded)
+                );
+                assert_eq!(
+                    short
+                        .nodes
+                        .iter()
+                        .map(|node| node.effects.clone())
+                        .collect::<Vec<_>>(),
+                    retained
+                );
+                drop(short);
+                let (mut measured, range, output, root, resume) = fixture();
+                let before = measured.type_work.used();
+                recompute(&mut measured, range, &output).unwrap();
+                let exact = measured.type_work.used() - before;
+                assert_eq!(measured.nodes[root.index().unwrap()].effects, output);
+                assert_eq!(measured.nodes[resume.index().unwrap()].effects, output);
+                drop(measured);
+                for allowance in [exact - 1, exact, exact] {
+                    let (mut retry, range, output, root, resume) = fixture();
+                    retry
+                        .charge_type_work_for_test(
+                            TYPE_WORK_LIMIT - retry.type_work.used() - allowance,
+                        )
+                        .unwrap();
+                    let result = recompute(&mut retry, range, &output);
+                    if allowance < exact {
+                        assert_eq!(result, Err(super::super::BuildError::TypeWorkExceeded));
+                        assert!(retry.nodes.iter().all(|node| node.effects.is_empty()));
+                    } else {
+                        result.unwrap();
+                        assert_eq!(retry.type_work.used(), TYPE_WORK_LIMIT);
+                        assert_eq!(retry.nodes[root.index().unwrap()].effects, output);
+                        assert_eq!(retry.nodes[resume.index().unwrap()].effects, output);
+                    }
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
     fn range_recompute_is_exact_retryable_and_stack_safe() {
         const DEPTH: usize = 16;
         let (mut measured, range, output, root, resume) = range_fixture(DEPTH);
@@ -1037,6 +1319,49 @@ mod tests {
 #[cfg(test)]
 mod rewrite_tests {
     use super::*;
+
+    #[test]
+    fn hook_target_retention_is_exact_retryable_and_disposes_deep_partial_clones() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source =
+                    crate::source::SourceFile::new("hook-target", "hook Mark<Unit> {}").unwrap();
+                let span = source
+                    .span(crate::source::ByteRange::new(0, 18).unwrap())
+                    .unwrap();
+                let mut deep = Type::Unit;
+                for _ in 0..32_000 {
+                    deep = Type::Application(Box::new(Type::Unit), Box::new(deep));
+                }
+                let effect = crate::types::EffectId::new(crate::module::ModuleId::new(0), 0);
+                let root = crate::resolved::HookRootContract {
+                    target: EffectInstance::new(effect, Box::new([deep, Type::Unit])),
+                    span,
+                    target_span: span,
+                    operation: crate::types::OperationId::new(effect, 0),
+                    input: crate::resolved::BinderId::generated(0),
+                    resume: crate::resolved::ResumeId::new(0),
+                };
+                let mut measured = TypeWorkBudget::unbounded();
+                drop(root.clone_with_budget(&mut measured).unwrap());
+                let exact = measured.used();
+                for limit in [0, exact - 1, exact - 2, exact - 3] {
+                    assert!(
+                        root.clone_with_budget(&mut TypeWorkBudget::with_limit(limit))
+                            .is_err()
+                    );
+                }
+                for _ in 0..2 {
+                    let mut retry = TypeWorkBudget::with_limit(exact);
+                    drop(root.clone_with_budget(&mut retry).unwrap());
+                    assert_eq!(retry.used(), exact);
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 
     #[test]
     fn operation_rewrite_is_exact_retryable_and_drops_partial_deep_arguments() {
