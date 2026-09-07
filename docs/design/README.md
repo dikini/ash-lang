@@ -90,6 +90,9 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 ### Effects and dynamic composition
 
+- [Synchronous hook evidence](effect-ash/synchronous-hooks-evidence.md) —
+  verified root checkpoint and explicit outstanding registration, runtime and
+  full-contract evidence.
 - [Safe resource scope evidence](effect-ash/resource-scope-evidence.md) —
   cell ownership, dependency, activation, runtime and full verification
   evidence; the product checkpoint is complete and locally integrated with

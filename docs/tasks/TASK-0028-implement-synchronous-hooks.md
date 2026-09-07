@@ -71,8 +71,11 @@ Do not push, tag, merge `main`, or change signing configuration.
   first overflowed during partial-clone disposal, then passed rollback,
   one-short exhaustion and two exact-budget retries in a fresh 256 KiB child.
   The final parent repeat passed 1,111 library and 176 focused integration tests,
-  formatting, strict Clippy, Markdown lint and diff checks. Step 2 is ready for
-  its unsigned checkpoint; registration remains unavailable.
+  formatting, strict Clippy, Markdown lint and diff checks. Step 2 is retained
+  in unsigned checkpoint `e801edb`; the final actual-field inventory also passed.
+  Registration remains unavailable.
+- A fresh high-reasoning implementer is reconstructing Step 3's registration
+  structure and completion-proof boundaries before its first failing witnesses.
 
 ## Verification
 
