@@ -23,7 +23,7 @@ typed Effect Core, finite capture analysis and explicit evaluator.
 - [x] Accepted contract and separate implementation authorization.
 - [x] Clean product checkout under `.worktree/synchronous-hooks`.
 - [x] Fresh full baseline verification before source or test edits.
-- [ ] Step 1: primary syntax, projection and fail-closed staging.
+- [x] Step 1: primary syntax, projection and fail-closed staging.
 - [ ] Step 2: authenticated, executable hook roots and absent-target rows.
 - [ ] Step 3: registration typing, generated forwarding and completion proof.
 - [ ] Step 4: runtime registration ownership and complete source execution.
@@ -264,3 +264,11 @@ The fresh baseline completed with exit status zero before product edits:
 `CARGO_INCREMENTAL=0 cargo xtask verify`, including 1,099 library tests, all
 integration suites, strict Clippy and rustdoc. Step 1 may now modify product
 source and tests under its fail-closed boundary.
+
+Step 1 passed independent high-reasoning semantic and Rust/resource review.
+The original missing-syntax witness failed before implementation and now passes.
+The parent repeated the complete focused gate: 1,101 library tests, seven hook
+syntax tests and 93 predecessor tests passed, as did formatting, strict Clippy,
+the bidirectional architecture inventory check and diff checks. The inventory
+adds only nine actual fields; its scanner and limits are unchanged. Both forms
+remain rejected at resolution until their later typed authority is implemented.

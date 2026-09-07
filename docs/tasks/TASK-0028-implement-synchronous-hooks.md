@@ -42,8 +42,12 @@ Do not push, tag, merge `main`, or change signing configuration.
   edits, including 1,099 library tests, all integration suites and rustdoc.
 - The read-only high-reasoning implementation map and parent-owned execution
   plan are complete. The medium documentation audit passes after linking the
-  lifecycle decision. Step 1 syntax implementation is underway; no hook product
-  increment is complete yet.
+  lifecycle decision.
+- Step 1 syntax and projection passed independent high-reasoning semantic and
+  Rust/resource review. The parent repeated the focused tests (1,101 library,
+  seven hook syntax and 93 predecessor tests), formatting, strict Clippy and
+  narrow architecture inventory check successfully. Both forms still reject
+  at resolution; executable roots are next.
 
 ## Verification
 
@@ -63,6 +67,11 @@ local merge, merged-checkout verification and clean feature-worktree removal.
 Preserve unrelated main-checkout changes and all remote refs/tags.
 
 ## Discoveries
+
+The surface tree has no separate iterative ownership API. Step 1 reuses the
+existing iterative CST/projection paths and checks accepted surface disposal on
+a small stack. Registration initializers can nest before a block, so each
+registration charges one structural unit in addition to its body block.
 
 The proposal review established that ordinary checking-only effect weakening
 does not change Core's least body row. The new scopes must independently retain

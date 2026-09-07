@@ -383,6 +383,10 @@ pub enum SurfaceExprKind {
     Resume(Box<SurfaceExpr>),
     /// A parsed acquisition, pending resource identity and lifetime checking.
     Resource(Box<SurfaceResourceExpr>),
+    /// An empty-chain scope, pending hook API and effect checking.
+    Hook(Box<SurfaceHookExpr>),
+    /// A scoped transformer, pending hook API and lifetime checking.
+    Registration(Box<SurfaceRegistrationExpr>),
     /// Nullary consumption of the nearest clause's captured continuation.
     Discard,
 }
@@ -397,6 +401,26 @@ pub struct SurfaceResourceExpr {
     /// The primary initializer evaluated in the preceding scope.
     pub initializer: SurfaceExpr,
     /// The block owned by this acquisition.
+    pub body: SurfaceBlock,
+}
+
+/// Source ownership of one empty-chain hook scope.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceHookExpr {
+    /// The exact written target; this form introduces no source binder.
+    pub effect: SurfaceEffectInstance,
+    /// The block owned by this scope.
+    pub body: SurfaceBlock,
+}
+
+/// Source ownership of one scoped hook registration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceRegistrationExpr {
+    /// The exact written target; this form introduces no source binder.
+    pub effect: SurfaceEffectInstance,
+    /// The primary transformer evaluated in the preceding context.
+    pub transformer: SurfaceExpr,
+    /// The block executed with the registration active.
     pub body: SurfaceBlock,
 }
 

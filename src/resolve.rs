@@ -8877,6 +8877,14 @@ impl Resolver {
         expressions: &mut ResolvedExpressionBuffer,
     ) -> Result<(), ResolveError> {
         match &expression.kind {
+            SurfaceExprKind::Hook(_) | SurfaceExprKind::Registration(_) => {
+                // Temporary syntax checkpoint gate; typed hook authority replaces it.
+                return Err(error(
+                    ResolveReason::InternalState,
+                    expression.span,
+                    "hook scopes do not yet have typed resolution authority",
+                ));
+            }
             SurfaceExprKind::Resource(_) if self.builtin_cell.is_none() => {
                 return Err(error(
                     ResolveReason::ResourceBuiltinRequired,
@@ -10095,6 +10103,26 @@ mod tests {
     };
 
     static IMPORT_BUDGET_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn hook_syntax_cannot_publish_a_resolved_or_checked_module_before_typed_authority() {
+        for expression in ["hook Adjust {\n3\n}", "register Adjust increment {\n3\n}"] {
+            let source = format!(
+                "effect Adjust {{\npublish : Int -> Int\n}}\nincrement : Int -> Int\nincrement value = value + 1\nmain : Unit -> Int\nmain () = {expression}\n"
+            );
+            let fixture = ImportBudgetFixture::create(&source, "");
+            let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
+                .expect("hook syntax should load");
+            let entry = graph.module(graph.entry()).unwrap();
+            let ResolveModuleError::Resolution(error) = resolve_module(entry, &[]).unwrap_err()
+            else {
+                panic!("temporary resolver gate")
+            };
+            assert_eq!(error.reason, ResolveReason::InternalState);
+            // This checkpoint gate is removed when typed hook authority lands.
+            // It must not turn a recognized scope into an ordinary checked body.
+        }
+    }
 
     #[test]
     fn capture_type_metadata_excludes_only_lexical_fact_demand_and_retries_exactly() {
