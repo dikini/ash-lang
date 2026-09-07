@@ -19,7 +19,10 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-No proposed change is currently awaiting a decision.
+- [CP-0018: Synchronous Typed Hooks](CP-0018-synchronous-typed-hooks.md) —
+  transforming chains over exact effect APIs, scoped registration, explicit
+  handler placement and checked normal-exit deregistration. Under review;
+  implementation is not authorized.
 
 ## Accepted changes
 

@@ -48,8 +48,10 @@ bounded effect-row form. The scoped-exact-evidence checkpoint is implemented
 and verified; its [implementation evidence](effect-ash/scoped-evidence-evidence.md)
 records the behavioral cases, independent authentication, resource bounds,
 and reviews. Pure supplied methods
-establish neither provider nor proof authority. Runtime acquisition identities
-remain a later proposal question.
+establish neither provider nor proof authority. The locally integrated
+[safe-resource checkpoint](effect-ash/resource-scope-evidence.md) now supplies
+acquisition-local activation, stored-dependency checks and scope-owned release.
+These branch results remain separate from `main`.
 
 ## Closure boundary
 
@@ -306,10 +308,11 @@ The verified scoped-evidence checkpoint settles the bounded pure-evidence
 choices. The completed
 [capture/discard checkpoint](effect-ash/capture-discard-evidence.md)
 implements inferred request obligations and consuming abandonment, with its
-reviews and full verification retained. Stored ordinary values remain
-unrestricted. Resource acquisition, lifetime and cleanup rules remain the next
-proposal-owned questions before safe resource scope; this checkpoint does not
-implement them.
+reviews and full verification retained. The locally integrated safe-resource
+checkpoint adds stored resource dependencies and normal scope-owned release;
+general cleanup remains later work. [CP-0018](../proposals/CP-0018-synchronous-typed-hooks.md)
+now proposes the synchronous transforming-hook contract. It is not accepted
+and authorizes no implementation.
 
 ## Supporting evidence
 
