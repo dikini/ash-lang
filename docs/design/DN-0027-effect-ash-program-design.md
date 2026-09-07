@@ -311,8 +311,8 @@ implements inferred request obligations and consuming abandonment, with its
 reviews and full verification retained. The locally integrated safe-resource
 checkpoint adds stored resource dependencies and normal scope-owned release;
 general cleanup remains later work. [CP-0018](../proposals/CP-0018-synchronous-typed-hooks.md)
-now proposes the synchronous transforming-hook contract. It is not accepted
-and authorizes no implementation.
+records the accepted synchronous transforming-hook contract. Separate
+implementation authorization and an active task remain pending.
 
 ## Supporting evidence
 

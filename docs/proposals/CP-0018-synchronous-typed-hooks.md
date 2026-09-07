@@ -1,15 +1,16 @@
 # CP-0018: Synchronous Typed Hooks
 
 - ID: `CP-0018`
-- Status: proposed
+- Status: accepted
 - Related: [DN-0012](../design/DN-0012-coeffects-and-hooks.md),
   [DN-0026](../design/DN-0026-effect-ash-resource-first-milestones.md),
   [DN-0028](../design/DN-0028-effect-ash-milestone-plan.md), and
   [safe-resource evidence](../design/effect-ash/resource-scope-evidence.md)
 
-> This proposal is not current Ash and does not authorize implementation.
-> The user selected transforming subscribers: each maps one payload to the next
-> payload of the same type. The remaining choices below are proposed for review.
+> This proposal is accepted but is not current Ash. The user approved the full
+> contract, including transforming subscribers, registration order, handler
+> placement, scoped removal and pre-cleanup exits. Implementation requires a
+> separate go-ahead and an active task; none has started.
 
 ## Current behavior
 
@@ -386,7 +387,7 @@ admits named typed synchronous transformation hooks with scoped registration,
 visible subscriber effects and checked resource/control lifetimes. Empty roots
 preserve payloads, participating registrations transform in outer-to-inner
 order, and normal scope exit deregisters once. It still supplies no asynchronous
-hook, general cleanup or foreign provider. This proposed document changes none
+hook, general cleanup or foreign provider. This accepted proposal changes none
 of those current specification facts by itself.
 
 ## Interactions
@@ -425,11 +426,12 @@ These are required future observations, not tests already run for this proposal.
 | HOOK-09: Resources and failure | Exact/one-short compiler work and live-registration capacity, fresh retries, release/reuse, captured owners counting as live, preflight failure without partial acquisition, and stale/duplicated internal activation rejection. Measure chain traversal and callback work separately. Deep success and internal failure inside a subscriber dispose registrations, cells and pending control on a small stack without running cleanup callbacks. |
 | HOOK-10: Migration and tools | Existing effect, capture/discard, resource, local-newtype, interface and ordinary Pure cases retain their contracts and limits. Hook-free Pure locality remains measured. The documented complete program has exact CLI output `8 : Int` and empty stderr; new rejection examples have exact phase-owned diagnostics. |
 
-Before acceptance, review the proposed order/priority, handler placement, nested
-chain visibility, scoped-only removal and pre-cleanup exit contract. The user's
-choice of transformation alone does not approve those remaining choices.
+The user approved the complete contract after independent semantic and
+documentation review, including order/priority, handler placement, nested chain
+visibility, scoped-only removal and pre-cleanup exits. This acceptance is not
+evidence that the future implementation passes the required cases.
 
-After separate acceptance and implementation authorization, one task and its
+After separate implementation authorization, one task and its
 temporary plan must name the test-first increments, owning work formulas and
 review gates. Require independent semantic and Rust/resource reviews at no more
 than high reasoning, medium documentation review, `cargo xtask verify`, Markdown

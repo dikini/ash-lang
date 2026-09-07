@@ -661,11 +661,11 @@ own proposal and authorization.
 
 Prerequisite: integrated safe resource scope and its reassessment.
 
-[CP-0018](../proposals/CP-0018-synchronous-typed-hooks.md) proposes transforming
+[CP-0018](../proposals/CP-0018-synchronous-typed-hooks.md) accepts transforming
 subscribers, existing exact effect APIs, forwarding-first registration order,
-explicit empty-chain roots and scoped deregistration. The user selected
-transformation; the complete contract remains proposed, not implementation
-authorization. The original nine-unit weight is unchanged.
+explicit empty-chain roots and scoped deregistration. The user approved the
+complete contract; separate implementation authorization and an active task
+remain pending. The original nine-unit weight is unchanged.
 
 The proposal must define hook identity and payload, registration resource,
 subscriber effects, sequential order and priority, handler placement,
