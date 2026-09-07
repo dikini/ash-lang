@@ -5,12 +5,13 @@
 - Related: [DN-0012](../design/DN-0012-coeffects-and-hooks.md),
   [DN-0026](../design/DN-0026-effect-ash-resource-first-milestones.md),
   [DN-0028](../design/DN-0028-effect-ash-milestone-plan.md), and
-  [safe-resource evidence](../design/effect-ash/resource-scope-evidence.md)
+  [safe-resource evidence](../design/effect-ash/resource-scope-evidence.md), and
+  [TASK-0028](../tasks/TASK-0028-implement-synchronous-hooks.md)
 
 > This proposal is accepted but is not current Ash. The user approved the full
 > contract, including transforming subscribers, registration order, handler
-> placement, scoped removal and pre-cleanup exits. Implementation requires a
-> separate go-ahead and an active task; none has started.
+> placement, scoped removal and pre-cleanup exits. The user separately authorized
+> implementation, tracked by TASK-0028; the feature is not implemented yet.
 
 ## Current behavior
 
@@ -431,8 +432,7 @@ documentation review, including order/priority, handler placement, nested chain
 visibility, scoped-only removal and pre-cleanup exits. This acceptance is not
 evidence that the future implementation passes the required cases.
 
-After separate implementation authorization, one task and its
-temporary plan must name the test-first increments, owning work formulas and
+TASK-0028 and its temporary plan name the test-first increments, owning work formulas and
 review gates. Require independent semantic and Rust/resource reviews at no more
 than high reasoning, medium documentation review, `cargo xtask verify`, Markdown
 lint, link/authority and formal-notation checks, plus a simplification review.

@@ -664,8 +664,9 @@ Prerequisite: integrated safe resource scope and its reassessment.
 [CP-0018](../proposals/CP-0018-synchronous-typed-hooks.md) accepts transforming
 subscribers, existing exact effect APIs, forwarding-first registration order,
 explicit empty-chain roots and scoped deregistration. The user approved the
-complete contract; separate implementation authorization and an active task
-remain pending. The original nine-unit weight is unchanged.
+complete contract and separately authorized implementation under
+[TASK-0028](../tasks/TASK-0028-implement-synchronous-hooks.md). The original
+nine-unit weight is unchanged; the checkpoint remains open.
 
 The proposal must define hook identity and payload, registration resource,
 subscriber effects, sequential order and priority, handler placement,
