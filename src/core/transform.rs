@@ -59,6 +59,15 @@ impl TransformFamily for EffectOperationFamily {
         let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
         let effects = builder.clone_effect_row_for_rebuild(expression.effects())?;
         match operation {
+            EffectOperation::Registration(scope) => builder.registration_scope(
+                super::effect::RegistrationScopeNode {
+                    body: remap(remapped, scope.body)?,
+                    ..*scope
+                },
+                ty.into_inner(),
+                effects,
+                expression.origin.clone(),
+            ),
             EffectOperation::Resource(resource) => {
                 let handle_type = builder.clone_type_for_rebuild(resource.handle.ty())?;
                 let handle = builder.resolved_binder(
@@ -107,6 +116,16 @@ impl TransformFamily for EffectOperationFamily {
                 expression.origin.clone(),
             ),
             EffectOperation::Handler(node) => {
+                let registration =
+                    node.hook_registration
+                        .as_ref()
+                        .map(|registration| {
+                            builder.charge_effect_metadata(1)?;
+                            Ok::<_, TransformError>(Box::new(registration.with_target(
+                                clone_effect_instance(builder, &registration.target)?,
+                            )))
+                        })
+                        .transpose()?;
                 let effect = clone_effect_instance(builder, node.effect())?;
                 let root = node
                     .hook_root()
@@ -135,7 +154,7 @@ impl TransformFamily for EffectOperationFamily {
                         ),
                     ));
                 }
-                builder.handler_with_root(
+                builder.handler_with_contracts(
                     node.id(),
                     body,
                     effect,
@@ -144,6 +163,7 @@ impl TransformFamily for EffectOperationFamily {
                     effects,
                     expression.origin.clone(),
                     root,
+                    registration,
                 )
             }
         }

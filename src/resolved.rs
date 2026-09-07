@@ -18599,6 +18599,8 @@ pub struct ResolvedPerformExpr {
 /// One resolved lexical handler.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedHandleExpr {
+    /// Authenticated source relation of a scoped registration.
+    pub hook_registration: Option<Box<HookRegistrationContract>>,
     /// Compiler-owned identity clause and source relation of an empty hook root.
     pub hook_root: Option<HookRootContract>,
     /// Handled computation.
@@ -18607,6 +18609,49 @@ pub struct ResolvedHandleExpr {
     pub effect: ResolvedEffectInstance,
     /// Source-ordered clauses.
     pub clauses: Vec<ResolvedHandlerClause>,
+}
+
+/// Fresh ordinary binders and exact source target of a registration lowering.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HookRegistrationContract {
+    pub target: crate::types::EffectInstance,
+    pub span: Span,
+    pub target_span: Span,
+    pub operation: crate::types::OperationId,
+    pub callback: BinderId,
+    pub input: BinderId,
+    pub previous: BinderId,
+    pub next: BinderId,
+    pub resume: ResumeId,
+}
+
+impl HookRegistrationContract {
+    pub(crate) fn with_target(&self, target: crate::types::EffectInstance) -> Self {
+        Self {
+            target,
+            span: self.span,
+            target_span: self.target_span,
+            operation: self.operation,
+            callback: self.callback,
+            input: self.input,
+            previous: self.previous,
+            next: self.next,
+            resume: self.resume,
+        }
+    }
+
+    pub(crate) fn clone_with_budget(
+        &self,
+        budget: &mut crate::types::TypeWorkBudget,
+    ) -> Result<Self, ()> {
+        budget.charge(1)?;
+        Ok(
+            self.with_target(crate::types::clone_effect_instance_with_budget(
+                &self.target,
+                budget,
+            )?),
+        )
+    }
 }
 
 /// The source root and its fresh identity-clause capabilities.

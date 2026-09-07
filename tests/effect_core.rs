@@ -371,6 +371,9 @@ fn checked_source_lowers_to_explicit_effect_core() {
                 EffectOperation::Resource(_) => {
                     panic!("resume-only fixture cannot contain resource")
                 }
+                EffectOperation::Registration(_) => {
+                    panic!("resume-only fixture cannot contain registration")
+                }
             }
         }
         pending.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));

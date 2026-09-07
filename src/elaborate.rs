@@ -1937,6 +1937,9 @@ impl CoreLoweringFamily for EffectOperationFamily {
         operation: EffectOperation,
     ) -> Result<NodeId, BuildError> {
         match operation {
+            EffectOperation::Registration(scope) => {
+                builder.registration_scope(scope, ty, effects, origin)
+            }
             EffectOperation::Resource(resource) => {
                 builder.resource_scope(resource, ty, effects, origin)
             }
@@ -1957,8 +1960,18 @@ impl CoreLoweringFamily for EffectOperationFamily {
                 origin,
             ),
             EffectOperation::Handler(handler) => {
-                let (id, body, effect, clauses, root) = handler.into_parts();
-                builder.handler_with_root(id, body, effect, clauses, ty, effects, origin, root)
+                let (id, body, effect, clauses, root, registration) = handler.into_parts();
+                builder.handler_with_contracts(
+                    id,
+                    body,
+                    effect,
+                    clauses,
+                    ty,
+                    effects,
+                    origin,
+                    root,
+                    registration,
+                )
             }
         }
     }
@@ -9011,6 +9024,162 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         self.finish_handler(handler, span, context, body, rewrite_checkpoint)
     }
 
+    fn check_registration_callback(
+        &mut self,
+        handler: &crate::resolved::ResolvedHandleExpr,
+        span: Span,
+        context: &TypeContext,
+    ) -> Result<(), TypeError> {
+        let registration = handler
+            .hook_registration
+            .as_ref()
+            .ok_or_else(invalid_state)?;
+        let (payload, result) = self.operation_signature(
+            &handler.effect.instance,
+            registration.operation,
+            handler.effect.span,
+        )?;
+        let payload = IterativeTypeOwner::new(payload);
+        drop(IterativeTypeOwner::new(result));
+        let callback = IterativeTypeOwner::new(
+            self.zonk(
+                context
+                    .lookup(registration.callback)
+                    .ok_or_else(invalid_state)?,
+            )?,
+        );
+        self.check_registration_callback_type(
+            &payload,
+            callback.into_inner(),
+            span,
+            handler.effect.span,
+        )
+    }
+
+    fn check_registration_callback_type(
+        &mut self,
+        payload: &Type,
+        callback: Type,
+        span: Span,
+        target_span: Span,
+    ) -> Result<(), TypeError> {
+        let callback = IterativeTypeOwner::new(callback);
+        let latent = match callback.function_view().and_then(|view| view.effects()) {
+            Some(effects) => clone_effect_row_with_budget(effects, &mut self.type_work)
+                .map_err(|()| type_resource())?,
+            None => EffectRow::empty(),
+        };
+        let domain = IterativeTypeOwner::new(self.clone_type(payload)?);
+        let codomain = self.clone_type(payload)?;
+        let expected = IterativeTypeOwner::new(Type::function_computation(
+            domain.into_inner(),
+            crate::types::ComputationType::new(codomain, latent),
+        ));
+        match self.unify(&expected, &callback) {
+            Ok(()) => Ok(()),
+            Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
+                Err(check_mismatch(
+                    CheckKind::General,
+                    span,
+                    expected.into_inner(),
+                    callback.into_inner(),
+                    Some(target_span),
+                    &self.registry,
+                ))
+            }
+            Err(UnificationFailure::Resource) => Err(type_resource()),
+            Err(UnificationFailure::Invariant) => Err(invalid_state()),
+        }
+    }
+
+    fn registration_outward_row(
+        &mut self,
+        handler: &crate::resolved::ResolvedHandleExpr,
+        span: Span,
+        context: &TypeContext,
+        mut output: EffectRow,
+    ) -> Result<EffectRow, TypeError> {
+        let registration = handler
+            .hook_registration
+            .as_ref()
+            .ok_or_else(invalid_state)?;
+        let callback = IterativeTypeOwner::new(
+            self.zonk(
+                context
+                    .lookup(registration.callback)
+                    .ok_or_else(invalid_state)?,
+            )?,
+        );
+        if let Some(latent) = callback.function_view().and_then(|view| view.effects()) {
+            output = self.union_effects(&output, latent, span)?;
+        }
+        let target = crate::types::clone_effect_instance_with_budget(
+            &handler.effect.instance,
+            &mut self.type_work,
+        )
+        .map_err(|()| type_resource())?;
+        output = self.union_effects(&output, &EffectRow::singleton(target), span)?;
+        let declaration = self
+            .registry
+            .effect(handler.effect.instance.effect())
+            .ok_or_else(invalid_state)?;
+        let valid = if let [operation] = &*declaration.operations {
+            if let Some(function) = operation.annotation.ty.function_view() {
+                operation.spelling == "publish"
+                    && same_type_with_budget(
+                        function.domain(),
+                        function.value(),
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| type_resource())?
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if !valid {
+            return Err(inference_failure(
+                TypeReason::HookApi,
+                handler.effect.span,
+                "a hook API must declare exactly publish with equal domain and result under its own parameters",
+            ));
+        }
+        Ok(output)
+    }
+
+    fn finish_registration_handler(
+        &mut self,
+        handler: &crate::resolved::ResolvedHandleExpr,
+        span: Span,
+        context: &TypeContext,
+        body: TypedNode,
+        rewrite_checkpoint: crate::core::dialect::TypeRewriteCheckpoint,
+    ) -> Result<TypedNode, TypeError> {
+        let body = TypedNodeOwner::new(body);
+        self.check_registration_callback(handler, span, context)?;
+        let output = match body
+            .effects
+            .remove_exact_with_budget(&handler.effect.instance, &mut self.type_work)
+            .map_err(|()| type_resource())?
+        {
+            Ok(row) => row,
+            Err(crate::types::EffectRowError::Missing) => {
+                clone_effect_row_with_budget(&body.effects, &mut self.type_work)
+                    .map_err(|()| type_resource())?
+            }
+            Err(_) => {
+                return Err(inference_failure(
+                    TypeReason::AmbiguousEffectRow,
+                    handler.effect.span,
+                    "the registration body does not determine whether it requests this exact effect instance",
+                ));
+            }
+        };
+        let output = self.registration_outward_row(handler, span, context, output)?;
+        self.lower_hook_registration(handler, body, output, rewrite_checkpoint, context)
+    }
+
     fn finish_handler(
         &mut self,
         handler: &crate::resolved::ResolvedHandleExpr,
@@ -9310,6 +9479,290 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(TypedNode {
             node,
             ty,
+            effects: output,
+            provenance,
+        })
+    }
+
+    fn authenticate_registration_lowering(
+        &mut self,
+        handler: &crate::resolved::ResolvedHandleExpr,
+    ) -> Result<(), TypeError> {
+        let contract = handler
+            .hook_registration
+            .as_ref()
+            .ok_or_else(invalid_state)?;
+        self.type_work.charge(20).map_err(|()| type_resource())?;
+        let [clause] = &*handler.clauses else {
+            return Err(invalid_state());
+        };
+        let ResolvedPatternKind::Binder(input) = &clause.pattern.kind else {
+            return Err(invalid_state());
+        };
+        let ResolvedExprKind::Block(block) = &clause.body.kind else {
+            return Err(invalid_state());
+        };
+        let [
+            ResolvedLocalDeclaration::Binding(previous),
+            ResolvedLocalDeclaration::Binding(next),
+        ] = &*block.declarations
+        else {
+            return Err(invalid_state());
+        };
+        let ResolvedPatternKind::Binder(previous_binder) = &previous.pattern.kind else {
+            return Err(invalid_state());
+        };
+        let ResolvedPatternKind::Binder(next_binder) = &next.pattern.kind else {
+            return Err(invalid_state());
+        };
+        let ResolvedExprKind::Perform(request) = &previous.initializer.kind else {
+            return Err(invalid_state());
+        };
+        let ResolvedExprKind::Apply(application) = &next.initializer.kind else {
+            return Err(invalid_state());
+        };
+        let ResolvedExprKind::Resume(resume) = &block.result.kind else {
+            return Err(invalid_state());
+        };
+        let variable = |expression: &ResolvedExpr, binder| {
+            matches!(&expression.kind,
+            ResolvedExprKind::Occurrence(value) if value.global_binder() == Some(binder)
+                && value.origin.primary_span() == contract.target_span && expression.span == contract.target_span)
+        };
+        if handler.hook_root.is_some()
+            || input.id != contract.input
+            || previous_binder.id != contract.previous
+            || next_binder.id != contract.next
+            || clause.resume != contract.resume
+            || resume.owner != Some(contract.resume)
+            || clause.operation != contract.operation
+            || request.operation != contract.operation
+            || clause.spelling != "publish"
+            || request.spelling != "publish"
+            || handler.effect.span != contract.target_span
+            || clause.span != contract.target_span
+            || !variable(&request.operand, contract.input)
+            || !variable(&application.function, contract.callback)
+            || !variable(&application.argument, contract.previous)
+            || !variable(&resume.value, contract.next)
+            || previous.annotation.is_some()
+            || next.annotation.is_some()
+        {
+            return Err(invalid_state());
+        }
+        for effect in [&handler.effect.instance, &request.effect.instance] {
+            if crate::types::compare_effect_instances_with_budget(
+                effect,
+                &contract.target,
+                &mut self.type_work,
+            )
+            .map_err(|()| type_resource())?
+                != std::cmp::Ordering::Equal
+            {
+                return Err(invalid_state());
+            }
+        }
+        for binder in [input, previous_binder, next_binder] {
+            if binder.origin.primary_span() != contract.target_span {
+                return Err(invalid_state());
+            }
+        }
+        for span in [
+            clause.pattern.span,
+            clause.body.span,
+            block.span,
+            previous.span,
+            previous.pattern.span,
+            previous.initializer.span,
+            next.span,
+            next.pattern.span,
+            next.initializer.span,
+            block.result.span,
+        ] {
+            if span != contract.target_span {
+                return Err(invalid_state());
+            }
+        }
+        Ok(())
+    }
+
+    fn lower_hook_registration(
+        &mut self,
+        handler: &crate::resolved::ResolvedHandleExpr,
+        body: TypedNodeOwner,
+        output: EffectRow,
+        rewrite_checkpoint: crate::core::dialect::TypeRewriteCheckpoint,
+        context: &TypeContext,
+    ) -> Result<TypedNode, TypeError> {
+        self.authenticate_registration_lowering(handler)?;
+        self.zonk_builder_types_since(Some(rewrite_checkpoint), false)
+            .map_err(TypeError::Internal)?;
+        let output = self.zonk_effect_row(&output)?;
+        let contract = handler
+            .hook_registration
+            .as_ref()
+            .ok_or_else(invalid_state)?;
+        let (domain, result) =
+            self.operation_signature(&contract.target, contract.operation, contract.target_span)?;
+        let domain = IterativeTypeOwner::new(domain);
+        drop(IterativeTypeOwner::new(result));
+        let payload = IterativeTypeOwner::new(self.pure_core_type(&domain)?);
+        let result_type = IterativeTypeOwner::new(self.pure_core_type(&body.ty)?);
+        let callback_type = IterativeTypeOwner::new(
+            self.zonk(
+                context
+                    .lookup(contract.callback)
+                    .ok_or_else(invalid_state)?,
+            )?,
+        );
+        let input_type = self.clone_type(&payload)?;
+        let input = self.builder.resolved_binder(
+            contract.input,
+            input_type,
+            Origin::Source(contract.target_span),
+        )?;
+        let pattern_type = self.clone_type(&payload)?;
+        let pattern = CorePatternOwner::new(Some(CorePattern::new(
+            pattern_type,
+            Origin::Source(contract.target_span),
+            CorePatternKind::Binder(input),
+        )));
+        let input_type = self.clone_type(&payload)?;
+        let input = self.builder.variable(
+            contract.input,
+            input_type,
+            Origin::Source(contract.target_span),
+        )?;
+        let forwarded =
+            crate::types::clone_effect_instance_with_budget(&contract.target, &mut self.type_work)
+                .map_err(|()| type_resource())?;
+        let request_row = EffectRow::singleton(
+            crate::types::clone_effect_instance_with_budget(&contract.target, &mut self.type_work)
+                .map_err(|()| type_resource())?,
+        );
+        let request_type = IterativeTypeOwner::new(self.clone_type(&payload)?);
+        let request_effects = self.core_effect_row(&request_row)?;
+        let request = self.push_effect_core(
+            request_type.into_inner(),
+            request_effects,
+            Origin::Source(contract.target_span),
+            EffectOperation::Request(RequestNode::new(forwarded, contract.operation, input)),
+        )?;
+        let previous_type = self.clone_type(&payload)?;
+        let previous = self.builder.resolved_binder(
+            contract.previous,
+            previous_type,
+            Origin::Source(contract.target_span),
+        )?;
+        let previous_type = self.clone_type(&payload)?;
+        let previous_value = self.builder.variable(
+            contract.previous,
+            previous_type,
+            Origin::Source(contract.target_span),
+        )?;
+        let callback_type = self.pure_core_type(&callback_type)?;
+        let callback = self.builder.variable(
+            contract.callback,
+            callback_type,
+            Origin::Source(contract.target_span),
+        )?;
+        let application_type = self.clone_type(&payload)?;
+        let application = self.builder.application(
+            callback,
+            previous_value,
+            application_type,
+            Origin::Source(contract.target_span),
+        )?;
+        let next_type = self.clone_type(&payload)?;
+        let next = self.builder.resolved_binder(
+            contract.next,
+            next_type,
+            Origin::Source(contract.target_span),
+        )?;
+        let next_type = self.clone_type(&payload)?;
+        let next_value = self.builder.variable(
+            contract.next,
+            next_type,
+            Origin::Source(contract.target_span),
+        )?;
+        let handler_id = HandlerId::new(self.next_handler);
+        self.next_handler = self.next_handler.checked_add(1).ok_or_else(invalid_state)?;
+        let resume_type = IterativeTypeOwner::new(self.clone_type(&result_type)?);
+        let resume_effects = self.core_effect_row(&output)?;
+        let resume = self.push_effect_core(
+            resume_type.into_inner(),
+            resume_effects,
+            Origin::Source(contract.target_span),
+            EffectOperation::Resume(ResumeNode::new(
+                handler_id,
+                contract.resume,
+                ResumeUse::Consumed,
+                next_value,
+            )),
+        )?;
+        let bind_type = self.clone_type(&result_type)?;
+        let next = self.builder.binding(
+            next,
+            application,
+            resume,
+            bind_type,
+            Origin::Source(contract.target_span),
+        )?;
+        let bind_type = self.clone_type(&result_type)?;
+        let previous = self.builder.binding(
+            previous,
+            request,
+            next,
+            bind_type,
+            Origin::Source(contract.target_span),
+        )?;
+        self.type_work.charge(1).map_err(|()| type_resource())?;
+        let mut clauses = Vec::new();
+        clauses.try_reserve_exact(1).map_err(|_| type_resource())?;
+        clauses.push(EffectClause::new(
+            contract.operation,
+            contract.resume,
+            CoreMatchArm::new(
+                pattern.into_inner(),
+                previous,
+                Origin::Source(contract.target_span),
+            ),
+        ));
+        let target =
+            crate::types::clone_effect_instance_with_budget(&contract.target, &mut self.type_work)
+                .map_err(|()| type_resource())?;
+        let retained = contract
+            .clone_with_budget(&mut self.type_work)
+            .map_err(|()| type_resource())?;
+        let handler_type = IterativeTypeOwner::new(self.clone_type(&result_type)?);
+        let handler_effects = self.core_effect_row(&output)?;
+        let handler = self.push_effect_core(
+            handler_type.into_inner(),
+            handler_effects,
+            Origin::Source(contract.span),
+            EffectOperation::Handler(
+                HandlerNode::new(handler_id, body.node, target, clauses)
+                    .with_hook_registration(Some(retained)),
+            ),
+        )?;
+        let owner_type = IterativeTypeOwner::new(self.clone_type(&result_type)?);
+        let owner_effects = self.core_effect_row(&output)?;
+        let node = self.push_effect_core(
+            owner_type.into_inner(),
+            owner_effects,
+            Origin::Source(contract.span),
+            EffectOperation::Registration(crate::core::effect::RegistrationScopeNode {
+                handler: handler_id,
+                callback: contract.callback,
+                body: handler,
+                span: contract.span,
+            }),
+        )?;
+        let ty = IterativeTypeOwner::new(self.clone_type(&body.ty)?);
+        let provenance = self.at_span_provenance(&ty, contract.span)?;
+        Ok(TypedNode {
+            node,
+            ty: ty.into_inner(),
             effects: output,
             provenance,
         })
@@ -10137,13 +10590,17 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     rewrite_checkpoint,
                 } => {
                     let body = values.pop().ok_or_else(invalid_state)?.into_inner();
-                    values.push(self.finish_handler(
-                        handler,
-                        span,
-                        context,
-                        body,
-                        rewrite_checkpoint,
-                    )?);
+                    values.push(if handler.hook_registration.is_some() {
+                        self.finish_registration_handler(
+                            handler,
+                            span,
+                            context,
+                            body,
+                            rewrite_checkpoint,
+                        )?
+                    } else {
+                        self.finish_handler(handler, span, context, body, rewrite_checkpoint)?
+                    });
                 }
                 ElaborationTask::ResourceBody { resource, span } => {
                     self.step_resource_body(resource, span, context, &mut tasks, &mut values)?;
@@ -10641,7 +11098,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     ResolvedExprKind::Perform(request) => {
                         self.schedule_perform(request, current.span, &mut tasks)?;
                     }
-                    ResolvedExprKind::Handle(handler) if handler.hook_root.is_some() => {
+                    ResolvedExprKind::Handle(handler)
+                        if handler.hook_root.is_some() || handler.hook_registration.is_some() =>
+                    {
                         self.type_work.charge(2).map_err(|()| {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                         })?;
@@ -10674,7 +11133,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         if !matches!(cause, Some(SynthesisCause::Binding(_))) {
                             return Err(function_needs_context(current.span, cause));
                         }
-                        self.schedule_inferred_function(function, current.span, &mut tasks)?;
+                        self.schedule_inferred_function(function, current.span, &mut tasks, None)?;
                     }
                 },
                 ElaborationTask::Check {
@@ -11073,45 +11532,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         provenance: TypeProvenance::atom(Some(operator_span)),
                     });
                 }
+                ElaborationTask::BeginRegistrationBinding { binding, handler } => {
+                    self.schedule_registration_binding(binding, handler, &mut tasks)?;
+                }
                 ElaborationTask::BeginBinding {
                     binding,
                     expected,
                     finish_expected,
                 } => {
-                    let expected = expected.map(ProvenancedTypeOwner::new);
-                    let finish_expected = finish_expected.map(ProvenancedTypeOwner::new);
-                    let evidence_marker = if self.purpose == ElaborationPurpose::ModuleCheck
-                        && self.selection.is_some()
-                        && finish_expected.is_none()
-                        && matches!(binding.pattern.kind, ResolvedPatternKind::Binder(_))
-                        && matches!(binding.initializer.kind, ResolvedExprKind::Function(_))
-                    {
-                        Some(self.evidence_marker()?)
-                    } else {
-                        None
-                    };
-                    tasks.push(ElaborationTask::FinishBinding {
-                        binding,
-                        expected: finish_expected.map(ProvenancedTypeOwner::into_inner),
-                        evidence_marker,
-                    });
-                    match (expected, binding.annotation.as_ref()) {
-                        (Some(expected), Some(annotation)) => {
-                            tasks.push(ElaborationTask::Check {
-                                expression: &binding.initializer,
-                                expected: expected.into_inner(),
-                                kind: CheckKind::BindingInitializer {
-                                    initializer_span: binding.initializer.span,
-                                    annotation_span: annotation.span,
-                                },
-                            });
-                        }
-                        (None, None) => tasks.push(ElaborationTask::Synthesize {
-                            expression: &binding.initializer,
-                            cause: Some(SynthesisCause::Binding(binding.span)),
-                        }),
-                        _ => return Err(invalid_state()),
-                    }
+                    self.schedule_binding(binding, expected, finish_expected, &mut tasks)?;
                 }
                 ElaborationTask::FinishBinding {
                     binding,
@@ -14034,21 +14463,109 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
+    fn schedule_binding<'a>(
+        &mut self,
+        binding: &'a ResolvedBinding,
+        expected: Option<ProvenancedType>,
+        finish_expected: Option<ProvenancedType>,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+    ) -> Result<(), TypeError> {
+        let expected = expected.map(ProvenancedTypeOwner::new);
+        let finish_expected = finish_expected.map(ProvenancedTypeOwner::new);
+        let evidence_marker = if self.purpose == ElaborationPurpose::ModuleCheck
+            && self.selection.is_some()
+            && finish_expected.is_none()
+            && matches!(binding.pattern.kind, ResolvedPatternKind::Binder(_))
+            && matches!(binding.initializer.kind, ResolvedExprKind::Function(_))
+        {
+            Some(self.evidence_marker()?)
+        } else {
+            None
+        };
+        tasks.push(ElaborationTask::FinishBinding {
+            binding,
+            expected: finish_expected.map(ProvenancedTypeOwner::into_inner),
+            evidence_marker,
+        });
+        match (expected, binding.annotation.as_ref()) {
+            (Some(expected), Some(annotation)) => {
+                tasks.push(ElaborationTask::Check {
+                    expression: &binding.initializer,
+                    expected: expected.into_inner(),
+                    kind: CheckKind::BindingInitializer {
+                        initializer_span: binding.initializer.span,
+                        annotation_span: annotation.span,
+                    },
+                });
+            }
+            (None, None) => tasks.push(ElaborationTask::Synthesize {
+                expression: &binding.initializer,
+                cause: Some(SynthesisCause::Binding(binding.span)),
+            }),
+            _ => return Err(invalid_state()),
+        }
+        Ok(())
+    }
+
+    fn schedule_registration_binding<'a>(
+        &mut self,
+        binding: &'a ResolvedBinding,
+        handler: &crate::resolved::ResolvedHandleExpr,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+    ) -> Result<(), TypeError> {
+        let ResolvedExprKind::Function(function) = &binding.initializer.kind else {
+            return Err(invalid_state());
+        };
+        let evidence_marker =
+            if self.purpose == ElaborationPurpose::ModuleCheck && self.selection.is_some() {
+                Some(self.evidence_marker()?)
+            } else {
+                None
+            };
+        tasks.push(ElaborationTask::FinishBinding {
+            binding,
+            expected: None,
+            evidence_marker,
+        });
+        let contract = handler
+            .hook_registration
+            .as_ref()
+            .ok_or_else(invalid_state)?;
+        let (payload, result) = self.operation_signature(
+            &handler.effect.instance,
+            contract.operation,
+            handler.effect.span,
+        )?;
+        let payload = IterativeTypeOwner::new(payload);
+        drop(IterativeTypeOwner::new(result));
+        self.schedule_inferred_function(function, binding.initializer.span, tasks, Some(&payload))
+    }
+
     fn schedule_inferred_function<'a>(
         &mut self,
         function: &'a crate::resolved::ResolvedFunctionExpr,
         span: Span,
         tasks: &mut ElaborationTaskBuffer<'a>,
+        hook_payload: Option<&Type>,
     ) -> Result<(), TypeError> {
         self.type_work
             .charge(3)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        let domain = self.fresh_inference(&Kind::Type, span)?;
-        let codomain = self.fresh_inference(&Kind::Type, span)?;
-        let expected_ty = Type::Function(Box::new(domain), Box::new(codomain));
+        let (domain, codomain) = if let Some(payload) = hook_payload {
+            let domain = IterativeTypeOwner::new(self.clone_type(payload)?);
+            let codomain = self.clone_type(payload)?;
+            (domain.into_inner(), codomain)
+        } else {
+            (
+                self.fresh_inference(&Kind::Type, span)?,
+                self.fresh_inference(&Kind::Type, span)?,
+            )
+        };
+        let expected_ty =
+            IterativeTypeOwner::new(Type::Function(Box::new(domain), Box::new(codomain)));
         let expected = ProvenancedTypeOwner::new(ProvenancedType {
             provenance: self.unknown_provenance(&expected_ty)?,
-            ty: expected_ty,
+            ty: expected_ty.into_inner(),
         });
         let (domain_ty, codomain_ty) =
             clone_function_parts_with_budget(&expected.ty, &mut self.type_work)
@@ -17938,6 +18455,10 @@ enum ElaborationTask<'a> {
         expected: Option<ProvenancedType>,
         finish_expected: Option<ProvenancedType>,
     },
+    BeginRegistrationBinding {
+        binding: &'a ResolvedBinding,
+        handler: &'a crate::resolved::ResolvedHandleExpr,
+    },
     FinishBinding {
         binding: &'a ResolvedBinding,
         expected: Option<ProvenancedType>,
@@ -19187,6 +19708,7 @@ fn discard_elaboration_task(task: ElaborationTask<'_>) {
         | ElaborationTask::FinishPerform(_) => {}
         ElaborationTask::RetainLocalNewtype(_)
         | ElaborationTask::Synthesize { .. }
+        | ElaborationTask::BeginRegistrationBinding { .. }
         | ElaborationTask::AfterApplicationFunction { .. }
         | ElaborationTask::AfterLeft { .. }
         | ElaborationTask::CheckRecursiveMember(_)
@@ -19397,6 +19919,18 @@ fn schedule_block<'a>(
                 )));
             }
             ResolvedLocalDeclaration::Binding(binding) => {
+                if binding.annotation.is_none()
+                    && matches!(binding.initializer.kind, ResolvedExprKind::Function(_))
+                    && block.declarations.len() == 1
+                    && let ResolvedExprKind::Handle(handler) = &block.result.kind
+                    && handler.hook_registration.as_ref().is_some_and(|contract| {
+                        matches!(&binding.pattern.kind, ResolvedPatternKind::Binder(binder)
+                            if binder.id == contract.callback)
+                    })
+                {
+                    tasks.push(ElaborationTask::BeginRegistrationBinding { binding, handler });
+                    continue;
+                }
                 let expected = binding
                     .annotation
                     .as_ref()
@@ -21522,6 +22056,9 @@ fn capture_failure(
                     ),
                     crate::core::capture::CompletionOwner::Resource(span) => {
                         (span, "this resource still requires scope completion")
+                    }
+                    crate::core::capture::CompletionOwner::Registration(span) => {
+                        (span, "this registration requires normal completion")
                     }
                 };
                 diagnostic.related.push(SourceLabel::new(owner, message));
@@ -33178,6 +33715,184 @@ mod tests {
     fn hook_body_and_identity_elaboration_are_exact_and_fresh_retryable() {
         let (module, _, _, _) = cell_module_fixture_sources(
             "effect Adjust<T, U> {\npublish : (Unit -> Int) -> (Unit -> Int)\n}\nmain : Unit -> Int\nmain () = hook Adjust<(Int, Bool), Unit> {\n42\n}\n",
+        );
+        let run = |limit| {
+            let mut elaborator = cell_resource_elaborator(&module);
+            elaborator.type_work = TypeWorkBudget::with_limit(limit);
+            let mut context = elaborator.base_context.clone();
+            let result = elaborator
+                .elaborate_expression_with_context(
+                    ElaborationTask::Synthesize {
+                        expression: fixture_result(&module),
+                        cause: None,
+                    },
+                    &mut context,
+                )
+                .map(|typed| drop(TypedNodeOwner::new(typed)));
+            (result, elaborator.type_work.used())
+        };
+        let (result, exact) = run(usize::MAX);
+        result.unwrap();
+        assert!(exact > 0);
+        for limit in 0..exact {
+            assert_eq!(
+                run(limit).0,
+                Err(TypeError::Internal(
+                    ElaborationFailure::TypeResourceExhausted
+                )),
+                "limit {limit}"
+            );
+        }
+        for _ in 0..2 {
+            assert_eq!(run(exact), (Ok(()), exact));
+        }
+    }
+
+    #[test]
+    fn registration_contextual_function_disposes_deep_payload_when_provenance_budget_fails() {
+        let (module, _, _, _) = cell_module_fixture_sources(
+            "main : Unit -> (Int -> Int)\nmain () = fn(value) {\nvalue\n}\n",
+        );
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let expression = fixture_result(&module);
+                let ResolvedExprKind::Function(function) = &expression.kind else {
+                    panic!("the fixture should expose its anonymous function");
+                };
+                let mut payload = Type::Int;
+                for _ in 0..4_096 {
+                    payload = Type::Function(Box::new(Type::Unit), Box::new(payload));
+                }
+                let payload = IterativeTypeOwner::new(payload);
+                let mut measured = TypeWorkBudget::unbounded();
+                charge_type_cells(&payload, &mut measured).unwrap();
+                let mut elaborator = CoreElaborator::<EffectOperationFamily>::new();
+                // Admit both payload clones and the ordinary function carrier,
+                // then fail at the first provenance charge.
+                elaborator.type_work = TypeWorkBudget::with_limit(3 + 2 * measured.used());
+                let mut tasks = ElaborationTaskBuffer(Vec::new());
+                assert_eq!(
+                    elaborator.schedule_inferred_function(
+                        function,
+                        expression.span,
+                        &mut tasks,
+                        Some(&payload),
+                    ),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    )),
+                );
+                assert!(tasks.is_empty());
+            })
+            .unwrap()
+            .join()
+            .expect("contextual callback failure must dispose its payload iteratively");
+    }
+
+    #[test]
+    fn registration_callback_check_disposes_first_deep_clone_when_second_clone_fails() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut payload = Type::Int;
+                for _ in 0..4_096 {
+                    payload = Type::Function(Box::new(Type::Unit), Box::new(payload));
+                }
+                let payload = IterativeTypeOwner::new(payload);
+                let callback = Type::Function(Box::new(payload.clone()), Box::new(payload.clone()));
+                let mut measured = TypeWorkBudget::unbounded();
+                charge_type_cells(&payload, &mut measured).unwrap();
+                let mut short = CoreElaborator::<EffectOperationFamily>::new();
+                short.type_work = TypeWorkBudget::with_limit(measured.used());
+                let span = row_test_span("registration-callback-failure.ash");
+                assert_eq!(
+                    short.check_registration_callback_type(&payload, callback, span, span),
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    )),
+                );
+            })
+            .unwrap()
+            .join()
+            .expect("callback comparison failure must dispose its first clone iteratively");
+    }
+
+    #[test]
+    fn registration_lowering_disposes_deep_result_when_resume_row_budget_fails() {
+        let (module, _, _, _) = cell_module_fixture_sources(
+            "effect Adjust {\npublish : Int -> Int\n}\nmain : Unit -> Int ! {Adjust}\nmain () = register Adjust (fn(value) {\nvalue + 1\n}) {\n42\n}\n",
+        );
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let ResolvedExprKind::Block(block) = &fixture_result(&module).kind else {
+                    panic!("registration should retain its initializer block");
+                };
+                let ResolvedExprKind::Handle(handler) = &block.result.kind else {
+                    panic!("registration should retain its generated handler");
+                };
+                let contract = handler.hook_registration.as_ref().unwrap();
+                let run = |limit| {
+                    let mut elaborator = cell_resource_elaborator(&module);
+                    let node = elaborator
+                        .builder
+                        .unit(Type::Unit, Origin::Source(contract.span))
+                        .unwrap();
+                    let checkpoint = elaborator.builder.type_rewrite_checkpoint();
+                    let mut result_type = Type::Unit;
+                    for _ in 0..4_096 {
+                        result_type = Type::Function(Box::new(Type::Unit), Box::new(result_type));
+                    }
+                    let body = TypedNodeOwner::new(TypedNode {
+                        node,
+                        ty: result_type,
+                        effects: EffectRow::empty(),
+                        provenance: TypeProvenance::atom(Some(contract.span)),
+                    });
+                    let mut context = TypeContext::new();
+                    context.insert(
+                        contract.callback,
+                        Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
+                    );
+                    elaborator.type_work = TypeWorkBudget::with_limit(limit);
+                    let result = elaborator
+                        .lower_hook_registration(
+                            handler,
+                            body,
+                            EffectRow::singleton(contract.target.clone()),
+                            checkpoint,
+                            &context,
+                        )
+                        .map(|typed| drop(TypedNodeOwner::new(typed)));
+                    (result, elaborator.type_work.used())
+                };
+                // The synthetic intermediate body is deliberately too deep for
+                // Core admission. No successful Core is forged: the unbounded
+                // run identifies work through the first resume admission.
+                let (admission, through_resume_row) = run(usize::MAX);
+                assert_eq!(
+                    admission,
+                    Err(TypeError::Internal(ElaborationFailure::Core(
+                        BuildError::TypeDepthExceeded
+                    )))
+                );
+                assert_eq!(
+                    run(through_resume_row - 1).0,
+                    Err(TypeError::Internal(
+                        ElaborationFailure::TypeResourceExhausted
+                    ))
+                );
+            })
+            .unwrap()
+            .join()
+            .expect("registration lowering failure must dispose its pending result iteratively");
+    }
+
+    #[test]
+    fn registration_body_callback_and_owner_elaboration_are_exact_and_fresh_retryable() {
+        let (module, _, _, _) = cell_module_fixture_sources(
+            "effect Adjust<T, U> {\npublish : Int -> Int\n}\nmain : Unit -> Bool\nmain () = hook Adjust<(Int, Bool), Unit> {\nregister Adjust<(Int, Bool), Unit> (fn(value) {\nvalue + 1\n}) {\ntrue\n}\n}\n",
         );
         let run = |limit| {
             let mut elaborator = cell_resource_elaborator(&module);

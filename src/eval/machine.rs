@@ -1124,6 +1124,9 @@ fn dispatch_entry(
             EffectExprKind::Pure(kind) => (kind, &expression.origin),
             EffectExprKind::Operation(operation) => {
                 return Ok(match operation {
+                    EffectOperation::Registration(_) => {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
                     EffectOperation::Resource(resource) => Transition::suspend(
                         Control::Evaluate(resource.initializer(), environment.clone()),
                         Frame::ResourceInitializer { node, environment },

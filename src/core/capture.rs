@@ -423,6 +423,7 @@ pub(crate) struct UnsafeDiscard {
 pub(crate) enum CompletionOwner {
     Clause(Span),
     Resource(Span),
+    Registration(Span),
 }
 
 #[derive(Clone, Copy)]
@@ -926,6 +927,10 @@ fn compile<F: CoreOperationFamily>(
                 Control::Sequence(sequence)
             }
             _ => match operation(&node.kind) {
+                Some(EffectOperation::Registration(scope)) => Control::Registration {
+                    body: index(scope.body) + 1,
+                    source: scope.span,
+                },
                 Some(EffectOperation::Resource(resource)) => {
                     graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
                     let scope = graph.code.len();
@@ -1081,6 +1086,9 @@ fn check_nodes_with_methods<F: CoreOperationFamily>(
         if let Some(EffectOperation::Resource(resource)) = operation(&node.kind) {
             resource_scope.get_or_insert(resource.acquisition.span);
         }
+        if let Some(EffectOperation::Registration(scope)) = operation(&node.kind) {
+            resource_scope.get_or_insert(scope.span);
+        }
         has_discard |= matches!(operation(&node.kind), Some(EffectOperation::Discard(_)));
         match F::pure(&node.kind) {
             Some(PureExprKind::Value(PureValue::Function(function))) => {
@@ -1216,6 +1224,9 @@ fn check_nodes_with_methods<F: CoreOperationFamily>(
                     _ => {}
                 },
                 _ => match operation(&node.kind) {
+                    Some(EffectOperation::Registration(scope)) => {
+                        value = values[index(scope.body)].copy(budget)?;
+                    }
                     Some(EffectOperation::Resource(resource)) => {
                         value = values[index(resource.body)].copy(budget)?;
                     }
@@ -1269,11 +1280,12 @@ fn check_control_roots(
     budget: &mut TypeWorkBudget,
 ) -> Result<(), Failure> {
     charge(budget, graph.code.len())?;
-    if graph
-        .code
-        .iter()
-        .any(|code| matches!(code, Control::Discard { .. } | Control::Resource { .. }))
-    {
+    if graph.code.iter().any(|code| {
+        matches!(
+            code,
+            Control::Discard { .. } | Control::Resource { .. } | Control::Registration { .. }
+        )
+    }) {
         let mut queries = Vec::new();
         for root in roots {
             if query_required(graph, root, budget)? {
@@ -1447,6 +1459,85 @@ mod tests {
         let error = validate_effect(core, &[&source])
             .expect_err("same type cannot conceal a changed capture summary");
         assert_eq!(error.reason(), ValidationReason::DiscardUnsafe);
+    }
+
+    #[test]
+    fn final_core_recomputes_registration_callback_completion_from_actual_target() {
+        use super::super::{
+            EffectExprKind, validate::ValidationReason, validate_effect, variable::VariableNode,
+        };
+        let source = "effect Adjust {\npublish : Int -> Int\n}\neffect Stop {\nstop : Int -> Int\n}\ngood : Int -> Int ! {Stop}\ngood value = value\nbad : Int -> Int ! {Stop}\nbad value = perform Stop.stop value\nmain : Unit -> Int\nmain () = handle (hook Adjust {\nregister Adjust good {\nperform Adjust.publish 42\n}\n}) with Stop {\nstop value => {\nlet done = discard\nvalue\n}\n}\n";
+        let (core, file, good, _) = checked_core_text(source);
+        super::super::validate::registration_proof_check(
+            &core,
+            &[&file],
+            &[(good.module().unwrap(), file.id())],
+        )
+        .unwrap();
+        assert_eq!(
+            validate_effect(core, &[&file]).unwrap_err().reason(),
+            ValidationReason::Handler
+        );
+        for pass in 0..3 {
+            let (mut core, file, good, bad) = checked_core_text(source);
+            let binding_type = |binder| {
+                core.nodes
+                    .iter()
+                    .find_map(|node| match &node.kind {
+                        EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                            binding,
+                        ))) if binding.binder().id() == binder => Some(binding.binder().ty()),
+                        EffectExprKind::Pure(PureExprKind::Computation(
+                            PureComputation::RecursiveBind(binding),
+                        )) => binding
+                            .members()
+                            .iter()
+                            .find(|member| member.binder().id() == binder)
+                            .map(|member| member.binder().ty()),
+                        _ => None,
+                    })
+                    .unwrap()
+            };
+            assert_eq!(binding_type(good), binding_type(bad));
+            if pass > 0 {
+                let module = good.module().unwrap();
+                let program = super::super::validate::registration_proof_program(
+                    core,
+                    &[&file],
+                    &[(module, file.id())],
+                );
+                core = if pass == 1 {
+                    super::super::transform::identity_effect_traversal(&program)
+                } else {
+                    super::super::transform::fold_effect_literal_primitives(&program)
+                }
+                .unwrap();
+            }
+            let mut replacements = 0;
+            for node in &mut core.nodes {
+                if matches!(&node.kind, EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == good)
+                {
+                    node.kind =
+                        EffectExprKind::Pure(PureExprKind::Variable(VariableNode::new(bad)));
+                    replacements += 1;
+                }
+            }
+            assert_eq!(replacements, 1);
+            assert_eq!(
+                super::super::validate::registration_proof_check(
+                    &core,
+                    &[&file],
+                    &[(good.module().unwrap(), file.id())]
+                )
+                .unwrap_err()
+                .reason(),
+                ValidationReason::DiscardUnsafe
+            );
+            assert_eq!(
+                validate_effect(core, &[&file]).unwrap_err().reason(),
+                ValidationReason::DiscardUnsafe
+            );
+        }
     }
 
     #[test]

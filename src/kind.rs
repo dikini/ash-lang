@@ -4656,7 +4656,7 @@ fn check_expression_work<'a>(
                     budget,
                 )?,
                 ResolvedExprKind::Handle(handler) => {
-                    if handler.hook_root.is_some() {
+                    if handler.hook_root.is_some() || handler.hook_registration.is_some() {
                         check_hook_target_kind(&handler.effect, environments, budget)?;
                     }
                     for clause in handler.clauses.iter().rev() {

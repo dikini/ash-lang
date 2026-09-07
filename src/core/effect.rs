@@ -193,6 +193,7 @@ impl EffectClause {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HandlerNode {
+    pub(super) hook_registration: Option<Box<crate::resolved::HookRegistrationContract>>,
     pub(super) hook_root: Option<crate::resolved::HookRootContract>,
     pub(super) id: HandlerId,
     pub(super) body: NodeId,
@@ -209,6 +210,7 @@ impl HandlerNode {
     ) -> Self {
         Self {
             hook_root: None,
+            hook_registration: None,
             id,
             body,
             effect,
@@ -242,6 +244,14 @@ impl HandlerNode {
         self.hook_root = root;
         self
     }
+    pub(crate) fn with_hook_registration(
+        mut self,
+        registration: Option<crate::resolved::HookRegistrationContract>,
+    ) -> Self {
+        self.hook_registration = registration.map(Box::new);
+        self
+    }
+    #[allow(clippy::type_complexity)] // Ownership deconstruction keeps independent root and registration contracts explicit.
     pub(crate) fn into_parts(
         self,
     ) -> (
@@ -250,6 +260,7 @@ impl HandlerNode {
         EffectInstance,
         Vec<EffectClause>,
         Option<crate::resolved::HookRootContract>,
+        Option<Box<crate::resolved::HookRegistrationContract>>,
     ) {
         (
             self.id,
@@ -257,8 +268,18 @@ impl HandlerNode {
             self.effect,
             self.clauses.into_vec(),
             self.hook_root,
+            self.hook_registration,
         )
     }
+}
+
+/// Required completion surrounding one generated registration handler.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegistrationScopeNode {
+    pub(crate) handler: HandlerId,
+    pub(crate) callback: crate::resolved::BinderId,
+    pub(crate) body: NodeId,
+    pub(crate) span: crate::source::Span,
 }
 
 /// An acquisition owns its rigid identity and body-local handle. Its integer
@@ -297,6 +318,7 @@ impl ResourceScopeNode {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EffectOperation {
+    Registration(RegistrationScopeNode),
     Resource(Box<ResourceScopeNode>),
     Request(RequestNode),
     Handler(HandlerNode),
@@ -384,6 +406,11 @@ impl CoreOperationFamily for EffectOperationFamily {
             }
             EffectOperation::Request(request) => Some(&request.effect),
             EffectOperation::Handler(handler) => {
+                if let Some(registration) = &handler.hook_registration {
+                    for argument in registration.target.arguments() {
+                        visit(super::dialect::OperationTypeMetadata::Type(argument));
+                    }
+                }
                 if let Some(root) = &handler.hook_root {
                     for argument in root.target.arguments() {
                         visit(super::dialect::OperationTypeMetadata::Type(argument));
@@ -396,7 +423,9 @@ impl CoreOperationFamily for EffectOperationFamily {
                 }
                 Some(&handler.effect)
             }
-            EffectOperation::Resume(_) | EffectOperation::Discard(_) => None,
+            EffectOperation::Registration(_)
+            | EffectOperation::Resume(_)
+            | EffectOperation::Discard(_) => None,
         };
         if let Some(instance) = instance {
             for argument in instance.arguments() {
@@ -422,6 +451,9 @@ impl CoreOperationFamily for EffectOperationFamily {
             }
             EffectExprKind::Operation(EffectOperation::Request(request)) => &mut request.effect,
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
+                if let Some(registration) = &mut handler.hook_registration {
+                    rewrite_effect_instance(&mut registration.target, rewrite, charge)?;
+                }
                 if let Some(root) = &mut handler.hook_root {
                     rewrite_effect_instance(&mut root.target, rewrite, charge)?;
                 }
@@ -449,6 +481,7 @@ impl CoreOperationFamily for EffectOperationFamily {
     fn child_count(kind: &Self::Kind) -> usize {
         match kind {
             EffectExprKind::Pure(kind) => kind.child_count(),
+            EffectExprKind::Operation(EffectOperation::Registration(_)) => 1,
             EffectExprKind::Operation(EffectOperation::Resource(_)) => 2,
             EffectExprKind::Operation(EffectOperation::Discard(_)) => 0,
             EffectExprKind::Operation(EffectOperation::Request(_) | EffectOperation::Resume(_)) => {
@@ -461,6 +494,7 @@ impl CoreOperationFamily for EffectOperationFamily {
         match kind {
             EffectExprKind::Operation(EffectOperation::Handler(node)) => node.clauses.len(),
             EffectExprKind::Pure(_)
+            | EffectExprKind::Operation(EffectOperation::Registration(_))
             | EffectExprKind::Operation(EffectOperation::Resource(_))
             | EffectExprKind::Operation(EffectOperation::Discard(_))
             | EffectExprKind::Operation(EffectOperation::Request(_) | EffectOperation::Resume(_)) => {
@@ -471,6 +505,9 @@ impl CoreOperationFamily for EffectOperationFamily {
     fn child_at(kind: &Self::Kind, index: usize) -> Option<NodeId> {
         match kind {
             EffectExprKind::Pure(kind) => kind.child_at(index),
+            EffectExprKind::Operation(EffectOperation::Registration(scope)) => {
+                (index == 0).then_some(scope.body)
+            }
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => match index {
                 0 => Some(resource.initializer),
                 1 => Some(resource.body),
@@ -495,6 +532,7 @@ impl CoreOperationFamily for EffectOperationFamily {
     fn discard_metadata(kind: Self::Kind) {
         match kind {
             EffectExprKind::Pure(kind) => discard_pure_expr_kind_metadata(kind),
+            EffectExprKind::Operation(EffectOperation::Registration(_)) => {}
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => drop(resource),
             EffectExprKind::Operation(EffectOperation::Request(mut node)) => {
                 let placeholder = EffectInstance::new(node.effect.effect(), Box::new([]));
@@ -544,6 +582,7 @@ impl CoreBuilder<EffectOperationFamily> {
         owner: ResumeId,
     ) -> Result<(), super::BuildError> {
         enum Equation {
+            Registration(NodeId),
             Pure,
             Replace,
             Request(NodeId, EffectInstance),
@@ -563,6 +602,9 @@ impl CoreBuilder<EffectOperationFamily> {
             for index in range {
                 self.charge_effect_metadata(1)?;
                 let equation = match &self.nodes[index].kind {
+                    EffectExprKind::Operation(EffectOperation::Registration(scope)) => {
+                        Equation::Registration(scope.body)
+                    }
                     EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
                         Equation::Resource(
                             resource.acquisition,
@@ -590,7 +632,7 @@ impl CoreBuilder<EffectOperationFamily> {
                     }
                     EffectExprKind::Operation(EffectOperation::Handler(nested)) => {
                         Equation::Handler(
-                            if nested.hook_root.is_some() {
+                            if nested.hook_root.is_some() || nested.hook_registration.is_some() {
                                 crate::types::clone_effect_instance_with_budget(
                                     &nested.effect,
                                     &mut self.type_work,
@@ -603,11 +645,20 @@ impl CoreBuilder<EffectOperationFamily> {
                                 )?
                             },
                             nested.clauses.len(),
-                            nested.hook_root.is_some(),
+                            nested.hook_root.is_some() || nested.hook_registration.is_some(),
                         )
                     }
                 };
                 let effects = match equation {
+                    Equation::Registration(body) => clone_effect_row_with_budget(
+                        &self
+                            .nodes
+                            .get(body.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?
+                            .effects,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| super::BuildError::TypeWorkExceeded)?,
                     Equation::Resource(acquisition, initializer, body) => {
                         self.charge_effect_metadata(2)?;
                         let api = acquisition.api().ok_or(super::BuildError::InvalidPayload)?;
@@ -809,6 +860,42 @@ impl CoreBuilder<EffectOperationFamily> {
         origin: Origin,
         hook_root: Option<crate::resolved::HookRootContract>,
     ) -> Result<NodeId, super::BuildError> {
+        self.handler_with_contracts(
+            id,
+            body,
+            effect,
+            clauses,
+            result_type,
+            effects,
+            origin,
+            hook_root,
+            None,
+        )
+    }
+
+    pub(crate) fn registration_scope(
+        &mut self,
+        scope: RegistrationScopeNode,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, super::BuildError> {
+        self.push_operation(ty, effects, origin, EffectOperation::Registration(scope))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn handler_with_contracts(
+        &mut self,
+        id: HandlerId,
+        body: NodeId,
+        effect: EffectInstance,
+        clauses: Vec<EffectClause>,
+        result_type: Type,
+        effects: EffectRow,
+        origin: Origin,
+        hook_root: Option<crate::resolved::HookRootContract>,
+        hook_registration: Option<Box<crate::resolved::HookRegistrationContract>>,
+    ) -> Result<NodeId, super::BuildError> {
         let effect = match self.admit_effect_instance(effect) {
             Ok(effect) => effect,
             Err(error) => {
@@ -822,7 +909,8 @@ impl CoreBuilder<EffectOperationFamily> {
         if let Err(error) = self.charge_effect_metadata(
             clauses
                 .len()
-                .saturating_add(usize::from(hook_root.is_some())),
+                .saturating_add(usize::from(hook_root.is_some()))
+                .saturating_add(usize::from(hook_registration.is_some())),
         ) {
             drop(effect);
             drop(clauses);
@@ -857,13 +945,13 @@ impl CoreBuilder<EffectOperationFamily> {
             }
         }
         let clauses = admitted;
+        let mut handler = HandlerNode::new(id, body, effect, clauses).with_hook_root(hook_root);
+        handler.hook_registration = hook_registration;
         self.push_operation(
             result_type,
             effects,
             origin,
-            EffectOperation::Handler(
-                HandlerNode::new(id, body, effect, clauses).with_hook_root(hook_root),
-            ),
+            EffectOperation::Handler(handler),
         )
     }
 }

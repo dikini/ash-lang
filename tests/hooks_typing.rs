@@ -82,6 +82,118 @@ fn unused_root_body_result_is_independent_of_payload() {
 }
 
 #[test]
+fn registration_callback_and_body_errors_precede_publication_gate() {
+    for (callback, body) in [("42", "true"), ("identity", "1 + true")] {
+        let error = check(&format!(
+            "effect Adjust {{\npublish : Int -> Int\n}}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Bool\nmain () = hook Adjust {{\nregister Adjust {callback} {{\n{body}\n}}\n}}\n"
+        )).unwrap_err();
+        assert!(error.starts_with("type."), "{error}");
+        assert_ne!(error, "type.hook-api");
+    }
+}
+
+#[test]
+fn unused_pure_registration_still_requires_completion_before_outward_discard() {
+    assert_eq!(
+        check(
+            "effect Adjust {\npublish : Int -> Int\n}\neffect Stop {\nstop : Unit -> Unit\n}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Int\nmain () = hook Adjust {\nhandle (register Adjust identity {\nlet ignored = perform Stop.stop ()\n42\n}) with Stop {\nstop ignored => {\nlet done = discard\n7\n}\n}\n}\n"
+        ),
+        Err("effect.discard-unsafe".into())
+    );
+}
+
+#[test]
+fn registration_discard_cannot_skip_completion_outside_its_immediate_capture() {
+    assert_eq!(
+        check(
+            "effect Adjust {\npublish : Int -> Int\n}\neffect A {\nask : Unit -> Unit\n}\neffect B {\nask : Unit -> Unit\n}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Unit\nmain () = hook Adjust {\nhandle (register Adjust identity {\nperform A.ask ()\n}) with A {\nask ignored => {\nlet _ = handle {\nlet _ = perform B.ask ()\nresume ()\n} with B {\nask ignored => discard\n}\n()\n}\n}\n}\n"
+        ),
+        Err("effect.discard-unsafe".into())
+    );
+}
+
+#[test]
+fn registration_api_shape_is_checked_before_generated_clause_artifacts() {
+    for (declaration, target) in [
+        ("effect Bad {\nask : Int -> Int\n}", "Bad"),
+        (
+            "effect Bad {\npublish : Int -> Int\nask : Int -> Int\n}",
+            "Bad",
+        ),
+        (
+            "effect Convert<A, B> {\npublish : A -> B\n}",
+            "Convert<Int, Int>",
+        ),
+    ] {
+        assert_eq!(
+            check(&format!(
+                "{declaration}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Int ! {{{target}}}\nmain () = register {target} identity {{\n42\n}}\n"
+            )),
+            Err("type.hook-api".into())
+        );
+    }
+}
+
+#[test]
+fn registration_unknown_tail_precedes_api_shape() {
+    assert_eq!(
+        check(
+            "effect Bad {\nask : Int -> Int\n}\nidentity : Int -> Int\nidentity value = value\nrelay<R : EffectRow> : (Unit -> Int ! {| R}) -> Int ! {| R}\nrelay action = register Bad identity {\naction ()\n}\nmain : Unit -> Int\nmain () = 42\n"
+        ),
+        Err("effect.row-union-ambiguous".into())
+    );
+}
+
+#[test]
+fn registration_unused_callback_keeps_forwarded_and_latent_requirements() {
+    for (signature, body) in [
+        ("Int", "register Adjust identity {\n42\n}"),
+        ("Int", "hook Adjust {\nregister Adjust callback {\n42\n}\n}"),
+        (
+            "Int",
+            "hook Adjust {\nregister Adjust callback {\nhandle (perform Log.log 42) with Log {\nlog value => resume value\n}\n}\n}",
+        ),
+    ] {
+        let reason = check(&format!("effect Adjust {{\npublish : Int -> Int\n}}\neffect Log {{\nlog : Int -> Int\n}}\nidentity : Int -> Int\nidentity value = value\ncallback : Int -> Int ! {{Log}}\ncallback value = perform Log.log value\nmain : Unit -> {signature}\nmain () = {body}\n")).unwrap_err();
+        assert!(
+            reason.starts_with("effect.") || reason.starts_with("type."),
+            "{reason}"
+        );
+    }
+}
+
+#[test]
+fn registration_initializer_effect_remains_outward() {
+    let error = check(
+        "effect Adjust {\npublish : Int -> Int\n}\neffect Before {\nbefore : Unit -> Unit\n}\nidentity : Int -> Int\nidentity value = value\nmake : Unit -> (Int -> Int) ! {Before}\nmake ignored = {\nlet done = perform Before.before ()\nidentity\n}\nmain : Unit -> Int\nmain () = hook Adjust {\nregister Adjust (make ()) {\n42\n}\n}\n"
+    ).unwrap_err();
+    assert!(
+        error.starts_with("effect.") || error.starts_with("type."),
+        "{error}"
+    );
+}
+
+#[test]
+fn registration_transformed_function_dependencies_cannot_escape() {
+    assert_eq!(
+        check(
+            "import @builtin.cell as Cell\neffect Adjust {\npublish : (Unit -> Int) -> (Unit -> Int)\n}\nconstant : Unit -> Int\nconstant ignored = 1\nmain : Unit -> (Unit -> Int)\nmain () = resource cell<R> c = 42 {\nhook Adjust {\nlet callback : (Unit -> Int) -> (Unit -> Int) = fn(previous) {\nfn(ignored) {\nlet held = c\n42\n}\n}\nregister Adjust callback {\nperform Adjust.publish constant\n}\n}\n}\n"
+        ),
+        Err("type.resource-escape".into())
+    );
+}
+
+#[test]
+fn registration_forwarded_input_cannot_be_lent_before_callback_erases_it() {
+    assert_eq!(
+        check(
+            "import @builtin.cell as Cell\neffect Adjust {\npublish : (Unit -> Int) -> (Unit -> Int)\n}\nconstant : Unit -> Int\nconstant ignored = 1\nerase : (Unit -> Int) -> (Unit -> Int)\nerase previous = constant\nmain : Unit -> Int\nmain () = hook Adjust {\nresource cell<R> c = 42 {\nlet payload : Unit -> Int = fn(ignored) {\nlet held = c\n42\n}\nlet result = register Adjust erase {\nperform Adjust.publish payload\n}\nresult ()\n}\n}\n"
+        ),
+        Err("type.resource-escape".into())
+    );
+}
+
+#[test]
 fn unused_ordinary_handler_still_requires_present_target() {
     assert_eq!(
         check(

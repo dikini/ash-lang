@@ -391,6 +391,10 @@ pub(super) fn validate_effect_family(
         program.discard_iteratively();
         return Err(error);
     }
+    if let Err(error) = validator.reject_pending_registration_runtime() {
+        program.discard_iteratively();
+        return Err(error);
+    }
     let (registry, method_evidence, anchors, arena, stored, root) = program.into_parts();
     let mut nodes = Vec::with_capacity(stored.len());
     for (index, stored) in stored.into_iter().enumerate() {
@@ -428,6 +432,10 @@ pub(super) fn validate_effect_modules_family(
         }
     };
     if let Err(error) = validator.run_effect() {
+        program.discard_iteratively();
+        return Err(error);
+    }
+    if let Err(error) = validator.reject_pending_registration_runtime() {
         program.discard_iteratively();
         return Err(error);
     }
@@ -4952,7 +4960,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         handler: &super::effect::HandlerNode,
         node: NodeId,
     ) -> Result<EffectRow, ValidationError> {
-        if handler.hook_root.is_none() {
+        if handler.hook_root.is_none() && handler.hook_registration.is_none() {
             return self.remove_effect_row_charged(row, &handler.effect, node);
         }
         let mut budget = TypeWorkBudget::with_limit(
@@ -7881,6 +7889,273 @@ struct EffectClauseContract {
 }
 
 impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperationFamily> {
+    fn reject_pending_registration_runtime(&self) -> Result<(), ValidationError> {
+        for (index, node) in self.program.nodes.iter().enumerate() {
+            self.charge_type_work(1)?;
+            if matches!(
+                node.kind,
+                super::effect::EffectExprKind::Operation(
+                    super::effect::EffectOperation::Registration(_)
+                )
+            ) {
+                return Err(ValidationError::new(
+                    ValidationReason::Handler,
+                    Some(node_id(self.program.arena, index)?),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_registration_owner(
+        &self,
+        id: NodeId,
+        node: &StoredNode<super::effect::EffectOperationFamily>,
+        scope: &super::effect::RegistrationScopeNode,
+    ) -> Result<(), ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation};
+        let invalid = || ValidationError::new(ValidationReason::Handler, Some(id));
+        self.charge_type_work(1)?;
+        let child = self.node(scope.body)?;
+        let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &child.kind else {
+            return Err(invalid());
+        };
+        let registration = handler.hook_registration.as_ref().ok_or_else(invalid)?;
+        if handler.hook_root.is_some()
+            || handler.id != scope.handler
+            || registration.callback != scope.callback
+            || registration.span != scope.span
+            || node.origin.as_ref().map(Origin::primary_span) != Some(scope.span)
+            || !self.same_type_charged(&node.ty, &child.ty)?
+            || !self.same_effect_row_charged(&node.effects, &child.effects, id)?
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
+    fn validate_registration_contract(
+        &self,
+        id: NodeId,
+        node: &StoredNode<super::effect::EffectOperationFamily>,
+        handler: &super::effect::HandlerNode,
+        contract: &crate::resolved::HookRegistrationContract,
+    ) -> Result<(), ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation};
+        let invalid = || ValidationError::new(ValidationReason::Handler, Some(id));
+        self.charge_type_work(18)?;
+        let declaration = self
+            .program
+            .registry
+            .effect(handler.effect.effect())
+            .ok_or_else(invalid)?;
+        let [operation] = &*declaration.operations else {
+            return Err(invalid());
+        };
+        let signature = operation
+            .annotation
+            .ty
+            .function_view()
+            .ok_or_else(invalid)?;
+        let [clause] = &*handler.clauses else {
+            return Err(invalid());
+        };
+        let CorePatternKind::Binder(input) = &clause.pattern().kind else {
+            return Err(invalid());
+        };
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let target_matches = crate::types::compare_effect_instances_with_budget(
+            &contract.target,
+            &handler.effect,
+            &mut budget,
+        );
+        self.charge_type_work(budget.used())?;
+        if target_matches
+            .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))?
+            != std::cmp::Ordering::Equal
+            || handler.hook_root.is_some()
+            || operation.spelling != "publish"
+            || !self.same_type_charged(signature.domain(), signature.value())?
+            || contract.operation != operation.id
+            || clause.operation() != contract.operation
+            || input.id() != contract.input
+            || clause.resume() != contract.resume
+            || node.origin.as_ref().map(Origin::primary_span) != Some(contract.span)
+            || contract.target_span.source() != contract.span.source()
+            || contract.target_span.range().start() < contract.span.range().start()
+            || contract.target_span.range().end() > contract.span.range().end()
+            || clause.origin().primary_span() != contract.target_span
+            || clause.pattern().origin.primary_span() != contract.target_span
+            || input.origin().primary_span() != contract.target_span
+        {
+            return Err(invalid());
+        }
+        let binders = [
+            contract.callback,
+            contract.input,
+            contract.previous,
+            contract.next,
+        ];
+        for (index, binder) in binders.iter().enumerate() {
+            if binders[..index].contains(binder) {
+                return Err(invalid());
+            }
+        }
+        let previous_node = self.node(clause.body())?;
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(previous))) =
+            &previous_node.kind
+        else {
+            return Err(invalid());
+        };
+        let next_node = self.node(previous.body())?;
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(next))) =
+            &next_node.kind
+        else {
+            return Err(invalid());
+        };
+        let request_node = self.node(previous.initializer())?;
+        let EffectExprKind::Operation(EffectOperation::Request(request)) = &request_node.kind
+        else {
+            return Err(invalid());
+        };
+        let application_node = self.node(next.initializer())?;
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(application))) =
+            &application_node.kind
+        else {
+            return Err(invalid());
+        };
+        let resume_node = self.node(next.body())?;
+        let EffectExprKind::Operation(EffectOperation::Resume(resume)) = &resume_node.kind else {
+            return Err(invalid());
+        };
+        let variable = |node, binder| -> Result<bool, ValidationError> {
+            let node = self.node(node)?;
+            Ok(
+                matches!(&node.kind, EffectExprKind::Pure(PureExprKind::Variable(value)) if value.binder() == binder)
+                    && node.origin.as_ref().map(Origin::primary_span) == Some(contract.target_span),
+            )
+        };
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let forwarding_matches = crate::types::compare_effect_instances_with_budget(
+            request.effect(),
+            &contract.target,
+            &mut budget,
+        );
+        self.charge_type_work(budget.used())?;
+        if forwarding_matches
+            .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))?
+            != std::cmp::Ordering::Equal
+            || previous.binder().id() != contract.previous
+            || next.binder().id() != contract.next
+            || request.operation() != contract.operation
+            || resume.handler() != handler.id()
+            || resume.owner() != contract.resume
+            || resume.use_state() != super::effect::ResumeUse::Consumed
+            || !variable(request.operand(), contract.input)?
+            || !variable(application.function(), contract.callback)?
+            || !variable(application.argument(), contract.previous)?
+            || !variable(resume.value(), contract.next)?
+        {
+            return Err(invalid());
+        }
+        for stored in [
+            previous_node,
+            next_node,
+            request_node,
+            application_node,
+            resume_node,
+        ] {
+            if stored.origin.as_ref().map(Origin::primary_span) != Some(contract.target_span) {
+                return Err(invalid());
+            }
+        }
+        for binder in [previous.binder(), next.binder()] {
+            if binder.origin().primary_span() != contract.target_span {
+                return Err(invalid());
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_registration_edges(&self) -> Result<(), ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation};
+        self.charge_type_work(self.program.nodes.len())?;
+        if !self.program.nodes.iter().any(|node| match &node.kind {
+            EffectExprKind::Operation(EffectOperation::Registration(_)) => true,
+            EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
+                handler.hook_registration.is_some()
+            }
+            _ => false,
+        }) {
+            return Ok(());
+        }
+        let mut parents = Vec::new();
+        self.charge_type_work(self.program.nodes.len())?;
+        parents
+            .try_reserve_exact(self.program.nodes.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        parents.resize(self.program.nodes.len(), (0usize, None));
+        for (index, node) in self.program.nodes.iter().enumerate() {
+            self.charge_type_work(node.kind.child_count())?;
+            for ordinal in 0..node.kind.child_count() {
+                let child = node
+                    .kind
+                    .child_at(ordinal)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::NodeBounds, None))?;
+                let parent =
+                    parents
+                        .get_mut(child.index().map_err(|_| {
+                            ValidationError::new(ValidationReason::NodeBounds, None)
+                        })?)
+                        .ok_or_else(|| ValidationError::new(ValidationReason::NodeBounds, None))?;
+                parent.0 = parent
+                    .0
+                    .checked_add(1)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?;
+                parent.1 = Some(node_id(self.program.arena, index)?);
+            }
+        }
+        for (index, node) in self.program.nodes.iter().enumerate() {
+            self.charge_type_work(1)?;
+            let id = node_id(self.program.arena, index)?;
+            let invalid = || ValidationError::new(ValidationReason::Handler, Some(id));
+            match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Handler(handler))
+                    if handler.hook_registration.is_some() =>
+                {
+                    let (count, parent) = parents[index];
+                    let EffectExprKind::Operation(EffectOperation::Registration(scope)) =
+                        &self.node(parent.ok_or_else(invalid)?)?.kind
+                    else {
+                        return Err(invalid());
+                    };
+                    if count != 1 || scope.body != id {
+                        return Err(invalid());
+                    }
+                }
+                EffectExprKind::Operation(EffectOperation::Registration(scope)) => {
+                    let (count, parent) = parents[index];
+                    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                        binding,
+                    ))) = &self.node(parent.ok_or_else(invalid)?)?.kind
+                    else {
+                        return Err(invalid());
+                    };
+                    if count != 1 || binding.body() != id || binding.binder().id() != scope.callback
+                    {
+                        return Err(invalid());
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     fn run_effect(&mut self) -> Result<(), ValidationError> {
         let mut nominal_parameter_owners = self.validate_registry()?;
         self.validate_effect_registry(self.module_sources.as_ref(), &mut nominal_parameter_owners)?;
@@ -7927,6 +8202,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             &authenticated_method_evidence,
         )?;
         let has_discard = self.validate_effect_nodes(&type_binders)?;
+        self.validate_registration_edges()?;
         self.validate_effect_abstraction_shapes(&authenticated_method_evidence)?;
         self.validate_scopes()?;
         self.validate_type_scopes()?;
@@ -7935,9 +8211,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             self.charge_type_work(1)?;
             if matches!(
                 &node.kind,
-                super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Resource(
-                    _
-                ))
+                super::effect::EffectExprKind::Operation(
+                    super::effect::EffectOperation::Resource(_)
+                        | super::effect::EffectOperation::Registration(_)
+                )
             ) {
                 has_resource = true;
             }
@@ -8314,6 +8591,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             self.validate_effect_type_rows(&node.ty, type_binders, id)?;
             self.validate_effect_row(&node.effects, type_binders, id)?;
             match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Registration(scope)) => {
+                    self.validate_registration_owner(id, node, scope)?;
+                }
                 EffectExprKind::Pure(PureExprKind::Computation(
                     PureComputation::TypeApplication(application),
                 )) => {
@@ -8811,6 +9091,12 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                                 id,
                             )?
                         }
+                        EffectExprKind::Operation(EffectOperation::Registration(scope)) => self
+                            .union_effect_rows_charged(
+                                &EffectRow::empty(),
+                                child_row(scope.body)?,
+                                id,
+                            )?,
                         EffectExprKind::Operation(EffectOperation::Request(request)) => {
                             let requested =
                                 self.singleton_effect_row_charged(request.effect(), id)?;
@@ -8886,6 +9172,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             return Err(ValidationError::new(ValidationReason::Handler, Some(id)));
         }
         let body = self.node(handler.body)?;
+        if let Some(contract) = &handler.hook_registration {
+            self.validate_registration_contract(id, node, handler, contract)?;
+        }
         if let Some(root) = &handler.hook_root {
             self.charge_type_work(1)?;
             let invalid = || ValidationError::new(ValidationReason::Handler, Some(id));
@@ -9085,6 +9374,9 @@ fn node_id(arena: super::dialect::ArenaId, index: usize) -> Result<NodeId, Valid
 }
 
 #[cfg(test)]
+pub(super) use tests::{registration_proof_check, registration_proof_program};
+
+#[cfg(test)]
 mod tests {
     type HookFixture = (
         super::super::effect::UnvalidatedEffectProgram,
@@ -9099,21 +9391,48 @@ mod tests {
     }
 
     fn hook_source_fixture(source: &str) -> HookFixture {
+        hook_modules_fixture(source, &[])
+    }
+
+    fn hook_modules_fixture(source: &str, modules: &[(&str, &str)]) -> HookFixture {
         let path = std::env::temp_dir().join(format!(
-            "ash-hook-validation-{}-{}.ash",
+            "ash-hook-validation-{}-{}",
             std::process::id(),
             SourceFile::new("hook", "").unwrap().id().value()
         ));
-        std::fs::write(&path, source).unwrap();
-        let graph =
-            crate::module::load_module_graph(&path, &crate::module::ModuleRoots::empty()).unwrap();
-        std::fs::remove_file(path).unwrap();
-        let module = graph.module(graph.entry()).unwrap();
-        let checked =
-            crate::elaborate::check_module(crate::resolve::resolve_module(module, &[]).unwrap())
-                .unwrap();
+        std::fs::create_dir(&path).unwrap();
+        for (name, source) in modules {
+            std::fs::write(path.join(name), source).unwrap();
+        }
+        std::fs::write(path.join("entry.ash"), source).unwrap();
+        let graph = crate::module::load_module_graph(
+            &path.join("entry.ash"),
+            &crate::module::ModuleRoots::empty(),
+        )
+        .unwrap();
+        std::fs::remove_dir_all(path).unwrap();
+        let mut checked: Vec<crate::resolved::CheckedModule> = Vec::new();
+        for module in graph.modules() {
+            let imports = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    crate::resolve::DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|module| module.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let resolved = crate::resolve::resolve_module(module, &imports).unwrap();
+            checked.push(crate::elaborate::check_module(resolved).unwrap());
+        }
         let linked = crate::evidence_validation::validate_interface_evidence(
-            crate::elaborate::link_modules(vec![checked], graph.entry()).unwrap(),
+            crate::elaborate::link_modules(checked, graph.entry()).unwrap(),
         )
         .unwrap();
         let mut elaborator =
@@ -9133,6 +9452,502 @@ mod tests {
             .map(|module| (module.id(), module.source().id()))
             .collect();
         (core, sources, relations)
+    }
+
+    // Step 3 proves Core, but cannot publish an executable program. These private
+    // fixtures exercise transforms after the same proof without crossing that gate.
+    pub(in crate::core) fn registration_proof_check(
+        core: &super::super::effect::UnvalidatedEffectProgram,
+        sources: &[&SourceFile],
+        relations: &[(ModuleId, SourceId)],
+    ) -> Result<(), super::ValidationError> {
+        super::Validator::new_modules(core, sources, relations)?.run_effect()
+    }
+
+    pub(in crate::core) fn registration_proof_program(
+        core: super::super::effect::UnvalidatedEffectProgram,
+        sources: &[&SourceFile],
+        relations: &[(ModuleId, SourceId)],
+    ) -> super::super::effect::ValidatedEffectProgram {
+        super::Validator::new_modules(&core, sources, relations)
+            .unwrap()
+            .run_effect()
+            .unwrap();
+        let (registry, methods, anchors, arena, stored, root) = core.into_parts();
+        let nodes = stored
+            .into_iter()
+            .map(|node| super::CoreTypedExpr {
+                ty: node.ty,
+                effects: node.effects,
+                origin: node.origin.unwrap(),
+                kind: node.kind,
+            })
+            .collect();
+        super::ValidatedCoreProgram::new(super::CoreProgram::new(
+            registry, methods, anchors, arena, nodes, root,
+        ))
+    }
+
+    fn prove_registration_transforms(fixture: HookFixture) {
+        let (mut core, sources, relations) = fixture;
+        let sources = sources.iter().collect::<Vec<_>>();
+        for pass in 0..3 {
+            let mut validator = super::Validator::new_modules(&core, &sources, &relations).unwrap();
+            validator.run_effect().unwrap();
+            assert!(validator.reject_pending_registration_runtime().is_err());
+            let program = registration_proof_program(core, &sources, &relations);
+            let gated = super::super::transform::identity_effect_traversal(&program).unwrap();
+            assert_eq!(
+                super::super::validate_effect_modules(gated, &sources, &relations)
+                    .unwrap_err()
+                    .reason(),
+                super::ValidationReason::Handler
+            );
+            core = if pass == 1 {
+                super::super::transform::fold_effect_literal_primitives(&program)
+            } else {
+                super::super::transform::identity_effect_traversal(&program)
+            }
+            .unwrap();
+        }
+        assert!(super::super::validate_effect_modules(core, &sources, &relations).is_err());
+    }
+
+    #[test]
+    fn registration_rows_factories_and_live_function_payloads_prove_after_transforms() {
+        for source in [
+            "effect Adjust {\npublish : Int -> Int\n}\neffect Log {\nlog : Int -> Int\n}\ncallback : Int -> Int ! {Log}\ncallback value = perform Log.log value\nmain : Unit -> Bool\nmain () = handle (hook Adjust {\nregister Adjust callback {\ntrue\n}\n}) with Log {\nlog value => resume value\n}\n",
+            "import @builtin.cell as Cell\neffect Adjust {\npublish : (Unit -> Int) -> (Unit -> Int)\n}\nconstant : Unit -> Int\nconstant ignored = 1\nmain : Unit -> Int\nmain () = resource cell<R> c = 42 {\nhook Adjust {\nlet callback : (Unit -> Int) -> (Unit -> Int) = fn(previous) {\nfn(ignored) {\nlet held = c\n42\n}\n}\nlet result = register Adjust callback {\nperform Adjust.publish constant\n}\nresult ()\n}\n}\n",
+            "effect Adjust {\npublish : Int -> Int\n}\nmain : Unit -> Int\nmain () = hook Adjust {\nregister Adjust (fn(value) {\nvalue + 1\n}) {\nperform Adjust.publish 3\n}\n}\n",
+        ] {
+            prove_registration_transforms(hook_source_fixture(source));
+        }
+        prove_registration_transforms(hook_modules_fixture(
+            "import facade (Adjust, make, Box, pack, unpack)\nconstant : Unit -> Int\nconstant ignored = 1\nmain : Unit -> Int\nmain () = hook Adjust {\nlet callback = unpack (pack (make constant))\nlet result = register Adjust callback {\nperform Adjust.publish constant\n}\nresult ()\n}\n",
+            &[
+                (
+                    "api.ash",
+                    "pub effect Adjust {\npublish : (Unit -> Int) -> (Unit -> Int)\n}\npub opaque type Box<A> = Hidden(A)\npub pack<A> : A -> Box<A>\npack value = Hidden value\npub unpack<A> : Box<A> -> A\nunpack (Hidden value) = value\npub make : (Unit -> Int) -> ((Unit -> Int) -> (Unit -> Int))\nmake saved = fn(previous) {\nsaved\n}\n",
+                ),
+                (
+                    "facade.ash",
+                    "pub import api (Adjust, make, Box, pack, unpack)\n",
+                ),
+            ],
+        ));
+        prove_registration_transforms(hook_modules_fixture(
+            "import @builtin.cell as Cell\nimport helper (Adjust, Read, read, Box, make, impl Make)\nconstant : Unit -> Int\nconstant ignored = 1\nmain : Unit -> Int\nmain () = resource cell<R> c = 42 {\nnewtype Token = Token(Unit)\nlet saved = Token(())\nwith Read<Token> {\nread ignored = handle (Cell.read c) with Cell.Ops<R> {\nread value => resume 42\nwrite value => resume ()\n}\n}\nhook Adjust {\nlet callback = make (Box saved)\nlet result = register Adjust callback {\nperform Adjust.publish constant\n}\nresult ()\n}\n}\n",
+            &[(
+                "helper.ash",
+                "pub effect Adjust {\npublish : (Unit -> Int) -> (Unit -> Int)\n}\npub interface Read<A> {\nread : A -> Int\n}\npub type Box<A> = Box(A)\npub interface Make<A> {\nmake : A -> ((Unit -> Int) -> (Unit -> Int))\n}\npub impl<A> Make<Box<A>> where Read<A> {\nmake (Box saved) = fn(previous) {\nfn(ignored) {\nread saved\n}\n}\n}\n",
+            )],
+        ));
+        prove_registration_transforms(hook_source_fixture(
+            "effect Adjust {\npublish : Int -> Int\n}\nidentity : Int -> Int\nidentity value = value\nrelay<R : EffectRow> : (Unit -> Int ! {| R}) -> Int ! {Adjust | R}\nrelay action = register Adjust identity {\naction ()\n}\nconstant : Unit -> Int\nconstant ignored = 42\nmain : Unit -> Int\nmain () = hook Adjust {\nrelay constant\n}\n",
+        ));
+    }
+
+    #[test]
+    fn registration_generic_targets_may_coincide_after_instantiation() {
+        for second in ["()", "true"] {
+            prove_registration_transforms(hook_source_fixture(&format!(
+                "effect Mark<T> {{\npublish : Int -> Int\n}}\nidentity : Int -> Int\nidentity value = value\nprobe<T, U> : (T, U) -> Int ! {{Mark<T>, Mark<U>}}\nprobe ignored = register Mark<U> identity {{\nperform Mark<T>.publish 42\n}}\nmain : Unit -> Int\nmain () = hook Mark<Unit> {{\nhook Mark<Bool> {{\nprobe ((), {second})\n}}\n}}\n"
+            )));
+        }
+    }
+
+    #[test]
+    fn registration_capture_work_is_exact_one_short_and_retryable() {
+        use super::super::{capture, effect::EffectExprKind};
+        let (core, _, _) = hook_source_fixture(
+            "effect Adjust {\npublish : Int -> Int\n}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Int\nmain () = hook Adjust {\nregister Adjust identity {\nperform Adjust.publish 3\n}\n}\n",
+        );
+        let run = |budget: &mut TypeWorkBudget| {
+            capture::check_nodes(
+                &core.nodes,
+                &[],
+                &[],
+                |kind| match kind {
+                    EffectExprKind::Operation(operation) => Some(operation),
+                    _ => None,
+                },
+                budget,
+            )
+        };
+        let mut generous = TypeWorkBudget::with_limit(crate::types::TYPE_WORK_LIMIT);
+        run(&mut generous).unwrap();
+        let exact = generous.used();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(exact - 1)),
+            Err(capture::Failure::Resource)
+        ));
+        for _ in 0..2 {
+            let mut retry = TypeWorkBudget::with_limit(exact);
+            run(&mut retry).unwrap();
+            assert_eq!(retry.used(), exact);
+        }
+        core.discard_iteratively();
+    }
+
+    #[test]
+    fn registration_pipeline_and_disposal_fit_a_small_stack() {
+        const CHILD: &str = "ASH_REGISTRATION_PROOF_STACK_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "core::validate::tests::registration_pipeline_and_disposal_fit_a_small_stack",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .status()
+                .unwrap();
+            assert!(
+                status.success(),
+                "fresh registration proof process: {status}"
+            );
+            return;
+        }
+        std::thread::Builder::new().stack_size(256 * 1024).spawn(|| {
+            let source = format!("effect Adjust {{\npublish : Int -> Int\n}}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Int\nmain () = hook Adjust {{\n{}42{}\n}}\n",
+                "register Adjust identity {\n".repeat(24), "\n}".repeat(24));
+            let path = std::env::temp_dir().join(format!("ash-registration-stack-{}.ash", std::process::id()));
+            std::fs::write(&path, source).unwrap();
+            let graph = crate::module::load_module_graph(&path, &crate::module::ModuleRoots::empty()).unwrap();
+            std::fs::remove_file(path).unwrap();
+            let module = &graph.modules()[0];
+            let checked = crate::elaborate::check_module(crate::resolve::resolve_module(module, &[]).unwrap()).unwrap();
+            let linked = crate::evidence_validation::validate_interface_evidence(crate::elaborate::link_modules(vec![checked], graph.entry()).unwrap()).unwrap();
+            let mut elaborator = crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+            let typed = elaborator.synthesize_effect_module_program(&linked).unwrap();
+            let core = elaborator.finish(typed.node).unwrap();
+            super::Validator::new_modules(&core, &[module.source()], &[(module.id(), module.source().id())]).unwrap().run_effect().unwrap();
+            core.discard_iteratively();
+        }).unwrap().join().unwrap();
+    }
+
+    #[test]
+    fn registration_structure_proves_before_unconditional_runtime_gate() {
+        let (core, sources, relations) = hook_source_fixture(
+            "effect Adjust {\npublish : Int -> Int\n}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Bool\nmain () = hook Adjust {\nregister Adjust identity {\ntrue\n}\n}\n",
+        );
+        let borrowed = sources.iter().collect::<Vec<_>>();
+        let mut validator = super::Validator::new_modules(&core, &borrowed, &relations).unwrap();
+        validator.run_effect().unwrap();
+        assert_eq!(
+            validator
+                .reject_pending_registration_runtime()
+                .unwrap_err()
+                .reason(),
+            super::ValidationReason::Handler
+        );
+        let program = registration_proof_program(core, &borrowed, &relations);
+        for transform in [
+            super::super::transform::identity_effect_traversal,
+            super::super::transform::fold_effect_literal_primitives,
+        ] {
+            let core = transform(&program).unwrap();
+            super::Validator::new(&core, &borrowed)
+                .run_effect()
+                .unwrap();
+            assert_eq!(
+                super::super::effect::validate_effect(core, &borrowed)
+                    .unwrap_err()
+                    .reason(),
+                super::ValidationReason::Handler
+            );
+        }
+    }
+
+    #[test]
+    fn registration_rejects_forged_target_and_generated_binder_contract() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for pass in 0..3 {
+            for corruption in 0..9 {
+                let (mut core, sources, relations) = hook_source_fixture(
+                    "effect Adjust<T> {\npublish : Int -> Int\n}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Int\nmain () = hook Adjust<Unit> {\nregister Adjust<Unit> identity {\nperform Adjust<Unit>.publish 3\n}\n}\n",
+                );
+                let borrowed = sources.iter().collect::<Vec<_>>();
+                if pass > 0 {
+                    let program = registration_proof_program(core, &borrowed, &relations);
+                    core = if pass == 1 {
+                        super::super::transform::identity_effect_traversal(&program)
+                    } else {
+                        super::super::transform::fold_effect_literal_primitives(&program)
+                    }
+                    .unwrap();
+                }
+                let node = core.nodes.iter_mut().find(|node| matches!(&node.kind, EffectExprKind::Operation(EffectOperation::Handler(handler)) if handler.hook_registration.is_some())).unwrap();
+                let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &mut node.kind
+                else {
+                    unreachable!()
+                };
+                let contract = handler.hook_registration.as_mut().unwrap();
+                match corruption {
+                    0 => {
+                        contract.target = crate::types::EffectInstance::new(
+                            contract.target.effect(),
+                            Box::new([Type::Bool]),
+                        )
+                    }
+                    1 => contract.previous = contract.next,
+                    2 => contract.input = contract.callback,
+                    3 => contract.callback = BinderId::generated(999),
+                    4 => contract.span = contract.target_span,
+                    5 => contract.resume = crate::resolved::ResumeId::new(999),
+                    6 => {
+                        handler.effect = crate::types::EffectInstance::new(
+                            contract.target.effect(),
+                            Box::new([Type::Bool]),
+                        )
+                    }
+                    7 => {
+                        handler.clauses[0].arm = crate::core::CoreMatchArm::new(
+                            handler.clauses[0].pattern().clone(),
+                            handler.body,
+                            handler.clauses[0].origin().clone(),
+                        )
+                    }
+                    _ => node.effects = EffectRow::empty(),
+                }
+                assert!(
+                    super::Validator::new_modules(&core, &borrowed, &relations)
+                        .unwrap()
+                        .run_effect()
+                        .is_err(),
+                    "pass {pass}, forgery {corruption} reached proof success"
+                );
+                core.discard_iteratively();
+            }
+        }
+    }
+
+    #[test]
+    fn registration_contract_rejects_replacing_its_owner_with_an_ordinary_binding() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (mut core, sources, relations) = hook_source_fixture(
+            "effect Adjust {\npublish : Int -> Int\n}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Int\nmain () = hook Adjust {\nregister Adjust identity {\nperform Adjust.publish 3\n}\n}\n",
+        );
+        let literal = core
+            .nodes
+            .iter()
+            .position(|node| {
+                matches!(
+                    node.kind,
+                    EffectExprKind::Pure(PureExprKind::Value(PureValue::Integer(_)))
+                )
+            })
+            .unwrap();
+        let initializer = super::node_id(core.arena, literal).unwrap();
+        let node = core
+            .nodes
+            .iter_mut()
+            .find(|node| {
+                matches!(
+                    node.kind,
+                    EffectExprKind::Operation(EffectOperation::Registration(_))
+                )
+            })
+            .unwrap();
+        let EffectExprKind::Operation(EffectOperation::Registration(scope)) = node.kind else {
+            unreachable!()
+        };
+        let binder = super::super::TypedBinder::new(
+            core.arena,
+            BinderId::generated(999_999),
+            Type::Int,
+            node.origin.clone().unwrap(),
+        );
+        node.kind = EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+            super::super::binding::BindingNode::new(binder, initializer, scope.body),
+        )));
+        let sources = sources.iter().collect::<Vec<_>>();
+        assert!(
+            super::Validator::new_modules(&core, &sources, &relations)
+                .unwrap()
+                .run_effect()
+                .is_err()
+        );
+        core.discard_iteratively();
+    }
+
+    #[test]
+    fn registration_rejects_duplicate_owner_after_transforms() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for pass in 0..3 {
+            let (mut core, sources, relations) = hook_source_fixture(
+                "effect Adjust {\npublish : Int -> Int\n}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Int\nmain () = hook Adjust {\nregister Adjust identity {\nperform Adjust.publish 3\n}\n}\n",
+            );
+            let sources = sources.iter().collect::<Vec<_>>();
+            if pass > 0 {
+                let program = registration_proof_program(core, &sources, &relations);
+                core = if pass == 1 {
+                    super::super::transform::identity_effect_traversal(&program)
+                } else {
+                    super::super::transform::fold_effect_literal_primitives(&program)
+                }
+                .unwrap();
+            }
+            let node = core
+                .nodes
+                .iter()
+                .find(|node| {
+                    matches!(
+                        node.kind,
+                        EffectExprKind::Operation(EffectOperation::Registration(_))
+                    )
+                })
+                .unwrap();
+            let EffectExprKind::Operation(EffectOperation::Registration(scope)) = node.kind else {
+                unreachable!()
+            };
+            let duplicate = super::super::dialect::StoredNode {
+                dialect: node.dialect,
+                ty: node.ty.clone(),
+                effects: node.effects.clone(),
+                origin: node.origin.clone(),
+                kind: EffectExprKind::Operation(EffectOperation::Registration(scope)),
+            };
+            core.nodes.push(duplicate);
+            assert!(
+                super::Validator::new_modules(&core, &sources, &relations)
+                    .unwrap()
+                    .run_effect()
+                    .is_err()
+            );
+            core.discard_iteratively();
+        }
+    }
+
+    #[test]
+    fn registration_subscriber_local_discard_preserves_completion() {
+        let (core, sources, relations) = hook_source_fixture(
+            "effect Adjust {\npublish : Int -> Int\n}\neffect Skip {\nskip : Unit -> Unit\n}\ncallback : Int -> Int\ncallback value = handle {\nlet ignored = perform Skip.skip ()\nvalue\n} with Skip {\nskip ignored => {\nlet done = discard\nvalue\n}\n}\nmain : Unit -> Int\nmain () = hook Adjust {\nregister Adjust callback {\nperform Adjust.publish 3\n}\n}\n",
+        );
+        let borrowed = sources.iter().collect::<Vec<_>>();
+        super::Validator::new_modules(&core, &borrowed, &relations)
+            .unwrap()
+            .run_effect()
+            .unwrap();
+        core.discard_iteratively();
+    }
+
+    #[test]
+    fn registration_recomputes_callback_result_dependencies_after_linked_tampering() {
+        use super::super::{
+            effect::{EffectExprKind, EffectOperation},
+            variable::VariableNode,
+        };
+        let source = "import @builtin.cell as Cell\neffect Adjust {\npublish : (Unit -> Int) -> (Unit -> Int)\n}\nconstant : Unit -> Int\nconstant ignored = 1\nmain : Unit -> (Unit -> Int)\nmain () = resource cell<R> c = 42 {\nlet good : (Unit -> Int) -> (Unit -> Int) = fn(previous) {\nconstant\n}\nlet bad : (Unit -> Int) -> (Unit -> Int) = fn(previous) {\nfn(ignored) {\nlet held = c\n42\n}\n}\nhook Adjust {\nregister Adjust good {\nperform Adjust.publish constant\n}\n}\n}\n";
+        for pass in 0..3 {
+            let (mut core, sources, relations) = hook_source_fixture(source);
+            let borrowed = sources.iter().collect::<Vec<_>>();
+            super::Validator::new_modules(&core, &borrowed, &relations)
+                .unwrap()
+                .run_effect()
+                .unwrap();
+            if pass > 0 {
+                let program = registration_proof_program(core, &borrowed, &relations);
+                core = if pass == 1 {
+                    super::super::transform::identity_effect_traversal(&program)
+                } else {
+                    super::super::transform::fold_effect_literal_primitives(&program)
+                }
+                .unwrap();
+            }
+            let binding = |name| {
+                core.nodes
+                    .iter()
+                    .find_map(|node| {
+                        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                            binding,
+                        ))) = &node.kind
+                        else {
+                            return None;
+                        };
+                        let span = binding.binder().origin().primary_span();
+                        let file = sources.iter().find(|file| file.id() == span.source())?;
+                        (file
+                            .text()
+                            .get(span.range().start() as usize..span.range().end() as usize)
+                            == Some(name))
+                        .then_some(binding.binder())
+                    })
+                    .unwrap()
+            };
+            let good = binding("good");
+            let bad = binding("bad");
+            assert_eq!(good.ty(), bad.ty());
+            let (good, bad) = (good.id(), bad.id());
+            let mut replacements = 0;
+            for node in &mut core.nodes {
+                if matches!(&node.kind, EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == good)
+                {
+                    node.kind =
+                        EffectExprKind::Pure(PureExprKind::Variable(VariableNode::new(bad)));
+                    replacements += 1;
+                }
+            }
+            assert_eq!(replacements, 1);
+            assert!(core.nodes.iter().any(|node| matches!(
+                node.kind,
+                EffectExprKind::Operation(EffectOperation::Registration(_))
+            )));
+            assert_eq!(
+                super::Validator::new_modules(&core, &borrowed, &relations)
+                    .unwrap()
+                    .run_effect()
+                    .unwrap_err()
+                    .reason(),
+                super::ValidationReason::ResourceEscape
+            );
+            assert_eq!(
+                super::super::validate_effect_modules(core, &borrowed, &relations)
+                    .unwrap_err()
+                    .reason(),
+                super::ValidationReason::ResourceEscape
+            );
+        }
+    }
+
+    #[test]
+    fn registration_context_checks_anonymous_identity_without_losing_latent_effects() {
+        for (callback, outer, clauses) in [
+            ("fn(value) {\nvalue\n}", "", ""),
+            (
+                "fn(value) {\nlet ignored = perform Log.log value\nvalue\n}",
+                "handle (",
+                ") with Log {\nlog value => resume value\n}",
+            ),
+        ] {
+            prove_registration_transforms(hook_source_fixture(&format!(
+                "effect Adjust {{\npublish : Int -> Int\n}}\neffect Log {{\nlog : Int -> Int\n}}\nmain : Unit -> Int\nmain () = {outer}hook Adjust {{\nregister Adjust ({callback}) {{\n42\n}}\n}}{clauses}\n"
+            )));
+        }
+        prove_registration_transforms(hook_source_fixture(
+            "effect Adjust {\npublish : Int -> Int\n}\nmain : Unit -> Int\nmain () = {\nlet identity = fn(value) {\nvalue\n}\nlet number = identity 42\nlet flag = identity true\nhook Adjust {\nregister Adjust identity {\nnumber\n}\n}\n}\n",
+        ));
+    }
+
+    #[test]
+    fn registration_initializer_discard_precedes_its_completion_owner() {
+        prove_registration_transforms(hook_source_fixture(
+            "effect Adjust {\npublish : Int -> Int\n}\neffect Before {\nbefore : Unit -> Unit\n}\nidentity : Int -> Int\nidentity value = value\nmake : Unit -> (Int -> Int) ! {Before}\nmake ignored = {\nlet done = perform Before.before ()\nidentity\n}\nmain : Unit -> Int\nmain () = handle (hook Adjust {\nregister Adjust (make ()) {\n42\n}\n}) with Before {\nbefore ignored => {\nlet done = discard\n42\n}\n}\n",
+        ));
+    }
+
+    #[test]
+    fn registration_subscriber_local_discard_preserves_nested_owners() {
+        prove_registration_transforms(hook_source_fixture(
+            "import @builtin.cell as Cell\neffect Adjust {\npublish : Int -> Int\n}\neffect Skip {\nskip : Unit -> Unit\n}\nidentity : Int -> Int\nidentity value = value\ncallback : Int -> Int\ncallback value = handle {\nlet ignored = perform Skip.skip ()\nvalue\n} with Skip {\nskip ignored => {\nlet done = discard\nvalue\n}\n}\nmain : Unit -> Int\nmain () = resource cell<R> c = 42 {\nhook Adjust {\nregister Adjust identity {\nregister Adjust callback {\nperform Adjust.publish 3\n}\n}\n}\n}\n",
+        ));
+    }
+
+    #[test]
+    fn registration_consumed_clause_owner_does_not_keep_completed_registration_live() {
+        prove_registration_transforms(hook_source_fixture(
+            "effect Adjust {\npublish : Int -> Int\n}\neffect A {\nask : Unit -> Unit\n}\neffect B {\nask : Unit -> Unit\n}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Unit\nmain () = hook Adjust {\nhandle (register Adjust identity {\nperform A.ask ()\n}) with A {\nask ignored => {\nlet _ = resume ()\nhandle (perform B.ask ()) with B {\nask ignored => discard\n}\n}\n}\n}\n",
+        ));
     }
 
     #[test]

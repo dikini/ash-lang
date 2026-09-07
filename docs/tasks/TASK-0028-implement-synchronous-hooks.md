@@ -33,49 +33,36 @@ Do not push, tag, merge `main`, or change signing configuration.
 
 ## Progress
 
-- Confirmed the accepted proposal and implementation authorization.
-- Moved the clean integration checkout to the product worktree and created its
-  feature branch; the integration ref remains at the starting tip.
-- Refreshed only disposable Ash/xtask build artifacts after moving the checkout,
-  so path-dependent test binaries do not retain the preceding checkout path.
+- The accepted proposal and implementation authorization are recorded. The
+  feature worktree is `.worktree/synchronous-hooks`; the integration ref remains
+  at `ec8f86165689306a5301732a2ec995f8f7487686`. Main's unrelated changes remain
+  untouched.
 - Fresh `CARGO_INCREMENTAL=0 cargo xtask verify` baseline passed before product
-  edits, including 1,099 library tests, all integration suites and rustdoc.
-- The read-only high-reasoning implementation map and parent-owned execution
-  plan are complete. The medium documentation audit passes after linking the
-  lifecycle decision.
-- Step 1 syntax and projection passed independent high-reasoning semantic and
-  Rust/resource review. The parent repeated the focused tests (1,101 library,
-  seven hook syntax and 93 predecessor tests), formatting, strict Clippy and
-  narrow architecture inventory check successfully. Both forms still reject
-  at resolution at that checkpoint.
-- Step 2 began with real-driver identity-publication and unused-root witnesses.
-  Both reached the expected temporary resolution rejection before product
-  changes. Root implementation is undergoing final checks; registration remains
-  unavailable.
-- The implementer's combined hook/effect/resource integration gate passes:
-  open-lacks admission and ambiguity rejection, imported helper transforms,
-  phantom target retention, generic resource/control cases, kind precedence,
-  source spans and the fresh-child 24-root/256-KiB direct pipeline. The corrected
-  five-field architecture inventory passes its focused check.
-- The parent pre-review-correction repeat passed 1,109 library tests, all 32
-  architecture tests and 175 focused integration tests. Semantic review found
-  row-error precedence and pattern-origin authentication gaps; the implementer
-  also found a root-only partial-clone disposal issue. Both semantic regressions
-  reproduced their failures before correction. All three fixes are applied and
-  semantic re-review passes. The implementer's post-fix gate passes 1,110 library
-  and 176 focused tests plus strict Clippy, inventory, formatting and diff checks.
-  The parent repeated that gate successfully, including all 32 architecture
-  tests. Rust/resource review found one remaining partial-clone failure path
-  when an ordinary handler recomputes rows through a nested hook root. Its
-  root-only correction passes Rust/resource re-review. The unchanged regression
-  first overflowed during partial-clone disposal, then passed rollback,
-  one-short exhaustion and two exact-budget retries in a fresh 256 KiB child.
-  The final parent repeat passed 1,111 library and 176 focused integration tests,
-  formatting, strict Clippy, Markdown lint and diff checks. Step 2 is retained
-  in unsigned checkpoint `e801edb`; the final actual-field inventory also passed.
-  Registration remains unavailable.
-- A fresh high-reasoning implementer is reconstructing Step 3's registration
-  structure and completion-proof boundaries before its first failing witnesses.
+  edits, including 1,099 library tests, integration suites and rustdoc.
+- Step 1 syntax and projection are retained in unsigned checkpoint `bb618e8`.
+  Step 2 authenticated executable roots are retained in unsigned checkpoint
+  `e801edb`. Both passed independent semantic and Rust/resource reviews.
+- Step 3 registration structure and completion proof are verified. Lowering
+  retains a preceding callback binding, a non-interpreting completion owner and
+  the ordinary generated forward–callback–resume clause. Independent linked
+  Core proof rejects altered owner relationships, unsafe callback completion
+  and callback-added escaping dependencies, including through both transforms.
+- Anonymous callbacks check against their payload type while preserving latent
+  effects and ordinary binding generalization. Owning tests cover exact work,
+  every insufficient elaboration allowance, fresh retries, deep partial-state
+  disposal and the 24-registration/256-KiB direct pipeline. The discoveries
+  below distinguish harness alignment from later unchanged-witness corrections.
+- Final independent semantic and Rust/resource reviews pass. The parent repeated
+  1,131 library tests, 229 focused integration tests and all 32 architecture
+  checks successfully on the corrected snapshot, plus formatting and full
+  strict Clippy. The evidence-document audit passes. The six added inventory
+  fields retain existing classifications; no check or limit is weakened.
+- Both public Effect validators still reject executable registration after
+  completing proof. No callback class, including pure or unused callbacks, can
+  bypass this temporary gate. Step 3 is not registration runtime support.
+- Step 4 runtime activation ownership is next. Step 5's complete corpus,
+  specification, full verification and unsigned local integration remain open.
+  No push, tag or main merge has occurred.
 
 ## Verification
 
@@ -95,6 +82,48 @@ local merge, merged-checkout verification and clean feature-worktree removal.
 Preserve unrelated main-checkout changes and all remote refs/tags.
 
 ## Discoveries
+
+The generated callback binding generalized an anonymous identity function
+before registration checking could supply its payload type. Reading that
+binding's rigid monotype then rejected the valid callback. Independent review
+identified this path, and the unchanged identity-lambda witness confirms it.
+Correction must retain ordinary user-binding generalization and inferred latent
+effects; a pure-only callback annotation would change the accepted contract.
+The contextual correction uses the existing inferred-effect function check.
+The registration task remains a borrowed scheduling detail. Frame measurements
+ruled out enum growth and showed 176 bytes less caller stack in the registration
+test. A hook-completion helper reduced the main frame but increased total live
+stack and was removed. Extracting ordinary binding scheduling verbatim instead
+reduces the shared frame from 109,152 to 106,944 bytes; that helper is absent from
+the failing path. Both unchanged 24-scope/256-KiB witnesses pass afterward.
+
+A same-typed callback substitution in actual linked Core exposed a completion
+proof gap. Contextual value analysis seeded callable bodies but did not demand
+the enclosing linked bindings, so calls could have no discovered target and
+skip the unsafe callback. Demanding each actual control root's value port in
+its existing context initializes those bindings through the existing analysis.
+The unchanged substituted callback now rejects unsafe discard before the
+temporary runtime gate, on base Core and both transforms. The honest callback
+passes the full internal proof. An independent read-only trace confirms this
+cause and correction; final Step 3 semantic and Rust/resource reviews pass.
+
+Registration metadata enlarged shared expression and handler frames. Extracting
+callback typing alone did not restore the root stack test. Boxing the new
+optional contract moved the observed failure past resolution but did not close
+the test. Separating direct typed registration lowering and its retained
+metadata from ordinary handler emission restores the unchanged root stack test.
+Existing root checks and ordinary emission remain intact. The deep registration
+witness still overflowed beneath the shared handler frame. Direct registration
+completion dispatch removes that frame; debugger traces then get through all
+registration lowering and fail at the outer root. The unchanged direct root
+test passes, while the matched root-only helper control fails. The registration
+test is therefore aligned with the direct predecessor harness, retaining
+the same 24 registrations, outer root, 256 KiB stack, compiler phases and
+disposal on that thread, and passes. This harness change is separate from the
+product corrections. An owner-erasure witness also exposed acceptance of a
+registration-marked handler after its owner node was removed. The corrected
+check includes surviving handler contracts as well as owner nodes; its
+regression now passes.
 
 Resolved effect occurrences discarded argument type provenance. Hook-target
 kind checking needs that original source information: the body-free kind API

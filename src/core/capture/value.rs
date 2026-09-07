@@ -991,6 +991,7 @@ impl Graph {
         let node = nodes.get(id).ok_or(Failure::Invalid)?;
         let source = self.sources[id];
         Ok(match operation(&node.kind) {
+            Some(EffectOperation::Registration(scope)) => Expr::Alias(index(scope.body)),
             Some(EffectOperation::Resource(resource)) => Expr::Resource {
                 handle: self.symbol(symbols, resource.handle.id(), source, budget)?,
                 identity: self.symbol(types, resource.acquisition.identity, source, budget)?,

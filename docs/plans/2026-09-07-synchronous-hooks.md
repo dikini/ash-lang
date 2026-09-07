@@ -25,7 +25,7 @@ typed Effect Core, finite capture analysis and explicit evaluator.
 - [x] Fresh full baseline verification before source or test edits.
 - [x] Step 1: primary syntax, projection and fail-closed staging.
 - [x] Step 2: authenticated, executable hook roots and absent-target rows.
-- [ ] Step 3: registration typing, generated forwarding and completion proof.
+- [x] Step 3: registration typing, generated forwarding and completion proof.
 - [ ] Step 4: runtime registration ownership and complete source execution.
 - [ ] Step 5: full interaction corpus, specification, reviews and verification.
 - [ ] Retained checkpoint, transition cleanup, unsigned local integration,
@@ -284,3 +284,15 @@ evidence includes exact/one-short/fresh-retry work, row rollback, imported
 open-lacks helpers, both transforms and the predecessor-shaped 24-root pipeline
 on a 256 KiB stack. The full driver wrapper is not covered by that stack claim.
 Registration remains rejected until its completion proof and runtime are ready.
+
+Step 3 passed independent high-reasoning semantic and Rust/resource review and
+the medium evidence-document audit. The final parent gate passed 1,131 library
+tests, 229 focused integration tests and all 32 architecture checks, formatting
+and full strict Clippy. Review corrected contextual anonymous callback checking
+and partial type ownership; actual linked same-typed callback substitutions
+independently reject changed completion and escaping dependencies. Exact-work,
+all-short/fresh-retry and small-stack evidence is retained in the
+[evidence record](../design/effect-ash/synchronous-hooks-evidence.md), with its
+explicit harness and failure-boundary limits. Both public validators still
+reject executable registration after proof. Step 4 must implement runtime
+activation ownership before removing those gates.
