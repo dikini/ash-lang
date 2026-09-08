@@ -1,18 +1,20 @@
 # Narrow checked foreign-provider evidence
 
 This informative report records the implemented and verified native-buffer
-increment on `codex/narrow-foreign-provider`, not current `main` semantics.
+increment on `integration/effect-ash-foundations`, not current `main` semantics.
 Product checkpoint `3819a93` retains compiler admission, runtime execution,
 conformance tests, specification, review and full verification.
 The [branch specification](../../../spec/README.md) accompanies the implementation
-and conformance tests. Clean local integration remains pending.
+and conformance tests. Unsigned local merge `c0f230f` passed full merged
+verification. The clean feature worktree and branch were removed; their history
+remains in the integration branch. No main merge, push or tag was performed.
 
 ## Evidence coverage
 
 The FOREIGN identifiers retain the accepted proposal's evidence obligations.
 Independent contract, effects, provenance/proof and existential-pressure review
 approved FOREIGN-01 through FOREIGN-09. Final Rust/resource quality review also
-passed. Full verification passed; clean local integration remains for FOREIGN-10.
+passed. Full verification and clean local integration close FOREIGN-10.
 
 | ID | Established evidence | Review and closure |
 | --- | --- | --- |
@@ -25,7 +27,7 @@ passed. Full verification passed; clean local integration remains for FOREIGN-10
 | FOREIGN-07 | [Linked validation](../../../src/evidence_validation.rs) checks nine independent resource mutations and constructor payloads. [Core validation](../../../src/core/validate.rs) mutates acquisition/method/brand/result/row/origin facts after both transforms. Rejections leave all six native counters zero; transformed positives execute `Success(5)` with one allocation and release. | Contract approved. |
 | FOREIGN-08 | Private tests cover normal return, body failure, discard, partial publication and completed teardown releases. Injected teardown exhaustion preserves primary/secondary failure, marks cleanup incomplete and prevents source clause/suffix/cleanup writes. Row-storage fault matrices preserve actual storage causes. | Contract and reporting reviews approved. |
 | FOREIGN-09 | Compiler and runtime tests retain exact/one-short/fresh budgets, proportional length charging, owner capacity/reuse, deep stack checks and shared Pure-locality evidence. | Contract and finite-work audit approved. |
-| FOREIGN-10 | Isolated safe-owning adapter, CLI fixture, predecessor suite and ARM64 compile checks pass. Independent complete-provider contract and Rust/resource reviews, full verification and documentation checks passed. | Clean unsigned local integration pending. |
+| FOREIGN-10 | Isolated safe-owning adapter, CLI fixture, predecessor suite and ARM64 compile checks pass. Independent complete-provider contract, Rust/resource and documentation reviews passed. Full verification passed before and after unsigned local merge; transition and clean feature-worktree cleanup are complete. | Closed locally; no main merge, push or tag. |
 
 ## Native and injected observations
 
@@ -93,6 +95,9 @@ parent verification passed:
 - 1,214 library tests, 14 CLI tests and 50 native integration tests, including
   the storage-fault matrices and native-owner source-effect-stop witnesses;
 - `cargo check --workspace --all-targets --target aarch64-unknown-linux-gnu --locked`.
+
+The merged checkout then passed `cargo xtask verify` in full. Final status-only
+documentation changes were checked separately; they change no Rust or Ash code.
 
 Changed Markdown has no new lint findings against the compiler checkpoint;
 existing overlong lines remain, and table and formal-code line lengths were

@@ -92,7 +92,7 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 - [Narrow checked foreign-provider evidence](effect-ash/narrow-foreign-provider-evidence.md)
   — native allocation, checked access, scoped ownership, fail-stop resource
-  reports, independent validation and verified product checkpoint.
+  reports, independent validation and verified local integration.
 - [Reliable cleanup evidence](effect-ash/reliable-cleanup-evidence.md) —
   verified normal-completion checkpoint and explicit outstanding abandonment
   and full-contract evidence.

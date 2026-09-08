@@ -704,16 +704,18 @@ Runtime cleanup is not presumed atomic, retryable, terminating or a guarantee
 of successful native release. Foreign partial acquisition and release failures
 remain provider-specific work for the next separately authorized slice.
 
-### Narrow checked foreign provider — forecast 10 units
+### Narrow checked foreign provider — 10 units closed locally
 
 Prerequisite: integrated reliable cleanup.
 
 Product checkpoint `3819a93` retains the bounded native byte buffer, compiler
 admission, runtime execution, conformance tests, specification and independent
 reviews. The [provider evidence](effect-ash/narrow-foreign-provider-evidence.md)
-records full verification and remaining clean local integration. The completed
-CP-0020, TASK-0030 and execution plan remain in Git history. The 10-unit planning
-weight is not yet closed.
+records full verification before and after unsigned local merge `c0f230f`.
+The clean feature worktree and branch were removed. The completed CP-0020,
+TASK-0030 and execution plan remain in Git history. This closes the 10-unit
+planning weight: 95 of 100 relative planning units are closed, with the separate
+5-unit milestone closure remaining. No main merge, push or tag is included.
 
 The implementation reuses static acquisition identities and runtime activation
 keys for checked authority, captured ownership and native release. It adds no

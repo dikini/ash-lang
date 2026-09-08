@@ -1,7 +1,7 @@
 # Ash native buffer
 
 `ash-native-buffer` is a first-party runtime adapter for Ash's native byte-buffer
-provider under implementation. It owns a block returned by the host C `calloc`
+provider. It owns a block returned by the host C `calloc`
 and releases that block with the matching `free`.
 
 The safe API accepts only positive lengths no greater than `isize::MAX`. It
