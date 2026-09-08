@@ -2,7 +2,8 @@
 
 This informative report records the implemented and verified native-buffer
 increment on `codex/narrow-foreign-provider`, not current `main` semantics.
-Compiler admission is retained at `3d80fbc` and runtime execution at `f9a02b6`.
+Product checkpoint `3819a93` retains compiler admission, runtime execution,
+conformance tests, specification, review and full verification.
 The [branch specification](../../../spec/README.md) accompanies the implementation
 and conformance tests. Clean local integration remains pending.
 
@@ -93,10 +94,10 @@ parent verification passed:
   the storage-fault matrices and native-owner source-effect-stop witnesses;
 - `cargo check --workspace --all-targets --target aarch64-unknown-linux-gnu --locked`.
 
-Changed Markdown has no new lint findings. Twenty-five overlong lines are
-unchanged from the compiler checkpoint; table and formal-code line lengths were
-excluded. All 82 relative file links in the twelve changed documents resolved,
-and referenced specification headings were checked. Final contract and
+Changed Markdown has no new lint findings against the compiler checkpoint;
+existing overlong lines remain, and table and formal-code line lengths were
+excluded. Relative file links resolve after artifact cleanup, and referenced
+specification headings were checked. Final contract and
 Rust/resource reviews found no remaining findings.
 
 ARM64 compilation is not native ARM64 execution or release conformance.
