@@ -110,6 +110,14 @@ is verified and integrated. Signed merge `5d126b2` retains all selected slices
 on `main`. Final merged-main verification passed, as recorded in the
 [milestone closure evidence](design/effect-ash/milestone-closure-evidence.md).
 
+The ash-doc migration exposed checked dependency-summary failures at the exact
+Lib Ash checkpoint. [TASK-0024](tasks/TASK-0024-repair-migration-regressions-after-effect-ash.md)
+defers their repair until `effect-ash` integrates into `main`, then requires a
+coordinated ash-doc forward migration to one exact repaired effects commit.
+[TASK-0021](tasks/TASK-0021-implement-human-diagnostics.md) retains the separate
+human-diagnostic feature. Historical migration evidence and published tags
+remain unchanged.
+
 | Work | Maturity | Dependencies | Next evidence |
 | --- | --- | --- | --- |
 | [Mini-Ash phase](design/DN-0015-mini-ash-phase.md) | complete / implementation | historical `mini-ash` tag, reviewed [first corpus stratum](design/DN-0016-first-mini-ash-corpus.md), accepted component decisions, retained [data-and-pattern evidence](design/mini-ash/data-and-patterns/evidence.md), and retained [rank-1 evidence](design/mini-ash/rank-1-polymorphism/evidence.md) | Use the separately built tag only for bounded historical comparisons. |

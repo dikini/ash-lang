@@ -2,7 +2,7 @@
 
 - ID: `TASK-0021`
 - Status: active
-- Related: [AD-0010: Human Diagnostic Presentation and Localization](../decisions/AD-0010-human-diagnostic-presentation-and-localization.md), [DN-0029: Human Diagnostic Presentation](../design/DN-0029-human-diagnostic-presentation.md)
+- Related: [TASK-0024: Repair Migration Regressions After Effect Ash](TASK-0024-repair-migration-regressions-after-effect-ash.md), [AD-0010: Human Diagnostic Presentation and Localization](../decisions/AD-0010-human-diagnostic-presentation-and-localization.md), [DN-0029: Human Diagnostic Presentation](../design/DN-0029-human-diagnostic-presentation.md)
 
 > This task organizes work. It does not define Ash semantics.
 
@@ -13,20 +13,23 @@
 - The bounded catalogue comparison in DN-0029 selected Fluent through
   `fluent-bundle`, `fluent-syntax`, and `unic-langid`.
 - The exact `lib-ash` migration sources in the sibling `ash-doc` repository
-  remain external regression evidence. The task must not rewrite those sources
-  to avoid the compiler failure.
+  remain external regression evidence. TASK-0024 owns their compiler repair
+  after `effect-ash` integrates into `main`. This task must not change summary
+  acceptance or rewrite the retained sources to avoid the failure.
 - Downstream `ash-doc` automation must migrate to the JSON contract in the same
-  coordinated checkpoint that changes default Ash output.
+  coordinated checkpoint that changes default Ash output. A newer canary does
+  not silently change ash-doc's edition pin; TASK-0024 owns the coordinated
+  forward migration to a repaired effects checkpoint.
 
 ## Work
 
-1. Minimize or otherwise isolate the honest checked-export-summary failure
-   exercised by the eight migration entries. Retain the failed invariant and
-   fix the producer or validator relationship rather than only changing prose.
+1. Retain the isolated checked-export-summary failure as presentation evidence.
+   Report its compiler responsibility and cause without changing the
+   authentication relation; TASK-0024 owns that repair.
 2. Replace `ResolvedBuildFailure::InvalidState` at the import-authentication
    boundary with a small structured invariant family and safe developer facts.
-   Authenticate every honest summary before publication and retain targeted
-   corruption tests.
+   Retain targeted corruption tests. Producer-side authentication before
+   publication and its resource accounting belong to TASK-0024.
 3. Compare existing catalogue formats using the English and Bulgarian cases in
    DN-0029. Record the evidence and retain the least mechanism that meets the
    accepted requirements.
@@ -62,8 +65,9 @@ localization language. Color is not required for completion.
 
 - Run focused structural, renderer, catalogue, locale, JSON, CLI, module, and
   checked-export-summary tests named by the execution plan.
-- Run the exact eight-entry `ash-doc` migration verifier against the resulting
-  Ash checkpoint and verify the specified current-language outcomes.
+- Check structured diagnostics against the eight retained entries at an exact
+  canary checkpoint. Unrepaired entries may still report compiler failures;
+  restored language outcomes are TASK-0024 acceptance evidence.
 - Verify English and Bulgarian catalogue completeness, named-argument
   agreement, fallback, escaping, and explicit locale selection.
 - Verify paths, one-based lines and columns, excerpts, tabs, Cyrillic,
@@ -92,4 +96,6 @@ localization language. Color is not required for completion.
 
 ## Deviations
 
-None.
+- The migration repair and edition-wide forward migration are deferred to
+  TASK-0024 after `effect-ash` lands. Diagnostic presentation and structured
+  cause preservation remain here under AD-0010.

@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Replace Ash's reason-first CLI failures with source-aware English and Bulgarian human diagnostics, compact localized log output, and a versioned locale-independent JSON-lines contract, while fixing and identifying the checked-export-summary regression that motivated the work.
+**Goal:** Replace Ash's reason-first CLI failures with source-aware English and Bulgarian human diagnostics, compact localized log output, and a versioned locale-independent JSON-lines contract, while identifying the checked-export-summary failure that motivated the work.
 
 **Architecture:** Phase-specific failures remain the semantic authority. They expose structured messages, facts, and spans to one borrowed presentation view; a retained source catalogue resolves spans; Fluent supplies words only; three renderers consume the same view. Checked-export-summary validation gains a small structured invariant cause that survives producer and importer boundaries.
 
@@ -15,6 +15,11 @@ in a dedicated worktree from the commit containing this plan; do not reuse any
 registered Effect Ash worktree. The plan's parent, `5430432`, allocated
 DN-0029, AD-0010, and TASK-0021 after checking every registered worktree.
 
+[TASK-0024](TASK-0024-repair-migration-regressions-after-effect-ash.md) owns
+the compiler repair, producer-side publication check, and edition-wide ash-doc
+forward migration after `effect-ash` lands. This plan changes presentation and
+structured failure data without changing summary acceptance.
+
 Keep the checkpoint narrow:
 
 - do not add color, editor protocols, runtime catalogue discovery, generated
@@ -26,64 +31,23 @@ Keep the checkpoint narrow:
 - use inline expected strings rather than adding a snapshot-test framework;
 - add dependencies only when the task below first needs them.
 
-## Task 1: Reproduce and repair the checked-export-summary regression
+## Task 1: Preserve the checked-export-summary failure cause
 
 **Files:**
 
-- Modify: `tests/library_imports.rs`
 - Modify: `src/resolved.rs`
 - Modify: `src/resolve.rs`
 - Modify: `src/elaborate.rs`
 - Modify: `tests/module_resolution.rs`
 
-**Step 1: Add the smallest honest regression.**
+**Step 1: Retain the failure as presentation evidence.**
 
-Add an integration fixture with one imported module that contains a public
-type and an unreferenced private helper type with constructors. Its entry
-module must import and use only the public API. Name the test
-`unreferenced_private_constructor_families_do_not_invalidate_exports`.
+Use the isolated honest-summary failure recorded by TASK-0021 and targeted
+corruption fixtures to test cause preservation. Do not correct the acceptance
+relation or add the producer publication pass here. TASK-0024 must revalidate
+the repair against integrated effects code before changing that relation.
 
-Run:
-
-```bash
-cargo test --test library_imports unreferenced_private_constructor_families_do_not_invalidate_exports -- --exact
-```
-
-Expected before the fix: failure with `resolve.internal-state` while admitting
-the dependency summary.
-
-**Step 2: Add relation-specific authentication tests.**
-
-In `src/resolved.rs`, extend the withheld-family fixture to establish all three
-cases:
-
-1. an unmatched local `Private` constructor family is valid access-only
-   metadata;
-2. a retained local hidden family still requires the exact constructor count;
-3. an unmatched opaque family or a private family owned by another module is
-   invalid.
-
-Run the focused library tests and observe the new honest case fail before
-changing the relation:
-
-```bash
-cargo test --lib withheld_constructor -- --nocapture
-```
-
-**Step 3: Correct the relation, not the retained closure.**
-
-In `ExportSummary::authenticate`, continue matching opaque public types and
-retained local hidden types exactly. Permit only unmatched
-`WithheldExportKind::Private` families whose owner belongs to the summary's
-module. These entries exist to diagnose source access and need not have a
-hidden semantic carrier when no public fact refers to the private type. Reject
-every other unmatched family.
-
-Do not retain unreferenced private nominal facts in `hidden_nominals`; that
-would enlarge every summary and contradict the specified minimal hidden
-closure.
-
-**Step 4: Name the failed invariant.**
+**Step 2: Name the failed invariant.**
 
 Replace the authentication path's undifferentiated invalid result with:
 
@@ -106,36 +70,17 @@ expose the `SummaryInvariantFailure`; the import span is context, not a
 replacement cause. Producer-side failure in `ExportSummary::freeze` must carry
 the same cause through `ElaborationFailure`.
 
-**Step 5: Authenticate before publication.**
+**Step 3: Verify cause preservation.**
 
-At the end of `ExportSummary::freeze`, authenticate the constructed summary
-before returning it. Use the existing work ledgers and preserve atomic
-publication. Update exact resource tests for the additional bounded pass; do
-not bypass the check under release builds.
+Run `cargo test --lib withheld_constructor` and
+`cargo test --test module_resolution`. Assert that authentication results stay
+the same while failures retain the invariant family through importer context.
+Keep corruption rejection coverage. Record the still-unrepaired honest failure
+without treating it as the specified outcome for valid source.
 
-Add one assertion that an honest checked module's published summary
-authenticates, and retain existing corruption tests with assertions for the
-new invariant family/check rather than generic invalid state.
+**Step 4: Commit the structured failure data.**
 
-**Step 6: Verify the repair.**
-
-Run:
-
-```bash
-cargo test --test library_imports unreferenced_private_constructor_families_do_not_invalidate_exports -- --exact
-cargo test --lib withheld_constructor
-cargo test --test module_resolution
-```
-
-Expected: the honest private helper passes; corrupt opaque, foreign-private,
-and retained-hidden families fail with named causes.
-
-**Step 7: Commit.**
-
-```bash
-git add src/resolved.rs src/resolve.rs src/elaborate.rs tests/library_imports.rs tests/module_resolution.rs
-git commit -m "fix: authenticate private export metadata"
-```
+Commit the cause-preservation change independently of the deferred repair.
 
 ## Task 2: Add the bounded catalogue foundation
 
@@ -616,67 +561,26 @@ git add src tests docs/tools/ash.md spec/name-resolution.md spec/static-semantic
 git commit -m "docs: define the diagnostic contracts"
 ```
 
-## Task 9: Migrate ash-doc automation and verify the eight retained entries
+## Task 9: Coordinate ash-doc diagnostic automation
 
-**Repositories and files:**
+Read ash-doc's current instructions, roadmap, exact pin, and checks before
+editing. Locate rejection helpers and specialized verifiers from that tree;
+do not assume a shared helper still exists. At the checkpoint adopting the
+new CLI, make those checks request `--message-format json --locale en-US` and
+parse JSON fields rather than human prose. Assert reason, responsibility,
+source location, and causal relationships. Successful-program checks retain
+the applicable stdout, value, type, and exit-status assertions.
 
-- Modify in `../ash-doc`: `content/checks/lib.sh`
-- Modify in `../ash-doc`: specialized rejection verifiers found by
-  `rg -l 'primary: source|sed -n .1p.*stderr' content -g 'verify.sh'`
-- Modify in `../ash-doc`:
-  `lab/lib-ash-migration/body-free-summary-authentication/checks/verify.sh`
-- Modify in `../ash-doc`:
-  `lab/lib-ash-migration/body-free-summary-authentication/README.md`
-- Modify in `../ash-doc`: migration roadmap/index links that describe the
-  resolved evidence
+If ash-doc is still pinned to Lib Ash, verify a separately identified exact
+canary without replacing the active pin or breaking its checks. Preserve the
+historical two-pin lab verifier and source hashes. A retained compiler failure
+may gain structured presentation; do not describe it as repaired. TASK-0024
+owns the effects edition target, restored outcomes, and publication gate.
 
-**Step 1: Change automation to request JSON.**
-
-Invoke Ash with `--message-format json --locale en-US` for every intentional
-rejection. Parse each JSON line with the repository's existing available JSON
-tool, or a short standard-library script if none exists. Assert reason,
-responsibility, path, and byte ranges as data. Do not grep serialized JSON or
-human messages.
-
-Accepted-program checks continue to use ordinary success output and need no
-format flag.
-
-**Step 2: Turn the eight-entry lab into fixed-regression evidence.**
-
-Preserve source hashes. Run the new Ash worktree against all eight entries and
-record their actual current-language outcomes:
-
-- search entries should reach their ordinary later checking or execution
-  result;
-- red-black and accepted iterator clients may reach the specified missing
-  implementation-selection rejection rather than predecessor success;
-- opaque iterator cases should reach `resolve.opaque-constructor` with their
-  causal cross-file labels.
-
-Do not assume predecessor outcomes where current `lib-ash` semantics differ.
-Assert each observed reason/status/output and byte span in JSON. Rewrite the
-README as resolved migration evidence: explain the set mismatch and the
-restored later outcomes, and distinguish exact historical output from the new
-contract.
-
-**Step 3: Verify ash-doc.**
-
-Run the focused eight-entry verifier against its required exact predecessor
-checkout and the implementation worktree, then run:
-
-```bash
-bash -n ../ash-doc/content/checks/lib.sh
-find ../ash-doc/content ../ash-doc/lab -path '*/checks/verify.sh' -print0 | xargs -0 -n1 bash -n
-```
-
-Run the ash-doc repository verifier required by its active migration task with
-the new Ash worktree. Expected: all rejection checks consume JSON and the eight
-entries no longer stop at a checked-summary compiler failure.
-
-**Step 4: Commit ash-doc separately.**
-
-Use an ash-doc commit that names the automation migration and resolved
-evidence. Do not combine changes from the two repositories in one commit.
+Verify changed shell scripts with `bash -n`, then run every affected verifier
+against its declared exact target. Record Ash and ash-doc commits and commands.
+Commit changes separately in each repository. Do not claim an edition-wide
+migration from canary-only evidence.
 
 ## Task 10: Full verification, review, and artifact closure
 
@@ -693,7 +597,6 @@ cargo test --test diagnostic_catalogues
 cargo test --test diagnostic_presentation
 cargo test --test diagnostic_rendering
 cargo test --test diagnostic_json
-cargo test --test library_imports unreferenced_private_constructor_families_do_not_invalidate_exports -- --exact
 cargo test --bin ash
 ```
 
@@ -710,8 +613,8 @@ quiet or truncated command.
 
 **Step 3: Check documentation and boundaries.**
 
-Run the repository's Markdown/link checks through `cargo xtask verify`, then
-manually confirm:
+Check Markdown structure, lint, and relative links separately: `cargo xtask
+verify` does not automate those checks. Manually confirm:
 
 - spec changes only rename/explain the compiler representation;
 - AD-0010 remains the architectural authority;
@@ -728,7 +631,9 @@ rerun the affected focused checks plus `cargo xtask verify`.
 **Step 5: Close TASK-0021 only after both repositories verify.**
 
 Record the exact Ash and ash-doc commits, commands, outcomes, catalogue
-selection, summary root cause, and any deviations in TASK-0021. Remove the
+selection, retained failure causes, and any deviations in TASK-0021. Keep
+TASK-0024 open until its separate repair and forward-migration gates pass.
+Remove the
 temporary execution plan and active-task/index entries according to the
 project artifact policy only when the implementation is retained and no work
 remains.
