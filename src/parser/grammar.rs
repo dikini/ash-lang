@@ -30,6 +30,8 @@ pub(super) enum PrimaryForm {
     Parenthesized,
     Perform,
     Discard,
+    Hook,
+    Registration,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -148,6 +150,8 @@ const CURRENT_ASH_DIALECT: ParserDialect = ParserDialect {
             PrimaryForm::Parenthesized,
             PrimaryForm::Perform,
             PrimaryForm::Discard,
+            PrimaryForm::Hook,
+            PrimaryForm::Registration,
         ],
         infix: &[
             InfixDescriptor {
@@ -1633,6 +1637,30 @@ fn handler_expression(parser: &mut Parser<'_>) {
     parser.finish();
 }
 
+pub(super) fn hook_expression(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::HookExpression);
+    let _ = parser.bump();
+    effect_instance(parser);
+    block(parser);
+    parser.finish();
+}
+
+pub(super) fn registration_expression(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::RegistrationExpression);
+    // A primary transformer can nest another registration before any block.
+    if !parser.enter_structure() {
+        parser.consume_rest();
+        parser.finish();
+        return;
+    }
+    let _ = parser.bump();
+    effect_instance(parser);
+    expression::primary_expression(parser);
+    block(parser);
+    parser.leave_structure();
+    parser.finish();
+}
+
 pub(super) fn perform_expression(parser: &mut Parser<'_>) {
     parser.start(NodeKind::PerformExpression);
     let _ = parser.bump();
@@ -2690,5 +2718,44 @@ mod tests {
         let mut budget = SyntaxBudget::with_limit(limit);
         let lexed = lex_with_budget(source, &mut budget).expect("limited lexing should fit spans");
         parse_with_budget(lexed, &mut budget)
+    }
+
+    #[test]
+    fn hook_scopes_charge_exact_syntax_work_before_retention_and_retry() {
+        for expression in [
+            "hook Adjust {\n3\n}",
+            "register Adjust increment {\n3\n}",
+            "register Api.Adjust<Int> (factory 1) {\nhook Api.Adjust<Int> {\n3\n}\n}",
+        ] {
+            let source = SourceFile::new(
+                "hook-work.ash",
+                format!("main : Unit -> Int\nmain () = {expression}\n"),
+            )
+            .unwrap();
+            let baseline = super::super::parse(lex(&source).unwrap());
+            super::super::project_module(&source, &baseline).unwrap();
+            // The owning syntax ledger charges one unit for each retained
+            // token and event, including both scope nodes and their targets.
+            let exact_work = baseline.tokens().len() + baseline.events().len();
+            let parse_at = |limit| {
+                let mut budget = SyntaxBudget::with_limit(limit);
+                let lexed = lex_with_budget(&source, &mut budget).unwrap();
+                parse_with_budget(lexed, &mut budget)
+            };
+            let short = parse_at(exact_work - 1);
+            assert_eq!(
+                short.resource_failure(),
+                Some(ResourceFailure::SyntaxWork {
+                    limit: exact_work - 1
+                })
+            );
+            assert!(short.root().is_none());
+            for _ in 0..2 {
+                let exact = parse_at(exact_work);
+                assert_eq!(exact.resource_failure(), None);
+                assert_eq!(exact.events(), baseline.events());
+                super::super::project_module(&source, &exact).unwrap();
+            }
+        }
     }
 }

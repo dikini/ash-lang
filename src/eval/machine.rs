@@ -319,6 +319,12 @@ pub struct Evaluation {
     pub max_frame_depth: usize,
     effect_trace: Option<Box<[EffectTraceEvent]>>,
     heap: Arc<ObservedHeap>,
+    #[cfg(test)]
+    registration_acquisitions: u32,
+    #[cfg(test)]
+    runtime_work: usize,
+    #[cfg(test)]
+    work_trace: Option<Vec<(NodeId, usize)>>,
 }
 
 impl Evaluation {
@@ -420,6 +426,17 @@ impl Error for RuntimeFailure {}
 
 #[derive(Debug)]
 enum Frame {
+    // This private, non-Clone frame is the release authority. Acquisition is
+    // its only constructor in execution; capture/resume move it, and normal
+    // return consumes it. Keys in handler/clause frames are non-owning facts.
+    RegistrationBoundary {
+        key: RegistrationKey,
+        handler: NodeId,
+        // Retain the evaluated callback independently of pending control.
+        callback: Value,
+        handler_active: bool,
+        pending_invocations: usize,
+    },
     ResourceInitializer {
         node: NodeId,
         environment: Environment,
@@ -469,6 +486,7 @@ enum Frame {
     HandlerBoundary {
         node: NodeId,
         environment: Environment,
+        registration: Option<RegistrationKey>,
     },
     Request {
         node: NodeId,
@@ -485,8 +503,12 @@ enum Frame {
         handler: HandlerId,
         owner: ResumeId,
         continuation: Option<CapturedContinuation>,
+        registration: Option<RegistrationKey>,
     },
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RegistrationKey(u32);
 
 #[derive(Debug)]
 struct CapturedContinuation {
@@ -547,6 +569,11 @@ pub struct Machine {
     resource_limit: usize,
     live_resources: usize,
     next_activation: u32,
+    registration_limit: usize,
+    live_registrations: usize,
+    next_registration: u32,
+    #[cfg(test)]
+    work_trace: Option<Vec<(NodeId, usize)>>,
 }
 
 impl Machine {
@@ -565,6 +592,11 @@ impl Machine {
             resource_limit: 0,
             live_resources: 0,
             next_activation: 0,
+            registration_limit: 0,
+            live_registrations: 0,
+            next_registration: 0,
+            #[cfg(test)]
+            work_trace: None,
         }
     }
 
@@ -590,6 +622,11 @@ impl Machine {
             resource_limit: MAX_CAPTURED_FRAME_CELLS,
             live_resources: 0,
             next_activation: 0,
+            registration_limit: MAX_CAPTURED_FRAME_CELLS,
+            live_registrations: 0,
+            next_registration: 0,
+            #[cfg(test)]
+            work_trace: None,
         }
     }
 
@@ -601,7 +638,15 @@ impl Machine {
                 .ok_or(RuntimeFailure::InvalidControlState)?;
             match control {
                 Control::Evaluate(node, environment) => {
+                    #[cfg(test)]
+                    if let Some(trace) = &mut self.work_trace {
+                        trace.push((node, self.instantiation_work.used()));
+                    }
                     self.trace.push(TraceEvent::Enter(node));
+                    if self.registration(node).is_some() {
+                        self.acquire_registration(node, environment)?;
+                        continue;
+                    }
                     if let Some(handler) = self.handler(node) {
                         self.trace_effect(EffectTraceEvent::HandlerActivated(handler.id()));
                     }
@@ -611,7 +656,10 @@ impl Machine {
                 }
                 Control::Return(value) => {
                     let Some(frame) = self.frames.pop() else {
-                        if self.live_resources != 0 || self.captured_cells != 0 {
+                        if self.live_resources != 0
+                            || self.live_registrations != 0
+                            || self.captured_cells != 0
+                        {
                             return Err(RuntimeFailure::InvalidControlState);
                         }
                         let heap =
@@ -628,6 +676,12 @@ impl Machine {
                             max_frame_depth: self.max_frame_depth,
                             effect_trace: self.effect_trace.take().map(Vec::into_boxed_slice),
                             heap,
+                            #[cfg(test)]
+                            registration_acquisitions: self.next_registration,
+                            #[cfg(test)]
+                            runtime_work: self.instantiation_work.used(),
+                            #[cfg(test)]
+                            work_trace: self.work_trace,
                         });
                     };
                     self.return_from(frame, value)?;
@@ -653,6 +707,23 @@ impl Machine {
 
     fn return_from(&mut self, frame: Frame, value: Value) -> Result<(), RuntimeFailure> {
         match frame {
+            Frame::RegistrationBoundary {
+                handler_active,
+                pending_invocations,
+                callback,
+                ..
+            } => {
+                if handler_active || pending_invocations != 0 {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                let live = self
+                    .live_registrations
+                    .checked_sub(1)
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                drop(callback);
+                self.live_registrations = live;
+                self.control = Some(Control::Return(value));
+            }
             Frame::ResourceInitializer { node, environment } => {
                 self.acquire_resource(node, environment, value)?;
             }
@@ -664,7 +735,21 @@ impl Machine {
                 self.trace_effect(EffectTraceEvent::ResourceReleased(key.0));
                 self.control = Some(Control::Return(value));
             }
-            Frame::HandlerBoundary { .. } => {
+            Frame::HandlerBoundary {
+                node, registration, ..
+            } => {
+                if let Some(key) = registration {
+                    let index = self.registration_owner(key, node, 0)?;
+                    let Frame::RegistrationBoundary { handler_active, .. } =
+                        &mut self.frames[index]
+                    else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    if !*handler_active {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    *handler_active = false;
+                }
                 self.control = Some(Control::Return(value));
             }
             Frame::Request {
@@ -678,10 +763,28 @@ impl Machine {
             Frame::ClauseBoundary {
                 handler,
                 continuation,
+                registration,
                 ..
             } => {
                 if continuation.is_some() {
                     return Err(RuntimeFailure::InvalidControlState);
+                }
+                if let Some(key) = registration {
+                    let index = self.registration_owner_for_handler(key, handler, true)?;
+                    let Frame::RegistrationBoundary {
+                        handler_active,
+                        pending_invocations,
+                        ..
+                    } = &mut self.frames[index]
+                    else {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    };
+                    if *handler_active {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    *pending_invocations = pending_invocations
+                        .checked_sub(1)
+                        .ok_or(RuntimeFailure::InvalidControlState)?;
                 }
                 self.trace_effect(EffectTraceEvent::ClauseReturned(handler));
                 self.control = Some(Control::Return(value));
@@ -691,6 +794,167 @@ impl Machine {
                 self.apply(transition);
             }
         }
+        Ok(())
+    }
+
+    fn registration_owner(
+        &mut self,
+        key: RegistrationKey,
+        handler: NodeId,
+        active_handlers: usize,
+    ) -> Result<usize, RuntimeFailure> {
+        let index = self.registration_owner_index(key, active_handlers, false)?;
+        if !matches!(self.frames[index], Frame::RegistrationBoundary { handler: found, .. } if found == handler)
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        Ok(index)
+    }
+
+    fn registration_owner_index(
+        &mut self,
+        key: RegistrationKey,
+        active_handlers: usize,
+        returning_clause: bool,
+    ) -> Result<usize, RuntimeFailure> {
+        // The selected owner's frame remains active outside its generated
+        // handler, even when younger owners have moved into captures. Charge
+        // the complete scan before inspecting retained relationships. Request
+        // requires its one selected handler; return has already popped it and
+        // resume has not restored it, so both require zero active handlers.
+        // Same-key clauses remain outside that handler with their owner, or
+        // move with the owner in an outward capture. Their count must equal
+        // pending invocations, including the one popped clause on its return.
+        self.instantiation_work
+            .charge(self.frames.len())
+            .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+        let mut found = None;
+        let mut handlers = 0;
+        let mut clauses: usize = 0;
+        for (index, frame) in self.frames.iter().enumerate() {
+            if let Frame::HandlerBoundary {
+                registration: Some(candidate),
+                ..
+            } = frame
+                && *candidate == key
+            {
+                handlers += 1;
+                if handlers > active_handlers {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+            }
+            if let Frame::ClauseBoundary {
+                registration: Some(candidate),
+                ..
+            } = frame
+                && *candidate == key
+            {
+                clauses += 1;
+            }
+            if let Frame::RegistrationBoundary {
+                key: candidate,
+                pending_invocations,
+                ..
+            } = frame
+                && *candidate == key
+                && found.replace((index, *pending_invocations)).is_some()
+            {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+        }
+        if handlers != active_handlers {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let (index, pending) = found.ok_or(RuntimeFailure::InvalidControlState)?;
+        if clauses.checked_add(usize::from(returning_clause)) != Some(pending) {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        Ok(index)
+    }
+
+    fn registration_owner_for_handler(
+        &mut self,
+        key: RegistrationKey,
+        handler: HandlerId,
+        returning_clause: bool,
+    ) -> Result<usize, RuntimeFailure> {
+        let index = self.registration_owner_index(key, 0, returning_clause)?;
+        let Frame::RegistrationBoundary { handler: node, .. } = self.frames[index] else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        if self
+            .handler(node)
+            .is_none_or(|candidate| candidate.id() != handler)
+        {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        Ok(index)
+    }
+
+    fn acquire_registration(
+        &mut self,
+        node: NodeId,
+        environment: Environment,
+    ) -> Result<(), RuntimeFailure> {
+        let scope = *self
+            .registration(node)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let handler = self
+            .handler(scope.body)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if handler.id() != scope.handler {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let body = handler.body();
+        // Two frames and their callback/handler relation, plus the lexical
+        // lookup's upper bound, use the existing evaluator work ledger.
+        self.instantiation_work
+            .charge(3usize.saturating_add(environment.len()))
+            .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+        let callback = environment
+            .lookup(scope.callback, &self.program)
+            .ok_or(RuntimeFailure::MissingBinding)?;
+        let live = self
+            .live_registrations
+            .checked_add(1)
+            .filter(|live| *live <= self.registration_limit)
+            .ok_or(RuntimeFailure::ResourceCapacity)?;
+        let next = self
+            .next_registration
+            .checked_add(1)
+            .ok_or(RuntimeFailure::ResourceCapacity)?;
+        self.frames
+            .try_reserve(2)
+            .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+        self.trace
+            .try_reserve(1)
+            .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+        if let Some(trace) = &mut self.effect_trace {
+            trace
+                .try_reserve(1)
+                .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+        }
+        let key = RegistrationKey(self.next_registration);
+        // No fallible work follows publication. The owner surrounds the
+        // generated ordinary handler and never interprets an operation.
+        self.frames.push(Frame::RegistrationBoundary {
+            key,
+            handler: scope.body,
+            callback,
+            handler_active: true,
+            pending_invocations: 0,
+        });
+        self.frames.push(Frame::HandlerBoundary {
+            node: scope.body,
+            environment: environment.clone(),
+            registration: Some(key),
+        });
+        self.live_registrations = live;
+        self.next_registration = next;
+        self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
+        self.trace.push(TraceEvent::Enter(scope.body));
+        self.trace_effect(EffectTraceEvent::HandlerActivated(scope.handler));
+        self.control = Some(Control::Evaluate(body, environment));
         Ok(())
     }
 
@@ -824,7 +1088,10 @@ impl Machine {
                 }
                 continue;
             }
-            let Frame::HandlerBoundary { node, environment } = frame else {
+            let Frame::HandlerBoundary {
+                node, environment, ..
+            } = frame
+            else {
                 continue;
             };
             let Some(ExecutableNode::Effect(expression)) = self.program.node(*node) else {
@@ -846,14 +1113,42 @@ impl Machine {
             }
         }
         let selected = selected.ok_or(RuntimeFailure::InvalidControlState)?;
-        self.trace_effect(EffectTraceEvent::Request(operation));
-        let continuation = self.capture_from(selected)?;
-        let captured = &continuation.frames;
+        let registration = match &self.frames[selected] {
+            Frame::HandlerBoundary {
+                node,
+                registration: Some(key),
+                ..
+            } => Some((*key, *node)),
+            _ => None,
+        };
+        let registration_owner = if let Some((key, handler)) = registration {
+            let index = self.registration_owner(key, handler, 1)?;
+            let Frame::RegistrationBoundary {
+                handler_active,
+                pending_invocations,
+                ..
+            } = &self.frames[index]
+            else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            if !handler_active || index >= selected {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            Some((
+                index,
+                pending_invocations
+                    .checked_add(1)
+                    .ok_or(RuntimeFailure::ResourceCapacity)?,
+            ))
+        } else {
+            None
+        };
         let (handler_id, handler_environment, clause_owner, clause_body, bindings) = {
             let Frame::HandlerBoundary {
                 node: handler_node,
                 environment,
-            } = &captured[0]
+                ..
+            } = &self.frames[selected]
             else {
                 return Err(RuntimeFailure::InvalidControlState);
             };
@@ -877,18 +1172,34 @@ impl Machine {
                 bindings,
             )
         };
+        let clause_environment = handler_environment.extend_many(bindings)?;
+        if let Some(trace) = &mut self.effect_trace {
+            trace
+                .try_reserve(3)
+                .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+        }
+        let continuation = self.capture_from(selected)?;
+        if let Some((index, pending)) = registration_owner
+            && let Frame::RegistrationBoundary {
+                handler_active,
+                pending_invocations,
+                ..
+            } = &mut self.frames[index]
+        {
+            *handler_active = false;
+            *pending_invocations = pending;
+        }
         self.frames.push(Frame::ClauseBoundary {
             handler: handler_id,
             owner: clause_owner,
             continuation: Some(continuation),
+            registration: registration.map(|(key, _)| key),
         });
+        self.trace_effect(EffectTraceEvent::Request(operation));
         self.trace_effect(EffectTraceEvent::HandlerSelected(handler_id));
         self.trace_effect(EffectTraceEvent::ClauseEntered(handler_id, operation));
         self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
-        self.control = Some(Control::Evaluate(
-            clause_body,
-            handler_environment.extend_many(bindings)?,
-        ));
+        self.control = Some(Control::Evaluate(clause_body, clause_environment));
         Ok(())
     }
 
@@ -974,62 +1285,130 @@ impl Machine {
             },
             _ => return Err(RuntimeFailure::InvalidControlState),
         };
-        let boundary = self
+        let (boundary_index, registration) = self
             .frames
-            .iter_mut()
+            .iter()
+            .enumerate()
             .rev()
-            .find_map(|frame| match frame {
+            .find_map(|(index, frame)| match frame {
                 Frame::ClauseBoundary {
                     handler: found_handler,
                     owner: found_owner,
-                    continuation,
-                } if found_handler == &handler && found_owner == &owner => Some(continuation),
+                    registration,
+                    ..
+                } if *found_handler == handler && *found_owner == owner => {
+                    Some((index, *registration))
+                }
                 _ => None,
             })
             .ok_or(RuntimeFailure::InvalidControlState)?;
-        let captured_len = boundary
+        let registration_owner = if let Some(key) = registration {
+            let index = self.registration_owner_for_handler(key, handler, false)?;
+            let Frame::RegistrationBoundary {
+                handler_active,
+                pending_invocations,
+                ..
+            } = &self.frames[index]
+            else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            if *handler_active || *pending_invocations == 0 {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            Some(index)
+        } else {
+            None
+        };
+        let Frame::ClauseBoundary { continuation, .. } = &self.frames[boundary_index] else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let captured = continuation
             .as_ref()
-            .ok_or(RuntimeFailure::InvalidControlState)?
-            .frames
-            .len();
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        let captured_len = captured.frames.len();
+        if let Some(key) = registration {
+            self.instantiation_work
+                .charge(captured_len)
+                .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+            let Some(Frame::HandlerBoundary {
+                node,
+                registration: Some(found),
+                ..
+            }) = captured.frames.first()
+            else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            if *found != key {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            let captured_node = *node;
+            if self
+                .handler(captured_node)
+                .is_none_or(|found| found.id() != handler)
+            {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            if captured.frames.iter().skip(1).any(|frame| {
+                matches!(frame,
+                Frame::HandlerBoundary { registration: Some(found), .. } if *found == key)
+            }) {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+        }
+        let retained = self
+            .captured_cells
+            .checked_sub(captured_len)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if self.live_registrations != 0 {
+            self.instantiation_work
+                .charge(captured_len)
+                .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+            for frame in &captured.frames {
+                if let Frame::HandlerBoundary { node, .. } = frame {
+                    self.handler(*node)
+                        .ok_or(RuntimeFailure::InvalidControlState)?;
+                }
+            }
+        }
+        if let Some(trace) = &mut self.effect_trace {
+            trace
+                .try_reserve(captured_len.saturating_add(1))
+                .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+        }
         self.frames
             .try_reserve(captured_len)
             .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
-        let boundary = self
-            .frames
-            .iter_mut()
-            .rev()
-            .find_map(|frame| match frame {
-                Frame::ClauseBoundary {
-                    handler: found_handler,
-                    owner: found_owner,
-                    continuation,
-                } if found_handler == &handler && found_owner == &owner => Some(continuation),
-                _ => None,
-            })
+        let Frame::ClauseBoundary { continuation, .. } = &mut self.frames[boundary_index] else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let mut continuation = continuation
+            .take()
             .ok_or(RuntimeFailure::InvalidControlState)?;
-        let mut continuation = boundary.take().ok_or(RuntimeFailure::InvalidControlState)?;
         self.trace_effect(EffectTraceEvent::Resume(handler));
         for frame in &continuation.frames {
             if let Frame::HandlerBoundary { node, .. } = frame {
+                // Registration paths checked these handles before consuming
+                // control. Ordinary effects retain their existing check.
                 let restored = self
                     .handler(*node)
                     .ok_or(RuntimeFailure::InvalidControlState)?;
                 self.trace_effect(EffectTraceEvent::HandlerRestored(restored.id()));
             }
         }
-        self.captured_cells = self
-            .captured_cells
-            .checked_sub(captured_len)
-            .ok_or(RuntimeFailure::InvalidControlState)?;
+        self.captured_cells = retained;
         self.frames.append(&mut continuation.frames);
+        if let Some(index) = registration_owner
+            && let Frame::RegistrationBoundary { handler_active, .. } = &mut self.frames[index]
+        {
+            *handler_active = true;
+        }
         self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
         self.control = Some(Control::Return(value));
         Ok(())
     }
 
     fn discard(&mut self, handler: HandlerId, owner: ResumeId) -> Result<(), RuntimeFailure> {
-        let boundary = self
+        let (boundary, registration) = self
             .frames
             .iter_mut()
             .rev()
@@ -1038,10 +1417,18 @@ impl Machine {
                     handler: found_handler,
                     owner: found_owner,
                     continuation,
-                } if *found_handler == handler && *found_owner == owner => Some(continuation),
+                    registration,
+                } if *found_handler == handler && *found_owner == owner => {
+                    Some((continuation, *registration))
+                }
                 _ => None,
             })
             .ok_or(RuntimeFailure::InvalidControlState)?;
+        // A generated registration clause must resume its publication. Local
+        // source handlers in a callback have their own ordinary capabilities.
+        if registration.is_some() {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
         let captured = boundary
             .as_ref()
             .ok_or(RuntimeFailure::InvalidControlState)?;
@@ -1054,6 +1441,7 @@ impl Machine {
                     continuation: Some(_),
                     ..
                 } | Frame::ResourceBoundary { .. }
+                    | Frame::RegistrationBoundary { .. }
             )
         }) {
             return Err(RuntimeFailure::InvalidControlState);
@@ -1091,6 +1479,17 @@ impl Machine {
         };
         Some(resource)
     }
+
+    fn registration(&self, node: NodeId) -> Option<&crate::core::effect::RegistrationScopeNode> {
+        let ExecutableNode::Effect(expression) = self.program.node(node)? else {
+            return None;
+        };
+        let EffectExprKind::Operation(EffectOperation::Registration(scope)) = &expression.kind
+        else {
+            return None;
+        };
+        Some(scope)
+    }
 }
 
 fn same_effect_instance(
@@ -1124,6 +1523,9 @@ fn dispatch_entry(
             EffectExprKind::Pure(kind) => (kind, &expression.origin),
             EffectExprKind::Operation(operation) => {
                 return Ok(match operation {
+                    EffectOperation::Registration(_) => {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
                     EffectOperation::Resource(resource) => Transition::suspend(
                         Control::Evaluate(resource.initializer(), environment.clone()),
                         Frame::ResourceInitializer { node, environment },
@@ -1137,7 +1539,11 @@ fn dispatch_entry(
                     ),
                     EffectOperation::Handler(handler) => Transition::suspend(
                         Control::Evaluate(handler.body(), environment.clone()),
-                        Frame::HandlerBoundary { node, environment },
+                        Frame::HandlerBoundary {
+                            node,
+                            environment,
+                            registration: None,
+                        },
                     ),
                     EffectOperation::Resume(resume) => Transition::suspend(
                         Control::Evaluate(resume.value(), environment),
@@ -1473,7 +1879,8 @@ fn dispatch_return(
         | Frame::Request { .. }
         | Frame::TypeApplication { .. }
         | Frame::Resume { .. }
-        | Frame::ClauseBoundary { .. } => Err(RuntimeFailure::InvalidControlState),
+        | Frame::ClauseBoundary { .. }
+        | Frame::RegistrationBoundary { .. } => Err(RuntimeFailure::InvalidControlState),
     }
 }
 
@@ -1915,6 +2322,696 @@ mod tests {
         Value::Integer(Integer::parse_decimal(value).unwrap())
     }
 
+    fn registration_fixture() -> (ValidatedEffectProgram, NodeId, Environment) {
+        let program = effect_program(
+            "effect Adjust {\npublish : Int -> Int\n}\nmain : Unit -> Int\nmain () = hook Adjust {\nregister Adjust (fn(value) {\nvalue + 1\n}) {\n42\n}\n}\n",
+        );
+        let mut pending = vec![program.root()];
+        let mut nodes = Vec::new();
+        while let Some(node) = pending.pop() {
+            nodes.push(node);
+            let kind = &program.node(node).unwrap().kind;
+            pending.extend((0..kind.child_count()).filter_map(|index| kind.child_at(index)));
+        }
+        let node = *nodes
+            .iter()
+            .find(|node| {
+                matches!(
+                    &program.node(**node).unwrap().kind,
+                    EffectExprKind::Operation(EffectOperation::Registration(_))
+                )
+            })
+            .unwrap();
+        let EffectExprKind::Operation(EffectOperation::Registration(scope)) =
+            &program.node(node).unwrap().kind
+        else {
+            unreachable!()
+        };
+        let initializer =
+            nodes
+                .iter()
+                .find_map(|node| match &program.node(*node).unwrap().kind {
+                    EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                        binding,
+                    ))) if binding.binder().id() == scope.callback => Some(binding.initializer()),
+                    _ => None,
+                })
+                .unwrap();
+        let executable = ExecutableProgram::Effect(program.shared());
+        let transition = dispatch_entry(
+            &executable,
+            initializer,
+            Environment::new(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let Control::Return(callback) = transition.control else {
+            panic!("ordinary callback value")
+        };
+        let environment = Environment::new().extend(scope.callback, callback).unwrap();
+        (program, node, environment)
+    }
+
+    #[test]
+    fn registration_capacity_preflight_is_exact_atomic_and_reuses_fresh_activations() {
+        let (program, node, environment) = registration_fixture();
+        let mut measured = Machine::new_effect(&program);
+        measured
+            .acquire_registration(node, environment.clone())
+            .unwrap();
+        let work = measured.instantiation_work.used();
+        assert_eq!(work, 3 + environment.len());
+        for allowance in [work - 1, work, work] {
+            let mut machine = Machine::new_effect(&program);
+            machine.instantiation_work = TypeWorkBudget::with_limit(allowance);
+            let result = machine.acquire_registration(node, environment.clone());
+            if allowance < work {
+                assert_eq!(result, Err(RuntimeFailure::EnvironmentCapacity));
+                assert_eq!(machine.live_registrations, 0);
+                assert_eq!(machine.next_registration, 0);
+                assert!(machine.frames.is_empty());
+                assert!(machine.trace.is_empty());
+                assert!(machine.effect_trace.as_ref().unwrap().is_empty());
+            } else {
+                result.unwrap();
+            }
+        }
+        let mut machine = Machine::new_effect(&program);
+        machine.registration_limit = 1;
+        for expected in 0..3 {
+            machine
+                .acquire_registration(node, environment.clone())
+                .unwrap();
+            assert!(
+                matches!(machine.frames[0], Frame::RegistrationBoundary { key: RegistrationKey(key), .. } if key == expected)
+            );
+            let events = machine.effect_trace.clone();
+            assert_eq!(
+                machine.acquire_registration(node, environment.clone()),
+                Err(RuntimeFailure::ResourceCapacity)
+            );
+            assert_eq!(machine.effect_trace, events);
+            assert_eq!(machine.live_registrations, 1);
+            assert_eq!(machine.next_registration, expected + 1);
+            let handler = machine.frames.pop().unwrap();
+            machine.return_from(handler, integer("42")).unwrap();
+            let owner = machine.frames.pop().unwrap();
+            machine.return_from(owner, integer("42")).unwrap();
+            assert_eq!(machine.live_registrations, 0);
+        }
+        machine.next_registration = u32::MAX;
+        assert_eq!(
+            machine.acquire_registration(node, environment.clone()),
+            Err(RuntimeFailure::ResourceCapacity)
+        );
+        assert!(machine.frames.is_empty());
+        assert_eq!(machine.live_registrations, 0);
+        let mut missing = Machine::new_effect(&program);
+        assert_eq!(
+            missing.acquire_registration(node, Environment::new()),
+            Err(RuntimeFailure::MissingBinding)
+        );
+        assert_eq!(missing.next_registration, 0);
+        assert!(missing.frames.is_empty());
+    }
+
+    #[test]
+    fn registration_capacity_counts_active_and_captured_owners_and_releases_once() {
+        for (source, expected) in [
+            "effect Adjust {\npublish : Int -> Int\n}\nmain : Unit -> Int\nmain () = hook Adjust {\nregister Adjust (fn(value) {\nvalue + 1\n}) {\nregister Adjust (fn(value) {\nvalue * 2\n}) {\nperform Adjust.publish 3\n}\n}\n}\n",
+            "effect Adjust {\npublish : Int -> Int\n}\neffect Pause {\nask : Unit -> Unit\n}\nmain : Unit -> Int\nmain () = hook Adjust {\nhandle (register Adjust (fn(value) {\nvalue + 1\n}) {\nlet _ = perform Pause.ask ()\nperform Adjust.publish 3\n}) with Pause {\nask ignored => {\nlet extra = register Adjust (fn(value) {\nvalue * 10\n}) {\nperform Adjust.publish 4\n}\nextra + (resume ())\n}\n}\n}\n",
+        ].into_iter().zip(["8", "44"]) {
+            let program = effect_program(source);
+            for limit in [1, 2, 2] {
+                let mut machine = Machine::new_effect(&program);
+                machine.registration_limit = limit;
+                let result = machine.run();
+                if limit == 1 { assert!(matches!(result, Err(RuntimeFailure::ResourceCapacity))); }
+                else {
+                    let evaluation = result.unwrap();
+                    assert_eq!(evaluation.registration_acquisitions, 2);
+                    assert_eq!(evaluation.value.to_string(), expected);
+                }
+            }
+        }
+        let program = effect_program(
+            "effect Adjust {\npublish : Int -> Int\n}\nmain : Unit -> Int\nmain () = hook Adjust {\nlet first = register Adjust (fn(value) {\nvalue + 1\n}) {\nperform Adjust.publish 3\n}\nregister Adjust (fn(value) {\nvalue * 2\n}) {\nperform Adjust.publish first\n}\n}\n",
+        );
+        for _ in 0..2 {
+            let mut machine = Machine::new_effect(&program);
+            machine.registration_limit = 1;
+            let result = machine.run().unwrap();
+            assert_eq!(result.value.to_string(), "8");
+            assert_eq!(result.registration_acquisitions, 2);
+        }
+    }
+
+    #[test]
+    fn registration_publication_work_is_exact_one_short_and_fresh_retryable() {
+        let program = effect_program(
+            "effect Adjust {\npublish : Int -> Int\n}\nmain : Unit -> Int\nmain () = hook Adjust {\nregister Adjust (fn(value) {\nvalue + 1\n}) {\nregister Adjust (fn(value) {\nvalue * 2\n}) {\nperform Adjust.publish 3\n}\n}\n}\n",
+        );
+        let measured = Machine::new_effect(&program).run().unwrap();
+        let exact = measured.runtime_work;
+        assert!(exact > 0);
+        for allowance in [exact - 1, exact, exact] {
+            let mut machine = Machine::new_effect(&program);
+            machine.instantiation_work = TypeWorkBudget::with_limit(allowance);
+            let result = machine.run();
+            if allowance < exact {
+                assert!(matches!(result, Err(RuntimeFailure::EnvironmentCapacity)));
+            } else {
+                let result = result.unwrap();
+                assert_eq!(result.value.to_string(), "8");
+                assert_eq!(result.runtime_work, exact);
+            }
+        }
+    }
+
+    #[test]
+    fn registration_stale_duplicate_and_incomplete_facts_reject_before_mutation() {
+        let (program, node, environment) = registration_fixture();
+        let mut machine = Machine::new_effect(&program);
+        machine
+            .acquire_registration(node, environment.clone())
+            .unwrap();
+        let handler_node = machine.registration(node).unwrap().body;
+        assert_eq!(
+            machine.registration_owner(RegistrationKey(99), handler_node, 1),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        machine.frames.push(Frame::HandlerBoundary {
+            node: handler_node,
+            environment: environment.clone(),
+            registration: Some(RegistrationKey(0)),
+        });
+        assert_eq!(
+            machine.registration_owner(RegistrationKey(0), handler_node, 1),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        machine.frames.pop();
+        machine.frames.push(Frame::RegistrationBoundary {
+            key: RegistrationKey(0),
+            handler: handler_node,
+            callback: Value::Unit,
+            handler_active: true,
+            pending_invocations: 0,
+        });
+        assert_eq!(
+            machine.registration_owner(RegistrationKey(0), handler_node, 1),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        machine.frames.pop();
+        assert_eq!(machine.live_registrations, 1);
+        assert!(matches!(
+            machine.frames[0],
+            Frame::RegistrationBoundary {
+                handler_active: true,
+                pending_invocations: 0,
+                ..
+            }
+        ));
+        let owner = machine.frames.remove(0);
+        assert_eq!(
+            machine.return_from(owner, Value::Unit),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        assert_eq!(machine.live_registrations, 1);
+        let handler = machine.frames.pop().unwrap();
+        assert_eq!(
+            machine.return_from(handler, Value::Unit),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        assert_eq!(machine.live_registrations, 1);
+    }
+
+    #[test]
+    fn registration_invocation_preflight_keeps_the_owner_and_capture_unchanged() {
+        let (program, node, environment) = registration_fixture();
+        let mut machine = Machine::new_effect(&program);
+        machine.acquire_registration(node, environment).unwrap();
+        let handler = machine.registration(node).unwrap().body;
+        let mut pending = vec![machine.handler(handler).unwrap().clauses()[0].body()];
+        let request = loop {
+            let node = pending.pop().unwrap();
+            let ExecutableNode::Effect(expression) = machine.program.node(node).unwrap() else {
+                unreachable!()
+            };
+            if matches!(
+                expression.kind,
+                EffectExprKind::Operation(EffectOperation::Request(_))
+            ) {
+                break node;
+            }
+            pending.extend(
+                (0..expression.kind.child_count())
+                    .filter_map(|index| expression.kind.child_at(index)),
+            );
+        };
+        let Frame::HandlerBoundary { environment, .. } = &mut machine.frames[1] else {
+            unreachable!()
+        };
+        environment.len = usize::MAX;
+        let events = machine.effect_trace.clone();
+        assert_eq!(
+            machine.return_request(request, &Instantiation::default(), integer("3")),
+            Err(RuntimeFailure::EnvironmentCapacity)
+        );
+        assert_eq!(machine.frames.len(), 2);
+        assert_eq!(machine.captured_cells, 0);
+        assert_eq!(machine.live_registrations, 1);
+        assert_eq!(machine.effect_trace, events);
+        assert!(matches!(
+            machine.frames[0],
+            Frame::RegistrationBoundary {
+                handler_active: true,
+                pending_invocations: 0,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn registration_request_and_resume_reject_stale_and_duplicate_nonowning_facts() {
+        let (program, node, environment) = registration_fixture();
+        let mut machine = Machine::new_effect(&program);
+        machine
+            .acquire_registration(node, environment.clone())
+            .unwrap();
+        let handler_node = machine.registration(node).unwrap().body;
+        let mut pending = vec![machine.handler(handler_node).unwrap().clauses()[0].body()];
+        let mut request = None;
+        let mut resume = None;
+        while let Some(node) = pending.pop() {
+            let ExecutableNode::Effect(expression) = machine.program.node(node).unwrap() else {
+                unreachable!()
+            };
+            match expression.kind {
+                EffectExprKind::Operation(EffectOperation::Request(_)) => request = Some(node),
+                EffectExprKind::Operation(EffectOperation::Resume(_)) => resume = Some(node),
+                _ => {}
+            }
+            pending.extend(
+                (0..expression.kind.child_count())
+                    .filter_map(|index| expression.kind.child_at(index)),
+            );
+        }
+        let (request, resume) = (request.unwrap(), resume.unwrap());
+        let events = machine.effect_trace.clone();
+        let Frame::HandlerBoundary { registration, .. } = &mut machine.frames[1] else {
+            unreachable!()
+        };
+        *registration = Some(RegistrationKey(99));
+        assert_eq!(
+            machine.return_request(request, &Instantiation::default(), integer("3")),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        assert_eq!(machine.frames.len(), 2);
+        assert_eq!(machine.captured_cells, 0);
+        assert_eq!(machine.effect_trace, events);
+        let Frame::HandlerBoundary { registration, .. } = &mut machine.frames[1] else {
+            unreachable!()
+        };
+        *registration = Some(RegistrationKey(0));
+        machine.frames.push(Frame::HandlerBoundary {
+            node: handler_node,
+            environment: environment.clone(),
+            registration: Some(RegistrationKey(0)),
+        });
+        assert_eq!(
+            machine.return_request(request, &Instantiation::default(), integer("3")),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        assert_eq!(machine.frames.len(), 3);
+        assert_eq!(machine.captured_cells, 0);
+        assert_eq!(machine.effect_trace, events);
+        machine.frames.pop();
+        machine
+            .return_request(request, &Instantiation::default(), integer("3"))
+            .unwrap();
+        assert!(matches!(
+            machine.frames[0],
+            Frame::RegistrationBoundary {
+                handler_active: false,
+                pending_invocations: 1,
+                ..
+            }
+        ));
+        let events = machine.effect_trace.clone();
+        let handler = machine.handler(handler_node).unwrap();
+        let (handler_id, resume_owner) = (handler.id(), handler.clauses()[0].resume());
+        assert_eq!(
+            machine.discard(handler_id, resume_owner),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        assert_eq!(machine.effect_trace, events);
+        let Frame::ClauseBoundary { registration, .. } = &mut machine.frames[1] else {
+            unreachable!()
+        };
+        *registration = Some(RegistrationKey(99));
+        assert_eq!(
+            machine.return_resume(resume, integer("4")),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        let Frame::ClauseBoundary {
+            registration,
+            continuation: Some(captured),
+            ..
+        } = &mut machine.frames[1]
+        else {
+            unreachable!()
+        };
+        *registration = Some(RegistrationKey(0));
+        let Frame::HandlerBoundary { registration, .. } = &mut captured.frames[0] else {
+            unreachable!()
+        };
+        *registration = Some(RegistrationKey(99));
+        assert_eq!(
+            machine.return_resume(resume, integer("4")),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        let Frame::ClauseBoundary {
+            continuation: Some(captured),
+            ..
+        } = &mut machine.frames[1]
+        else {
+            unreachable!()
+        };
+        let Frame::HandlerBoundary { registration, .. } = &mut captured.frames[0] else {
+            unreachable!()
+        };
+        *registration = Some(RegistrationKey(0));
+        captured.frames.push(Frame::HandlerBoundary {
+            node: handler_node,
+            environment: environment.clone(),
+            registration: Some(RegistrationKey(0)),
+        });
+        assert_eq!(
+            machine.return_resume(resume, integer("4")),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        assert_eq!(machine.captured_cells, 1);
+        assert_eq!(machine.live_registrations, 1);
+        assert_eq!(machine.effect_trace, events);
+        let Frame::ClauseBoundary {
+            continuation: Some(captured),
+            ..
+        } = &mut machine.frames[1]
+        else {
+            unreachable!()
+        };
+        captured.frames.pop();
+        machine.return_resume(resume, integer("4")).unwrap();
+        assert_eq!(
+            machine.return_resume(resume, integer("4")),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        assert_eq!(machine.captured_cells, 0);
+        assert_eq!(machine.live_registrations, 1);
+        for _ in 0..3 {
+            let frame = machine.frames.pop().unwrap();
+            machine.return_from(frame, integer("42")).unwrap();
+        }
+        assert_eq!(machine.live_registrations, 0);
+        machine
+            .acquire_registration(node, environment.clone())
+            .unwrap();
+        let stale = Frame::HandlerBoundary {
+            node: handler_node,
+            environment,
+            registration: Some(RegistrationKey(0)),
+        };
+        assert_eq!(
+            machine.return_from(stale, integer("42")),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        assert_eq!(machine.live_registrations, 1);
+        assert_eq!(machine.next_registration, 2);
+    }
+
+    #[test]
+    fn registration_duplicate_consumed_clause_rejects_before_owner_mutation() {
+        let (program, node, environment) = registration_fixture();
+        let mut machine = Machine::new_effect(&program);
+        machine.acquire_registration(node, environment).unwrap();
+        let handler_node = machine.registration(node).unwrap().body;
+        let handler = machine.handler(handler_node).unwrap();
+        let (handler_id, owner) = (handler.id(), handler.clauses()[0].resume());
+        let mut pending = vec![handler.clauses()[0].body()];
+        let (mut request, mut resume) = (None, None);
+        while let Some(node) = pending.pop() {
+            let ExecutableNode::Effect(expression) = machine.program.node(node).unwrap() else {
+                unreachable!()
+            };
+            match expression.kind {
+                EffectExprKind::Operation(EffectOperation::Request(_)) => request = Some(node),
+                EffectExprKind::Operation(EffectOperation::Resume(_)) => resume = Some(node),
+                _ => {}
+            }
+            pending.extend(
+                (0..expression.kind.child_count())
+                    .filter_map(|index| expression.kind.child_at(index)),
+            );
+        }
+        machine
+            .return_request(request.unwrap(), &Instantiation::default(), integer("3"))
+            .unwrap();
+        machine
+            .return_resume(resume.unwrap(), integer("4"))
+            .unwrap();
+        let restored = machine.frames.pop().unwrap();
+        machine.return_from(restored, integer("4")).unwrap();
+        let events = machine.effect_trace.clone();
+        let duplicate = Frame::ClauseBoundary {
+            handler: handler_id,
+            owner,
+            continuation: None,
+            registration: Some(RegistrationKey(0)),
+        };
+        assert_eq!(
+            machine.return_from(duplicate, integer("4")),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        assert_eq!(machine.effect_trace, events);
+        assert_eq!(machine.frames.len(), 2);
+        assert_eq!(machine.live_registrations, 1);
+        assert_eq!(machine.captured_cells, 0);
+        assert!(matches!(
+            machine.frames[0],
+            Frame::RegistrationBoundary {
+                handler_active: false,
+                pending_invocations: 1,
+                ..
+            }
+        ));
+        for _ in 0..2 {
+            let frame = machine.frames.pop().unwrap();
+            machine.return_from(frame, integer("4")).unwrap();
+        }
+        assert_eq!(machine.live_registrations, 0);
+    }
+
+    #[test]
+    fn registration_duplicate_active_handler_return_rejects_before_owner_mutation() {
+        assert_registration_duplicate_rejected(false);
+    }
+
+    #[test]
+    fn registration_duplicate_active_handler_resume_rejects_before_owner_mutation() {
+        assert_registration_duplicate_rejected(true);
+    }
+
+    fn assert_registration_duplicate_rejected(resume_transition: bool) {
+        let (program, node, environment) = registration_fixture();
+        let mut machine = Machine::new_effect(&program);
+        machine
+            .acquire_registration(node, environment.clone())
+            .unwrap();
+        let handler_node = machine.registration(node).unwrap().body;
+        let mut pending = vec![machine.handler(handler_node).unwrap().clauses()[0].body()];
+        let (mut request, mut resume) = (None, None);
+        while let Some(node) = pending.pop() {
+            let ExecutableNode::Effect(expression) = machine.program.node(node).unwrap() else {
+                unreachable!()
+            };
+            match expression.kind {
+                EffectExprKind::Operation(EffectOperation::Request(_)) => request = Some(node),
+                EffectExprKind::Operation(EffectOperation::Resume(_)) => resume = Some(node),
+                _ => {}
+            }
+            pending.extend(
+                (0..expression.kind.child_count())
+                    .filter_map(|index| expression.kind.child_at(index)),
+            );
+        }
+        if resume_transition {
+            machine
+                .return_request(request.unwrap(), &Instantiation::default(), integer("3"))
+                .unwrap();
+        }
+        machine.frames.push(Frame::HandlerBoundary {
+            node: handler_node,
+            environment,
+            registration: Some(RegistrationKey(0)),
+        });
+        let events = machine.effect_trace.clone();
+        let result = if resume_transition {
+            machine.return_resume(resume.unwrap(), integer("4"))
+        } else {
+            let duplicate = machine.frames.pop().unwrap();
+            machine.return_from(duplicate, integer("4"))
+        };
+        assert_eq!(
+            result,
+            Err(RuntimeFailure::InvalidControlState),
+            "resume transition: {resume_transition}"
+        );
+        assert_eq!(machine.frames.len(), if resume_transition { 3 } else { 2 });
+        assert_eq!(machine.captured_cells, usize::from(resume_transition));
+        assert_eq!(machine.live_registrations, 1);
+        assert_eq!(machine.effect_trace, events);
+        let Frame::RegistrationBoundary {
+            handler_active,
+            pending_invocations,
+            ..
+        } = &machine.frames[0]
+        else {
+            unreachable!()
+        };
+        assert_eq!(*handler_active, !resume_transition);
+        assert_eq!(*pending_invocations, usize::from(resume_transition));
+    }
+
+    #[test]
+    fn registration_chain_steps_are_separate_from_ordinary_callback_work() {
+        for depth in [1, 2, 4] {
+            for callback in ["value + 1", "(value + 1) + 0 + 0 + 0"] {
+                let source = format!(
+                    "effect Adjust {{\npublish : Int -> Int\n}}\ncallback : Int -> Int\ncallback value = {callback}\nmain : Unit -> Int\nmain () = hook Adjust {{\n{}perform Adjust.publish 3{}\n}}\n",
+                    "register Adjust callback {\n".repeat(depth),
+                    "\n}".repeat(depth)
+                );
+                let program = effect_program(&source);
+                let evaluation = Machine::new_effect(&program).run().unwrap();
+                let mut pending = vec![program.root()];
+                let mut primitive_nodes = Vec::new();
+                while let Some(node) = pending.pop() {
+                    let kind = &program.node(node).unwrap().kind;
+                    if matches!(
+                        kind,
+                        EffectExprKind::Pure(PureExprKind::Computation(
+                            PureComputation::Primitive(_)
+                        ))
+                    ) {
+                        primitive_nodes.push(node);
+                    }
+                    pending
+                        .extend((0..kind.child_count()).filter_map(|index| kind.child_at(index)));
+                }
+                let selected = evaluation
+                    .effect_trace()
+                    .iter()
+                    .filter(|event| matches!(event, EffectTraceEvent::HandlerSelected(_)))
+                    .count();
+                let requests = evaluation
+                    .effect_trace()
+                    .iter()
+                    .filter(|event| matches!(event, EffectTraceEvent::Request(_)))
+                    .count();
+                let resumed = evaluation
+                    .effect_trace()
+                    .iter()
+                    .filter(|event| matches!(event, EffectTraceEvent::Resume(_)))
+                    .count();
+                let callback_steps = evaluation.trace.iter().filter(|event| matches!(event, TraceEvent::Enter(node) if primitive_nodes.contains(node))).count();
+                assert_eq!(evaluation.registration_acquisitions as usize, depth);
+                assert_eq!(selected, depth + 1);
+                assert_eq!(requests, depth + 1);
+                assert_eq!(resumed, depth + 1);
+                assert_eq!(callback_steps, depth * primitive_nodes.len());
+                assert_eq!(evaluation.value.to_string(), (3 + depth).to_string());
+            }
+        }
+    }
+
+    #[test]
+    fn deep_registration_callbacks_capture_cells_and_dispose_failure_on_a_small_stack() {
+        const CHILD: &str = "ASH_REGISTRATION_CALLBACK_STACK_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "eval::machine::tests::deep_registration_callbacks_capture_cells_and_dispose_failure_on_a_small_stack", "--nocapture"])
+                .env(CHILD, "1").status().unwrap();
+            assert!(
+                status.success(),
+                "fresh registration runtime child: {status}"
+            );
+            return;
+        }
+        const DEPTH: usize = 1024;
+        let source = format!(
+            "import @builtin.cell as Cell\neffect Adjust {{\npublish : Int -> Int\n}}\neffect Pause {{\nask : Int -> Int\n}}\ndescend : Int -> Int ! {{Adjust, Pause}}\ndescend depth = resource cell<R> c = depth {{\nlet callback : Int -> Int ! {{Cell.Ops<R>, Pause}} = fn(value) {{\nlet copied = Cell.read c\nperform Pause.ask (value + copied)\n}}\nregister Adjust callback {{\nmatch depth == {DEPTH} {{\ntrue => perform Adjust.publish 0\nfalse => descend (depth + 1)\n}}\n}}\n}}\nmain : Unit -> Int\nmain () = handle (hook Adjust {{\ndescend 0\n}}) with Pause {{\nask value => resume value\n}}\n"
+        );
+        let program = effect_program(&source);
+        let mut pending = vec![program.root()];
+        let mut requests = Vec::new();
+        while let Some(node) = pending.pop() {
+            let kind = &program.node(node).unwrap().kind;
+            if let EffectExprKind::Operation(EffectOperation::Request(request)) = kind {
+                // The source callback's explicit request is the only request
+                // whose operation is named `ask` in this fixture.
+                if program
+                    .registry()
+                    .effect(request.effect().effect())
+                    .unwrap()
+                    .operations[request.operation().operation() as usize]
+                    .spelling
+                    == "ask"
+                {
+                    requests.push(node);
+                }
+            }
+            pending.extend((0..kind.child_count()).filter_map(|index| kind.child_at(index)));
+        }
+        assert_eq!(requests.len(), 1);
+        let callback_request = requests[0];
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let mut machine = Machine::new_effect(&program);
+                machine.work_trace = Some(Vec::new());
+                let result = machine.run().unwrap();
+                assert_eq!(
+                    result.value.to_string(),
+                    (DEPTH * (DEPTH + 1) / 2).to_string()
+                );
+                assert_eq!(result.registration_acquisitions as usize, DEPTH + 1);
+                let trace = result.work_trace.as_ref().unwrap();
+                let failure_work = trace
+                    .iter()
+                    .find_map(|(node, work)| (*node == callback_request).then_some(*work))
+                    .unwrap();
+                assert_eq!(
+                    trace
+                        .iter()
+                        .filter(|(node, _)| *node == callback_request)
+                        .count(),
+                    DEPTH + 1
+                );
+                assert!(result.max_frame_depth > DEPTH);
+                for _ in 0..2 {
+                    let mut failure = Machine::new_effect(&program);
+                    failure.instantiation_work = TypeWorkBudget::with_limit(failure_work);
+                    assert!(matches!(
+                        failure.run(),
+                        Err(RuntimeFailure::EnvironmentCapacity)
+                    ));
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     #[test]
     fn resource_capacity_is_live_exact_atomic_and_reused_with_fresh_keys() {
         let program = resource_program();
@@ -2112,6 +3209,7 @@ mod tests {
         let handler = HandlerId::new(0);
         let owner = ResumeId::new(0);
         machine.frames.push(Frame::ClauseBoundary {
+            registration: None,
             handler,
             owner,
             continuation: Some(captured),
@@ -2222,6 +3320,7 @@ mod tests {
                                 cell: Integer::parse_decimal("41").unwrap(),
                             },
                             Frame::ClauseBoundary {
+                                registration: None,
                                 handler: HandlerId::new(0),
                                 owner: ResumeId::new(0),
                                 continuation: Some(captured),
@@ -2230,6 +3329,7 @@ mod tests {
                     };
                 }
                 failure.frames.push(Frame::ClauseBoundary {
+                    registration: None,
                     handler: HandlerId::new(0),
                     owner: ResumeId::new(0),
                     continuation: Some(captured),
@@ -2258,6 +3358,10 @@ mod tests {
         let program = validate(builder.finish(root).unwrap(), &[&source]).unwrap();
         let machine = Machine::new(&program);
         assert_eq!(machine.resource_limit, 0);
+        assert_eq!(machine.registration_limit, 0);
+        assert_eq!(machine.live_registrations, 0);
+        assert_eq!(machine.next_registration, 0);
+        assert!(machine.work_trace.is_none());
         assert_eq!(machine.live_resources, 0);
         assert_eq!(machine.next_activation, 0);
         assert!(machine.frames.is_empty());
@@ -2358,6 +3462,7 @@ mod tests {
                 for depth in 0..32_768_u32 {
                     continuation = CapturedContinuation {
                         frames: vec![Frame::ClauseBoundary {
+                            registration: None,
                             handler: HandlerId::new(depth),
                             owner: ResumeId::new(depth),
                             continuation: Some(continuation),
@@ -2441,6 +3546,7 @@ mod tests {
         machine.captured_cells = 1;
         let captured = machine.capture_from(0).expect("exact remaining quota");
         machine.frames.push(Frame::ClauseBoundary {
+            registration: None,
             handler: HandlerId::new(1),
             owner: ResumeId::new(1),
             continuation: Some(CapturedContinuation {
@@ -2451,6 +3557,7 @@ mod tests {
             }),
         });
         machine.frames.push(Frame::ClauseBoundary {
+            registration: None,
             handler,
             owner,
             continuation: Some(captured),
@@ -2516,6 +3623,7 @@ mod tests {
             let mut captured = machine.capture_from(0).expect("capture fits");
             if nested {
                 captured.frames[1] = Frame::ClauseBoundary {
+                    registration: None,
                     handler: HandlerId::new(1),
                     owner: ResumeId::new(1),
                     continuation: Some(CapturedContinuation { frames: Vec::new() }),
@@ -2523,6 +3631,7 @@ mod tests {
             }
             machine.captured_cells = retained;
             machine.frames.push(Frame::ClauseBoundary {
+                registration: None,
                 handler: found_handler,
                 owner: found_owner,
                 continuation: Some(captured),
@@ -2577,6 +3686,7 @@ mod tests {
                         if live_nested {
                             captured = CapturedContinuation {
                                 frames: vec![Frame::ClauseBoundary {
+                                    registration: None,
                                     handler,
                                     owner,
                                     continuation: Some(captured),
@@ -2584,6 +3694,7 @@ mod tests {
                             };
                         } else {
                             captured.frames.push(Frame::ClauseBoundary {
+                                registration: None,
                                 handler,
                                 owner,
                                 continuation: None,
@@ -2607,6 +3718,7 @@ mod tests {
                         assert!(machine.frames.is_empty());
                     }
                     machine.frames.push(Frame::ClauseBoundary {
+                        registration: None,
                         handler,
                         owner,
                         continuation: Some(captured),
@@ -2641,11 +3753,13 @@ mod tests {
         let mut machine = capture_machine(3);
         let captured = machine.capture_from(0).expect("capture fits");
         machine.frames.push(Frame::ClauseBoundary {
+            registration: None,
             handler,
             owner,
             continuation: Some(captured),
         });
         machine.frames.push(Frame::ClauseBoundary {
+            registration: None,
             handler,
             owner,
             continuation: None,
@@ -2766,6 +3880,12 @@ mod tests {
     ];
 
     const EFFECT_TRANSITION_OWNERSHIP: &[TransitionOwner] = &[
+        TransitionOwner {
+            feature: "registration",
+            entry: "Machine::acquire_registration",
+            frames: &["Frame::RegistrationBoundary"],
+            returns: &["Machine::return_from"],
+        },
         TransitionOwner {
             feature: "resource",
             entry: "dispatch_entry",
@@ -2944,13 +4064,14 @@ mod tests {
     #[test]
     fn every_effect_operation_has_one_explicit_transition_owner() {
         assert_eq!(TRANSITION_OWNERSHIP.len(), 14);
-        assert_eq!(EFFECT_TRANSITION_OWNERSHIP.len(), 6);
+        assert_eq!(EFFECT_TRANSITION_OWNERSHIP.len(), 7);
         assert_eq!(
             EFFECT_TRANSITION_OWNERSHIP
                 .iter()
                 .map(|owner| owner.feature)
                 .collect::<Vec<_>>(),
             [
+                "registration",
                 "resource",
                 "handler",
                 "request",

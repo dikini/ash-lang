@@ -100,6 +100,10 @@ pub enum NodeKind {
     ResumeExpression,
     /// One builtin cell acquisition with an identity binder and scoped body.
     ResourceExpression,
+    /// An empty-chain hook scope with an exact effect target and block body.
+    HookExpression,
+    /// A registration with an exact target, primary transformer, and block body.
+    RegistrationExpression,
     /// A primary-precedence operation request.
     PerformExpression,
     /// One effect-qualified operation reference.
@@ -740,6 +744,8 @@ fn token_name(kind: &TokenKind) -> &'static str {
         TokenKind::With => "with",
         TokenKind::Resume => "resume",
         TokenKind::Resource => "resource",
+        TokenKind::Hook => "hook",
+        TokenKind::Register => "register",
         TokenKind::Discard => "discard",
         TokenKind::Import => "import",
         TokenKind::As => "as",

@@ -654,28 +654,31 @@ independent reviews and the simplification/downstream reassessment pass.
 No additional proof, existential or hook machinery is justified by this slice.
 Verified local integration closes the original 16-unit weight: 65 of the
 milestone's 100 planning units are now closed, with 35 remaining. These are
-relative scope weights, not measured expenditure. Hooks still require their
-own proposal and authorization.
+relative scope weights, not measured expenditure. The following hook checkpoint
+records the subsequent authorized work.
 
 ### Synchronous typed hooks — forecast 9 units
 
 Prerequisite: integrated safe resource scope and its reassessment.
 
-[CP-0018](../proposals/CP-0018-synchronous-typed-hooks.md) accepts transforming
-subscribers, existing exact effect APIs, forwarding-first registration order,
-explicit empty-chain roots and scoped deregistration. The user approved the
-complete contract; separate implementation authorization and an active task
-remain pending. The original nine-unit weight is unchanged.
+Complete product checkpoint `ad2b0d4` implements historical `CP-0018` under
+historical `TASK-0028`. It retains transforming subscribers over existing exact
+effect APIs, forwarding-first registration order, explicit empty-chain roots
+and scoped deregistration, with specification, tests, independent reviews and
+full verification. The [evidence](effect-ash/synchronous-hooks-evidence.md)
+records generic coincidence, callback-added dependencies, completion,
+independent Core authority and exact runtime ownership bounds.
 
-The proposal must define hook identity and payload, registration resource,
-subscriber effects, sequential order and priority, handler placement,
-deregistration, captured identities, chain mutation observation, and the
-restricted failure/capture boundary before reliable cleanup. Exclude
-suspension, parallel fan-out, async completion, and a universal event bus.
+Local integration and merged-checkout verification remain the final lifecycle
+gate. Closing that gate closes the original nine-unit weight, reaching 74 of
+100 relative planning units, with 26 remaining: cleanup 11, foreign provider
+10 and milestone closure 5. These are scope weights, not measured expenditure.
 
-The representation must permit later suspension without replacing the hook API
-or adding a second effect runtime. Until reliable cleanup, reject any subscriber
-failure or exit whose live obligations the hook slice cannot discharge.
+The implementation uses ordinary handlers and callable values with one private
+registration owner, not a second runtime or registry. Unsupported live-obligation
+exits still reject. Reliable cleanup requires a separate accepted proposal;
+suspension, parallel fan-out, async completion and a universal event bus remain
+excluded.
 
 ### Reliable cleanup — forecast 11 units
 

@@ -142,6 +142,7 @@ fn source_structural_depth_exceeds_budget(root: &ConcreteNode) -> bool {
 fn structural_weight(node: &ConcreteNode) -> usize {
     match node.kind {
         NodeKind::Block
+        | NodeKind::RegistrationExpression
         | NodeKind::FunctionExpression
         | NodeKind::EqualityExpression
         | NodeKind::AdditiveExpression
@@ -642,6 +643,17 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             shape.node(NodeKind::PrimaryExpression)?;
             shape.node(NodeKind::Block)?;
         }
+        NodeKind::HookExpression => {
+            shape.token(&TokenKind::Hook)?;
+            shape.node(NodeKind::EffectInstance)?;
+            shape.node(NodeKind::Block)?;
+        }
+        NodeKind::RegistrationExpression => {
+            shape.token(&TokenKind::Register)?;
+            shape.node(NodeKind::EffectInstance)?;
+            shape.node(NodeKind::PrimaryExpression)?;
+            shape.node(NodeKind::Block)?;
+        }
         NodeKind::PerformExpression => {
             shape.token(&TokenKind::Perform)?;
             shape.node(NodeKind::OperationReference)?;
@@ -677,6 +689,10 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                 shape.node(NodeKind::ParenthesizedExpression)?;
             } else if shape.peek_node_is(NodeKind::PerformExpression) {
                 shape.node(NodeKind::PerformExpression)?;
+            } else if shape.peek_node_is(NodeKind::HookExpression) {
+                shape.node(NodeKind::HookExpression)?;
+            } else if shape.peek_node_is(NodeKind::RegistrationExpression) {
+                shape.node(NodeKind::RegistrationExpression)?;
             } else if shape.peek_node_is(NodeKind::QualifiedName) {
                 shape.node(NodeKind::QualifiedName)?;
             } else {
@@ -1775,6 +1791,29 @@ fn project_expression(
                         NodeKind::PrimaryExpression,
                     )?));
                 }
+                NodeKind::HookExpression | NodeKind::RegistrationExpression => {
+                    let effect = project_effect_instance(
+                        source,
+                        only_child_of_kind(node, NodeKind::EffectInstance)?,
+                        tokens,
+                    )?;
+                    let span = node_span(source, node, tokens)?;
+                    tasks.push(if node.kind == NodeKind::HookExpression {
+                        ExpressionTask::FinishHook { effect, span }
+                    } else {
+                        ExpressionTask::FinishRegistration { effect, span }
+                    });
+                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                        node,
+                        NodeKind::Block,
+                    )?));
+                    if node.kind == NodeKind::RegistrationExpression {
+                        tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                            node,
+                            NodeKind::PrimaryExpression,
+                        )?));
+                    }
+                }
                 NodeKind::HandlerExpression => {
                     let body = expression_child(node)?;
                     let effect = project_effect_instance(
@@ -1830,6 +1869,14 @@ fn project_expression(
                         optional_child_of_kind(node, NodeKind::PerformExpression)?
                     {
                         tasks.push(ExpressionTask::Visit(perform));
+                    } else if let Some(hook) =
+                        optional_child_of_kind(node, NodeKind::HookExpression)?
+                    {
+                        tasks.push(ExpressionTask::Visit(hook));
+                    } else if let Some(registration) =
+                        optional_child_of_kind(node, NodeKind::RegistrationExpression)?
+                    {
+                        tasks.push(ExpressionTask::Visit(registration));
                     } else if let Some(name) =
                         optional_child_of_kind(node, NodeKind::QualifiedName)?
                     {
@@ -1967,6 +2014,37 @@ fn project_expression(
                             identity,
                             handle,
                             initializer,
+                            body,
+                        },
+                    )),
+                    span,
+                });
+            }
+            ExpressionTask::FinishHook { effect, span } => {
+                let body = projected.pop().ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+                let SurfaceExprKind::Block(body) = body.kind else {
+                    return malformed(InternalReason::UnexpectedShape);
+                };
+                projected.push(SurfaceExpr {
+                    kind: SurfaceExprKind::Hook(Box::new(crate::surface::SurfaceHookExpr {
+                        effect,
+                        body,
+                    })),
+                    span,
+                });
+            }
+            ExpressionTask::FinishRegistration { effect, span } => {
+                let (transformer, body) = take_expression_pair(&mut projected)?;
+                let SurfaceExprKind::Block(body) = body.kind else {
+                    return malformed(InternalReason::UnexpectedShape);
+                };
+                projected.push(SurfaceExpr {
+                    kind: SurfaceExprKind::Registration(Box::new(
+                        crate::surface::SurfaceRegistrationExpr {
+                            effect,
+                            transformer,
                             body,
                         },
                     )),
@@ -2148,6 +2226,14 @@ enum ExpressionTask<'a> {
     FinishResource {
         identity: SurfaceName,
         handle: SurfaceName,
+        span: Span,
+    },
+    FinishHook {
+        effect: SurfaceEffectInstance,
+        span: Span,
+    },
+    FinishRegistration {
+        effect: SurfaceEffectInstance,
         span: Span,
     },
     FinishHandle {
@@ -3028,6 +3114,8 @@ const fn is_expression_kind(kind: NodeKind) -> bool {
             | NodeKind::HandlerExpression
             | NodeKind::ResumeExpression
             | NodeKind::ResourceExpression
+            | NodeKind::HookExpression
+            | NodeKind::RegistrationExpression
             | NodeKind::PerformExpression
             | NodeKind::TupleExpression
             | NodeKind::EqualityExpression

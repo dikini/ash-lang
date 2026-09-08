@@ -35,6 +35,10 @@ use crate::{
 
 #[derive(Debug)]
 pub(super) enum Control {
+    Registration {
+        body: usize,
+        source: Span,
+    },
     Return,
     Sequence(Vec<usize>),
     Choice(Vec<usize>),
@@ -107,7 +111,9 @@ impl Control {
                 pending.push(*body);
                 pending.extend(clauses.iter().map(|clause| clause.body));
             }
-            Self::Resume { value, .. } | Self::Resource { body: value, .. } => {
+            Self::Resume { value, .. }
+            | Self::Resource { body: value, .. }
+            | Self::Registration { body: value, .. } => {
                 pending.try_reserve(1).map_err(|_| Failure::Resource)?;
                 pending.push(*value);
             }
@@ -124,6 +130,10 @@ impl Control {
     ) -> Result<Self, Failure> {
         charge(budget, 1)?;
         Ok(match self {
+            Self::Registration { body, source } => Self::Registration {
+                body: body + code_offset,
+                source: *source,
+            },
             Self::Return => Self::Return,
             Self::Sequence(children) | Self::Choice(children) => {
                 let mut copy = copy_slice(children, budget)?;
@@ -201,7 +211,7 @@ pub(super) fn query_required(
         seen.insert(code);
         if matches!(
             graph.code[code],
-            Control::Discard { .. } | Control::Resource { .. }
+            Control::Discard { .. } | Control::Resource { .. } | Control::Registration { .. }
         ) {
             return Ok(true);
         }
@@ -231,6 +241,7 @@ struct Position {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum Site {
+    Registration(usize),
     Next(Position),
     Handler(usize),
     Resource(usize),
@@ -287,6 +298,11 @@ struct Event {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum Frame {
+    Registration {
+        code: usize,
+        context: usize,
+        value_context: usize,
+    },
     Next {
         position: Position,
         context: usize,
@@ -322,6 +338,7 @@ impl Frame {
     fn allocation_context(self) -> usize {
         match self {
             Self::Next { value_context, .. }
+            | Self::Registration { value_context, .. }
             | Self::Handler { value_context, .. }
             | Self::Resource { value_context, .. } => value_context,
             Self::Clause { clause_context, .. } => clause_context,
@@ -331,6 +348,7 @@ impl Frame {
     fn site(self) -> Site {
         match self {
             Self::Next { position, .. } => Site::Next(position),
+            Self::Registration { code, .. } => Site::Registration(code),
             Self::Handler { code, .. } => Site::Handler(code),
             Self::Resource { code, .. } => Site::Resource(code),
             Self::Clause {
@@ -718,10 +736,12 @@ impl<'a> Analysis<'a> {
         budget: &mut TypeWorkBudget,
     ) -> Result<Self, Failure> {
         charge(budget, graph.code.len())?;
-        let has_resource = graph
-            .code
-            .iter()
-            .any(|code| matches!(code, Control::Resource { .. }));
+        let has_resource = graph.code.iter().any(|code| {
+            matches!(
+                code,
+                Control::Resource { .. } | Control::Registration { .. }
+            )
+        });
         let mut types: Vec<&Type> = Vec::new();
         let mut pending = Vec::new();
         pending
@@ -1381,6 +1401,15 @@ impl<'a> Analysis<'a> {
             Self::enqueue(seed.copy(budget)?, &mut pending, &mut visited, budget)?;
         }
         for root in roots {
+            let value_context = if let Some(data) = &mut self.data {
+                let context = data.root_context(*root, budget)?;
+                // Linked Core retains globals as ordinary outer bindings. Demand
+                // the actual root so its lexical initializers feed callable ports.
+                data.port(*root, context, budget)?;
+                context
+            } else {
+                0
+            };
             Self::enqueue(
                 State {
                     position: Position {
@@ -1388,12 +1417,7 @@ impl<'a> Analysis<'a> {
                         next: 0,
                     },
                     context: 0,
-                    value_context: self
-                        .data
-                        .as_ref()
-                        .map(|data| data.root_context(*root, budget))
-                        .transpose()?
-                        .unwrap_or(0),
+                    value_context,
                     stack: Address::Empty,
                     heap: Vec::new(),
                     abandoned: None,
@@ -1457,7 +1481,9 @@ impl<'a> Analysis<'a> {
                             Self::enqueue_normalized(next, &mut pending, &mut visited, budget)?;
                         }
                     }
-                    Control::Handler { body, .. } | Control::Resource { body, .. } => {
+                    Control::Handler { body, .. }
+                    | Control::Resource { body, .. }
+                    | Control::Registration { body, .. } => {
                         let body = *body;
                         let mut next = state;
                         let frame = if matches!(self.graph.code[code], Control::Resource { .. }) {
@@ -1471,6 +1497,12 @@ impl<'a> Analysis<'a> {
                                 context: next.context,
                                 value_context: next.value_context,
                                 focused: false,
+                            }
+                        } else if matches!(self.graph.code[code], Control::Registration { .. }) {
+                            Frame::Registration {
+                                code,
+                                context: next.context,
+                                value_context: next.value_context,
                             }
                         } else {
                             Frame::Handler {
@@ -1754,9 +1786,16 @@ impl<'a> Analysis<'a> {
                     code,
                     value_context,
                     ..
+                }
+                | Frame::Registration {
+                    code,
+                    value_context,
+                    ..
                 } => {
                     let body = match &self.graph.code[*code] {
-                        Control::Handler { body, .. } | Control::Resource { body, .. } => *body,
+                        Control::Handler { body, .. }
+                        | Control::Resource { body, .. }
+                        | Control::Registration { body, .. } => *body,
                         _ => return Err(Failure::Invalid),
                     };
                     let cut = data.restore_cut(
@@ -1903,6 +1942,11 @@ impl<'a> Analysis<'a> {
                     ..
                 }
                 | Frame::Resource {
+                    context,
+                    value_context,
+                    ..
+                }
+                | Frame::Registration {
                     context,
                     value_context,
                     ..
@@ -2171,6 +2215,7 @@ impl<'a> Analysis<'a> {
                                     consumed: false,
                                     ..
                                 } | Frame::Resource { .. }
+                                    | Frame::Registration { .. }
                             ),
                             true,
                         ))
@@ -2178,6 +2223,16 @@ impl<'a> Analysis<'a> {
                     budget,
                 )?;
                 if let Some(live) = live.first() {
+                    if let Frame::Registration { code, .. } = live.boundary.frame {
+                        let Control::Registration { source, .. } = self.graph.code[code] else {
+                            return Err(Failure::Invalid);
+                        };
+                        return Err(self.unsafe_discard(
+                            state.position.code,
+                            event,
+                            Some(CompletionOwner::Registration(source)),
+                        ));
+                    }
                     if let Frame::Resource { code, .. } = live.boundary.frame {
                         let Control::Resource { effect, .. } = &self.graph.code[code] else {
                             return Err(Failure::Invalid);

@@ -5537,14 +5537,26 @@ impl Resolver {
         span: crate::source::Span,
     ) -> Result<ResolvedEffectInstance, ResolveError> {
         let identity = self.effect_reference(effect)?;
-        self.type_work.charge(arguments.len()).map_err(|()| {
-            error(
-                ResolveReason::TypeResourceExhausted,
-                span,
-                "effect-argument storage exceeded its type-work budget",
-            )
-        })?;
+        self.type_work
+            .charge(arguments.len().saturating_mul(2))
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "effect-argument storage exceeded its type-work budget",
+                )
+            })?;
         let mut resolved = Vec::new();
+        let mut argument_provenance = Vec::new();
+        argument_provenance
+            .try_reserve_exact(arguments.len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "effect-argument provenance could not reserve storage",
+                )
+            })?;
         resolved.try_reserve_exact(arguments.len()).map_err(|_| {
             error(
                 ResolveReason::TypeResourceExhausted,
@@ -5553,11 +5565,31 @@ impl Resolver {
             )
         })?;
         for argument in arguments {
-            let ResolvedType { ty, .. } = self.resolve_type(argument)?;
-            resolved.push(ty);
+            let ResolvedType { ty, provenance, .. } = self.resolve_type(argument)?;
+            resolved.push(crate::types::IterativeTypeOwner::new(ty));
+            argument_provenance.push(provenance);
+        }
+        self.type_work.charge(resolved.len()).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "effect-argument retention exceeded its type-work budget",
+            )
+        })?;
+        let mut retained = Vec::new();
+        retained.try_reserve_exact(resolved.len()).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "effect-argument retention could not reserve storage",
+            )
+        })?;
+        for argument in resolved {
+            retained.push(argument.into_inner());
         }
         Ok(ResolvedEffectInstance {
-            instance: EffectInstance::new(identity, resolved.into_boxed_slice()),
+            instance: EffectInstance::new(identity, retained.into_boxed_slice()),
+            argument_provenance: argument_provenance.into_boxed_slice(),
             origin: Origin::Source(effect.span()),
             span,
         })
@@ -7694,6 +7726,239 @@ impl Resolver {
         Ok(block)
     }
 
+    fn finish_hook(
+        &mut self,
+        effect: ResolvedEffectInstance,
+        span: Span,
+        body: ResolvedExpressionOwner,
+    ) -> Result<ResolvedExpr, ResolveError> {
+        let target_span = effect.span;
+        self.type_work.charge(6).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "hook identity clause retention exceeded its type-work budget",
+            )
+        })?;
+        let mut clauses = Vec::new();
+        clauses.try_reserve_exact(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "hook identity clause storage could not be reserved",
+            )
+        })?;
+        let input = self.allocate_binder("", target_span)?;
+        let resume = ResumeId::new(self.next_resume);
+        self.next_resume = self.next_resume.checked_add(1).ok_or_else(|| {
+            error(
+                ResolveReason::BinderIdExhausted,
+                span,
+                "hook resume identity space is exhausted",
+            )
+        })?;
+        let operation = OperationId::new(effect.instance.effect(), 0);
+        let contract = crate::resolved::HookRootContract {
+            target: crate::types::clone_effect_instance_with_budget(
+                &effect.instance,
+                &mut self.type_work,
+            )
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "hook target retention exceeded its type-work budget",
+                )
+            })?,
+            span,
+            target_span,
+            operation,
+            input: input.id,
+            resume,
+        };
+        clauses.push(ResolvedHandlerClause {
+            operation,
+            spelling: "publish".into(),
+            resume,
+            pattern: ResolvedPattern {
+                kind: ResolvedPatternKind::Binder(input),
+                span: target_span,
+            },
+            body: ResolvedExpr {
+                kind: ResolvedExprKind::Resume(ResolvedResumeExpr {
+                    owner: Some(resume),
+                    value: Box::new(ResolvedExpr {
+                        kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
+                            term: ResolvedTermName::Global(contract.input),
+                            spelling: String::new(),
+                            origin: Origin::Source(target_span),
+                            import_span: None,
+                            evidence: Box::new([]),
+                        }),
+                        span: target_span,
+                    }),
+                }),
+                span: target_span,
+            },
+            span: target_span,
+        });
+        Ok(ResolvedExpr {
+            kind: ResolvedExprKind::Handle(ResolvedHandleExpr {
+                hook_registration: None,
+                hook_root: Some(contract),
+                body: Box::new(body.into_inner()),
+                effect,
+                clauses,
+            }),
+            span,
+        })
+    }
+
+    fn finish_registration(
+        &mut self,
+        effect: ResolvedEffectInstance,
+        span: Span,
+        initializer: ResolvedExpressionOwner,
+        body: ResolvedExpressionOwner,
+    ) -> Result<ResolvedExpr, ResolveError> {
+        let target_span = effect.span;
+        let exhausted = || {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "registration lowering exceeded its type-work budget",
+            )
+        };
+        self.type_work.charge(24).map_err(|()| exhausted())?;
+        let mut declarations = Vec::new();
+        declarations.try_reserve_exact(1).map_err(|_| exhausted())?;
+        let mut steps = Vec::new();
+        steps.try_reserve_exact(2).map_err(|_| exhausted())?;
+        let mut clauses = Vec::new();
+        clauses.try_reserve_exact(1).map_err(|_| exhausted())?;
+        let callback = self.allocate_binder("", target_span)?;
+        let input = self.allocate_binder("", target_span)?;
+        let previous = self.allocate_binder("", target_span)?;
+        let next = self.allocate_binder("", target_span)?;
+        let resume = ResumeId::new(self.next_resume);
+        self.next_resume = self.next_resume.checked_add(1).ok_or_else(|| {
+            error(
+                ResolveReason::BinderIdExhausted,
+                span,
+                "registration resume identity space is exhausted",
+            )
+        })?;
+        let operation = OperationId::new(effect.instance.effect(), 0);
+        let target =
+            crate::types::clone_effect_instance_with_budget(&effect.instance, &mut self.type_work)
+                .map_err(|()| exhausted())?;
+        let forwarded =
+            crate::types::clone_effect_instance_with_budget(&effect.instance, &mut self.type_work)
+                .map_err(|()| exhausted())?;
+        let contract = crate::resolved::HookRegistrationContract {
+            target,
+            span,
+            target_span,
+            operation,
+            callback: callback.id,
+            input: input.id,
+            previous: previous.id,
+            next: next.id,
+            resume,
+        };
+        let occurrence = |binder| ResolvedExpr {
+            kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
+                term: ResolvedTermName::Global(binder),
+                spelling: String::new(),
+                origin: Origin::Source(target_span),
+                import_span: None,
+                evidence: Box::new([]),
+            }),
+            span: target_span,
+        };
+        let binding = |binder, initializer| {
+            ResolvedLocalDeclaration::Binding(Box::new(ResolvedBinding {
+                pattern: ResolvedPattern {
+                    kind: ResolvedPatternKind::Binder(binder),
+                    span: target_span,
+                },
+                annotation: None,
+                initializer,
+                span: target_span,
+            }))
+        };
+        steps.push(binding(
+            previous,
+            ResolvedExpr {
+                kind: ResolvedExprKind::Perform(ResolvedPerformExpr {
+                    effect: ResolvedEffectInstance {
+                        instance: forwarded,
+                        argument_provenance: Box::new([]),
+                        origin: Origin::Source(target_span),
+                        span: target_span,
+                    },
+                    operation,
+                    spelling: "publish".into(),
+                    operand: Box::new(occurrence(contract.input)),
+                    origin: Origin::Source(target_span),
+                }),
+                span: target_span,
+            },
+        ));
+        steps.push(binding(
+            next,
+            ResolvedExpr {
+                kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
+                    function: Box::new(occurrence(contract.callback)),
+                    argument: Box::new(occurrence(contract.previous)),
+                }),
+                span: target_span,
+            },
+        ));
+        clauses.push(ResolvedHandlerClause {
+            operation,
+            spelling: "publish".into(),
+            resume,
+            pattern: ResolvedPattern {
+                kind: ResolvedPatternKind::Binder(input),
+                span: target_span,
+            },
+            body: ResolvedExpr {
+                kind: ResolvedExprKind::Block(ResolvedBlock {
+                    declarations: steps,
+                    result: Box::new(ResolvedExpr {
+                        kind: ResolvedExprKind::Resume(ResolvedResumeExpr {
+                            owner: Some(resume),
+                            value: Box::new(occurrence(contract.next)),
+                        }),
+                        span: target_span,
+                    }),
+                    span: target_span,
+                }),
+                span: target_span,
+            },
+            span: target_span,
+        });
+        declarations.push(binding(callback, initializer.into_inner()));
+        Ok(ResolvedExpr {
+            kind: ResolvedExprKind::Block(ResolvedBlock {
+                declarations,
+                result: Box::new(ResolvedExpr {
+                    kind: ResolvedExprKind::Handle(ResolvedHandleExpr {
+                        hook_registration: Some(Box::new(contract)),
+                        hook_root: None,
+                        body: Box::new(body.into_inner()),
+                        effect,
+                        clauses,
+                    }),
+                    span,
+                }),
+                span,
+            }),
+            span,
+        })
+    }
+
     fn allocate_binder(
         &mut self,
         spelling: &str,
@@ -8155,6 +8420,7 @@ impl Resolver {
             let request = ResolvedExpr {
                 kind: ResolvedExprKind::Perform(ResolvedPerformExpr {
                     effect: ResolvedEffectInstance {
+                        argument_provenance: Box::new([]),
                         instance: crate::types::EffectInstance::new(
                             api.ops(),
                             Box::new([Type::Variable(identity.id)]),
@@ -8279,6 +8545,33 @@ impl Resolver {
             match task {
                 ResolveTask::VisitExpr(expression) => {
                     self.visit_expression(expression, &mut tasks, &mut expressions)?;
+                }
+                ResolveTask::FinishHook { effect, span } => {
+                    let body = expressions.pop_owned().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            span,
+                            "hook body resolution produced no expression",
+                        )
+                    })?;
+                    expressions.push(self.finish_hook(effect, span, body)?);
+                }
+                ResolveTask::FinishRegistration { effect, span } => {
+                    let body = expressions.pop_owned().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            span,
+                            "missing registration body",
+                        )
+                    })?;
+                    let initializer = expressions.pop_owned().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            span,
+                            "missing registration initializer",
+                        )
+                    })?;
+                    expressions.push(self.finish_registration(effect, span, initializer, body)?);
                 }
                 ResolveTask::VisitBlock(block) => {
                     let scope_checkpoint = self.scopes.len();
@@ -8877,6 +9170,59 @@ impl Resolver {
         expressions: &mut ResolvedExpressionBuffer,
     ) -> Result<(), ResolveError> {
         match &expression.kind {
+            SurfaceExprKind::Registration(registration) => {
+                let effect = self.resolve_effect_instance_parts(
+                    &registration.effect.effect,
+                    &registration.effect.arguments,
+                    registration.effect.span,
+                )?;
+                self.type_work.charge(3).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "registration task storage exceeded its budget",
+                    )
+                })?;
+                tasks.0.try_reserve(3).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "registration task storage could not be reserved",
+                    )
+                })?;
+                tasks.push(ResolveTask::FinishRegistration {
+                    effect,
+                    span: expression.span,
+                });
+                tasks.push(ResolveTask::VisitBlock(&registration.body));
+                tasks.push(ResolveTask::VisitExpr(&registration.transformer));
+            }
+            SurfaceExprKind::Hook(hook) => {
+                let effect = self.resolve_effect_instance_parts(
+                    &hook.effect.effect,
+                    &hook.effect.arguments,
+                    hook.effect.span,
+                )?;
+                self.type_work.charge(2).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "hook resolution task storage exceeded its budget",
+                    )
+                })?;
+                tasks.0.try_reserve(2).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "hook resolution task storage could not be reserved",
+                    )
+                })?;
+                tasks.push(ResolveTask::FinishHook {
+                    effect,
+                    span: expression.span,
+                });
+                tasks.push(ResolveTask::VisitBlock(&hook.body));
+            }
             SurfaceExprKind::Resource(_) if self.builtin_cell.is_none() => {
                 return Err(error(
                     ResolveReason::ResourceBuiltinRequired,
@@ -9230,6 +9576,8 @@ impl Resolver {
                 }
                 expressions.push(ResolvedExpr {
                     kind: ResolvedExprKind::Handle(ResolvedHandleExpr {
+                        hook_registration: None,
+                        hook_root: None,
                         body: Box::new(body.into_inner()),
                         effect,
                         clauses,
@@ -9325,6 +9673,14 @@ impl Drop for PendingLexicalResolution<'_> {
 
 enum ResolveTask<'a> {
     VisitExpr(&'a SurfaceExpr),
+    FinishRegistration {
+        effect: ResolvedEffectInstance,
+        span: Span,
+    },
+    FinishHook {
+        effect: ResolvedEffectInstance,
+        span: Span,
+    },
     ResourceInitializer {
         source: &'a crate::surface::SurfaceResourceExpr,
         span: Span,
@@ -9415,6 +9771,8 @@ impl ResolveTask<'_> {
             Self::VisitBlock(block) => block.span,
             Self::VisitRecursiveGroup(group) => group.span,
             Self::FinishApplication { span }
+            | Self::FinishHook { span, .. }
+            | Self::FinishRegistration { span, .. }
             | Self::ResourceInitializer { span, .. }
             | Self::FinishResource { span, .. }
             | Self::FinishBinary { span, .. }
@@ -10095,6 +10453,176 @@ mod tests {
     };
 
     static IMPORT_BUDGET_FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn registration_resolution_retains_initializer_and_completion_contract() {
+        {
+            let expression = "register Adjust increment {\n3\n}";
+            let source = format!(
+                "effect Adjust {{\npublish : Int -> Int\n}}\nincrement : Int -> Int\nincrement value = value + 1\nmain : Unit -> Int\nmain () = {expression}\n"
+            );
+            let fixture = ImportBudgetFixture::create(&source, "");
+            let graph = load_module_graph(&fixture.0.join("entry.ash"), &ModuleRoots::empty())
+                .expect("hook syntax should load");
+            let entry = graph.module(graph.entry()).unwrap();
+            let resolved = resolve_module(entry, &[]).unwrap();
+            let ResolvedDefinitionKind::Equational(main) = &resolved.definitions()[1].kind else {
+                panic!("equational main")
+            };
+            let ResolvedExprKind::Block(block) = &main.equations[0].body.kind else {
+                panic!("initializer binding")
+            };
+            let [ResolvedLocalDeclaration::Binding(initializer)] = &*block.declarations else {
+                panic!("one initializer")
+            };
+            let ResolvedExprKind::Handle(handler) = &block.result.kind else {
+                panic!("registration handler")
+            };
+            let contract = handler
+                .hook_registration
+                .as_ref()
+                .expect("retained registration contract");
+            let ResolvedPatternKind::Binder(callback) = &initializer.pattern.kind else {
+                panic!("callback binder")
+            };
+            assert_eq!(callback.id, contract.callback);
+            assert!(matches!(
+                initializer.initializer.kind,
+                ResolvedExprKind::Occurrence(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn hook_identity_retention_is_exact_and_disposes_failed_deep_inputs() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("hook-retention", "hook Adjust { 42 }").unwrap();
+                let span = source.span(ByteRange::new(0, 18).unwrap()).unwrap();
+                let run = |limit| {
+                    let mut resolver = Resolver::with_type_work(
+                        ModuleId::new(0),
+                        TypeWorkBudget::with_limit(limit),
+                    );
+                    let mut argument = Type::Unit;
+                    for _ in 0..32_000 {
+                        argument = Type::Function(Box::new(Type::Unit), Box::new(argument));
+                    }
+                    let effect = ResolvedEffectInstance {
+                        instance: EffectInstance::new(
+                            EffectId::new(ModuleId::new(0), 0),
+                            Box::new([argument]),
+                        ),
+                        argument_provenance: Box::new([]),
+                        origin: Origin::Source(span),
+                        span,
+                    };
+                    let mut expression = ResolvedExpr {
+                        kind: ResolvedExprKind::Unit,
+                        span,
+                    };
+                    for _ in 0..32_000 {
+                        expression = ResolvedExpr {
+                            kind: ResolvedExprKind::Tuple(vec![expression]),
+                            span,
+                        };
+                    }
+                    let result = resolver.finish_hook(
+                        effect,
+                        span,
+                        ResolvedExpressionOwner::new(expression),
+                    );
+                    let work = resolver.type_work.used();
+                    match result {
+                        Ok(expression) => {
+                            drop(ResolvedExpressionOwner::new(expression));
+                            Ok(work)
+                        }
+                        Err(error) => Err(error.reason),
+                    }
+                };
+                let exact = run(usize::MAX).unwrap();
+                for limit in [0, 6, exact - 1] {
+                    assert_eq!(run(limit), Err(ResolveReason::TypeResourceExhausted));
+                }
+                for _ in 0..2 {
+                    assert_eq!(run(exact), Ok(exact));
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn registration_retention_is_exact_and_disposes_failed_deep_inputs() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source =
+                    SourceFile::new("registration-retention", "register Adjust callback { 42 }")
+                        .unwrap();
+                let span = source.span(ByteRange::new(0, 31).unwrap()).unwrap();
+                let run = |limit| {
+                    let mut resolver = Resolver::with_type_work(
+                        ModuleId::new(0),
+                        TypeWorkBudget::with_limit(limit),
+                    );
+                    let mut argument = Type::Unit;
+                    for _ in 0..32_000 {
+                        argument = Type::Function(Box::new(Type::Unit), Box::new(argument));
+                    }
+                    let effect = ResolvedEffectInstance {
+                        instance: EffectInstance::new(
+                            EffectId::new(ModuleId::new(0), 0),
+                            Box::new([argument, Type::Bool]),
+                        ),
+                        argument_provenance: Box::new([]),
+                        origin: Origin::Source(span),
+                        span,
+                    };
+                    let mut expression = ResolvedExpr {
+                        kind: ResolvedExprKind::Unit,
+                        span,
+                    };
+                    for _ in 0..32_000 {
+                        expression = ResolvedExpr {
+                            kind: ResolvedExprKind::Tuple(vec![expression]),
+                            span,
+                        };
+                    }
+                    let initializer = ResolvedExpr {
+                        kind: ResolvedExprKind::Unit,
+                        span,
+                    };
+                    let result = resolver.finish_registration(
+                        effect,
+                        span,
+                        ResolvedExpressionOwner::new(initializer),
+                        ResolvedExpressionOwner::new(expression),
+                    );
+                    let work = resolver.type_work.used();
+                    match result {
+                        Ok(expression) => {
+                            drop(ResolvedExpressionOwner::new(expression));
+                            Ok(work)
+                        }
+                        Err(error) => Err(error.reason),
+                    }
+                };
+                let exact = run(usize::MAX).unwrap();
+                for limit in [0, 24, 64_030, exact - 1] {
+                    assert_eq!(run(limit), Err(ResolveReason::TypeResourceExhausted));
+                }
+                for _ in 0..2 {
+                    assert_eq!(run(exact), Ok(exact));
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 
     #[test]
     fn capture_type_metadata_excludes_only_lexical_fact_demand_and_retries_exactly() {

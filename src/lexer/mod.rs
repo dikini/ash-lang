@@ -449,6 +449,8 @@ fn classify_word(word: &str) -> Option<TokenKind> {
         "with" => Some(TokenKind::With),
         "resume" => Some(TokenKind::Resume),
         "resource" => Some(TokenKind::Resource),
+        "hook" => Some(TokenKind::Hook),
+        "register" => Some(TokenKind::Register),
         "discard" => Some(TokenKind::Discard),
         "import" => Some(TokenKind::Import),
         "as" => Some(TokenKind::As),

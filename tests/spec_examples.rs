@@ -1891,6 +1891,20 @@ fn resource_cell_documentation_example_has_exact_cli_output() {
 }
 
 #[test]
+fn synchronous_hooks_documentation_example_has_exact_cli_output() {
+    let text = "effect Adjust {\n    publish : Int -> Int\n}\n\nincrement : Int -> Int\nincrement value = value + 1\n\ndouble : Int -> Int\ndouble value = value * 2\n\nmain : Unit -> Int\nmain () = hook Adjust {\n    register Adjust increment {\n        register Adjust double {\n            perform Adjust.publish 3\n        }\n    }\n}\n";
+    let source = TempFile::write(text);
+    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .arg(source.path())
+        .output()
+        .expect("the documented hook executable should start");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"8 : Int\n");
+    assert!(output.stderr.is_empty());
+    assert_documented("docs/tools/ash.md", text);
+}
+
+#[test]
 fn tool_module_newtype_observation_has_exact_cli_output() {
     let source = TempFile::write(MODULE_NEWTYPE_MODULE);
     let output = Command::new(env!("CARGO_BIN_EXE_ash"))

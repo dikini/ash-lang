@@ -165,6 +165,37 @@ Run it with `ash entry.ash`, without a builtin root option. It prints
 Handles and captured cell access cannot escape the scope; the returned integer
 is an ordinary copy.
 
+The executable test `synchronous_hooks_documentation_example_has_exact_cli_output`
+checks this complete hook program:
+
+```ash
+effect Adjust {
+    publish : Int -> Int
+}
+
+increment : Int -> Int
+increment value = value + 1
+
+double : Int -> Int
+double value = value * 2
+
+main : Unit -> Int
+main () = hook Adjust {
+    register Adjust increment {
+        register Adjust double {
+            perform Adjust.publish 3
+        }
+    }
+}
+```
+
+It prints `8 : Int` followed by a newline, with empty standard error. The outer
+registration increments first; the inner registration doubles that result.
+Reversing them produces `7`. Each transformer is evaluated once before its
+scope begins, and normal scope return removes its registration. Subscriber
+effects require handlers around the registration, not merely around the
+publication site. Hooks add no automatic module registration or cleanup.
+
 Global functions have module-wide recursive scope. The executable test
 `tool_recursive_example_has_exact_cli_observation` runs this mutually recursive
 module, in which the earlier equational definition refers forward to the later
@@ -457,6 +488,13 @@ Effect declaration and resolution failures use `effect.operation-shape`,
 `effect.resume-not-consumed`, `effect.resume-already-consumed`, and
 `effect.resume-capture`.
 
+An otherwise well-formed hook target that lacks exactly one declared
+`publish : P -> P` operation reports `type.hook-api`. Callback mismatches use
+ordinary type errors identifying the registration's payload contract. Kind,
+type/row and structural continuation failures retain precedence. An unused
+registration still requires its callback's latent effects and the forwarded
+hook effect to be handled.
+
 Kind failures use `kind.not-applicable` when an applied type does not have a
 function kind, `kind.argument` when a type or interface argument has the wrong
 kind, and `kind.expected-type` when a value-type position receives a residual
@@ -513,8 +551,9 @@ runtime-internal status-`2` failures, not source outcomes.
 
 Resource-dependent escape reports `type.resource-escape` with status `1` and
 labels the escaping expression and known acquisition/capture causes. Discard
-that abandons or skips resource completion reports `effect.discard-unsafe`.
-The effect machine's live-cell capacity failure is `runtime.resource-capacity`,
+that abandons or skips cell or registration completion reports
+`effect.discard-unsafe`.
+The effect machine's live-cell or live-registration capacity failure is `runtime.resource-capacity`,
 an internal status-`2` failure. It publishes no partial acquisition. There is
 no source-level allocation-failure branch or use-after-release outcome.
 

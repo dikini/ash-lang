@@ -52,6 +52,10 @@ pub enum TokenKind {
     Resume,
     /// Scoped acquisition of the builtin cell resource.
     Resource,
+    /// The `hook` reserved word.
+    Hook,
+    /// The `register` reserved word.
+    Register,
     /// The `discard` reserved word.
     Discard,
     /// The `import` reserved word.

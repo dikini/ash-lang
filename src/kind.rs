@@ -4656,6 +4656,9 @@ fn check_expression_work<'a>(
                     budget,
                 )?,
                 ResolvedExprKind::Handle(handler) => {
+                    if handler.hook_root.is_some() || handler.hook_registration.is_some() {
+                        check_hook_target_kind(&handler.effect, environments, budget)?;
+                    }
                     for clause in handler.clauses.iter().rev() {
                         push_body_work(
                             &mut work,
@@ -4684,6 +4687,71 @@ fn check_expression_work<'a>(
                 | ResolvedExprKind::Constructor(_)
                 | ResolvedExprKind::Discard(_) => {}
             },
+        }
+    }
+    Ok(())
+}
+
+fn check_hook_target_kind(
+    target: &crate::resolved::ResolvedEffectInstance,
+    environments: &KindEnvironments<'_>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), KindFailure> {
+    budget.charge(1).map_err(|()| {
+        KindFailure::resource(
+            target.span,
+            "hook target kind lookup exceeded its type-work budget",
+        )
+    })?;
+    let parameters = environments
+        .effects
+        .as_ref()
+        .and_then(|effects| effects.get(&target.instance.effect()))
+        .ok_or_else(|| {
+            KindFailure::internal(
+                target.span,
+                "a hook target has no canonical effect declaration",
+            )
+        })?;
+    // Elaboration owns the existing source-facing instance arity diagnostic.
+    if parameters.len() != target.instance.arguments().len() {
+        return Ok(());
+    }
+    if target.argument_provenance.len() != target.instance.arguments().len() {
+        return Err(KindFailure::internal(
+            target.span,
+            "a hook target has incomplete argument provenance",
+        ));
+    }
+    for ((argument, provenance), parameter) in target
+        .instance
+        .arguments()
+        .iter()
+        .zip(target.argument_provenance.iter())
+        .zip(parameters.iter())
+    {
+        let span = provenance.span().ok_or_else(|| {
+            KindFailure::internal(target.span, "a hook argument has no source occurrence")
+        })?;
+        let found = environments.synthesize(argument, Some(provenance), span, budget)?;
+        if !same_kind_with_budget(&parameter.kind, found.kind, budget).map_err(|()| {
+            KindFailure::resource(
+                span,
+                "hook argument kind comparison exceeded its type-work budget",
+            )
+        })? {
+            return Err(KindFailure::Source(Box::new(structured_error(
+                KindReason::Argument,
+                span,
+                "this effect argument has the wrong kind",
+                &parameter.kind,
+                found.kind,
+                Some((
+                    parameter.origin.primary_span(),
+                    "the effect parameter kind is declared here",
+                )),
+                budget,
+            )?)));
         }
     }
     Ok(())

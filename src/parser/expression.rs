@@ -105,6 +105,8 @@ fn parse_primary(parser: &mut Parser<'_>, forms: &[PrimaryForm]) -> CompletedExp
         Some(PrimaryForm::Qualified) => grammar::qualified_name(parser, false),
         Some(PrimaryForm::Parenthesized) => parse_parenthesized(parser),
         Some(PrimaryForm::Perform) => grammar::perform_expression(parser),
+        Some(PrimaryForm::Hook) => grammar::hook_expression(parser),
+        Some(PrimaryForm::Registration) => grammar::registration_expression(parser),
         _ => parser.report(ParseReason::ExpectedOperand, ExpectedForm::Operand),
     }
     parser.finish();
@@ -203,6 +205,8 @@ fn primary_form(parser: &Parser<'_>, forms: &[PrimaryForm]) -> Option<PrimaryFor
             | (PrimaryForm::Parenthesized, Some(TokenKind::LeftParen)) => true,
             (PrimaryForm::Perform, Some(TokenKind::Perform)) => true,
             (PrimaryForm::Discard, Some(TokenKind::Discard)) => true,
+            (PrimaryForm::Hook, Some(TokenKind::Hook)) => true,
+            (PrimaryForm::Registration, Some(TokenKind::Register)) => true,
             (PrimaryForm::Qualified, Some(TokenKind::UpperIdentifier(_))) => parser
                 .nth(1)
                 .is_some_and(|kind| matches!(kind, TokenKind::Dot)),

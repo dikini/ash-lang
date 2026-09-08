@@ -302,6 +302,12 @@ an effect by spelling or API shape. Rows have no semantic order or
 multiplicity, effect subtyping or masking, or implicit removal. Weakening is a
 checking relation; it does not change a synthesized least row.
 
+Hook scopes use the distinct partial relation `scope_discharge(epsilon, H)`.
+It removes `H` when explicitly present. If `H` is absent from the known members,
+it leaves a closed row unchanged, or leaves an open row unchanged only when its
+tail already lacks `H`. Otherwise discharge is ambiguous. This relation adds
+no lacks fact and does not relax ordinary handler admission or exact removal.
+
 Surface `A -> B` denotes `Function(A, B ! {})`. A written row changes only the
 complete computation codomain to which it attaches. Consequently,
 `A -> B -> C ! {E}` is a pure call from `A` returning a function whose call may
@@ -1145,6 +1151,98 @@ consumption and barriers. `written_duplicate_effect_row_has_exact_reason_code`
 checks `effect.duplicate`, while
 `effect_examples_have_exact_observations_and_reasons` checks the complete
 handled example plus `entry.main-effects` and `effect.resume-not-consumed`.
+
+## Synchronous typed hooks
+
+A hook API is an ordinary effect declaration with exactly one operation named
+`publish`, whose domain and result are structurally equal under the
+declaration's own parameters. Qualification precedes use-site substitution:
+`Convert<A, B>` declaring `publish : A -> B` does not qualify even at
+`Convert<Int, Int>`. Equal newtype representations do not establish equal
+payload types. Hook APIs retain ordinary effect identities, parameter kinds
+and visibility; their parameters cannot have kind `EffectRow`.
+
+For an exact qualifying instance `H`, let `P` be its instantiated payload type.
+`hook H { body }` supplies an identity handler for `H`.
+`register H transformer { body }` checks an ordinary transformer from `P` to
+`P`, evaluates that expression before acquisition, and retains it for the
+scope. The body's result type `A` is independent of `P`.
+
+The following rules use the scope-discharge relation above and existing partial
+row union. `epsilon_init` describes evaluating the transformer expression;
+`epsilon_callback` describes calling its resulting function. Their union is
+subject to the existing least-row and expected-row constraints, not a new
+row-union mechanism.
+
+```sequent
+family hook-scope-typing:
+  T-Hook :=
+    H is a well-kinded exact hook instance with payload P
+    GAMMA |- body ⇒ A ! epsilon_body
+    epsilon_out = scope_discharge(epsilon_body, H)
+    stored dependencies and control completion are safe across the scope
+    ===>
+    GAMMA |- hook H { body } ⇒ A ! epsilon_out
+
+  T-Register :=
+    H is a well-kinded exact hook instance with payload P
+    GAMMA |- transformer ⇐ (P -> P ! epsilon_callback) ! epsilon_init
+    GAMMA |- body ⇒ A ! epsilon_body
+    rho = scope_discharge(epsilon_body, H)
+    epsilon_out = epsilon_init union rho union epsilon_callback union { H }
+    stored dependencies and control completion are safe across the registration
+    ===>
+    GAMMA |- register H transformer { body } ⇒ A ! epsilon_out
+```
+
+The registration's generated clause forwards `H`, calls the transformer on the
+forwarded result, and resumes with the transformed result. Its forwarded and
+latent requirements remain in the outward row even if the body never
+publishes. An unused callback does not execute. A root removes only its target,
+not subscriber effects or another exact instance. Closed absent-target bodies
+and open tails already known to lack the target are admitted; an unconstrained
+tail remains ambiguous. Ordinary `handle` still requires an explicitly present
+target in its body's least row.
+
+The generated handler runs inside a registration completion owner. Selecting
+its clause captures that handler and publisher-side frames, not its own owner.
+Callback requests therefore use handlers surrounding the registration, not
+handlers installed only around publication in its body. The callback's saved
+ordinary values and lexical type/row instantiation retain their usual meaning.
+Creating an ordinary closure under a handler does not store that handler.
+
+Registration owners require normal completion even for pure callbacks and
+unused bodies. Capture and resume preserve that obligation. Checked discard is
+permitted inside a subscriber only when the generated clause and every
+surrounding owner still complete. Abandoning a registration, a pending resume,
+or an owner whose completion would be skipped remains `effect.discard-unsafe`.
+Subscribers receive no surrounding resume capability.
+
+Stored-dependency inference follows actual callback results, not merely their
+types. A transformer can return a function with a new cell dependency while
+retaining type `P -> P`; that result is permitted while its resource owner
+surrounds the restored recipient, but cannot escape it. Callback captures,
+tuples, selected evidence and imported factories obey the same rules as other
+stored values. Forwarding checks the original payload against every crossed
+owner before later transformers run. A later transformer that erases a
+dependency cannot authorize an earlier unsafe transfer, including through an
+empty identity root.
+
+Generic target parameters may become equal after specialization. A scope must
+therefore remain present even when its unspecialized body row appears to omit
+its target. Dependency and completion inference preserve that possibility;
+generic parameters are not fresh acquisition brands. An ordinary closure that
+requests a static hook identity does not retain the active chain, but actual
+stored resource dependencies remain subject to escape checking.
+
+Malformed syntax and unknown targets retain their earlier-phase diagnostics.
+Kind, ordinary type/row and structural continuation errors precede hook API
+qualification. An otherwise well-formed non-hook target reports `type.hook-api`
+at the target. Callback mismatches use ordinary type errors identifying the
+registration's payload contract. Escape remains `type.resource-escape`; unsafe
+discard retains its registration or pending-owner labels. Inference and
+independent validation charge the existing owning work ledgers for added
+relationships and scans.
 
 ## Scoped cells and resource dependencies
 

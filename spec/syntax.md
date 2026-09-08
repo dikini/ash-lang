@@ -138,6 +138,9 @@ discard_expression ::= "discard" ;
 resource_expression ::=
   "resource" "cell" "<" upper_identifier ">" identifier
   "=" primary_expression block ;
+hook_expression ::= "hook" effect_instance block ;
+registration_expression ::=
+  "register" effect_instance primary_expression block ;
 
 expression ::=
     block
@@ -161,6 +164,8 @@ primary_expression ::=
   | qualified_term_reference
   | perform_expression
   | discard_expression
+  | hook_expression
+  | registration_expression
   | parenthesized_expression ;
 unqualified_term_reference ::= identifier | upper_identifier ;
 qualified_term_reference ::= upper_identifier "." import_name ;
@@ -385,6 +390,13 @@ parenthesized. The initializer precedes the binders' scope; both binders are
 visible only in the body. There is no resource declaration or first-class
 acquisition function.
 
+A hook expression names an exact effect instance followed by a block. A
+registration expression names an exact effect instance, one primary-expression
+transformer and a block. A non-primary transformer, such as a function
+expression or application, must be parenthesized. Neither form introduces a
+source-visible binder. Static semantics determines whether the target is a
+hook API and checks the transformer's type.
+
 The executable test `syntax_local_recursive_group_example_is_executable`
 checks a complete entry module containing a two-member recursive group. The
 second function retains a reference back to the first without calling it, so
@@ -424,6 +436,10 @@ while `(resume x) + y` resumes with `x` and then adds `y`.
 A resource expression ends at its body block. Like a block, it must be
 parenthesized to serve as an application or infix operand. The primary
 initializer rule does not make the complete resource expression primary.
+
+Hook and registration expressions also end at their body blocks, but both are
+primary expressions. Their complete forms can therefore serve as application
+or infix operands without additional parentheses.
 
 `!` attaches to the complete computation codomain immediately to its left after
 parentheses are applied. Thus `A -> B -> C ! {E}` is a pure call from `A` that

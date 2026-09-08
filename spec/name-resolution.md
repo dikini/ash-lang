@@ -70,6 +70,11 @@ available through qualified occurrences such as `List.map`, `List.Option`,
 qualified occurrence must use an alias bound by an import in the same module. A
 complete import is private and selects no implementation facts.
 
+Hook and registration targets use these same effect names and defining
+identities, including through renaming and public re-export. There is no
+separate hook namespace or compiler-owned hook module. Importing a hook API or
+transformer makes it available but installs no registration.
+
 A targeted name item binds only the selected public spelling as an unqualified
 name. An `as` clause changes the local spelling without changing the imported
 identity. One name item considers the term namespace, the shared
@@ -682,6 +687,14 @@ acquisition's identity and handle binders then enter scope together for its
 body block and may shadow earlier names. Neither binder is visible in its own
 initializer or after the resource expression. Closing the body restores the
 preceding scopes. The handle is an ordinary term binder, not a release owner.
+
+The target of `hook` or `register` resolves as an exact effect instance in the
+preceding type scope. A registration's transformer resolves in the preceding
+term and type scopes, before its body. Resolution retains the generated
+handler's compiler-owned identity and the lexical registration-owner relation;
+neither form introduces a source-visible term or type binder. Their body blocks retain
+the surrounding clause's resume scope. A transformer function is an ordinary
+function and cannot capture that clause's resume capability.
 
 Each local `with` declaration receives its own `LexicalEvidenceId` and hidden
 method binders when resolution reaches it. It creates no source-visible term

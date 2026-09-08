@@ -623,6 +623,32 @@ impl Drop for EffectInstance {
     }
 }
 
+pub(crate) fn clone_effect_instance_with_budget(
+    instance: &EffectInstance,
+    budget: &mut TypeWorkBudget,
+) -> Result<EffectInstance, ()> {
+    budget.charge(instance.arguments().len())?;
+    let mut arguments = Vec::new();
+    arguments
+        .try_reserve_exact(instance.arguments().len())
+        .map_err(|_| ())?;
+    for argument in instance.arguments() {
+        arguments.push(IterativeTypeOwner::new(clone_type_with_budget(
+            argument, budget,
+        )?));
+    }
+    budget.charge(instance.arguments().len())?;
+    let mut retained = Vec::new();
+    retained
+        .try_reserve_exact(instance.arguments().len())
+        .map_err(|_| ())?;
+    retained.extend(arguments.into_iter().map(IterativeTypeOwner::into_inner));
+    Ok(EffectInstance::new(
+        instance.effect(),
+        retained.into_boxed_slice(),
+    ))
+}
+
 /// One effect-row tail and the exact instances known absent from it.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct EffectRowTail {

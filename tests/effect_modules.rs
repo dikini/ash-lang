@@ -84,6 +84,39 @@ fn try_check_graph(graph: &ModuleGraph) -> Result<Vec<CheckedModule>, ash::elabo
 }
 
 #[test]
+fn registration_factory_dependencies_survive_opaque_facade_exports() {
+    let tree = ModuleTree::create();
+    tree.write("api.ash", "pub effect Adjust {\npublish : (Unit -> Int) -> (Unit -> Int)\n}\npub opaque type Box<A> = Hidden(A)\npub pack<A> : A -> Box<A>\npack value = Hidden value\npub unpack<A> : Box<A> -> A\nunpack (Hidden value) = value\npub make : (Unit -> Int) -> ((Unit -> Int) -> (Unit -> Int))\nmake saved = fn(previous) {\nsaved\n}\n");
+    tree.write(
+        "facade.ash",
+        "pub import api (Adjust, make, Box, pack, unpack)\n",
+    );
+    for (result, accepted) in [("restored ()", true), ("restored", false)] {
+        let output = if accepted { "Int" } else { "(Unit -> Int)" };
+        let entry = tree.write("entry.ash", &format!("import @builtin.cell as Cell\nimport facade (Adjust, make, pack, unpack)\nconstant : Unit -> Int\nconstant ignored = 1\nmain : Unit -> {output}\nmain () = resource cell<R> c = 42 {{\nlet saved : Unit -> Int = fn(ignored) {{\nlet held = c\n42\n}}\nhook Adjust {{\nlet callback = unpack (pack (make saved))\nlet restored = register Adjust callback {{\nperform Adjust.publish constant\n}}\n{result}\n}}\n}}\n"));
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let result = try_check_graph(&graph);
+        if accepted {
+            result.unwrap();
+        } else {
+            assert!(format!("{:?}", result.unwrap_err()).contains("ResourceEscape"));
+        }
+    }
+}
+
+#[test]
+fn imported_registration_retains_unused_completion_owner() {
+    let tree = ModuleTree::create();
+    tree.write("helper.ash", "pub effect Adjust {\npublish : Int -> Int\n}\npub effect Stop {\nstop : Unit -> Unit\n}\nidentity : Int -> Int\nidentity value = value\npub subscribe : (Unit -> Unit ! {Stop}) -> Unit ! {Adjust, Stop}\nsubscribe action = register Adjust identity {\naction ()\n}\n");
+    let entry = tree.write("entry.ash", "import helper (Adjust, Stop, subscribe)\naction : Unit -> Unit ! {Stop}\naction ignored = perform Stop.stop ()\nmain : Unit -> Unit\nmain () = handle (hook Adjust {\nsubscribe action\n}) with Stop {\nstop ignored => discard\n}\n");
+    let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+    assert!(
+        matches!(try_check_graph(&graph), Err(ash::elaborate::TypeError::Source(error))
+        if error.reason == ash::elaborate::TypeReason::DiscardUnsafe)
+    );
+}
+
+#[test]
 fn imported_handlers_are_selected_after_type_specialization() {
     let tree = ModuleTree::create();
     tree.write("helper.ash", concat!(

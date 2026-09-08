@@ -582,7 +582,7 @@ its surrounding control intact, and returns unit at the discard expression:
 ```sequent
 E-Discard :=
   split_owner(continuation, handler, owner) = clause_prefix, live(captured), outer
-  captured contains no other live clause capability or acquired resource scope
+  captured contains no other live clause capability, acquired cell or registration owner
   remaining = clause_prefix ++ CLAUSE(handler, owner, consumed) :: outer
   ===>
   CONFIG(heap, environment, discard(handler, owner), continuation) -> CONFIG(heap, environment, (), remaining)
@@ -686,6 +686,77 @@ divergence, and no abort, destructor callback, cancellation or foreign cleanup
 path is added. Resource-free Pure execution allocates no resource registry,
 resource frame or live cell.
 
+## Synchronous hook execution
+
+`hook H { body }` enters an exact identity handler for the qualifying hook API.
+Its `publish` clause resumes with the incoming payload unchanged. An inner root
+for exactly `H` cuts off the surrounding chain until that root returns; other
+instances retain their existing interpretation.
+
+`register H transformer { body }` evaluates `transformer` exactly once in the
+preceding context. Successful preparation acquires a fresh registration
+activation and enters its body. A non-interpreting owner retains the callback
+outside the generated exact handler. The activation is distinct on every
+successful execution, including overlapping executions of one source site.
+It is not a source value or a resource identity supplied as an effect argument.
+
+The generated handler uses the ordinary request and completion rules. Its
+clause forwards the incoming payload to the older chain, applies the saved
+callback to the returned payload by ordinary function application, and resumes
+with that result. For outer registration A and inner registration B,
+publication computes `B(A(payload))`. Each repeated registration participates
+separately. The body's result is returned unchanged after its registration
+is removed normally; the result need not have the hook's payload type.
+
+Selecting B captures its handler and publisher-side control, while B's owner
+remains outside that capture. Its callback therefore runs under handlers
+surrounding its registration, not handlers installed only around publication.
+Its saved lexical term, type and row environment remains ordinary closure
+state. A nearer exact source handler can intercept publication under the
+existing rules; hook syntax gives no sealed interpretation authority.
+
+A publication inside B's callback sees the then-active older prefix, not B or
+younger registrations held in captures. A temporary registration inside that
+callback affects publications only in its own body. A nested root cuts off
+the older prefix for its exact target. Neither operation inserts callbacks into
+the original publication's pending sequence, replays a completed prefix or
+reevaluates an initializer. Explicit recursive calls may still diverge.
+
+Forwarding or an outward callback request can move younger registration owners,
+their pending callbacks and cells into captured control. Resume restores those
+same owners and activation keys in order, without reacquisition or duplication.
+Consumed clause boundaries may remain below restored handlers while their
+remaining clause computation completes. Registration ownership therefore does
+not require the owner and generated handler to remain adjacent.
+
+Normal scope completion removes its callback entry and releases registration
+capacity exactly once, inner before outer. An external ordinary copy of the
+callback remains callable but retains no registration authority. A closure
+containing a request to a static hook identity uses the chain active when that
+closure is called, not the chain present when it was created.
+
+Live-registration capacity counts owners in both active and captured control.
+Capture and resume do not change that count; normal release makes capacity
+reusable. Acquisition checks capacity and prepares all fallible state before
+publishing an activation. Stale or duplicated non-owning activation facts are
+rejected before invocation or mutation. The machine moves, rather than copies,
+owning registration frames.
+
+Checked discard cannot abandon a registration owner or bypass required
+completion outside its immediate capture. Subscriber-local discard remains
+valid when all surrounding owners and pending resumes still complete. Internal
+work, allocation or capacity failure disposes registrations, cells, environments
+and captured control iteratively. It runs no source cleanup or destructor
+callback and does not roll back earlier callback effects. Divergence promises
+no eventual deregistration.
+
+Publication over N participating registrations performs N ordinary callback
+applications and their forwarding/resume steps, in addition to handler search
+and callback work. Added scans and retained relationships charge the existing
+evaluator work ledger. There is no machine-global registry, copied whole-chain
+snapshot, priority sort or second callback evaluator. Hook-free Pure execution
+allocates no registration owner or live-registration storage.
+
 ## Observation
 
 Successful evaluation of the generated entry application retains the heap
@@ -697,7 +768,8 @@ the active rendering path renders as `<cycle>`. Removing a location from the
 active path after its subtree means shared acyclic data renders in full at each
 occurrence. Function values render as `<function>`.
 
-Successful observation retains no live resource scope or captured continuation.
+Successful observation retains no live resource scope, registration owner or
+captured continuation.
 The observed heap may retain copied values and unused non-owning handle
 entries, but owns no released cell payload.
 
@@ -710,7 +782,7 @@ nominal-registry lookup and adds no special newtype value case.
 
 Evaluation reports uninitialized access, alias loops, invalid locations, an
 impossible complete-pattern failure, malformed effect control, and captured-
-control or live-cell capacity exhaustion as structured internal runtime failures. They are
+control, live-cell or live-registration capacity exhaustion as structured internal runtime failures. They are
 not source-language error outcomes.
 
 The executable test `dynamic_cyclic_data_observation_is_finite` checks guarded

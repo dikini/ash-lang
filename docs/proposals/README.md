@@ -23,7 +23,4 @@ No proposed change is currently awaiting a decision.
 
 ## Accepted changes
 
-- [CP-0018: Synchronous Typed Hooks](CP-0018-synchronous-typed-hooks.md) —
-  accepted transforming chains over exact effect APIs, scoped registration,
-  explicit handler placement and checked normal-exit deregistration.
-  Implementation authorization and an active task remain pending.
+No accepted change is awaiting implementation.
