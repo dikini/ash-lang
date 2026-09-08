@@ -143,6 +143,7 @@ fn structural_weight(node: &ConcreteNode) -> usize {
     match node.kind {
         NodeKind::Block
         | NodeKind::RegistrationExpression
+        | NodeKind::CleanupExpression
         | NodeKind::FunctionExpression
         | NodeKind::EqualityExpression
         | NodeKind::AdditiveExpression
@@ -654,6 +655,11 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             shape.node(NodeKind::PrimaryExpression)?;
             shape.node(NodeKind::Block)?;
         }
+        NodeKind::CleanupExpression => {
+            shape.token(&TokenKind::Cleanup)?;
+            shape.expression()?;
+            shape.node(NodeKind::Block)?;
+        }
         NodeKind::PerformExpression => {
             shape.token(&TokenKind::Perform)?;
             shape.node(NodeKind::OperationReference)?;
@@ -693,6 +699,8 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                 shape.node(NodeKind::HookExpression)?;
             } else if shape.peek_node_is(NodeKind::RegistrationExpression) {
                 shape.node(NodeKind::RegistrationExpression)?;
+            } else if shape.peek_node_is(NodeKind::CleanupExpression) {
+                shape.node(NodeKind::CleanupExpression)?;
             } else if shape.peek_node_is(NodeKind::QualifiedName) {
                 shape.node(NodeKind::QualifiedName)?;
             } else {
@@ -1791,6 +1799,20 @@ fn project_expression(
                         NodeKind::PrimaryExpression,
                     )?));
                 }
+                NodeKind::CleanupExpression => {
+                    let mut children = child_nodes(node);
+                    let action = children.next().ok_or(ProjectionError::MalformedTree(
+                        InternalReason::UnexpectedShape,
+                    ))?;
+                    let body = children.next().ok_or(ProjectionError::MalformedTree(
+                        InternalReason::UnexpectedShape,
+                    ))?;
+                    tasks.push(ExpressionTask::FinishCleanup(node_span(
+                        source, node, tokens,
+                    )?));
+                    tasks.push(ExpressionTask::Visit(body));
+                    tasks.push(ExpressionTask::Visit(action));
+                }
                 NodeKind::HookExpression | NodeKind::RegistrationExpression => {
                     let effect = project_effect_instance(
                         source,
@@ -1877,6 +1899,10 @@ fn project_expression(
                         optional_child_of_kind(node, NodeKind::RegistrationExpression)?
                     {
                         tasks.push(ExpressionTask::Visit(registration));
+                    } else if let Some(cleanup) =
+                        optional_child_of_kind(node, NodeKind::CleanupExpression)?
+                    {
+                        tasks.push(ExpressionTask::Visit(cleanup));
                     } else if let Some(name) =
                         optional_child_of_kind(node, NodeKind::QualifiedName)?
                     {
@@ -2030,6 +2056,19 @@ fn project_expression(
                 projected.push(SurfaceExpr {
                     kind: SurfaceExprKind::Hook(Box::new(crate::surface::SurfaceHookExpr {
                         effect,
+                        body,
+                    })),
+                    span,
+                });
+            }
+            ExpressionTask::FinishCleanup(span) => {
+                let (action, body) = take_expression_pair(&mut projected)?;
+                let SurfaceExprKind::Block(body) = body.kind else {
+                    return malformed(InternalReason::UnexpectedShape);
+                };
+                projected.push(SurfaceExpr {
+                    kind: SurfaceExprKind::Cleanup(Box::new(crate::surface::SurfaceCleanupExpr {
+                        action,
                         body,
                     })),
                     span,
@@ -2223,6 +2262,7 @@ enum ExpressionTask<'a> {
         span: Span,
     },
     FinishResume(Span),
+    FinishCleanup(Span),
     FinishResource {
         identity: SurfaceName,
         handle: SurfaceName,
@@ -3116,6 +3156,7 @@ const fn is_expression_kind(kind: NodeKind) -> bool {
             | NodeKind::ResourceExpression
             | NodeKind::HookExpression
             | NodeKind::RegistrationExpression
+            | NodeKind::CleanupExpression
             | NodeKind::PerformExpression
             | NodeKind::TupleExpression
             | NodeKind::EqualityExpression
@@ -3249,6 +3290,27 @@ mod tests {
             | ConcreteElement::Missing { .. }
             | ConcreteElement::Error(_) => None,
         })
+    }
+
+    #[test]
+    fn cleanup_projection_rejects_missing_duplicate_and_reordered_parts() {
+        for mutation in 0..3 {
+            let (source, mut tree) = parsed("cleanup action {\n42\n}");
+            let root = tree.root.as_mut().expect("parsed root");
+            let cleanup =
+                find_node_mut(root, NodeKind::CleanupExpression).expect("cleanup expression");
+            // The checked shape is exactly keyword, action expression, body block.
+            match mutation {
+                0 => {
+                    cleanup.children.remove(1);
+                }
+                1 => {
+                    cleanup.children.push(cleanup.children[1].clone());
+                }
+                _ => cleanup.children.swap(1, 2),
+            }
+            assert!(project_module(&source, &tree).is_err());
+        }
     }
 
     #[test]

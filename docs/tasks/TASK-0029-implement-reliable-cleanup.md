@@ -42,8 +42,13 @@ push, tag or merge main.
 
 - Authorization recorded; feature checkout moved from the clean integration
   checkout, preserving its ignored build cache and integration ref.
-- Fresh full baseline verification is running before product/test edits.
-- Implementation plan prepared; no product increment is complete yet.
+- Fresh full baseline verification passed before product/test edits: 2,470
+  top-level tests plus six subprocess rechecks, zero failures, successful
+  rustdoc and full `cargo xtask verify` exit 0.
+- Syntax increment passed semantic and Rust/resource reviews, 1,235 focused
+  top-level tests plus three subprocess rechecks, strict Clippy and formatting.
+  The plan records exact depth and small-stack evidence. Resolution fails
+  closed pending typed support; full CP-0019 implementation remains open.
 
 ## Verification
 

@@ -9170,6 +9170,13 @@ impl Resolver {
         expressions: &mut ResolvedExpressionBuffer,
     ) -> Result<(), ResolveError> {
         match &expression.kind {
+            SurfaceExprKind::Cleanup(_) => {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    expression.span,
+                    "cleanup resolution is not implemented",
+                ));
+            }
             SurfaceExprKind::Registration(registration) => {
                 let effect = self.resolve_effect_instance_parts(
                     &registration.effect.effect,

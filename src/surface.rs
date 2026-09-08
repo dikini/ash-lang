@@ -387,6 +387,8 @@ pub enum SurfaceExprKind {
     Hook(Box<SurfaceHookExpr>),
     /// A scoped transformer, pending hook API and lifetime checking.
     Registration(Box<SurfaceRegistrationExpr>),
+    /// A scoped action, pending cleanup type and lifetime checking.
+    Cleanup(Box<SurfaceCleanupExpr>),
     /// Nullary consumption of the nearest clause's captured continuation.
     Discard,
 }
@@ -421,6 +423,15 @@ pub struct SurfaceRegistrationExpr {
     /// The primary transformer evaluated in the preceding context.
     pub transformer: SurfaceExpr,
     /// The block executed with the registration active.
+    pub body: SurfaceBlock,
+}
+
+/// Source ownership of one cleanup invocation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceCleanupExpr {
+    /// The action evaluated in the preceding context.
+    pub action: SurfaceExpr,
+    /// The block executed with the cleanup obligation active.
     pub body: SurfaceBlock,
 }
 

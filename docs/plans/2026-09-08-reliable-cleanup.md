@@ -29,8 +29,8 @@ mandatory; intermediate focused gates target changed boundaries.
 
 ## Progress
 
-- [ ] Fresh full baseline gate.
-- [ ] 1. Syntax/projection with explicit fail-closed staging.
+- [x] Fresh full baseline gate.
+- [x] 1. Syntax/projection with explicit fail-closed staging.
 - [ ] 2. Typed, authenticated cleanup scopes and normal execution.
 - [ ] 3. Owned abandonment, cleanup rows and interpreter compatibility.
 - [ ] 4. Full interaction/resource corpus and specification.
@@ -46,8 +46,9 @@ iterative projection, without a target-effect field. Parse the action with the
 full expression entry point, as CP-0019 requires, not registration's narrower
 primary initializer. The following block belongs to the cleanup body.
 
-1. Add a real parse/projection witness for `cleanup (fn(ignored) { () }) { 42 }`;
-   run `CARGO_INCREMENTAL=0 cargo test --test cleanup_syntax` and retain RED.
+1. Add a real parse/projection witness for an anonymous unit action and body
+   returning `42`, using the existing mandatory block line ends; run
+   `CARGO_INCREMENTAL=0 cargo test --test cleanup_syntax` and retain RED.
 2. Add only the required token, primary grammar, checked CST shape and surface
    action/body carrier. Until typed admission exists, fail closed in resolution
    using the existing stage failure; do not lower cleanup to an ordinary block.
@@ -153,5 +154,17 @@ main dirt, detached pins, remote refs and tags. No main merge/push/tag.
 The first baseline failed because cached architecture-test binaries embedded
 the old checkout path after the worktree move; production sources were unchanged.
 After discarding only Ash package build artifacts with `cargo clean -p ash`,
-the fresh full baseline is running. No baseline success or product completion
-is claimed.
+the fresh full baseline passed: `CARGO_INCREMENTAL=0 cargo xtask verify`, exit 0,
+2,470 top-level tests across 71 suites plus six subprocess rechecks, zero
+failures, and successful rustdoc.
+
+Step 1 passed semantic and Rust/resource review. The corrected multiline
+parse/projection witness failed before implementation and passed afterward.
+The focused library, cleanup, hook, resource-syntax, parser and lexer gate
+passed 1,235 top-level tests plus three subprocess rechecks; parent reran it
+successfully. Strict all-target Clippy, formatting and diff checks passed.
+Exact syntax admission is 64 nested cleanup bodies or 127 nested action
+initializers; the next depth rejects and fresh retries preserve admission.
+Accepted trees project and dispose on a 256 KiB stack. Resolution deliberately
+fails closed until step 2; no cleanup execution or complete CP-0019 admission
+is claimed by this syntax checkpoint.

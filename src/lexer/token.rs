@@ -56,6 +56,8 @@ pub enum TokenKind {
     Hook,
     /// The `register` reserved word.
     Register,
+    /// The `cleanup` reserved word.
+    Cleanup,
     /// The `discard` reserved word.
     Discard,
     /// The `import` reserved word.
