@@ -582,7 +582,7 @@ its surrounding control intact, and returns unit at the discard expression:
 ```sequent
 E-Discard :=
   split_owner(continuation, handler, owner) = clause_prefix, live(captured), outer
-  captured contains no other live clause capability, acquired cell or registration owner
+  captured contains no other live clause capability, acquired cell, registration owner or armed/running cleanup obligation
   remaining = clause_prefix ++ CLAUSE(handler, owner, consumed) :: outer
   ===>
   CONFIG(heap, environment, discard(handler, owner), continuation) -> CONFIG(heap, environment, (), remaining)
@@ -757,6 +757,32 @@ evaluator work ledger. There is no machine-global registry, copied whole-chain
 snapshot, priority sort or second callback evaluator. Hook-free Pure execution
 allocates no registration owner or live-registration storage.
 
+## Scoped cleanup actions
+
+A cleanup expression evaluates its action once in the preceding environment.
+Only after this initialization and fallible acquisition preparation succeed
+does it acquire an invocation obligation and enter its body. Abandonment before
+that acquisition owns no invocation of the action. Copying the ordinary callable
+does not acquire another obligation.
+
+Normal completion saves the body value and invokes the retained action with
+`()`, using ordinary function application in the same evaluator. The action's
+`Unit` result is ignored; its completion returns the saved body value unchanged.
+An unused or pure body does not remove the acquired obligation. Nested actions
+complete in structural innermost-to-outermost order, while still-enclosing cell
+and registration owners remain available until their own closing positions.
+
+Capture and resume transfer the owner without invoking or duplicating its
+action. Starting an action makes it ineligible for another invocation, but
+retains its unfinished completion. Outward requests may capture and resume
+this running state; they may not abandon it. Actions may acquire and complete
+nested scopes through the same rules.
+
+An invocation attempt is not a proof of termination or successful native
+release. Internal exhaustion or termination provides no source-cleanup
+guarantee. Host teardown remains iterative, does not replay completed actions
+and does not roll back effects already performed.
+
 ## Observation
 
 Successful evaluation of the generated entry application retains the heap
@@ -768,8 +794,8 @@ the active rendering path renders as `<cycle>`. Removing a location from the
 active path after its subtree means shared acyclic data renders in full at each
 occurrence. Function values render as `<function>`.
 
-Successful observation retains no live resource scope, registration owner or
-captured continuation.
+Successful observation retains no live resource scope, registration owner,
+cleanup obligation or captured continuation.
 The observed heap may retain copied values and unused non-owning handle
 entries, but owns no released cell payload.
 

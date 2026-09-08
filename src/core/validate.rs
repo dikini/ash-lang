@@ -7881,6 +7881,50 @@ struct EffectClauseContract {
 }
 
 impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperationFamily> {
+    fn validate_cleanup_owner(
+        &self,
+        id: NodeId,
+        node: &StoredNode<super::effect::EffectOperationFamily>,
+        scope: &super::effect::CleanupScopeNode,
+    ) -> Result<(), ValidationError> {
+        use super::effect::EffectExprKind;
+        let invalid = || ValidationError::new(ValidationReason::Handler, Some(id));
+        self.charge_type_work(4)?;
+        let action = self.node(scope.action)?;
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(application))) =
+            &action.kind
+        else {
+            return Err(invalid());
+        };
+        let function = self.node(application.function())?;
+        let argument = self.node(application.argument())?;
+        let EffectExprKind::Pure(PureExprKind::Variable(variable)) = &function.kind else {
+            return Err(invalid());
+        };
+        let Some(signature) = function.ty.function_view() else {
+            return Err(invalid());
+        };
+        let body = self.node(scope.body)?;
+        let effects = self.union_effect_rows_charged(&body.effects, &action.effects, id)?;
+        if variable.binder() != scope.callback
+            || !matches!(
+                &argument.kind,
+                EffectExprKind::Pure(PureExprKind::Value(PureValue::Unit(_)))
+            )
+            || !self.same_type_charged(signature.domain(), &Type::Unit)?
+            || !self.same_type_charged(signature.value(), &Type::Unit)?
+            || !self.same_type_charged(&node.ty, &body.ty)?
+            || !self.same_effect_row_charged(&node.effects, &effects, id)?
+            || node.origin.as_ref().map(Origin::primary_span) != Some(scope.span)
+            || [action, function, argument].iter().any(|child| {
+                child.origin.as_ref().map(Origin::primary_span) != Some(scope.action_span)
+            })
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
     fn validate_registration_owner(
         &self,
         id: NodeId,
@@ -8059,7 +8103,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         use super::effect::{EffectExprKind, EffectOperation};
         self.charge_type_work(self.program.nodes.len())?;
         if !self.program.nodes.iter().any(|node| match &node.kind {
-            EffectExprKind::Operation(EffectOperation::Registration(_)) => true,
+            EffectExprKind::Operation(
+                EffectOperation::Registration(_) | EffectOperation::Cleanup(_),
+            ) => true,
             EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
                 handler.hook_registration.is_some()
             }
@@ -8098,6 +8144,23 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             let id = node_id(self.program.arena, index)?;
             let invalid = || ValidationError::new(ValidationReason::Handler, Some(id));
             match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
+                    let (count, parent) = parents[index];
+                    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                        binding,
+                    ))) = &self.node(parent.ok_or_else(invalid)?)?.kind
+                    else {
+                        return Err(invalid());
+                    };
+                    if count != 1
+                        || binding.body() != id
+                        || binding.binder().id() != scope.callback
+                        || binding.binder().origin().primary_span() != scope.action_span
+                        || parents[scope.action.index().map_err(|_| invalid())?].0 != 1
+                    {
+                        return Err(invalid());
+                    }
+                }
                 EffectExprKind::Operation(EffectOperation::Handler(handler))
                     if handler.hook_registration.is_some() =>
                 {
@@ -8187,6 +8250,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 &node.kind,
                 super::effect::EffectExprKind::Operation(
                     super::effect::EffectOperation::Resource(_)
+                        | super::effect::EffectOperation::Cleanup(_)
                         | super::effect::EffectOperation::Registration(_)
                 )
             ) {
@@ -8565,6 +8629,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             self.validate_effect_type_rows(&node.ty, type_binders, id)?;
             self.validate_effect_row(&node.effects, type_binders, id)?;
             match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
+                    self.validate_cleanup_owner(id, node, scope)?
+                }
                 EffectExprKind::Operation(EffectOperation::Registration(scope)) => {
                     self.validate_registration_owner(id, node, scope)?;
                 }
@@ -9065,6 +9132,12 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                                 id,
                             )?
                         }
+                        EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => self
+                            .union_effect_rows_charged(
+                                child_row(scope.body)?,
+                                child_row(scope.action)?,
+                                id,
+                            )?,
                         EffectExprKind::Operation(EffectOperation::Registration(scope)) => self
                             .union_effect_rows_charged(
                                 &EffectRow::empty(),
@@ -9444,6 +9517,185 @@ mod tests {
         relations: &[(ModuleId, SourceId)],
     ) -> super::super::effect::ValidatedEffectProgram {
         super::super::validate_effect_modules(core, sources, relations).unwrap()
+    }
+
+    #[test]
+    fn cleanup_contract_rejects_forgery_before_and_after_both_transforms() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for pass in 0..3 {
+            for corruption in 0..6 {
+                let (mut core, sources, relations) = hook_source_fixture(
+                    "effect Report {\nreport : Int -> Unit\n}\nmain : Unit -> Int\nmain () = handle (cleanup fn(ignored) {\nperform Report.report 7\n} {\n40 + 2\n}) with Report {\nreport value => resume ()\n}\n",
+                );
+                let borrowed = sources.iter().collect::<Vec<_>>();
+                if pass > 0 {
+                    let valid =
+                        super::super::validate_effect_modules(core, &borrowed, &relations).unwrap();
+                    assert_eq!(
+                        crate::eval::evaluate_effect(&valid)
+                            .unwrap()
+                            .value
+                            .to_string(),
+                        "42"
+                    );
+                    core = if pass == 1 {
+                        super::super::transform::identity_effect_traversal(&valid)
+                    } else {
+                        super::super::transform::fold_effect_literal_primitives(&valid)
+                    }
+                    .unwrap();
+                }
+                let node = core
+                    .nodes
+                    .iter_mut()
+                    .find(|node| {
+                        matches!(
+                            node.kind,
+                            EffectExprKind::Operation(EffectOperation::Cleanup(_))
+                        )
+                    })
+                    .unwrap();
+                let EffectExprKind::Operation(EffectOperation::Cleanup(scope)) = &mut node.kind
+                else {
+                    unreachable!()
+                };
+                match corruption {
+                    0 => scope.callback = BinderId::generated(999),
+                    1 => std::mem::swap(&mut scope.body, &mut scope.action),
+                    2 => scope.action_span = scope.span,
+                    3 => scope.span = scope.action_span,
+                    4 => node.effects = EffectRow::empty(),
+                    _ => node.ty = Type::Unit,
+                }
+                assert!(
+                    super::super::validate_effect_modules(core, &borrowed, &relations).is_err(),
+                    "pass {pass}, corruption {corruption}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cleanup_imported_generic_open_row_factory_preserves_both_transforms() {
+        prove_registration_transforms(hook_modules_fixture(
+            "import actions (Report, make)\nmain : Unit -> Int\nmain () = handle (cleanup (make ()) {\n42\n}) with Report {\nreport value => resume ()\n}\n",
+            &[(
+                "actions.ash",
+                "pub effect Report {\nreport : Int -> Unit\n}\npub make<A> : A -> (Unit -> Unit ! {Report})\nmake value = fn(ignored) {\nperform Report.report 7\n}\n",
+            )],
+        ));
+        prove_registration_transforms(hook_source_fixture(
+            "effect Report {\nreport : Int -> Unit\n}\nscoped<E : EffectRow> : (Unit -> Unit ! {| E}) -> Int ! {| E}\nscoped action = cleanup action {\n42\n}\nreport : Unit -> Unit ! {Report}\nreport ignored = perform Report.report 7\nmain : Unit -> Int\nmain () = handle (scoped report) with Report {\nreport value => resume ()\n}\n",
+        ));
+    }
+
+    #[test]
+    fn cleanup_owner_validation_has_an_exact_budget_and_fresh_retry() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (core, sources, relations) = hook_source_fixture(
+            "main : Unit -> Int\nmain () = cleanup fn(ignored) {\n()\n} {\n42\n}\n",
+        );
+        let borrowed = sources.iter().collect::<Vec<_>>();
+        let (index, node) = core
+            .nodes
+            .iter()
+            .enumerate()
+            .find(|(_, node)| {
+                matches!(
+                    node.kind,
+                    EffectExprKind::Operation(EffectOperation::Cleanup(_))
+                )
+            })
+            .unwrap();
+        let EffectExprKind::Operation(EffectOperation::Cleanup(scope)) = &node.kind else {
+            unreachable!()
+        };
+        let id = super::node_id(core.arena, index).unwrap();
+        let measured = super::Validator::new_modules(&core, &borrowed, &relations).unwrap();
+        let before = measured.type_work.get();
+        measured.validate_cleanup_owner(id, node, scope).unwrap();
+        let exact = measured.type_work.get() - before;
+        assert!(exact > 4);
+        for allowance in [exact - 1, exact, exact] {
+            let validator = super::Validator::new_modules(&core, &borrowed, &relations).unwrap();
+            validator
+                .type_work
+                .set(super::CORE_VALIDATION_TYPE_WORK_LIMIT - allowance);
+            let result = validator.validate_cleanup_owner(id, node, scope);
+            if allowance < exact {
+                assert_eq!(result.unwrap_err().reason(), ValidationReason::Resource);
+            } else {
+                result.unwrap();
+            }
+        }
+        core.discard_iteratively();
+    }
+
+    #[test]
+    fn cleanup_same_typed_callback_substitution_reconstructs_resource_dependencies() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for pass in 0..3 {
+            let (mut core, sources, relations) = hook_source_fixture(
+                "import @builtin.cell as Cell\neffect Report {\nreport : (Unit -> Int) -> Unit\n}\nconstant : Unit -> Int\nconstant ignored = 42\nmain : Unit -> Int\nmain () = handle (resource cell<R> c = 42 {\nlet dangerous : Unit -> Unit ! {Report} = fn(ignored) {\nlet saved : Unit -> Int = fn(ignored) {\nlet held = c\n42\n}\nperform Report.report saved\n}\nlet safe : Unit -> Unit ! {Report} = fn(ignored) {\nperform Report.report constant\n}\ncleanup safe {\n42\n}\n}) with Report {\nreport error => resume ()\n}\n",
+            );
+            let borrowed = sources.iter().collect::<Vec<_>>();
+            if pass > 0 {
+                let valid =
+                    super::super::validate_effect_modules(core, &borrowed, &relations).unwrap();
+                core = if pass == 1 {
+                    super::super::transform::identity_effect_traversal(&valid)
+                } else {
+                    super::super::transform::fold_effect_literal_primitives(&valid)
+                }
+                .unwrap();
+            }
+            let mut callback = None;
+            let mut dangerous = None;
+            for node in &core.nodes {
+                match &node.kind {
+                    EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
+                        callback = Some(scope.callback)
+                    }
+                    EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                        binding,
+                    ))) => {
+                        let span = binding.binder().origin().primary_span();
+                        let source = sources
+                            .iter()
+                            .find(|source| source.id() == span.source())
+                            .unwrap();
+                        if &source.text()
+                            [span.range().start() as usize..span.range().end() as usize]
+                            == "dangerous"
+                        {
+                            dangerous = Some(binding.binder().id());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let initializer = core
+                .nodes
+                .iter()
+                .find_map(|node| match &node.kind {
+                    EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                        binding,
+                    ))) if Some(binding.binder().id()) == callback => Some(binding.initializer()),
+                    _ => None,
+                })
+                .unwrap();
+            core.nodes[initializer.index().unwrap()].kind =
+                EffectExprKind::Pure(PureExprKind::Variable(
+                    crate::core::variable::VariableNode::new(dangerous.unwrap()),
+                ));
+            assert_eq!(
+                super::super::validate_effect_modules(core, &borrowed, &relations)
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::ResourceEscape,
+                "pass {pass}"
+            );
+        }
     }
 
     fn prove_registration_transforms(fixture: HookFixture) {

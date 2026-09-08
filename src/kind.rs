@@ -4573,6 +4573,20 @@ fn check_expression_work<'a>(
                 environments.remove_owner_parameter_extension(std::slice::from_ref(identity));
             }
             BodyWork::Expression(expression) => match &expression.kind {
+                ResolvedExprKind::Cleanup(cleanup) => {
+                    push_body_work(
+                        &mut work,
+                        BodyWork::Expression(&cleanup.action),
+                        cleanup.action.span,
+                        budget,
+                    )?;
+                    push_body_work(
+                        &mut work,
+                        BodyWork::Expression(&cleanup.body),
+                        cleanup.body.span,
+                        budget,
+                    )?;
+                }
                 ResolvedExprKind::Resource(resource) => {
                     push_body_work(
                         &mut work,

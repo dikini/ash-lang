@@ -696,6 +696,12 @@ neither form introduces a source-visible term or type binder. Their body blocks 
 the surrounding clause's resume scope. A transformer function is an ordinary
 function and cannot capture that clause's resume capability.
 
+A cleanup action resolves in the preceding term and type scopes, before its
+body block. Resolution retains its hidden callback binding and lexical cleanup
+owner relation; neither introduces a source-visible binder or namespace. The
+body retains the surrounding clause's resume scope. An action function remains
+an ordinary function and cannot capture the enclosing clause's resume capability.
+
 Each local `with` declaration receives its own `LexicalEvidenceId` and hidden
 method binders when resolution reaches it. It creates no source-visible term
 binding. Its method heads identify interface methods; method bodies resolve

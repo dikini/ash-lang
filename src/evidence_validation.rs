@@ -4751,6 +4751,11 @@ fn collect_method_evidence_expression_occurrences(
                 pending.push(&acquisition.body);
                 pending.push(&acquisition.initializer);
             }
+            ResolvedExprKind::Cleanup(cleanup) => {
+                reserve_expressions(&mut pending, 2, constraint_work, expression.span)?;
+                pending.push(&cleanup.body);
+                pending.push(&cleanup.action);
+            }
             ResolvedExprKind::Perform(request) => pending.push(&request.operand),
             ResolvedExprKind::Handle(handler) => {
                 let child_count = handler.clauses.len().saturating_add(1);
@@ -5732,6 +5737,12 @@ fn validate_pending_expressions<'a, 'body>(
                 )?;
                 pending.push(&acquisition.initializer);
                 resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;
+            }
+            ResolvedExprKind::Cleanup(cleanup) => {
+                reserve_expressions(pending, 2, budget, expression.span)?;
+                resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;
+                pending.push(&cleanup.body);
+                pending.push(&cleanup.action);
             }
             ResolvedExprKind::Perform(request) => pending.push(request.operand.as_ref()),
             ResolvedExprKind::Handle(handler) => {

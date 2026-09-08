@@ -45,10 +45,19 @@ push, tag or merge main.
 - Fresh full baseline verification passed before product/test edits: 2,470
   top-level tests plus six subprocess rechecks, zero failures, successful
   rustdoc and full `cargo xtask verify` exit 0.
-- Syntax increment passed semantic and Rust/resource reviews, 1,235 focused
+- Syntax checkpoint `390708e` passed semantic and Rust/resource reviews, 1,235 focused
   top-level tests plus three subprocess rechecks, strict Clippy and formatting.
-  The plan records exact depth and small-stack evidence. Resolution fails
-  closed pending typed support; full CP-0019 implementation remains open.
+  The plan records exact depth and small-stack evidence. That checkpoint left
+  resolution fail-closed pending typed support; full CP-0019 implementation
+  remains open.
+- Typed ownership and normal execution passed semantic and Rust/resource reviews.
+  Final focused regressions passed 1,496 top-level tests plus seven subprocess
+  rechecks; all 32 architecture tests, strict all-target Clippy, formatting and
+  diff checks passed. The retained small-stack bound is unchanged. The plan
+  records the contextual-row and stack corrections.
+- Owned abandonment, effectful discard rows and closing-position interpreter
+  checks are next. Armed abandonment remains temporarily rejected; this normal
+  execution checkpoint does not complete CP-0019.
 
 ## Verification
 
@@ -75,6 +84,10 @@ invocation attempt and successful release remain explicit acceptance boundaries.
 
 ## Deviations
 
-None. The 11-unit milestone weight is a relative forecast, not consumed tokens
+Core forgery and runtime preflight/failure probes are colocated with their
+owning modules rather than duplicated in new integration files; public
+end-to-end cleanup tests remain separate. Required evidence is unchanged.
+
+The 11-unit milestone weight is a relative forecast, not consumed tokens
 or a numeric execution allowance. Return semantic gaps to CP-0019 rather than
 substituting an easier final contract.

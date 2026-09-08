@@ -31,7 +31,7 @@ mandatory; intermediate focused gates target changed boundaries.
 
 - [x] Fresh full baseline gate.
 - [x] 1. Syntax/projection with explicit fail-closed staging.
-- [ ] 2. Typed, authenticated cleanup scopes and normal execution.
+- [x] 2. Typed, authenticated cleanup scopes and normal execution.
 - [ ] 3. Owned abandonment, cleanup rows and interpreter compatibility.
 - [ ] 4. Full interaction/resource corpus and specification.
 - [ ] 5. Final reviews, verification, transition cleanup and local integration.
@@ -65,8 +65,10 @@ primary initializer. The following block belongs to the cleanup body.
 Files: `src/resolved.rs`, `src/resolve.rs`, `src/elaborate.rs`,
 `src/core/effect.rs`, `src/core/validate.rs`, `src/core/transform.rs`,
 `src/core/capture.rs`, `src/core/capture/control.rs`, `src/core/capture/value.rs`,
-`src/eval/machine.rs`; new `tests/cleanup_typing.rs`, `tests/cleanup_core.rs`,
-`tests/cleanup_runtime.rs`. Update `tests/architecture.rs` only for real carriers.
+`src/eval/machine.rs`; new end-to-end `tests/cleanup_typing.rs`. Keep Core forgery
+and runtime preflight/failure tests in their existing owning modules, where they
+can inspect private state; do not duplicate that evidence in separate integration
+test files. Update `tests/architecture.rs` only for real carriers.
 
 1. Retain RED for a cell-backed trace: initializer once, nested actions append
    inner then outer digits, saved body result unchanged. Pair callback mismatch,
@@ -168,3 +170,53 @@ initializers; the next depth rejects and fresh retries preserve admission.
 Accepted trees project and dispose on a 256 KiB stack. Resolution deliberately
 fails closed until step 2; no cleanup execution or complete CP-0019 admission
 is claimed by this syntax checkpoint.
+
+Step 2 began with four failing typing/runtime witnesses at the expected
+`resolve.internal-state` boundary: initializer/close order and saved result,
+callback shape errors, action-local reporting and captured-result escape.
+The lexical, syntax, name-resolution, normal checking/execution and Core-validation
+specification delta is drafted. Typed/runtime wording remains pending this
+increment's verification.
+
+The first normal-execution implementation passed an annotated variant of the
+initializer witness. Parent review rejected that weakening: the original
+block-returned anonymous action must receive cleanup's expected function context,
+as ordinary contextual block/match results do. The original and a contextual
+match action now pass through existing checking with an inferred latent row.
+Ten focused cleanup cases pass, including capture/resume and the distinction
+between safe local discard and skipped armed/running owners. Independent Core,
+owning-resource evidence and reviews remain open before the step 2 checkpoint.
+
+The expanded library gate exposed a retained registration proof's 256 KiB stack
+overflow. Debugger evidence places it in the existing elaboration dispatcher
+during handler lowering, without new recursion or runtime frames. Extracting
+only the three added cleanup branches into phase helpers restored the exact
+`core::validate::tests::registration_pipeline_and_disposal_fit_a_small_stack`
+test: parent and fresh subprocess pass at 24 registrations on 256 KiB. Neither
+the predecessor witness nor its stack bound changed.
+
+Semantic review found one further contextual-row defect: both branch orders of
+a mixed pure/effectful anonymous match action reject with
+`effect.row-union-ambiguous`, while both explicitly annotated controls return
+`42`. A scoped worklist accumulator now joins anonymous-body requirements before
+solving their common contextual row. Both direct orders and annotated controls
+pass, along with named-function invariance and unrelated-body isolation cases.
+All 14 cleanup typing/runtime tests pass and semantic re-review passed.
+The expanded dispatcher again exceeded the unchanged registration proof's
+small-stack bound after this correction; debugger evidence still shows one
+dispatcher frame, not new recursion. Extracting the existing function-completion
+arm into a helper restored that bound. A separate completion task tried during
+diagnosis was removed; pending cleanup progress remains boxed and its completion
+helper takes ownership by value. No test depth, stack or resource limit changed.
+
+Step 2 passed semantic and Rust/resource reviews. Runtime evidence includes
+actual-loop traces for failure after a first cell write and after a completed
+inner action: neither teardown nor failure replays the action or starts the
+outer action. Successful observation also checks that no cleanup owner remains.
+Final post-Clippy regressions passed 1,496 top-level tests plus seven subprocess
+rechecks, including both interface helper suites affected by exhaustive traversal
+updates. The full architecture suite passed all 32 tests; its exact manifest
+recheck passed after the final mechanical edits. Strict all-target Clippy,
+formatting and diff checks passed. The seven specification files describe this
+implemented normal-execution checkpoint; armed abandonment remains deliberately
+rejected until step 3 supplies the accepted full contract.

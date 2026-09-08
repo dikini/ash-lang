@@ -59,6 +59,16 @@ impl TransformFamily for EffectOperationFamily {
         let ty = IterativeTypeOwner::new(builder.clone_type_for_rebuild(&expression.ty)?);
         let effects = builder.clone_effect_row_for_rebuild(expression.effects())?;
         match operation {
+            EffectOperation::Cleanup(scope) => builder.cleanup_scope(
+                super::effect::CleanupScopeNode {
+                    body: remap(remapped, scope.body)?,
+                    action: remap(remapped, scope.action)?,
+                    ..*scope
+                },
+                ty.into_inner(),
+                effects,
+                expression.origin.clone(),
+            ),
             EffectOperation::Registration(scope) => builder.registration_scope(
                 super::effect::RegistrationScopeNode {
                     body: remap(remapped, scope.body)?,

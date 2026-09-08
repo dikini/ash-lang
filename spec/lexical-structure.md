@@ -17,7 +17,7 @@ syntactic position and scope.
 
 The reserved words `fn`, `let`, `rec`, `and`, `type`, `newtype`, `interface`,
 `impl`, `effect`, `perform`, `handle`, `with`, `resume`, `discard`, `resource`,
-`hook`, `register`, `where`,
+`hook`, `register`, `cleanup`, `where`,
 `match`, `import`, `as`, `pub`, `opaque`, `Int`, `Bool`, `Unit`, `true`, and
 `false` cannot be identifiers. The single spelling `_` is the
 wildcard token rather than an ordinary identifier; spellings such as `_tail`

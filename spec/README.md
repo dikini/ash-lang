@@ -111,6 +111,13 @@ nested root starts a separate chain. Normal return removes each registration
 once; capture/resume preserves its owner, and checked discard cannot skip its
 completion. Callback effects and stored resource dependencies remain checked.
 
+`cleanup action { body }` evaluates and retains one `Unit -> Unit` action.
+Normal completion invokes it, then returns the saved body value unchanged.
+Capture/resume transfers the invocation owner; copies of the callable gain no
+cleanup authority. An executing action remains a required completion and cannot
+be discarded. Action effects and stored dependencies remain checked. Internal
+termination or exhaustion provides no source-cleanup guarantee.
+
 The source path selected for execution is the entry module. It declares exactly
 one local, monomorphic, unconstrained `main : Unit -> R`, where `R` is closed.
 Its computation row is empty. After checking every dependency, Ash links the
@@ -153,7 +160,7 @@ effectful expressions with single-use, non-escaping handler continuations.
 
 Beyond the fixed sealed cell provider and acquisition form, the effect kernel
 adds no general provider or resource declarations, first-class registration
-tokens, arbitrary removal or priorities, automatic cleanup,
+tokens, arbitrary removal or priorities, general destructor declarations,
 foreign resources, escaping or multi-shot resume, asynchronous execution, or
 dynamic loading.
 A linked nonempty effect row is a source rejection rather than an

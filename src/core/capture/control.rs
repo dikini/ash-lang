@@ -35,6 +35,11 @@ use crate::{
 
 #[derive(Debug)]
 pub(super) enum Control {
+    Cleanup {
+        body: usize,
+        action: usize,
+        source: Span,
+    },
     Registration {
         body: usize,
         source: Span,
@@ -84,6 +89,11 @@ impl Control {
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
         match self {
+            Self::Cleanup { body, action, .. } => {
+                charge(budget, 2)?;
+                pending.try_reserve(2).map_err(|_| Failure::Resource)?;
+                pending.extend([*body, *action]);
+            }
             Self::Sequence(children) | Self::Choice(children) => {
                 charge(budget, children.len())?;
                 pending
@@ -130,6 +140,15 @@ impl Control {
     ) -> Result<Self, Failure> {
         charge(budget, 1)?;
         Ok(match self {
+            Self::Cleanup {
+                body,
+                action,
+                source,
+            } => Self::Cleanup {
+                body: body + code_offset,
+                action: action + code_offset,
+                source: *source,
+            },
             Self::Registration { body, source } => Self::Registration {
                 body: body + code_offset,
                 source: *source,
@@ -211,7 +230,10 @@ pub(super) fn query_required(
         seen.insert(code);
         if matches!(
             graph.code[code],
-            Control::Discard { .. } | Control::Resource { .. } | Control::Registration { .. }
+            Control::Discard { .. }
+                | Control::Resource { .. }
+                | Control::Registration { .. }
+                | Control::Cleanup { .. }
         ) {
             return Ok(true);
         }
@@ -241,6 +263,7 @@ struct Position {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum Site {
+    Cleanup(usize, bool),
     Registration(usize),
     Next(Position),
     Handler(usize),
@@ -298,6 +321,12 @@ struct Event {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum Frame {
+    Cleanup {
+        code: usize,
+        context: usize,
+        value_context: usize,
+        running: bool,
+    },
     Registration {
         code: usize,
         context: usize,
@@ -338,6 +367,7 @@ impl Frame {
     fn allocation_context(self) -> usize {
         match self {
             Self::Next { value_context, .. }
+            | Self::Cleanup { value_context, .. }
             | Self::Registration { value_context, .. }
             | Self::Handler { value_context, .. }
             | Self::Resource { value_context, .. } => value_context,
@@ -347,6 +377,7 @@ impl Frame {
 
     fn site(self) -> Site {
         match self {
+            Self::Cleanup { code, running, .. } => Site::Cleanup(code, running),
             Self::Next { position, .. } => Site::Next(position),
             Self::Registration { code, .. } => Site::Registration(code),
             Self::Handler { code, .. } => Site::Handler(code),
@@ -739,7 +770,7 @@ impl<'a> Analysis<'a> {
         let has_resource = graph.code.iter().any(|code| {
             matches!(
                 code,
-                Control::Resource { .. } | Control::Registration { .. }
+                Control::Resource { .. } | Control::Registration { .. } | Control::Cleanup { .. }
             )
         });
         let mut types: Vec<&Type> = Vec::new();
@@ -1482,11 +1513,19 @@ impl<'a> Analysis<'a> {
                         }
                     }
                     Control::Handler { body, .. }
+                    | Control::Cleanup { body, .. }
                     | Control::Resource { body, .. }
                     | Control::Registration { body, .. } => {
                         let body = *body;
                         let mut next = state;
-                        let frame = if matches!(self.graph.code[code], Control::Resource { .. }) {
+                        let frame = if matches!(self.graph.code[code], Control::Cleanup { .. }) {
+                            Frame::Cleanup {
+                                code,
+                                context: next.context,
+                                value_context: next.value_context,
+                                running: false,
+                            }
+                        } else if matches!(self.graph.code[code], Control::Resource { .. }) {
                             if !self.focusing {
                                 charge(budget, 1)?;
                                 self.entries.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -1777,6 +1816,32 @@ impl<'a> Analysis<'a> {
                     *value_context = cut.context;
                     cut
                 }
+                Frame::Cleanup {
+                    code,
+                    value_context,
+                    running,
+                    ..
+                } => {
+                    let Control::Cleanup { body, action, .. } = self.graph.code[*code] else {
+                        return Err(Failure::Invalid);
+                    };
+                    let completed = if *running {
+                        std::slice::from_ref(&body)
+                    } else {
+                        &[]
+                    };
+                    let cut = data.restore_cut(
+                        *value_context,
+                        *code,
+                        usize::MAX - 2 - usize::from(*running),
+                        if *running { action } else { body },
+                        completed,
+                        false,
+                        budget,
+                    )?;
+                    *value_context = cut.context;
+                    cut
+                }
                 Frame::Handler {
                     code,
                     value_context,
@@ -1927,6 +1992,35 @@ impl<'a> Analysis<'a> {
             let mut next = state.copy(budget)?;
             next.stack = edge.next;
             match edge.frame {
+                Frame::Cleanup {
+                    code,
+                    context,
+                    value_context,
+                    running,
+                } => {
+                    next.context = context;
+                    next.value_context = value_context;
+                    next.position = if running {
+                        Position { code: 0, next: 0 }
+                    } else {
+                        let Control::Cleanup { action, .. } = self.graph.code[code] else {
+                            return Err(Failure::Invalid);
+                        };
+                        next.push(
+                            Frame::Cleanup {
+                                code,
+                                context,
+                                value_context,
+                                running: true,
+                            },
+                            budget,
+                        )?;
+                        Position {
+                            code: action,
+                            next: 0,
+                        }
+                    };
+                }
                 Frame::Next {
                     position,
                     context,
@@ -1981,8 +2075,14 @@ impl<'a> Analysis<'a> {
                     next.value_context = value_context;
                 }
             }
-            // Popping changes reachability, not the order or contents of edges.
-            Self::enqueue_after_pop(next, state.stack, pending, visited, budget)?;
+            if matches!(edge.frame, Frame::Cleanup { running: false, .. }) {
+                // Starting the action adds a new completion frame, so this is
+                // not the pop-only transition whose heap is already sorted.
+                Self::enqueue(next, pending, visited, budget)?;
+            } else {
+                // Popping changes reachability, not the order or contents of edges.
+                Self::enqueue_after_pop(next, state.stack, pending, visited, budget)?;
+            }
         }
         Ok(())
     }
@@ -2215,6 +2315,7 @@ impl<'a> Analysis<'a> {
                                     consumed: false,
                                     ..
                                 } | Frame::Resource { .. }
+                                    | Frame::Cleanup { .. }
                                     | Frame::Registration { .. }
                             ),
                             true,
@@ -2223,6 +2324,16 @@ impl<'a> Analysis<'a> {
                     budget,
                 )?;
                 if let Some(live) = live.first() {
+                    if let Frame::Cleanup { code, .. } = live.boundary.frame {
+                        let Control::Cleanup { source, .. } = self.graph.code[code] else {
+                            return Err(Failure::Invalid);
+                        };
+                        return Err(self.unsafe_discard(
+                            state.position.code,
+                            event,
+                            Some(CompletionOwner::Cleanup(source)),
+                        ));
+                    }
                     if let Frame::Registration { code, .. } = live.boundary.frame {
                         let Control::Registration { source, .. } = self.graph.code[code] else {
                             return Err(Failure::Invalid);

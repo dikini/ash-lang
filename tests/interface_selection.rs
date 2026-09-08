@@ -229,6 +229,10 @@ fn occurrences_in_expressions(
     let mut occurrences = Vec::new();
     while let Some(expression) = expressions.pop() {
         match &expression.kind {
+            ResolvedExprKind::Cleanup(cleanup) => {
+                expressions.push(&cleanup.action);
+                expressions.push(&cleanup.body);
+            }
             ResolvedExprKind::Occurrence(occurrence) => {
                 if occurrence.term == term {
                     occurrences.push(occurrence);

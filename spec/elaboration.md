@@ -655,6 +655,9 @@ rejects every effect operation. Effect Core validation independently checks:
 - each registration's unique owner, preceding callback binding, callback
   type/row, generated handler, forward–callback–resume order, result relation
   and source origins;
+- each cleanup scope's unique owner, preceding action binding, `Unit -> Unit`
+  callback contract, ordinary invocation, preserved body result, least outward
+  row and source origins;
 - exactly-once structural completion through resume or discard, and barriers
   against escape into functions, recursive members, supplied methods, or nested
   clauses;

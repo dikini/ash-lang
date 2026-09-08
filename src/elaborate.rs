@@ -1937,6 +1937,7 @@ impl CoreLoweringFamily for EffectOperationFamily {
         operation: EffectOperation,
     ) -> Result<NodeId, BuildError> {
         match operation {
+            EffectOperation::Cleanup(scope) => builder.cleanup_scope(scope, ty, effects, origin),
             EffectOperation::Registration(scope) => {
                 builder.registration_scope(scope, ty, effects, origin)
             }
@@ -10563,6 +10564,329 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
+    fn step_function_completion(
+        &mut self,
+        task: ElaborationTask<'_>,
+        context: &mut TypeContext,
+        values: &mut TypedNodeBuffer,
+        tasks: &mut ElaborationTaskBuffer<'_>,
+    ) -> Result<(), TypeError> {
+        match task {
+            ElaborationTask::FinishFunction {
+                direct_binder,
+                pattern_binders,
+                binder,
+                pattern,
+                domain,
+                ty,
+                origin,
+                provenance,
+                contains_newtype,
+                pattern_count,
+                infer_effects,
+                cleanup_completion,
+            } => {
+                let effect_span = origin.primary_span();
+                let origin = OriginOwner::new(origin);
+                let mut pattern = CorePatternOwner::new(pattern);
+                let domain = domain.map(IterativeTypeOwner::new);
+                let mut ty = IterativeTypeOwner::new(ty);
+                let mut body = values.pop().ok_or_else(invalid_state)?;
+                if let Some(binder) = direct_binder
+                    && !context.remove_and_discard(binder)
+                {
+                    return Err(invalid_state());
+                }
+                self.remove_pattern_binders(context, &pattern_binders)?;
+                if let Some(completion) = cleanup_completion {
+                    self.record_cleanup_action_effects(completion, &body.effects, tasks)?;
+                } else if infer_effects && !body.effects.is_empty() {
+                    let effects = self.zonk_effect_row(&body.effects)?;
+                    let zonked = IterativeTypeOwner::new(self.zonk(&ty)?);
+                    let source = zonked.into_inner();
+                    let Type::Function(domain, codomain) = source else {
+                        discard_type_iteratively(source);
+                        return Err(invalid_state());
+                    };
+                    ty.replace(Type::function_computation(
+                        *domain,
+                        ComputationType::new(*codomain, effects),
+                    ));
+                } else if !infer_effects {
+                    let expected_effects = match ty
+                        .function_view()
+                        .and_then(|function| function.effects())
+                    {
+                        Some(effects) => clone_effect_row_with_budget(effects, &mut self.type_work)
+                            .map_err(|()| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?,
+                        None => EffectRow::empty(),
+                    };
+                    let expected_is_inference = expected_effects.tail().is_some_and(|tail| {
+                        matches!(tail.variable(), EffectRowVariable::Inference(_))
+                    });
+                    if expected_is_inference {
+                        self.unify_effect_rows(&expected_effects, &body.effects)
+                            .map_err(|failure| match failure {
+                                UnificationFailure::Resource => {
+                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                                }
+                                UnificationFailure::Infinite => inference_failure(
+                                    TypeReason::AmbiguousEffectRow,
+                                    effect_span,
+                                    "this function would require an infinite latent effect row",
+                                ),
+                                UnificationFailure::Mismatch | UnificationFailure::Invariant => {
+                                    inference_failure(
+                                        TypeReason::AmbiguousEffectRow,
+                                        effect_span,
+                                        "this function body does not match its latent effect row",
+                                    )
+                                }
+                            })?;
+                        let zonked = self.zonk(&ty)?;
+                        ty.replace(zonked);
+                    } else {
+                        let weakened =
+                            self.union_effects(&body.effects, &expected_effects, effect_span)?;
+                        if !self.same_effect_rows(&weakened, &expected_effects)? {
+                            return Err(inference_failure(
+                                TypeReason::AmbiguousEffectRow,
+                                effect_span,
+                                "this function body requests effects outside its declared row",
+                            ));
+                        }
+                    }
+                }
+                if pattern.0.is_some() {
+                    let domain = domain.ok_or_else(invalid_state)?;
+                    let pattern_span = pattern.origin.primary_span();
+                    let mut matrix = CorePatternMatrixBuffer(vec![vec![
+                        pattern.take().ok_or_else(invalid_state)?,
+                    ]]);
+                    if let Some(witness) = missing_witness_for_types_with_budget(
+                        &matrix,
+                        std::slice::from_ref(&domain),
+                        &self.registry,
+                        &mut self.coverage_work,
+                    )? {
+                        return Err(case_error(
+                            TypeReason::RefutableFunctionDomain,
+                            pattern_span,
+                            "this function pattern is not exhaustive",
+                            Some(display_witness(&witness, &self.registry)),
+                        ));
+                    }
+                    let mut row = matrix.pop().ok_or_else(invalid_state)?;
+                    let mut pattern = row.pop().ok_or_else(invalid_state)?;
+                    if !row.is_empty() {
+                        return Err(invalid_state());
+                    }
+                    let scrutinee_origin = OriginOwner::new(pattern.origin.clone());
+                    let arm_origin = OriginOwner::new(pattern.origin.clone());
+                    let match_origin = OriginOwner::new(pattern.origin.clone());
+                    let core_body_type = IterativeTypeOwner::new(self.clone_type(&body.ty)?);
+                    let scrutinee = self.builder.variable(
+                        binder.id(),
+                        domain.into_inner(),
+                        scrutinee_origin.into_inner(),
+                    )?;
+                    let match_node = self.lower_match_expression(
+                        scrutinee,
+                        vec![CoreMatchArm::new(
+                            pattern.take().ok_or_else(invalid_state)?,
+                            body.node,
+                            arm_origin.into_inner(),
+                        )],
+                        core_body_type.into_inner(),
+                        match_origin.into_inner(),
+                        contains_newtype,
+                        pattern_count,
+                    )?;
+                    body.set_node(match_node);
+                }
+                let core_ty = self.pure_core_type(&ty)?;
+                let node =
+                    self.builder
+                        .function(binder, body.node, core_ty, origin.into_inner())?;
+                values.push(TypedNode {
+                    node,
+                    ty: ty.into_inner(),
+                    effects: EffectRow::empty(),
+                    provenance,
+                });
+            }
+            other => {
+                discard_elaboration_task(other);
+                return Err(invalid_state());
+            }
+        }
+        Ok(())
+    }
+
+    fn step_cleanup_completion(
+        &mut self,
+        cleanup: &crate::resolved::ResolvedCleanupExpr,
+        span: Span,
+        values: &mut TypedNodeBuffer,
+    ) -> Result<(), TypeError> {
+        let action = values.pop().ok_or_else(invalid_state)?;
+        let body = values.pop().ok_or_else(invalid_state)?;
+        let ty = self.clone_type(&body.ty)?;
+        let effects = self.union_effects(&body.effects, &action.effects, span)?;
+        let core_effects = self.core_effect_row(&effects)?;
+        let node = self.push_effect_core(
+            ty,
+            core_effects,
+            Origin::Source(span),
+            EffectOperation::Cleanup(crate::core::effect::CleanupScopeNode {
+                callback: cleanup.callback,
+                body: body.node,
+                action: action.node,
+                span,
+                action_span: cleanup.action_span,
+            }),
+        )?;
+        values.push(TypedNode {
+            node,
+            ty: self.clone_type(&body.ty)?,
+            effects,
+            provenance: body.provenance.clone(),
+        });
+        Ok(())
+    }
+
+    fn schedule_cleanup<'a>(
+        &mut self,
+        cleanup: &'a crate::resolved::ResolvedCleanupExpr,
+        span: Span,
+        context: &TypeContext,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+    ) -> Result<(), TypeError> {
+        let callback = self.zonk(context.lookup(cleanup.callback).ok_or_else(invalid_state)?)?;
+        self.check_registration_callback_type(&Type::Unit, callback, cleanup.action_span, span)?;
+        self.type_work.charge(3).map_err(|()| type_resource())?;
+        tasks.0.try_reserve(3).map_err(|_| type_resource())?;
+        tasks.push(ElaborationTask::FinishCleanup { cleanup, span });
+        tasks.push(ElaborationTask::Synthesize {
+            expression: &cleanup.action,
+            cause: None,
+        });
+        tasks.push(ElaborationTask::Synthesize {
+            expression: &cleanup.body,
+            cause: None,
+        });
+        Ok(())
+    }
+
+    fn schedule_cleanup_binding<'a>(
+        &mut self,
+        binding: &'a ResolvedBinding,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+    ) -> Result<(), TypeError> {
+        self.type_work.charge(4).map_err(|()| type_resource())?;
+        tasks.0.try_reserve(3).map_err(|_| type_resource())?;
+        let evidence_marker =
+            if self.purpose == ElaborationPurpose::ModuleCheck && self.selection.is_some() {
+                Some(self.evidence_marker()?)
+            } else {
+                None
+            };
+        tasks.push(ElaborationTask::FinishBinding {
+            binding,
+            expected: None,
+            evidence_marker,
+        });
+        let effects = self.fresh_effect_row(binding.initializer.span)?;
+        let completion = tasks.0.len();
+        tasks.push(ElaborationTask::FinishCleanupAction(Box::new(
+            CleanupActionProgress {
+                expected: clone_effect_row_with_budget(&effects, &mut self.type_work)
+                    .map_err(|()| type_resource())?,
+                inferred: None,
+                span: binding.initializer.span,
+            },
+        )));
+        let ty = IterativeTypeOwner::new(Type::function_computation(
+            Type::Unit,
+            ComputationType::new(Type::Unit, effects),
+        ));
+        let provenance = self.unknown_provenance(&ty)?;
+        tasks.push(ElaborationTask::Check {
+            expression: &binding.initializer,
+            expected: ProvenancedType {
+                ty: ty.into_inner(),
+                provenance,
+            },
+            kind: CheckKind::CleanupAction(completion),
+        });
+        Ok(())
+    }
+
+    fn finish_cleanup_action(
+        &mut self,
+        progress: CleanupActionProgress,
+        values: &mut TypedNodeBuffer,
+    ) -> Result<(), TypeError> {
+        let CleanupActionProgress {
+            expected,
+            inferred,
+            span,
+        } = progress;
+        if let Some(inferred) = inferred {
+            let expected = self.zonk_effect_row(&expected)?;
+            if expected
+                .tail()
+                .is_some_and(|tail| matches!(tail.variable(), EffectRowVariable::Inference(_)))
+            {
+                self.unify_effect_rows(&expected, &inferred)
+                    .map_err(|failure| match failure {
+                        UnificationFailure::Resource => type_resource(),
+                        UnificationFailure::Invariant => invalid_state(),
+                        UnificationFailure::Infinite | UnificationFailure::Mismatch => {
+                            inference_failure(
+                                TypeReason::AmbiguousEffectRow,
+                                span,
+                                "this cleanup action has no principal latent effect row",
+                            )
+                        }
+                    })?;
+            } else {
+                let combined = self.union_effects(&expected, &inferred, span)?;
+                if !self.same_effect_rows(&combined, &expected)? {
+                    return Err(inference_failure(
+                        TypeReason::AmbiguousEffectRow,
+                        span,
+                        "this cleanup action requests effects outside its expected row",
+                    ));
+                }
+            }
+        }
+        let mut action = values.pop().ok_or_else(invalid_state)?;
+        action.replace_type(self.zonk(&action.ty)?);
+        values.push(action.into_inner());
+        Ok(())
+    }
+
+    fn record_cleanup_action_effects(
+        &mut self,
+        completion: usize,
+        effects: &EffectRow,
+        tasks: &mut ElaborationTaskBuffer<'_>,
+    ) -> Result<(), TypeError> {
+        self.type_work.charge(1).map_err(|()| type_resource())?;
+        let Some(ElaborationTask::FinishCleanupAction(progress)) = tasks.0.get_mut(completion)
+        else {
+            return Err(invalid_state());
+        };
+        // Keep the common expected row unsolved until all contextual result
+        // alternatives have contributed. Ordinary named values still unify.
+        let accumulated = progress.inferred.take().unwrap_or_else(EffectRow::empty);
+        progress.inferred = Some(self.union_effects(&accumulated, effects, progress.span)?);
+        Ok(())
+    }
+
     fn elaborate_expression_with_context<'a>(
         &mut self,
         initial: ElaborationTask<'a>,
@@ -10595,6 +10919,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut declarations = ElaboratedDeclarationBuffer(Vec::new());
         while let Some(task) = tasks.pop() {
             match task {
+                ElaborationTask::FinishCleanup { cleanup, span } => {
+                    self.step_cleanup_completion(cleanup, span, &mut values)?;
+                }
                 ElaborationTask::FinishPerform(progress) => {
                     self.step_perform_completion(progress, &mut values)?;
                 }
@@ -11106,6 +11433,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             &mut self.type_work,
                         )?;
                     }
+                    ResolvedExprKind::Cleanup(cleanup) => {
+                        self.schedule_cleanup(cleanup, current.span, context, &mut tasks)?;
+                    }
                     ResolvedExprKind::Resource(resource) => {
                         self.schedule_resource(resource, current.span, &mut tasks)?;
                     }
@@ -11314,148 +11644,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         },
                     )?;
                 }
-                ElaborationTask::FinishFunction {
-                    direct_binder,
-                    pattern_binders,
-                    binder,
-                    pattern,
-                    domain,
-                    ty,
-                    origin,
-                    provenance,
-                    contains_newtype,
-                    pattern_count,
-                    infer_effects,
-                } => {
-                    let effect_span = origin.primary_span();
-                    let origin = OriginOwner::new(origin);
-                    let mut pattern = CorePatternOwner::new(pattern);
-                    let domain = domain.map(IterativeTypeOwner::new);
-                    let mut ty = IterativeTypeOwner::new(ty);
-                    let mut body = values.pop().ok_or_else(invalid_state)?;
-                    if let Some(binder) = direct_binder
-                        && !context.remove_and_discard(binder)
-                    {
-                        return Err(invalid_state());
-                    }
-                    self.remove_pattern_binders(context, &pattern_binders)?;
-                    if infer_effects && !body.effects.is_empty() {
-                        let effects = self.zonk_effect_row(&body.effects)?;
-                        let zonked = IterativeTypeOwner::new(self.zonk(&ty)?);
-                        let source = zonked.into_inner();
-                        let Type::Function(domain, codomain) = source else {
-                            discard_type_iteratively(source);
-                            return Err(invalid_state());
-                        };
-                        ty.replace(Type::function_computation(
-                            *domain,
-                            ComputationType::new(*codomain, effects),
-                        ));
-                    } else if !infer_effects {
-                        let expected_effects =
-                            match ty.function_view().and_then(|function| function.effects()) {
-                                Some(effects) => {
-                                    clone_effect_row_with_budget(effects, &mut self.type_work)
-                                        .map_err(|()| {
-                                            TypeError::Internal(
-                                                ElaborationFailure::TypeResourceExhausted,
-                                            )
-                                        })?
-                                }
-                                None => EffectRow::empty(),
-                            };
-                        let expected_is_inference = expected_effects.tail().is_some_and(|tail| {
-                            matches!(tail.variable(), EffectRowVariable::Inference(_))
-                        });
-                        if expected_is_inference {
-                            self.unify_effect_rows(&expected_effects, &body.effects)
-                                .map_err(|failure| match failure {
-                                    UnificationFailure::Resource => TypeError::Internal(
-                                        ElaborationFailure::TypeResourceExhausted,
-                                    ),
-                                    UnificationFailure::Infinite => inference_failure(
-                                        TypeReason::AmbiguousEffectRow,
-                                        effect_span,
-                                        "this function would require an infinite latent effect row",
-                                    ),
-                                    UnificationFailure::Mismatch
-                                    | UnificationFailure::Invariant => inference_failure(
-                                        TypeReason::AmbiguousEffectRow,
-                                        effect_span,
-                                        "this function body does not match its latent effect row",
-                                    ),
-                                })?;
-                            let zonked = self.zonk(&ty)?;
-                            ty.replace(zonked);
-                        } else {
-                            let weakened =
-                                self.union_effects(&body.effects, &expected_effects, effect_span)?;
-                            if !self.same_effect_rows(&weakened, &expected_effects)? {
-                                return Err(inference_failure(
-                                    TypeReason::AmbiguousEffectRow,
-                                    effect_span,
-                                    "this function body requests effects outside its declared row",
-                                ));
-                            }
-                        }
-                    }
-                    if pattern.0.is_some() {
-                        let domain = domain.ok_or_else(invalid_state)?;
-                        let pattern_span = pattern.origin.primary_span();
-                        let mut matrix = CorePatternMatrixBuffer(vec![vec![
-                            pattern.take().ok_or_else(invalid_state)?,
-                        ]]);
-                        if let Some(witness) = missing_witness_for_types_with_budget(
-                            &matrix,
-                            std::slice::from_ref(&domain),
-                            &self.registry,
-                            &mut self.coverage_work,
-                        )? {
-                            return Err(case_error(
-                                TypeReason::RefutableFunctionDomain,
-                                pattern_span,
-                                "this function pattern is not exhaustive",
-                                Some(display_witness(&witness, &self.registry)),
-                            ));
-                        }
-                        let mut row = matrix.pop().ok_or_else(invalid_state)?;
-                        let mut pattern = row.pop().ok_or_else(invalid_state)?;
-                        if !row.is_empty() {
-                            return Err(invalid_state());
-                        }
-                        let scrutinee_origin = OriginOwner::new(pattern.origin.clone());
-                        let arm_origin = OriginOwner::new(pattern.origin.clone());
-                        let match_origin = OriginOwner::new(pattern.origin.clone());
-                        let core_body_type = IterativeTypeOwner::new(self.clone_type(&body.ty)?);
-                        let scrutinee = self.builder.variable(
-                            binder.id(),
-                            domain.into_inner(),
-                            scrutinee_origin.into_inner(),
-                        )?;
-                        let match_node = self.lower_match_expression(
-                            scrutinee,
-                            vec![CoreMatchArm::new(
-                                pattern.take().ok_or_else(invalid_state)?,
-                                body.node,
-                                arm_origin.into_inner(),
-                            )],
-                            core_body_type.into_inner(),
-                            match_origin.into_inner(),
-                            contains_newtype,
-                            pattern_count,
-                        )?;
-                        body.set_node(match_node);
-                    }
-                    let core_ty = self.pure_core_type(&ty)?;
-                    let node =
-                        self.builder
-                            .function(binder, body.node, core_ty, origin.into_inner())?;
-                    values.push(TypedNode {
-                        node,
-                        ty: ty.into_inner(),
-                        effects: EffectRow::empty(),
-                        provenance,
-                    });
+                task @ ElaborationTask::FinishFunction { .. } => {
+                    self.step_function_completion(task, context, &mut values, &mut tasks)?;
                 }
                 ElaborationTask::AfterApplicationFunction {
                     whole_span,
@@ -11548,6 +11738,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 }
                 ElaborationTask::BeginRegistrationBinding { binding, handler } => {
                     self.schedule_registration_binding(binding, handler, &mut tasks)?;
+                }
+                ElaborationTask::BeginCleanupBinding { binding } => {
+                    self.schedule_cleanup_binding(binding, &mut tasks)?;
+                }
+                ElaborationTask::FinishCleanupAction(progress) => {
+                    self.finish_cleanup_action(*progress, &mut values)?;
                 }
                 ElaborationTask::BeginBinding {
                     binding,
@@ -14725,6 +14921,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             reason: GeneratedReason::FunctionLowering,
         };
         let function_type = function_type.into_inner();
+        let (cleanup_completion, body_check) = match body_check {
+            CheckKind::CleanupAction(completion) => (Some(completion), CheckKind::General),
+            other => (None, other),
+        };
         tasks.push(ElaborationTask::FinishFunction {
             direct_binder,
             pattern_binders,
@@ -14737,6 +14937,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             contains_newtype,
             pattern_count,
             infer_effects,
+            cleanup_completion,
         });
         match body {
             FunctionBody::Block(block) => schedule_block(
@@ -18368,7 +18569,21 @@ enum EquationTask<'a> {
     LexicalEvidence(&'a crate::resolved::ResolvedLexicalEvidence),
 }
 
+struct CleanupActionProgress {
+    expected: EffectRow,
+    inferred: Option<EffectRow>,
+    span: Span,
+}
+
 enum ElaborationTask<'a> {
+    FinishCleanupAction(Box<CleanupActionProgress>),
+    FinishCleanup {
+        cleanup: &'a crate::resolved::ResolvedCleanupExpr,
+        span: Span,
+    },
+    BeginCleanupBinding {
+        binding: &'a ResolvedBinding,
+    },
     FinishPerform(Box<PerformProgress<'a>>),
     FinishHookBody {
         handler: &'a crate::resolved::ResolvedHandleExpr,
@@ -18423,6 +18638,7 @@ enum ElaborationTask<'a> {
         contains_newtype: bool,
         pattern_count: usize,
         infer_effects: bool,
+        cleanup_completion: Option<usize>,
     },
     AfterApplicationFunction {
         whole_span: Span,
@@ -18644,6 +18860,7 @@ enum FunctionBody<'a> {
 #[derive(Clone, Copy)]
 enum CheckKind {
     General,
+    CleanupAction(usize),
     Argument {
         function_span: Span,
         whole_span: Span,
@@ -19716,7 +19933,10 @@ fn discard_match_progress(progress: Box<MatchProgress<'_>>) {
 fn discard_elaboration_task(task: ElaborationTask<'_>) {
     match task {
         ElaborationTask::Equation(_) => {}
+        ElaborationTask::FinishCleanupAction(_) => {}
         ElaborationTask::ResourceBody { .. }
+        | ElaborationTask::FinishCleanup { .. }
+        | ElaborationTask::BeginCleanupBinding { .. }
         | ElaborationTask::FinishHookBody { .. }
         | ElaborationTask::FinishResource(_)
         | ElaborationTask::FinishPerform(_) => {}
@@ -19934,6 +20154,14 @@ fn schedule_block<'a>(
             }
             ResolvedLocalDeclaration::Binding(binding) => {
                 if binding.annotation.is_none()
+                    && block.declarations.len() == 1
+                    && let ResolvedExprKind::Cleanup(cleanup) = &block.result.kind
+                    && matches!(&binding.pattern.kind, ResolvedPatternKind::Binder(binder) if binder.id == cleanup.callback)
+                {
+                    tasks.push(ElaborationTask::BeginCleanupBinding { binding });
+                    continue;
+                }
+                if binding.annotation.is_none()
                     && matches!(binding.initializer.kind, ResolvedExprKind::Function(_))
                     && block.declarations.len() == 1
                     && let ResolvedExprKind::Handle(handler) = &block.result.kind
@@ -19991,7 +20219,7 @@ fn check_mismatch(
     let expected = IterativeTypeOwner::new(expected);
     let found = IterativeTypeOwner::new(found);
     match kind {
-        CheckKind::General => TypeError::Mismatch(TypeMismatch {
+        CheckKind::General | CheckKind::CleanupAction(_) => TypeError::Mismatch(TypeMismatch {
             span,
             expected_display: registry.display_source_type(&expected),
             found_display: registry.display_source_type(&found),
@@ -20803,6 +21031,10 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
             ResolvedExprKind::Resource(resource) => {
                 work.push(&resource.body);
                 work.push(&resource.initializer);
+            }
+            ResolvedExprKind::Cleanup(cleanup) => {
+                work.push(&cleanup.body);
+                work.push(&cleanup.action);
             }
             ResolvedExprKind::Perform(request) => work.push(&request.operand),
             ResolvedExprKind::Handle(handler) => {
@@ -22074,6 +22306,9 @@ fn capture_failure(
                     crate::core::capture::CompletionOwner::Registration(span) => {
                         (span, "this registration requires normal completion")
                     }
+                    crate::core::capture::CompletionOwner::Cleanup(span) => {
+                        (span, "this cleanup action must complete")
+                    }
                 };
                 diagnostic.related.push(SourceLabel::new(owner, message));
             }
@@ -22211,6 +22446,10 @@ fn resume_usage_with_budget(
                 ResolvedExprKind::Resource(resource) => {
                     push(&mut tasks, Task::Visit(&resource.body), budget)?;
                     push(&mut tasks, Task::Visit(&resource.initializer), budget)?;
+                }
+                ResolvedExprKind::Cleanup(cleanup) => {
+                    push(&mut tasks, Task::Visit(&cleanup.action), budget)?;
+                    push(&mut tasks, Task::Visit(&cleanup.body), budget)?;
                 }
                 ResolvedExprKind::Perform(request) => {
                     push(&mut tasks, Task::Visit(&request.operand), budget)?;
@@ -22412,6 +22651,10 @@ fn contains_resume_owner_with_budget(
             ResolvedExprKind::Resource(resource) => {
                 schedule(&mut pending, &resource.body, budget)?;
                 schedule(&mut pending, &resource.initializer, budget)?;
+            }
+            ResolvedExprKind::Cleanup(cleanup) => {
+                schedule(&mut pending, &cleanup.body, budget)?;
+                schedule(&mut pending, &cleanup.action, budget)?;
             }
             ResolvedExprKind::Tuple(elements) => {
                 for element in elements {
@@ -22679,7 +22922,8 @@ pub(crate) fn checked_program_contains_effect_syntax(
 
     while let Some(expression) = work.pop() {
         match &expression.kind {
-            ResolvedExprKind::Resource(_)
+            ResolvedExprKind::Cleanup(_)
+            | ResolvedExprKind::Resource(_)
             | ResolvedExprKind::Perform(_)
             | ResolvedExprKind::Handle(_)
             | ResolvedExprKind::Resume(_)
@@ -22848,6 +23092,10 @@ fn collect_expression_binders(binders: &mut Vec<BinderId>, mut expressions: Vec<
                 binders.push(resource.handle.id);
                 expressions.push(&resource.body);
                 expressions.push(&resource.initializer);
+            }
+            ResolvedExprKind::Cleanup(cleanup) => {
+                expressions.push(&cleanup.body);
+                expressions.push(&cleanup.action);
             }
             ResolvedExprKind::Perform(request) => expressions.push(&request.operand),
             ResolvedExprKind::Handle(handler) => {
@@ -31692,6 +31940,7 @@ mod tests {
                             contains_newtype: false,
                             pattern_count: 0,
                             infer_effects: false,
+                            cleanup_completion: None,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -31915,6 +32164,7 @@ mod tests {
                             contains_newtype: false,
                             pattern_count: 0,
                             infer_effects: false,
+                            cleanup_completion: None,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -31975,6 +32225,7 @@ mod tests {
                             contains_newtype: false,
                             pattern_count: 1,
                             infer_effects: false,
+                            cleanup_completion: None,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -32038,6 +32289,7 @@ mod tests {
                             contains_newtype: false,
                             pattern_count: 1,
                             infer_effects: false,
+                            cleanup_completion: None,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -33901,6 +34153,43 @@ mod tests {
             .unwrap()
             .join()
             .expect("registration lowering failure must dispose its pending result iteratively");
+    }
+
+    #[test]
+    fn cleanup_contextual_row_join_is_exact_and_fresh_retryable() {
+        let (module, _, _, _) = cell_module_fixture_sources(
+            "effect Report {\nreport : Int -> Unit\n}\nmain : Unit -> Int\nmain () = handle (cleanup (match true {\ntrue => fn(ignored) {\ncleanup fn(ignored) {\nperform Report.report 1\n} {\n()\n}\n}\nfalse => fn(ignored) {\n()\n}\n}) {\n42\n}) with Report {\nreport error => resume ()\n}\n",
+        );
+        let run = |limit| {
+            let mut elaborator = cell_resource_elaborator(&module);
+            elaborator.type_work = TypeWorkBudget::with_limit(limit);
+            let mut context = elaborator.base_context.clone();
+            let result = elaborator
+                .elaborate_expression_with_context(
+                    ElaborationTask::Synthesize {
+                        expression: fixture_result(&module),
+                        cause: None,
+                    },
+                    &mut context,
+                )
+                .map(|typed| drop(TypedNodeOwner::new(typed)));
+            (result, elaborator.type_work.used())
+        };
+        let (result, exact) = run(usize::MAX);
+        result.unwrap();
+        assert!(exact > 0);
+        for limit in 0..exact {
+            assert_eq!(
+                run(limit).0,
+                Err(TypeError::Internal(
+                    ElaborationFailure::TypeResourceExhausted
+                )),
+                "limit {limit}"
+            );
+        }
+        for _ in 0..2 {
+            assert_eq!(run(exact), (Ok(()), exact));
+        }
     }
 
     #[test]

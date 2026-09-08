@@ -141,6 +141,7 @@ resource_expression ::=
 hook_expression ::= "hook" effect_instance block ;
 registration_expression ::=
   "register" effect_instance primary_expression block ;
+cleanup_expression ::= "cleanup" expression block ;
 
 expression ::=
     block
@@ -166,6 +167,7 @@ primary_expression ::=
   | discard_expression
   | hook_expression
   | registration_expression
+  | cleanup_expression
   | parenthesized_expression ;
 unqualified_term_reference ::= identifier | upper_identifier ;
 qualified_term_reference ::= upper_identifier "." import_name ;
@@ -396,6 +398,13 @@ transformer and a block. A non-primary transformer, such as a function
 expression or application, must be parenthesized. Neither form introduces a
 source-visible binder. Static semantics determines whether the target is a
 hook API and checks the transformer's type.
+
+A cleanup expression contains an action expression followed by its body block.
+Unlike a registration transformer, its action may be an ungrouped application,
+operator expression or function expression. The action ends before the following
+body block; grouping disambiguates an action with a trailing block. Cleanup is
+a primary expression and introduces no source-visible binder or namespace.
+Both action-owned blocks and the cleanup body retain the ordinary line-end rules.
 
 The executable test `syntax_local_recursive_group_example_is_executable`
 checks a complete entry module containing a two-member recursive group. The

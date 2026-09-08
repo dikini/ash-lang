@@ -7814,6 +7814,75 @@ impl Resolver {
         })
     }
 
+    fn finish_cleanup(
+        &mut self,
+        span: Span,
+        initializer: ResolvedExpressionOwner,
+        body: ResolvedExpressionOwner,
+    ) -> Result<ResolvedExpr, ResolveError> {
+        let exhausted = || {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "cleanup lowering exceeded its budget",
+            )
+        };
+        self.type_work.charge(9).map_err(|()| exhausted())?;
+        let mut declarations = Vec::new();
+        declarations.try_reserve_exact(1).map_err(|_| exhausted())?;
+        let action_span = initializer.span;
+        let callback = self.allocate_binder("", action_span)?;
+        let owner = callback.id;
+        declarations.push(ResolvedLocalDeclaration::Binding(Box::new(
+            ResolvedBinding {
+                pattern: ResolvedPattern {
+                    kind: ResolvedPatternKind::Binder(callback),
+                    span: action_span,
+                },
+                annotation: None,
+                initializer: initializer.into_inner(),
+                span: action_span,
+            },
+        )));
+        let action = ResolvedExpr {
+            kind: ResolvedExprKind::Apply(ResolvedApplicationExpr {
+                function: Box::new(ResolvedExpr {
+                    kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
+                        term: ResolvedTermName::Global(owner),
+                        spelling: String::new(),
+                        origin: Origin::Source(action_span),
+                        import_span: None,
+                        evidence: Box::new([]),
+                    }),
+                    span: action_span,
+                }),
+                argument: Box::new(ResolvedExpr {
+                    kind: ResolvedExprKind::Unit,
+                    span: action_span,
+                }),
+            }),
+            span: action_span,
+        };
+        Ok(ResolvedExpr {
+            kind: ResolvedExprKind::Block(ResolvedBlock {
+                declarations,
+                result: Box::new(ResolvedExpr {
+                    kind: ResolvedExprKind::Cleanup(Box::new(
+                        crate::resolved::ResolvedCleanupExpr {
+                            callback: owner,
+                            action_span,
+                            body: Box::new(body.into_inner()),
+                            action: Box::new(action),
+                        },
+                    )),
+                    span,
+                }),
+                span,
+            }),
+            span,
+        })
+    }
+
     fn finish_registration(
         &mut self,
         effect: ResolvedEffectInstance,
@@ -8573,6 +8642,19 @@ impl Resolver {
                     })?;
                     expressions.push(self.finish_registration(effect, span, initializer, body)?);
                 }
+                ResolveTask::FinishCleanup { span } => {
+                    let body = expressions.pop_owned().ok_or_else(|| {
+                        error(ResolveReason::InternalState, span, "missing cleanup body")
+                    })?;
+                    let initializer = expressions.pop_owned().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            span,
+                            "missing cleanup initializer",
+                        )
+                    })?;
+                    expressions.push(self.finish_cleanup(span, initializer, body)?);
+                }
                 ResolveTask::VisitBlock(block) => {
                     let scope_checkpoint = self.scopes.len();
                     let nominal_scope_checkpoint = self.lexical_nominal_scopes.len();
@@ -9170,12 +9252,26 @@ impl Resolver {
         expressions: &mut ResolvedExpressionBuffer,
     ) -> Result<(), ResolveError> {
         match &expression.kind {
-            SurfaceExprKind::Cleanup(_) => {
-                return Err(error(
-                    ResolveReason::InternalState,
-                    expression.span,
-                    "cleanup resolution is not implemented",
-                ));
+            SurfaceExprKind::Cleanup(cleanup) => {
+                self.type_work.charge(3).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "cleanup task storage exceeded its budget",
+                    )
+                })?;
+                tasks.0.try_reserve(3).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "cleanup task storage could not be reserved",
+                    )
+                })?;
+                tasks.push(ResolveTask::FinishCleanup {
+                    span: expression.span,
+                });
+                tasks.push(ResolveTask::VisitBlock(&cleanup.body));
+                tasks.push(ResolveTask::VisitExpr(&cleanup.action));
             }
             SurfaceExprKind::Registration(registration) => {
                 let effect = self.resolve_effect_instance_parts(
@@ -9679,6 +9775,9 @@ impl Drop for PendingLexicalResolution<'_> {
 }
 
 enum ResolveTask<'a> {
+    FinishCleanup {
+        span: Span,
+    },
     VisitExpr(&'a SurfaceExpr),
     FinishRegistration {
         effect: ResolvedEffectInstance,
@@ -9778,6 +9877,7 @@ impl ResolveTask<'_> {
             Self::VisitBlock(block) => block.span,
             Self::VisitRecursiveGroup(group) => group.span,
             Self::FinishApplication { span }
+            | Self::FinishCleanup { span }
             | Self::FinishHook { span, .. }
             | Self::FinishRegistration { span, .. }
             | Self::ResourceInitializer { span, .. }

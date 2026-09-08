@@ -421,6 +421,7 @@ pub(crate) struct UnsafeDiscard {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CompletionOwner {
+    Cleanup(Span),
     Clause(Span),
     Resource(Span),
     Registration(Span),
@@ -927,6 +928,11 @@ fn compile<F: CoreOperationFamily>(
                 Control::Sequence(sequence)
             }
             _ => match operation(&node.kind) {
+                Some(EffectOperation::Cleanup(scope)) => Control::Cleanup {
+                    body: index(scope.body) + 1,
+                    action: index(scope.action) + 1,
+                    source: scope.span,
+                },
                 Some(EffectOperation::Registration(scope)) => Control::Registration {
                     body: index(scope.body) + 1,
                     source: scope.span,
@@ -1083,6 +1089,9 @@ fn check_nodes_with_methods<F: CoreOperationFamily>(
     let mut resource_scope = None;
     let mut parameters = HashMap::new();
     for (id, node) in nodes.iter().enumerate() {
+        if let Some(EffectOperation::Cleanup(scope)) = operation(&node.kind) {
+            resource_scope.get_or_insert(scope.span);
+        }
         if let Some(EffectOperation::Resource(resource)) = operation(&node.kind) {
             resource_scope.get_or_insert(resource.acquisition.span);
         }
@@ -1224,6 +1233,9 @@ fn check_nodes_with_methods<F: CoreOperationFamily>(
                     _ => {}
                 },
                 _ => match operation(&node.kind) {
+                    Some(EffectOperation::Cleanup(scope)) => {
+                        value = values[index(scope.body)].copy(budget)?;
+                    }
                     Some(EffectOperation::Registration(scope)) => {
                         value = values[index(scope.body)].copy(budget)?;
                     }
@@ -1283,7 +1295,10 @@ fn check_control_roots(
     if graph.code.iter().any(|code| {
         matches!(
             code,
-            Control::Discard { .. } | Control::Resource { .. } | Control::Registration { .. }
+            Control::Discard { .. }
+                | Control::Resource { .. }
+                | Control::Registration { .. }
+                | Control::Cleanup { .. }
         )
     }) {
         let mut queries = Vec::new();

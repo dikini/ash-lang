@@ -209,6 +209,10 @@ fn method_occurrences(definition: &CheckedDefinition, method: MethodId) -> Vec<&
     let mut slots = Vec::new();
     while let Some(expression) = expressions.pop() {
         match &expression.kind {
+            ResolvedExprKind::Cleanup(cleanup) => {
+                expressions.push(&cleanup.action);
+                expressions.push(&cleanup.body);
+            }
             ResolvedExprKind::Occurrence(occurrence)
                 if occurrence.term == ResolvedTermName::Method(method) =>
             {

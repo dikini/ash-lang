@@ -426,6 +426,13 @@ impl Error for RuntimeFailure {}
 
 #[derive(Debug)]
 enum Frame {
+    CleanupBoundary {
+        action: NodeId,
+        environment: Environment,
+    },
+    CleanupCompletion {
+        saved: Value,
+    },
     // This private, non-Clone frame is the release authority. Acquisition is
     // its only constructor in execution; capture/resume move it, and normal
     // return consumes it. Keys in handler/clause frames are non-owning facts.
@@ -553,9 +560,15 @@ impl Transition {
     }
 }
 
+/// Shared test observation also retains the prefix of a failed run.
+#[cfg(test)]
+type WorkTrace = Arc<std::sync::Mutex<Vec<(NodeId, usize)>>>;
+
 /// The retained explicit evaluator machine shared by pure and effect Core.
 #[derive(Debug)]
 pub struct Machine {
+    cleanup_limit: usize,
+    live_cleanups: usize,
     program: ExecutableProgram,
     control: Option<Control>,
     frames: Vec<Frame>,
@@ -573,13 +586,15 @@ pub struct Machine {
     live_registrations: usize,
     next_registration: u32,
     #[cfg(test)]
-    work_trace: Option<Vec<(NodeId, usize)>>,
+    work_trace: Option<WorkTrace>,
 }
 
 impl Machine {
     fn new(program: &ValidatedProgram) -> Self {
         Self {
             program: ExecutableProgram::Pure(program.shared()),
+            cleanup_limit: 0,
+            live_cleanups: 0,
             control: Some(Control::Evaluate(program.root(), Environment::new())),
             frames: Vec::new(),
             max_frame_depth: 0,
@@ -610,6 +625,8 @@ impl Machine {
     ) -> Self {
         Self {
             program: ExecutableProgram::Effect(program.shared()),
+            cleanup_limit: MAX_CAPTURED_FRAME_CELLS,
+            live_cleanups: 0,
             control: Some(Control::Evaluate(program.root(), Environment::new())),
             frames: Vec::new(),
             max_frame_depth: 0,
@@ -640,9 +657,19 @@ impl Machine {
                 Control::Evaluate(node, environment) => {
                     #[cfg(test)]
                     if let Some(trace) = &mut self.work_trace {
-                        trace.push((node, self.instantiation_work.used()));
+                        trace
+                            .lock()
+                            .unwrap()
+                            .push((node, self.instantiation_work.used()));
                     }
                     self.trace.push(TraceEvent::Enter(node));
+                    if let Some(ExecutableNode::Effect(expression)) = self.program.node(node)
+                        && let EffectExprKind::Operation(EffectOperation::Cleanup(scope)) =
+                            expression.kind
+                    {
+                        self.acquire_cleanup(scope, environment)?;
+                        continue;
+                    }
                     if self.registration(node).is_some() {
                         self.acquire_registration(node, environment)?;
                         continue;
@@ -657,6 +684,7 @@ impl Machine {
                 Control::Return(value) => {
                     let Some(frame) = self.frames.pop() else {
                         if self.live_resources != 0
+                            || self.live_cleanups != 0
                             || self.live_registrations != 0
                             || self.captured_cells != 0
                         {
@@ -681,7 +709,7 @@ impl Machine {
                             #[cfg(test)]
                             runtime_work: self.instantiation_work.used(),
                             #[cfg(test)]
-                            work_trace: self.work_trace,
+                            work_trace: self.work_trace.map(|trace| trace.lock().unwrap().clone()),
                         });
                     };
                     self.return_from(frame, value)?;
@@ -707,6 +735,29 @@ impl Machine {
 
     fn return_from(&mut self, frame: Frame, value: Value) -> Result<(), RuntimeFailure> {
         match frame {
+            Frame::CleanupBoundary {
+                action,
+                environment,
+            } => {
+                self.instantiation_work
+                    .charge(2)
+                    .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+                self.frames
+                    .try_reserve(1)
+                    .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+                self.frames.push(Frame::CleanupCompletion { saved: value });
+                self.control = Some(Control::Evaluate(action, environment));
+            }
+            Frame::CleanupCompletion { saved } => {
+                if !matches!(value, Value::Unit) {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                self.live_cleanups = self
+                    .live_cleanups
+                    .checked_sub(1)
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                self.control = Some(Control::Return(saved));
+            }
             Frame::RegistrationBoundary {
                 handler_active,
                 pending_invocations,
@@ -889,6 +940,38 @@ impl Machine {
             return Err(RuntimeFailure::InvalidControlState);
         }
         Ok(index)
+    }
+
+    fn acquire_cleanup(
+        &mut self,
+        scope: crate::core::effect::CleanupScopeNode,
+        environment: Environment,
+    ) -> Result<(), RuntimeFailure> {
+        self.instantiation_work
+            .charge(2usize.saturating_add(environment.len()))
+            .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+        let callback = environment
+            .lookup(scope.callback, &self.program)
+            .ok_or(RuntimeFailure::MissingBinding)?;
+        if !matches!(callback, Value::Function(_)) {
+            return Err(RuntimeFailure::UnexpectedFunctionValue);
+        }
+        let live = self
+            .live_cleanups
+            .checked_add(1)
+            .filter(|live| *live <= self.cleanup_limit)
+            .ok_or(RuntimeFailure::ResourceCapacity)?;
+        self.frames
+            .try_reserve(1)
+            .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+        self.frames.push(Frame::CleanupBoundary {
+            action: scope.action,
+            environment: environment.clone(),
+        });
+        self.live_cleanups = live;
+        self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
+        self.control = Some(Control::Evaluate(scope.body, environment));
+        Ok(())
     }
 
     fn acquire_registration(
@@ -1441,6 +1524,8 @@ impl Machine {
                     continuation: Some(_),
                     ..
                 } | Frame::ResourceBoundary { .. }
+                    | Frame::CleanupBoundary { .. }
+                    | Frame::CleanupCompletion { .. }
                     | Frame::RegistrationBoundary { .. }
             )
         }) {
@@ -1526,6 +1611,7 @@ fn dispatch_entry(
                     EffectOperation::Registration(_) => {
                         return Err(RuntimeFailure::InvalidControlState);
                     }
+                    EffectOperation::Cleanup(_) => return Err(RuntimeFailure::InvalidControlState),
                     EffectOperation::Resource(resource) => Transition::suspend(
                         Control::Evaluate(resource.initializer(), environment.clone()),
                         Frame::ResourceInitializer { node, environment },
@@ -1874,6 +1960,8 @@ fn dispatch_return(
             environment,
         } => return_recursive_initialization(pending, next, body, environment, value, heap),
         Frame::HandlerBoundary { .. }
+        | Frame::CleanupBoundary { .. }
+        | Frame::CleanupCompletion { .. }
         | Frame::ResourceInitializer { .. }
         | Frame::ResourceBoundary { .. }
         | Frame::Request { .. }
@@ -2320,6 +2408,209 @@ mod tests {
 
     fn integer(value: &str) -> Value {
         Value::Integer(Integer::parse_decimal(value).unwrap())
+    }
+
+    fn cleanup_fixture() -> (
+        ValidatedEffectProgram,
+        crate::core::effect::CleanupScopeNode,
+        Environment,
+    ) {
+        let program =
+            effect_program("main : Unit -> Int\nmain () = cleanup fn(ignored) {\n()\n} {\n42\n}\n");
+        let mut pending = vec![program.root()];
+        let mut scope = None;
+        let mut bindings = Vec::new();
+        while let Some(node) = pending.pop() {
+            let expression = program.node(node).unwrap();
+            match &expression.kind {
+                EffectExprKind::Operation(EffectOperation::Cleanup(found)) => scope = Some(*found),
+                EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) => {
+                    bindings.push((binding.binder().id(), binding.initializer()))
+                }
+                _ => {}
+            }
+            pending.extend(
+                (0..expression.kind.child_count())
+                    .filter_map(|index| expression.kind.child_at(index)),
+            );
+        }
+        let scope = scope.unwrap();
+        let initializer = bindings
+            .into_iter()
+            .find(|(binder, _)| *binder == scope.callback)
+            .unwrap()
+            .1;
+        let executable = ExecutableProgram::Effect(program.shared());
+        let transition = dispatch_entry(
+            &executable,
+            initializer,
+            Environment::new(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let Control::Return(callback) = transition.control else {
+            panic!("ordinary callback")
+        };
+        let environment = Environment::new().extend(scope.callback, callback).unwrap();
+        (program, scope, environment)
+    }
+
+    #[test]
+    fn cleanup_preflight_charges_exactly_before_publication_and_reuses_capacity() {
+        let (program, scope, environment) = cleanup_fixture();
+        let exact = 2 + environment.len();
+        for allowance in [exact - 1, exact, exact] {
+            let mut machine = Machine::new_effect(&program);
+            machine.instantiation_work = TypeWorkBudget::with_limit(allowance);
+            let result = machine.acquire_cleanup(scope, environment.clone());
+            if allowance < exact {
+                assert_eq!(result, Err(RuntimeFailure::EnvironmentCapacity));
+                assert!(machine.frames.is_empty());
+                assert_eq!(machine.live_cleanups, 0);
+            } else {
+                result.unwrap();
+                assert_eq!(machine.instantiation_work.used(), exact);
+                assert_eq!(machine.live_cleanups, 1);
+            }
+        }
+        let mut machine = Machine::new_effect(&program);
+        machine.cleanup_limit = 1;
+        for _ in 0..3 {
+            machine.acquire_cleanup(scope, environment.clone()).unwrap();
+            assert_eq!(
+                machine.acquire_cleanup(scope, environment.clone()),
+                Err(RuntimeFailure::ResourceCapacity)
+            );
+            assert_eq!(machine.frames.len(), 1);
+            let owner = machine.frames.pop().unwrap();
+            machine.return_from(owner, integer("42")).unwrap();
+            assert_eq!(
+                machine.live_cleanups, 1,
+                "running completion retains capacity"
+            );
+            let completion = machine.frames.pop().unwrap();
+            machine.return_from(completion, Value::Unit).unwrap();
+            assert_eq!(machine.live_cleanups, 0);
+            assert!(
+                matches!(&machine.control, Some(Control::Return(Value::Integer(value))) if value.to_string() == "42")
+            );
+        }
+    }
+
+    #[test]
+    fn cleanup_start_has_an_exact_charge_and_failure_does_not_start_an_action() {
+        let (program, scope, environment) = cleanup_fixture();
+        for allowance in [1, 2, 2] {
+            let mut machine = Machine::new_effect(&program);
+            machine.acquire_cleanup(scope, environment.clone()).unwrap();
+            machine.instantiation_work = TypeWorkBudget::with_limit(allowance);
+            let owner = machine.frames.pop().unwrap();
+            let result = machine.return_from(owner, integer("42"));
+            assert_eq!(machine.live_cleanups, 1);
+            if allowance == 1 {
+                assert_eq!(result, Err(RuntimeFailure::EnvironmentCapacity));
+                assert!(machine.frames.is_empty());
+                assert!(
+                    !matches!(machine.control, Some(Control::Evaluate(node, _)) if node == scope.action)
+                );
+            } else {
+                result.unwrap();
+                assert_eq!(machine.instantiation_work.used(), 2);
+                assert!(matches!(
+                    machine.frames.as_slice(),
+                    [Frame::CleanupCompletion { .. }]
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn cleanup_partial_action_and_completed_inner_action_are_not_replayed_on_failure() {
+        let program = effect_program(
+            "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = resource cell<R> trace = 0 {\nlet result = cleanup fn(ignored) {\nlet outer_started = 7003\nCell.write (trace, 1)\n} {\nlet result = cleanup fn(ignored) {\nlet written = Cell.write (trace, 2)\nlet first_write_completed = 7001\nCell.write (trace, 3)\n} {\n42\n}\nlet inner_completed = 7002\nresult\n}\nCell.read trace\n}\n",
+        );
+        let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut measured = Machine::new_effect(&program);
+        measured.work_trace = Some(Arc::clone(&observed));
+        assert_eq!(measured.run().unwrap().value.to_string(), "1");
+        let trace = observed.lock().unwrap();
+        let marker = |value: &str| {
+            trace
+                .iter()
+                .copied()
+                .find(|(node, _)| {
+                    matches!(&program.node(*node).unwrap().kind,
+                    EffectExprKind::Pure(PureExprKind::Value(PureValue::Integer(integer)))
+                        if integer.value().to_string() == value)
+                })
+                .unwrap()
+        };
+        let first_write = marker("7001");
+        let inner_done = marker("7002");
+        let outer_started = marker("7003");
+        for (stop, completed_inner) in [(first_write, false), (inner_done, true)] {
+            for _ in 0..2 {
+                let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+                let mut failure = Machine::new_effect(&program);
+                failure.work_trace = Some(Arc::clone(&observed));
+                failure.instantiation_work = TypeWorkBudget::with_limit(stop.1);
+                assert_eq!(
+                    failure.run().unwrap_err(),
+                    RuntimeFailure::EnvironmentCapacity
+                );
+                let trace = observed.lock().unwrap();
+                let visits = |marker| trace.iter().filter(|(node, _)| *node == marker).count();
+                // These strict markers run only after the preceding cell
+                // write or inner action returned, not merely on request entry.
+                assert_eq!(visits(first_write.0), 1);
+                assert_eq!(visits(inner_done.0), usize::from(completed_inner));
+                assert_eq!(visits(outer_started.0), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn cleanup_live_owner_cannot_be_published_as_a_successful_result() {
+        let (program, _, _) = cleanup_fixture();
+        let mut machine = Machine::new_effect(&program);
+        machine.control = Some(Control::Return(integer("42")));
+        machine.live_cleanups = 1;
+        assert_eq!(
+            machine.run().unwrap_err(),
+            RuntimeFailure::InvalidControlState
+        );
+    }
+
+    #[test]
+    fn cleanup_deep_normal_completion_and_capacity_failure_use_a_small_stack() {
+        const CHILD: &str = "ASH_CLEANUP_MACHINE_STACK_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact", "eval::machine::tests::cleanup_deep_normal_completion_and_capacity_failure_use_a_small_stack", "--nocapture"]).env(CHILD, "1").status().unwrap();
+            assert!(status.success());
+            return;
+        }
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut source = String::from("main : Unit -> Int\nmain () = ");
+                for _ in 0..24 {
+                    source.push_str("cleanup fn(ignored) {\n()\n} {\n");
+                }
+                source.push_str("42\n");
+                for _ in 0..24 {
+                    source.push_str("}\n");
+                }
+                let program = effect_program(&source);
+                let mut exact = Machine::new_effect(&program);
+                exact.cleanup_limit = 24;
+                assert_eq!(exact.run().unwrap().value.to_string(), "42");
+                let mut short = Machine::new_effect(&program);
+                short.cleanup_limit = 23;
+                assert_eq!(short.run().unwrap_err(), RuntimeFailure::ResourceCapacity);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     fn registration_fixture() -> (ValidatedEffectProgram, NodeId, Environment) {
@@ -2978,7 +3269,7 @@ mod tests {
             .stack_size(256 * 1024)
             .spawn(move || {
                 let mut machine = Machine::new_effect(&program);
-                machine.work_trace = Some(Vec::new());
+                machine.work_trace = Some(Arc::new(std::sync::Mutex::new(Vec::new())));
                 let result = machine.run().unwrap();
                 assert_eq!(
                     result.value.to_string(),
@@ -3881,6 +4172,13 @@ mod tests {
 
     const EFFECT_TRANSITION_OWNERSHIP: &[TransitionOwner] = &[
         TransitionOwner {
+            feature: "cleanup",
+            entry: "Machine::acquire_cleanup",
+            frames: &["Frame::CleanupBoundary", "Frame::CleanupCompletion"],
+            // Both frame-return transitions belong to separate arms of this method.
+            returns: &["Machine::return_from", "Machine::return_from"],
+        },
+        TransitionOwner {
             feature: "registration",
             entry: "Machine::acquire_registration",
             frames: &["Frame::RegistrationBoundary"],
@@ -4064,13 +4362,14 @@ mod tests {
     #[test]
     fn every_effect_operation_has_one_explicit_transition_owner() {
         assert_eq!(TRANSITION_OWNERSHIP.len(), 14);
-        assert_eq!(EFFECT_TRANSITION_OWNERSHIP.len(), 7);
+        assert_eq!(EFFECT_TRANSITION_OWNERSHIP.len(), 8);
         assert_eq!(
             EFFECT_TRANSITION_OWNERSHIP
                 .iter()
                 .map(|owner| owner.feature)
                 .collect::<Vec<_>>(),
             [
+                "cleanup",
                 "registration",
                 "resource",
                 "handler",
@@ -4084,7 +4383,7 @@ mod tests {
             !owner.entry.is_empty()
                 && owner.frames.len()
                     == match owner.feature {
-                        "resource" => 2,
+                        "resource" | "cleanup" => 2,
                         "discard" => 0,
                         _ => 1,
                     }

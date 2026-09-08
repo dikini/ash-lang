@@ -282,6 +282,16 @@ pub struct RegistrationScopeNode {
     pub(crate) span: crate::source::Span,
 }
 
+/// A non-interpreting owner; `action` is the authenticated callback application.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CleanupScopeNode {
+    pub(crate) callback: crate::resolved::BinderId,
+    pub(crate) body: NodeId,
+    pub(crate) action: NodeId,
+    pub(crate) span: crate::source::Span,
+    pub(crate) action_span: crate::source::Span,
+}
+
 /// An acquisition owns its rigid identity and body-local handle. Its integer
 /// initializer is a preceding-scope child, not an ordinary constructor payload.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -318,6 +328,7 @@ impl ResourceScopeNode {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EffectOperation {
+    Cleanup(CleanupScopeNode),
     Registration(RegistrationScopeNode),
     Resource(Box<ResourceScopeNode>),
     Request(RequestNode),
@@ -423,7 +434,8 @@ impl CoreOperationFamily for EffectOperationFamily {
                 }
                 Some(&handler.effect)
             }
-            EffectOperation::Registration(_)
+            EffectOperation::Cleanup(_)
+            | EffectOperation::Registration(_)
             | EffectOperation::Resume(_)
             | EffectOperation::Discard(_) => None,
         };
@@ -481,6 +493,7 @@ impl CoreOperationFamily for EffectOperationFamily {
     fn child_count(kind: &Self::Kind) -> usize {
         match kind {
             EffectExprKind::Pure(kind) => kind.child_count(),
+            EffectExprKind::Operation(EffectOperation::Cleanup(_)) => 2,
             EffectExprKind::Operation(EffectOperation::Registration(_)) => 1,
             EffectExprKind::Operation(EffectOperation::Resource(_)) => 2,
             EffectExprKind::Operation(EffectOperation::Discard(_)) => 0,
@@ -494,6 +507,7 @@ impl CoreOperationFamily for EffectOperationFamily {
         match kind {
             EffectExprKind::Operation(EffectOperation::Handler(node)) => node.clauses.len(),
             EffectExprKind::Pure(_)
+            | EffectExprKind::Operation(EffectOperation::Cleanup(_))
             | EffectExprKind::Operation(EffectOperation::Registration(_))
             | EffectExprKind::Operation(EffectOperation::Resource(_))
             | EffectExprKind::Operation(EffectOperation::Discard(_))
@@ -505,6 +519,11 @@ impl CoreOperationFamily for EffectOperationFamily {
     fn child_at(kind: &Self::Kind, index: usize) -> Option<NodeId> {
         match kind {
             EffectExprKind::Pure(kind) => kind.child_at(index),
+            EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => match index {
+                0 => Some(scope.body),
+                1 => Some(scope.action),
+                _ => None,
+            },
             EffectExprKind::Operation(EffectOperation::Registration(scope)) => {
                 (index == 0).then_some(scope.body)
             }
@@ -532,7 +551,9 @@ impl CoreOperationFamily for EffectOperationFamily {
     fn discard_metadata(kind: Self::Kind) {
         match kind {
             EffectExprKind::Pure(kind) => discard_pure_expr_kind_metadata(kind),
-            EffectExprKind::Operation(EffectOperation::Registration(_)) => {}
+            EffectExprKind::Operation(
+                EffectOperation::Registration(_) | EffectOperation::Cleanup(_),
+            ) => {}
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => drop(resource),
             EffectExprKind::Operation(EffectOperation::Request(mut node)) => {
                 let placeholder = EffectInstance::new(node.effect.effect(), Box::new([]));
@@ -583,6 +604,7 @@ impl CoreBuilder<EffectOperationFamily> {
     ) -> Result<(), super::BuildError> {
         enum Equation {
             Registration(NodeId),
+            Cleanup(NodeId, NodeId),
             Pure,
             Replace,
             Request(NodeId, EffectInstance),
@@ -602,6 +624,9 @@ impl CoreBuilder<EffectOperationFamily> {
             for index in range {
                 self.charge_effect_metadata(1)?;
                 let equation = match &self.nodes[index].kind {
+                    EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
+                        Equation::Cleanup(scope.body, scope.action)
+                    }
                     EffectExprKind::Operation(EffectOperation::Registration(scope)) => {
                         Equation::Registration(scope.body)
                     }
@@ -650,6 +675,25 @@ impl CoreBuilder<EffectOperationFamily> {
                     }
                 };
                 let effects = match equation {
+                    Equation::Cleanup(body, action) => {
+                        let body = clone_effect_row_with_budget(
+                            &self
+                                .nodes
+                                .get(body.index()?)
+                                .ok_or(super::BuildError::InvalidNodeId)?
+                                .effects,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+                        let action = &self
+                            .nodes
+                            .get(action.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?
+                            .effects;
+                        body.union_with_budget(action, &mut self.type_work)
+                            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                            .map_err(|_| super::BuildError::InvalidPayload)?
+                    }
                     Equation::Registration(body) => clone_effect_row_with_budget(
                         &self
                             .nodes
@@ -871,6 +915,16 @@ impl CoreBuilder<EffectOperationFamily> {
             hook_root,
             None,
         )
+    }
+
+    pub(crate) fn cleanup_scope(
+        &mut self,
+        scope: CleanupScopeNode,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, super::BuildError> {
+        self.push_operation(ty, effects, origin, EffectOperation::Cleanup(scope))
     }
 
     pub(crate) fn registration_scope(

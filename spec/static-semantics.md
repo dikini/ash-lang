@@ -1244,6 +1244,34 @@ discard retains its registration or pending-owner labels. Inference and
 independent validation charge the existing owning work ledgers for added
 relationships and scans.
 
+## Scoped cleanup actions
+
+In a cleanup expression, the action checks as `Unit -> Unit ! epsilon_cleanup`.
+An anonymous function receives the `Unit` domain and result context while its
+latent effects are inferred. Ordinary callback values, imported factories and
+generic functions use the same type and row rules; cleanup does not require a
+pure action or a universally closed row.
+
+The scope has its body's value type. Its least outward row includes the
+initializer's effects, the body's effects and the action's latent effects.
+A handler installed only inside the body does not discharge the later action's
+effects. A handler installed inside the action handles requests normally.
+Callback shape errors use ordinary type diagnostics; missing outward effects
+use ordinary row diagnostics.
+
+The scope owns one invocation obligation independently of ordinary copies of
+the callback. Completion analysis follows the actual callback, including its
+imported and generic relationships. Starting the action consumes its eligibility
+for another invocation but retains a required completion until it returns.
+A discard that abandons an armed cleanup obligation or skips a running action
+is `effect.discard-unsafe`; an action-local discard may complete when the action
+and surrounding owners still complete.
+
+Stored-dependency checks apply to the saved body result, the action's captures
+and its operation payloads. An action may access an enclosing cell while that
+cell remains live, but cleanup does not authorize exporting its dependencies.
+An escaping dependency remains `type.resource-escape`.
+
 ## Scoped cells and resource dependencies
 
 The compiler-owned `@builtin.cell` module supplies one sealed API. The import
