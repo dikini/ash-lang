@@ -133,3 +133,110 @@ fn imported_open_lacks_helper_preserves_its_least_root_row_after_transforms() {
         "42",
     );
 }
+
+#[test]
+fn registration_order_and_generic_coincidence_execute_after_both_transforms() {
+    transformed(
+        "effect Adjust {\npublish : Int -> Int\n}\nmain : Unit -> Int\nmain () = hook Adjust {\nregister Adjust (fn(value) {\nvalue + 1\n}) {\nregister Adjust (fn(value) {\nvalue * 2\n}) {\nperform Adjust.publish 3\n}\n}\n}\n",
+        &[],
+        "8",
+    );
+    for (argument, expected) in [("()", "4"), ("true", "3")] {
+        transformed(
+            &format!(
+                "import helper (Mark, probe)\nmain : Unit -> Int\nmain () = hook Mark<Unit> {{\nhook Mark<Bool> {{\nprobe ((), {argument})\n}}\n}}\n"
+            ),
+            &[(
+                "helper.ash",
+                "pub effect Mark<T> {\npublish : Int -> Int\n}\npub probe<T, U> : (T, U) -> Int ! {Mark<T>, Mark<U>}\nprobe ignored = register Mark<U> (fn(value) {\nvalue + 1\n}) {\nperform Mark<T>.publish 3\n}\n",
+            )],
+            expected,
+        );
+    }
+}
+
+#[test]
+fn imported_opaque_callback_factory_executes_after_both_transforms() {
+    transformed(
+        "import facade (Adjust, make, Box, pack, unpack)\nconstant : Unit -> Int\nconstant ignored = 1\nsaved : Unit -> Int\nsaved ignored = 42\nmain : Unit -> Int\nmain () = hook Adjust {\nlet callback = unpack (pack (make saved))\nlet result = register Adjust callback {\nperform Adjust.publish constant\n}\nresult ()\n}\n",
+        &[
+            (
+                "api.ash",
+                "pub effect Adjust {\npublish : (Unit -> Int) -> (Unit -> Int)\n}\npub opaque type Box<A> = Hidden(A)\npub pack<A> : A -> Box<A>\npack value = Hidden value\npub unpack<A> : Box<A> -> A\nunpack (Hidden value) = value\npub make : (Unit -> Int) -> ((Unit -> Int) -> (Unit -> Int))\nmake saved = fn(previous) {\nsaved\n}\n",
+            ),
+            (
+                "facade.ash",
+                "pub import api (Adjust, make, Box, pack, unpack)\n",
+            ),
+        ],
+        "42",
+    );
+}
+
+#[test]
+fn imported_evidence_method_factory_adds_a_live_resource_dependency_after_transforms() {
+    transformed(
+        "import @builtin.cell as Cell\nimport helper (Adjust, Read, read, Box, make, impl Make)\nconstant : Unit -> Int\nconstant ignored = 1\nmain : Unit -> Int\nmain () = resource cell<R> c = 42 {\nnewtype Token = Token(Unit)\nlet saved = Token(())\nwith Read<Token> {\nread ignored = handle (Cell.read c) with Cell.Ops<R> {\nread value => resume 42\nwrite value => resume ()\n}\n}\nhook Adjust {\nlet callback = make (Box saved)\nlet result = register Adjust callback {\nperform Adjust.publish constant\n}\nresult ()\n}\n}\n",
+        &[(
+            "helper.ash",
+            "pub effect Adjust {\npublish : (Unit -> Int) -> (Unit -> Int)\n}\npub interface Read<A> {\nread : A -> Int\n}\npub type Box<A> = Box(A)\npub interface Make<A> {\nmake : A -> ((Unit -> Int) -> (Unit -> Int))\n}\npub impl<A> Make<Box<A>> where Read<A> {\nmake (Box saved) = fn(previous) {\nfn(ignored) {\nread saved\n}\n}\n}\n",
+        )],
+        "42",
+    );
+}
+
+#[test]
+fn registration_keeps_saved_generic_callback_type_and_row_context_after_transforms() {
+    transformed(
+        "import helper (Adjust, relay)\neffect Log {\nlog : Int -> Int\n}\ncallback : Int -> Int ! {Log}\ncallback value = perform Log.log (value + 1)\nmain : Unit -> Int\nmain () = handle (hook Adjust<Int> {\nrelay callback\n}) with Log {\nlog value => resume (value * 2)\n}\n",
+        &[(
+            "helper.ash",
+            "pub effect Adjust<T> {\npublish : T -> T\n}\npub relay<R : EffectRow> : (Int -> Int ! {| R}) -> Int ! {Adjust<Int> | R}\nrelay callback = register Adjust<Int> callback {\nperform Adjust<Int>.publish 3\n}\n",
+        )],
+        "8",
+    );
+}
+
+#[test]
+fn registration_callback_adds_a_tuple_dependency_preserved_by_projection_and_transforms() {
+    transformed(
+        "import @builtin.cell as Cell\neffect Adjust {\npublish : (Int, Unit -> Int) -> (Int, Unit -> Int)\n}\nconstant : Unit -> Int\nconstant ignored = 1\nmain : Unit -> Int\nmain () = resource cell<R> c = 42 {\nlet callback : (Int, Unit -> Int) -> (Int, Unit -> Int) = fn(previous) {\nlet (number, old) = previous\nlet saved : Unit -> Int = fn(ignored) {\nlet held = c\n42\n}\n(number + 1, saved)\n}\nlet result = hook Adjust {\nregister Adjust callback {\nperform Adjust.publish (1, constant)\n}\n}\nlet (number, saved) = result\nnumber + saved ()\n}\n",
+        &[],
+        "44",
+    );
+}
+
+#[test]
+fn registration_generic_dependency_coincidence_executes_with_the_cell_live() {
+    for (argument, expected) in [("()", "42"), ("true", "1")] {
+        transformed(
+            &format!(
+                "import @builtin.cell as Cell\neffect Mark<T> {{\npublish : (Unit -> Int) -> (Unit -> Int)\n}}\nconstant : Unit -> Int\nconstant ignored = 1\nprobe<T, U> : (T, U, ((Unit -> Int) -> (Unit -> Int))) -> (Unit -> Int) ! {{Mark<T>, Mark<U>}}\nprobe (first, second, callback) = register Mark<U> callback {{\nperform Mark<T>.publish constant\n}}\nmain : Unit -> Int\nmain () = resource cell<R> c = 42 {{\nlet callback : (Unit -> Int) -> (Unit -> Int) = fn(previous) {{\nfn(ignored) {{\nlet held = c\n42\n}}\n}}\nlet result = hook Mark<Unit> {{\nhook Mark<Bool> {{\nprobe ((), {argument}, callback)\n}}\n}}\nresult ()\n}}\n"
+            ),
+            &[],
+            expected,
+        );
+    }
+}
+
+#[test]
+fn registration_generic_completion_coincidence_resumes_after_both_transforms() {
+    for (argument, expected) in [("()", "4"), ("true", "3")] {
+        transformed(
+            &format!(
+                "effect Mark<T> {{\npublish : Int -> Int\n}}\neffect Pause {{\nask : Int -> Int\n}}\nincrement : Int -> Int\nincrement value = value + 1\nprobe<T, U> : (T, U) -> Int ! {{Mark<T>, Mark<U>, Pause}}\nprobe ignored = register Mark<U> increment {{\nlet value = perform Mark<T>.publish 3\nperform Pause.ask value\n}}\nmain : Unit -> Int\nmain () = handle (hook Mark<Unit> {{\nhook Mark<Bool> {{\nprobe ((), {argument})\n}}\n}}) with Pause {{\nask value => resume value\n}}\n"
+            ),
+            &[],
+            expected,
+        );
+    }
+}
+
+#[test]
+fn registration_forwards_through_an_older_ordinary_exact_handler_after_transforms() {
+    transformed(
+        "effect Adjust {\npublish : Int -> Int\n}\nincrement : Int -> Int\nincrement value = value + 1\nmain : Unit -> Int\nmain () = handle (register Adjust increment {\nperform Adjust.publish 3\n}) with Adjust {\npublish value => resume (value * 10)\n}\n",
+        &[],
+        "31",
+    );
+}

@@ -391,10 +391,6 @@ pub(super) fn validate_effect_family(
         program.discard_iteratively();
         return Err(error);
     }
-    if let Err(error) = validator.reject_pending_registration_runtime() {
-        program.discard_iteratively();
-        return Err(error);
-    }
     let (registry, method_evidence, anchors, arena, stored, root) = program.into_parts();
     let mut nodes = Vec::with_capacity(stored.len());
     for (index, stored) in stored.into_iter().enumerate() {
@@ -432,10 +428,6 @@ pub(super) fn validate_effect_modules_family(
         }
     };
     if let Err(error) = validator.run_effect() {
-        program.discard_iteratively();
-        return Err(error);
-    }
-    if let Err(error) = validator.reject_pending_registration_runtime() {
         program.discard_iteratively();
         return Err(error);
     }
@@ -7889,24 +7881,6 @@ struct EffectClauseContract {
 }
 
 impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperationFamily> {
-    fn reject_pending_registration_runtime(&self) -> Result<(), ValidationError> {
-        for (index, node) in self.program.nodes.iter().enumerate() {
-            self.charge_type_work(1)?;
-            if matches!(
-                node.kind,
-                super::effect::EffectExprKind::Operation(
-                    super::effect::EffectOperation::Registration(_)
-                )
-            ) {
-                return Err(ValidationError::new(
-                    ValidationReason::Handler,
-                    Some(node_id(self.program.arena, index)?),
-                ));
-            }
-        }
-        Ok(())
-    }
-
     fn validate_registration_owner(
         &self,
         id: NodeId,
@@ -9454,8 +9428,8 @@ mod tests {
         (core, sources, relations)
     }
 
-    // Step 3 proves Core, but cannot publish an executable program. These private
-    // fixtures exercise transforms after the same proof without crossing that gate.
+    // Borrowed proof checks support mutation controls; executable fixtures use
+    // the public validator and retain no separate admission path.
     pub(in crate::core) fn registration_proof_check(
         core: &super::super::effect::UnvalidatedEffectProgram,
         sources: &[&SourceFile],
@@ -9469,23 +9443,7 @@ mod tests {
         sources: &[&SourceFile],
         relations: &[(ModuleId, SourceId)],
     ) -> super::super::effect::ValidatedEffectProgram {
-        super::Validator::new_modules(&core, sources, relations)
-            .unwrap()
-            .run_effect()
-            .unwrap();
-        let (registry, methods, anchors, arena, stored, root) = core.into_parts();
-        let nodes = stored
-            .into_iter()
-            .map(|node| super::CoreTypedExpr {
-                ty: node.ty,
-                effects: node.effects,
-                origin: node.origin.unwrap(),
-                kind: node.kind,
-            })
-            .collect();
-        super::ValidatedCoreProgram::new(super::CoreProgram::new(
-            registry, methods, anchors, arena, nodes, root,
-        ))
+        super::super::validate_effect_modules(core, sources, relations).unwrap()
     }
 
     fn prove_registration_transforms(fixture: HookFixture) {
@@ -9494,15 +9452,10 @@ mod tests {
         for pass in 0..3 {
             let mut validator = super::Validator::new_modules(&core, &sources, &relations).unwrap();
             validator.run_effect().unwrap();
-            assert!(validator.reject_pending_registration_runtime().is_err());
             let program = registration_proof_program(core, &sources, &relations);
-            let gated = super::super::transform::identity_effect_traversal(&program).unwrap();
-            assert_eq!(
-                super::super::validate_effect_modules(gated, &sources, &relations)
-                    .unwrap_err()
-                    .reason(),
-                super::ValidationReason::Handler
-            );
+            crate::eval::evaluate_effect(&program).unwrap();
+            let transformed = super::super::transform::identity_effect_traversal(&program).unwrap();
+            super::super::validate_effect_modules(transformed, &sources, &relations).unwrap();
             core = if pass == 1 {
                 super::super::transform::fold_effect_literal_primitives(&program)
             } else {
@@ -9510,7 +9463,8 @@ mod tests {
             }
             .unwrap();
         }
-        assert!(super::super::validate_effect_modules(core, &sources, &relations).is_err());
+        let program = super::super::validate_effect_modules(core, &sources, &relations).unwrap();
+        crate::eval::evaluate_effect(&program).unwrap();
     }
 
     #[test]
@@ -9627,20 +9581,13 @@ mod tests {
     }
 
     #[test]
-    fn registration_structure_proves_before_unconditional_runtime_gate() {
+    fn registration_structure_proves_and_executes_through_public_validators() {
         let (core, sources, relations) = hook_source_fixture(
             "effect Adjust {\npublish : Int -> Int\n}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Bool\nmain () = hook Adjust {\nregister Adjust identity {\ntrue\n}\n}\n",
         );
         let borrowed = sources.iter().collect::<Vec<_>>();
         let mut validator = super::Validator::new_modules(&core, &borrowed, &relations).unwrap();
         validator.run_effect().unwrap();
-        assert_eq!(
-            validator
-                .reject_pending_registration_runtime()
-                .unwrap_err()
-                .reason(),
-            super::ValidationReason::Handler
-        );
         let program = registration_proof_program(core, &borrowed, &relations);
         for transform in [
             super::super::transform::identity_effect_traversal,
@@ -9650,11 +9597,13 @@ mod tests {
             super::Validator::new(&core, &borrowed)
                 .run_effect()
                 .unwrap();
+            let validated = super::super::effect::validate_effect(core, &borrowed).unwrap();
             assert_eq!(
-                super::super::effect::validate_effect(core, &borrowed)
-                    .unwrap_err()
-                    .reason(),
-                super::ValidationReason::Handler
+                crate::eval::evaluate_effect(&validated)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "true"
             );
         }
     }

@@ -26,8 +26,8 @@ typed Effect Core, finite capture analysis and explicit evaluator.
 - [x] Step 1: primary syntax, projection and fail-closed staging.
 - [x] Step 2: authenticated, executable hook roots and absent-target rows.
 - [x] Step 3: registration typing, generated forwarding and completion proof.
-- [ ] Step 4: runtime registration ownership and complete source execution.
-- [ ] Step 5: full interaction corpus, specification, reviews and verification.
+- [x] Step 4: runtime registration ownership and complete source execution.
+- [x] Step 5: full interaction corpus, specification, reviews and verification.
 - [ ] Retained checkpoint, transition cleanup, unsigned local integration,
   merged-checkout verification and completed worktree removal.
 
@@ -296,3 +296,22 @@ all-short/fresh-retry and small-stack evidence is retained in the
 explicit harness and failure-boundary limits. Both public validators still
 reject executable registration after proof. Step 4 must implement runtime
 activation ownership before removing those gates.
+
+The runtime draft's full writer gate passes 1,141 library tests, 251 focused
+integration tests, 76 documentation-example tests and all 32 architecture
+checks. This snapshot precedes the consumed-clause review correction and
+aggregate payload controls. After those changes, the writer repeats library,
+focused integration, formatting and strict Clippy checks. The parent's
+independent `cargo xtask verify` supplies the complete corrected architecture
+and workspace gate, avoiding a duplicate architecture scan without omitting
+any final verification.
+
+On September 8, the final parent `CARGO_INCREMENTAL=0 cargo xtask verify`
+completed every phase successfully, including 1,142 library tests, all 32
+architecture checks and 76 documentation-example tests. The original tool
+session receipt was lost during context truncation; the full successful phase
+log and terminated process were inspected. The merged-checkout gate will
+retain its separate exit receipt. Final high semantic and Rust/resource
+reviews and the medium documentation audit pass. Markdown lint and diff checks
+pass. The complete checkpoint and authorized local lifecycle remain to be
+retained; no semantic requirement or resource bound was dropped.

@@ -245,22 +245,43 @@ Pure Core families. Effect Core adds only these operation-family nodes:
 - `Request(effect_instance, operation, operand)` evaluates the operand and has
   the operand row union the requested exact instance;
 - `Handler(handler, body, effect_instance, clauses)` removes that instance from
-  the body row and retains the shared output row;
+  the body row and retains the shared output row; authenticated hook scopes
+  additionally retain their distinct scope-discharge contract;
 - each clause retains its operation identity, checked irrefutable pattern,
   body, handler identity, and one resume-owner identity;
 - `Resume(handler, owner, value)` remains a clause-scoped Core operation rather
   than a value or function;
 - `Discard(handler, owner)` is a clause-scoped, childless operation with value
-  type `Unit` and empty immediate row; and
+  type `Unit` and empty immediate row;
 - `Resource(acquisition, handle, initializer, body)` retains the authenticated
   builtin relation, evaluates the initializer outside the acquired scope, and
   removes exactly its `Ops<R>` instance from the body row before union with
-  the initializer row.
+  the initializer row; and
+- `Registration(handler, callback, body)` retains the non-interpreting
+  registration owner and its relation to the evaluated callback and generated
+  handler.
 
 Effect and operation declarations remain authenticated registry facts. Core
-contains no provider choice or runtime effect registration. Lowering does not
+contains no provider choice or machine-global registration registry. Lowering does not
 encode continuations as Rust closures or expose evaluator frames as Core data.
 The generated entry application is retained only with an empty row.
+
+A hook root lowers to an authenticated identity clause, `publish input =>
+resume input`. A registration first binds its transformer in the preceding
+context. Its explicit owner surrounds a generated handler whose clause binds
+the result of forwarding the original payload, applies the already evaluated
+callback to that result, then resumes with the transformed value. These are
+ordinary request, binding, application and resume nodes; there is no callback
+evaluator or source-visible registration value.
+
+The root and registration contracts retain the exact target, source relation
+and generated structure needed to authenticate scope discharge. Lowering does
+not fabricate a request, inflate a literal's least row or wrap the body in a
+function that would change its enclosing resume scope. Callback applications
+retain ordinary least-row qualification from the enclosing lexical authority.
+The owner and generated handler remain through generic specialization, even
+when target parameters may later coincide. Pure Core gains no inhabited hook
+carrier.
 
 Module checking infers private control summaries from typed semantic control
 and publishes them only after capture checking succeeds. A function summary
@@ -629,6 +650,11 @@ rejects every effect operation. Effect Core validation independently checks:
 - each resource's builtin origin, unique acquisition identity and handle,
   sealed provider and operation relation, initializer scope and `Int` type,
   body scope, exact row discharge and result contract;
+- each hook API's declaration-level endomorphic shape, exact target and
+  authenticated scope-discharge relation;
+- each registration's unique owner, preceding callback binding, callback
+  type/row, generated handler, forward–callback–resume order, result relation
+  and source origins;
 - exactly-once structural completion through resume or discard, and barriers
   against escape into functions, recursive members, supplied methods, or nested
   clauses;
@@ -646,9 +672,10 @@ linked Core control after ordinary validation. It does not trust an elaborator
 permission or imported summary in place of that derivation. A transformed
 program must re-establish the same safety property.
 
-Resource validation also reconstructs stored value and callable dependencies
-and resource-completion obligations from actual linked Core, even when there
-is no discard. It checks closing results, operation payloads crossing each
+Resource and registration validation also reconstruct stored value and callable
+dependencies and completion obligations from actual linked Core, even when
+there is no discard. Registration requires this proof even without cells or
+publication. It checks closing results, operation payloads crossing each
 owner and skipped completion, including restored control. Retained imported
 facts and elaborator results do not replace this independent derivation.
 Identity and folding transforms rebuild resource children and authentication
@@ -656,11 +683,21 @@ facts and return to the same full check before execution. Forged builtin
 origins, identity/handle/provider relations, lexical owners, dependencies or
 rows cannot authorize evaluation.
 
+Registration proof includes dependencies newly introduced by callback results
+and completion reached through actual linked callback targets. A source
+summary or a same-typed callback substitution does not establish that proof.
+Detached or duplicated owners and altered forwarding relationships reject;
+both transforms must re-establish the complete contract before execution.
+
 Static acquisition identities remain distinct from runtime activation keys.
 Core carries the former and contains no preallocated activation or mutable
 cell. Dynamic lexical instantiation binds each executed acquisition to a fresh
 activation; it cannot introduce an inference variable into validated Core or
 feed execution metadata back into source typing.
+
+The lexical registration owner is likewise distinct from each runtime
+activation of that scope. Core contains no pre-acquired callback entry or
+runtime activation key.
 
 For every resolved global with a nonempty outer binder list, validation
 requires its `TypeAbstraction` to be the immediate initializer of exactly one

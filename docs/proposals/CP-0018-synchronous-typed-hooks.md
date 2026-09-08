@@ -11,9 +11,11 @@
 > This proposal is accepted but is not current Ash. The user approved the full
 > contract, including transforming subscribers, registration order, handler
 > placement, scoped removal and pre-cleanup exits. The user separately authorized
-> implementation, tracked by TASK-0028; the feature is not implemented yet.
+> implementation, tracked by TASK-0028. The complete branch implementation,
+> specification, tests and final reviews now pass verification; transition
+> cleanup and local integration follow its retained product checkpoint.
 
-## Current behavior
+## Behavior at the proposal baseline
 
 `main` remains separate from the Effects Ash integration branch. This proposal
 starts from locally integrated checkpoint `13a92b5`, not from an assumption that
@@ -130,7 +132,7 @@ are no numeric priorities, equal-priority tie rules, or runtime reordering.
 Repeated registration of the same callback creates separate entries and invokes
 it once per participating entry. The empty chain is the identity function.
 
-This proposed program returns `8`; the new scope forms are not executable yet:
+This program returns `8` under the proposed behavior:
 
 ```ash
 effect Adjust {
@@ -412,7 +414,9 @@ existential package, general ownership syntax, main merge, push or milestone tag
 
 ## Required evidence
 
-These are required future observations, not tests already run for this proposal.
+These observations define the proposal's required evidence. The retained
+[report](../design/effect-ash/synchronous-hooks-evidence.md) records the
+implementation results.
 
 | Case | Required positive and negative observations |
 | --- | --- |

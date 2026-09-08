@@ -1474,9 +1474,13 @@ mod tests {
             &[(good.module().unwrap(), file.id())],
         )
         .unwrap();
+        let validated = validate_effect(core, &[&file]).unwrap();
         assert_eq!(
-            validate_effect(core, &[&file]).unwrap_err().reason(),
-            ValidationReason::Handler
+            crate::eval::evaluate_effect(&validated)
+                .unwrap()
+                .value
+                .to_string(),
+            "42"
         );
         for pass in 0..3 {
             let (mut core, file, good, bad) = checked_core_text(source);

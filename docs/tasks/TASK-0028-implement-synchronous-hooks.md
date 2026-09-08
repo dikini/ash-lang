@@ -42,7 +42,8 @@ Do not push, tag, merge `main`, or change signing configuration.
 - Step 1 syntax and projection are retained in unsigned checkpoint `bb618e8`.
   Step 2 authenticated executable roots are retained in unsigned checkpoint
   `e801edb`. Both passed independent semantic and Rust/resource reviews.
-- Step 3 registration structure and completion proof are verified. Lowering
+- Step 3 registration structure and completion proof are retained in unsigned
+  checkpoint `07bb726e`. Lowering
   retains a preceding callback binding, a non-interpreting completion owner and
   the ordinary generated forward–callback–resume clause. Independent linked
   Core proof rejects altered owner relationships, unsafe callback completion
@@ -57,12 +58,24 @@ Do not push, tag, merge `main`, or change signing configuration.
   checks successfully on the corrected snapshot, plus formatting and full
   strict Clippy. The evidence-document audit passes. The six added inventory
   fields retain existing classifications; no check or limit is weakened.
-- Both public Effect validators still reject executable registration after
-  completing proof. No callback class, including pure or unused callbacks, can
-  bypass this temporary gate. Step 3 is not registration runtime support.
-- Step 4 runtime activation ownership is next. Step 5's complete corpus,
-  specification, full verification and unsigned local integration remain open.
-  No push, tag or main merge has occurred.
+- At the retained Step 3 checkpoint, both public Effect validators reject
+  executable registration after completing proof, without a pure or unused
+  callback exemption. That checkpoint is not registration runtime support.
+- Steps 4 and 5 are implemented and verified. Registration uses a private
+  owning frame and ordinary forward–callback–resume execution. Final high
+  semantic and Rust/resource reviews pass, including the corrected duplicate
+  handler and consumed-clause checks. Generic coincidence, tuple/projection
+  dependencies and imported callback rows pass through both transforms.
+- All eight specification/tool updates pass medium review, local-link and
+  formal-notation checks, Markdown lint and the exact CLI test. The final
+  parent `CARGO_INCREMENTAL=0 cargo xtask verify` completed all phases
+  successfully on September 8, including 1,142 library tests, all 32
+  architecture checks and 76 documentation-example tests. Its original tool
+  session receipt was lost during context truncation; the completed log and
+  terminated process were inspected. Merged-checkout verification will retain
+  a separate process exit receipt.
+- The complete product checkpoint, transition cleanup and unsigned local
+  integration are next. No push, tag or main merge has occurred.
 
 ## Verification
 

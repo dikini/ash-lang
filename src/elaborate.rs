@@ -9660,17 +9660,31 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             previous_type,
             Origin::Source(contract.target_span),
         )?;
+        // Both operands are pure variables. Qualify the callback's latent row
+        // exactly as an ordinary application does, using only the enclosing
+        // checked row contract; its known members remain unchanged.
+        let application_effects = match callback_type
+            .function_view()
+            .and_then(|function| function.effects())
+        {
+            Some(effects) => {
+                self.union_effects(&EffectRow::empty(), effects, contract.target_span)?
+            }
+            None => EffectRow::empty(),
+        };
         let callback_type = self.pure_core_type(&callback_type)?;
         let callback = self.builder.variable(
             contract.callback,
             callback_type,
             Origin::Source(contract.target_span),
         )?;
-        let application_type = self.clone_type(&payload)?;
-        let application = self.builder.application(
-            callback,
-            previous_value,
-            application_type,
+        let application_type = IterativeTypeOwner::new(self.clone_type(&payload)?);
+        let application_effects = self.core_effect_row(&application_effects)?;
+        let application = F::push_application(
+            &mut self.builder,
+            ApplicationNode::new(callback, previous_value),
+            application_type.into_inner(),
+            application_effects,
             Origin::Source(contract.target_span),
         )?;
         let next_type = self.clone_type(&payload)?;

@@ -26,6 +26,55 @@ fn check_result(source: &str) -> Result<ash::driver::Observation, ash::driver::F
 }
 
 #[test]
+fn registration_tuple_and_projected_callback_dependency_cannot_escape() {
+    for (result_type, result) in [
+        ("(Int, Unit -> Int)", "result"),
+        ("(Unit -> Int)", "let (number, saved) = result\nsaved"),
+    ] {
+        assert_eq!(
+            check(&format!(
+                "import @builtin.cell as Cell\neffect Adjust {{\npublish : (Int, Unit -> Int) -> (Int, Unit -> Int)\n}}\nconstant : Unit -> Int\nconstant ignored = 1\nmain : Unit -> {result_type}\nmain () = resource cell<R> c = 42 {{\nlet callback : (Int, Unit -> Int) -> (Int, Unit -> Int) = fn(previous) {{\nlet (number, old) = previous\nlet saved : Unit -> Int = fn(ignored) {{\nlet held = c\n42\n}}\n(number + 1, saved)\n}}\nlet result = hook Adjust {{\nregister Adjust callback {{\nperform Adjust.publish (1, constant)\n}}\n}}\n{result}\n}}\n"
+            )),
+            Err("type.resource-escape".into()),
+            "{result_type}",
+        );
+    }
+}
+
+#[test]
+fn registration_original_tuple_dependency_cannot_be_lent_before_callback_erases_it() {
+    assert_eq!(
+        check(
+            "import @builtin.cell as Cell\neffect Adjust {\npublish : (Int, Unit -> Int) -> (Int, Unit -> Int)\n}\nconstant : Unit -> Int\nconstant ignored = 1\nerase : (Int, Unit -> Int) -> (Int, Unit -> Int)\nerase previous = (0, constant)\nmain : Unit -> Int\nmain () = hook Adjust {\nresource cell<R> c = 42 {\nlet saved : Unit -> Int = fn(ignored) {\nlet held = c\n42\n}\nlet result = register Adjust erase {\nperform Adjust.publish (1, saved)\n}\nlet (number, restored) = result\nnumber + restored ()\n}\n}\n"
+        ),
+        Err("type.resource-escape".into())
+    );
+}
+
+#[test]
+fn coincident_registration_callback_cannot_export_its_cell_dependency() {
+    assert_eq!(
+        check(
+            "import @builtin.cell as Cell\neffect Mark<T> {\npublish : (Unit -> Int) -> (Unit -> Int)\n}\nconstant : Unit -> Int\nconstant ignored = 1\nprobe<T, U> : (T, U, ((Unit -> Int) -> (Unit -> Int))) -> (Unit -> Int) ! {Mark<T>, Mark<U>}\nprobe (first, second, callback) = register Mark<U> callback {\nperform Mark<T>.publish constant\n}\nmain : Unit -> (Unit -> Int)\nmain () = resource cell<R> c = 42 {\nlet callback : (Unit -> Int) -> (Unit -> Int) = fn(previous) {\nfn(ignored) {\nlet held = c\n42\n}\n}\nhook Mark<Unit> {\nhook Mark<Bool> {\nprobe ((), (), callback)\n}\n}\n}\n"
+        ),
+        Err("type.resource-escape".into())
+    );
+}
+
+#[test]
+fn registration_completion_rejects_outward_discard_with_or_without_coincidence() {
+    for argument in ["()", "true"] {
+        assert_eq!(
+            check(&format!(
+                "effect Mark<T> {{\npublish : Int -> Int\n}}\neffect Pause {{\nask : Int -> Int\n}}\nincrement : Int -> Int\nincrement value = value + 1\nprobe<T, U> : (T, U) -> Int ! {{Mark<T>, Mark<U>, Pause}}\nprobe ignored = register Mark<U> increment {{\nlet value = perform Mark<T>.publish 3\nperform Pause.ask value\n}}\nmain : Unit -> Int\nmain () = handle (hook Mark<Unit> {{\nhook Mark<Bool> {{\nprobe ((), {argument})\n}}\n}}) with Pause {{\nask value => {{\nlet done = discard\nvalue\n}}\n}}\n"
+            )),
+            Err("effect.discard-unsafe".into()),
+            "argument: {argument}",
+        );
+    }
+}
+
+#[test]
 fn hook_argument_kinds_keep_original_nested_source_spans() {
     for (parameter, argument, reason, occurrence) in [
         ("F : Type -> Type", "Int", "kind.argument", "Int"),

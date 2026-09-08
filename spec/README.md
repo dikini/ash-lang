@@ -102,6 +102,15 @@ their owner, including through request payloads. Copied integers may escape.
 Each execution has a fresh activation, and capture/resume moves the owned
 scope without duplication. Normal completion releases it once.
 
+`hook H { body }` supplies the empty identity chain for an exact effect API
+with one endomorphic `publish` operation. `register H transformer { body }`
+evaluates one ordinary transformer and retains it for that scope. Publication
+uses `perform H.publish value`; outer registrations transform before inner
+ones, and callbacks run under handlers surrounding their registration. An exact
+nested root starts a separate chain. Normal return removes each registration
+once; capture/resume preserves its owner, and checked discard cannot skip its
+completion. Callback effects and stored resource dependencies remain checked.
+
 The source path selected for execution is the entry module. It declares exactly
 one local, monomorphic, unconstrained `main : Unit -> R`, where `R` is closed.
 Its computation row is empty. After checking every dependency, Ash links the
@@ -143,7 +152,8 @@ interfaces, explicit constraints, anonymous implementations, and pure and
 effectful expressions with single-use, non-escaping handler continuations.
 
 Beyond the fixed sealed cell provider and acquisition form, the effect kernel
-adds no general provider or resource declarations, hooks, automatic cleanup,
+adds no general provider or resource declarations, first-class registration
+tokens, arbitrary removal or priorities, automatic cleanup,
 foreign resources, escaping or multi-shot resume, asynchronous execution, or
 dynamic loading.
 A linked nonempty effect row is a source rejection rather than an
