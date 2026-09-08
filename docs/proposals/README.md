@@ -19,11 +19,10 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-- [CP-0019: Reliable Cleanup](CP-0019-reliable-cleanup.md) — scoped actions,
-  cleanup-capable checked discard, structural close order and ordinary typed
-  failure reporting. The no-separate-exceptions direction is agreed; the
-  detailed contract remains proposed and implementation is not authorized.
+No proposed change is currently awaiting a decision.
 
 ## Accepted changes
 
-No accepted change is awaiting implementation.
+- [CP-0019: Reliable Cleanup](CP-0019-reliable-cleanup.md) — accepted scoped
+  actions, cleanup-capable checked discard, structural close order and ordinary
+  typed failure reporting. Implementation awaits separate authorization.

@@ -1,7 +1,7 @@
 # CP-0019: Reliable Cleanup
 
 - ID: `CP-0019`
-- Status: proposed
+- Status: accepted
 - Related: [DN-0026](../design/DN-0026-effect-ash-resource-first-milestones.md),
   [DN-0028](../design/DN-0028-effect-ash-milestone-plan.md),
   [DN-0010](../design/DN-0010-identities-and-resource-lifetimes.md),
@@ -10,10 +10,11 @@
   [resource evidence](../design/effect-ash/resource-scope-evidence.md),
   [hook evidence](../design/effect-ash/synchronous-hooks-evidence.md)
 
-> This proposal is not current Ash and does not authorize implementation. The
-> user agreed to build cleanup on ordinary effects and checked `discard`, with
-> no separate exception mechanism. The detailed rules below are proposed for
-> acceptance. No specification or product code is changed by this document.
+> This proposal is accepted but is not current Ash. The user accepted the full
+> semantic contract and required evidence, including cleanup through ordinary
+> effects and checked `discard`, with no separate exception mechanism.
+> Implementation still requires separate authorization. No specification or
+> product code is changed by this document.
 
 ## Current behavior
 
@@ -447,7 +448,8 @@ measures its actual scans and retained fields.
 Before implementation, independent semantic and ownership/resource reviews
 must close this complete contract. Return a missing rule to this proposal;
 do not silently broaden captured-handler support or narrow a required positive
-case in product code. After acceptance, create one task and its temporary plan.
+case in product code. After implementation authorization, create one task and
+its temporary plan.
 The original 11-unit forecast remains a relative scope estimate, not an
 authorization or measured budget. No implementation plan is started here.
 
@@ -463,4 +465,5 @@ diff checks pass.
 
 These are design and documentation reviews, not execution evidence. The
 proposed example and CLEAN-01 through CLEAN-11 remain implementation obligations.
-The full proposal still needs user acceptance before an implementation task.
+The user accepted the full proposal. An implementation task remains subject to
+separate authorization.
