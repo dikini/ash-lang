@@ -1590,7 +1590,8 @@ fn resume_expression(parser: &mut Parser<'_>) {
 fn resource_expression(parser: &mut Parser<'_>) {
     parser.start(NodeKind::ResourceExpression);
     let _ = parser.bump();
-    if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "cell") {
+    if matches!(parser.current(), Some(TokenKind::Identifier(name)) if name == "cell" || name == "native_buffer")
+    {
         let _ = parser.bump();
     } else {
         parser.report(ParseReason::ExpectedForm, ExpectedForm::Identifier);

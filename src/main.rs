@@ -7,7 +7,8 @@ use std::{
 };
 
 use ash::{
-    driver::{FileFailure, Observation, RunConfiguration, run_path},
+    driver::{FileFailure, Observation, PipelineFailure, RunConfiguration, run_path},
+    eval::RuntimeFailure,
     module::{LoadGraphError, ModuleRoots},
     render,
 };
@@ -60,6 +61,10 @@ where
                 );
                 2
             }
+        }
+        Err(FileFailure::Pipeline(PipelineFailure::Runtime(RuntimeFailure::Report(report)))) => {
+            let _ = render::write_runtime_report(stderr, &report);
+            2
         }
         Err(failure) => {
             let status = if failure.is_source_rejection() { 1 } else { 2 };
@@ -414,6 +419,208 @@ mod tests {
             stderr,
             b"runtime.missing-binding\nruntime lexical binding is absent\n"
         );
+    }
+
+    #[test]
+    fn enriched_legacy_resource_report_uses_bounded_cause_writer() {
+        use ash::eval::{
+            CleanupStatus, ResourceFailure, ResourceFailureCause, RuntimePhase, RuntimeResource,
+        };
+        for (legacy, phase, cause) in [
+            (
+                RuntimeFailure::CapturedControlCapacity,
+                RuntimePhase::Capture,
+                ResourceFailureCause::ConfiguredCapacity,
+            ),
+            (
+                RuntimeFailure::EnvironmentCapacity,
+                RuntimePhase::Access,
+                ResourceFailureCause::WorkBudgetExhausted,
+            ),
+            (
+                RuntimeFailure::CapturedControlCapacity,
+                RuntimePhase::Capture,
+                ResourceFailureCause::StorageReservationFailed,
+            ),
+        ] {
+            let RuntimeFailure::Report(mut report) =
+                legacy.with_resource_details(ResourceFailure::new(
+                    cause,
+                    phase,
+                    RuntimeResource::FrameStorage,
+                    Some(1),
+                    Some(0),
+                ))
+            else {
+                panic!("report")
+            };
+            report.cleanup = CleanupStatus::Complete;
+            let mut stdout = [0; 0];
+            let mut output = [0; 512];
+            let mut remaining = output.as_mut_slice();
+            let status = execute_with_runner(
+                [OsString::from("injected.ash")],
+                &mut stdout.as_mut_slice(),
+                &mut remaining,
+                |_| {
+                    Err(FileFailure::Pipeline(PipelineFailure::Runtime(
+                        RuntimeFailure::Report(report),
+                    )))
+                },
+            );
+            assert_eq!(status, 2);
+            let used = 512 - remaining.len();
+            let output = std::str::from_utf8(&output[..used]).unwrap();
+            assert!(output.starts_with(legacy.reason_code()));
+            assert!(output.contains(&format!("cause: {}\n", cause.reason_code())));
+            assert!(output.contains(&format!("phase: {}\n", phase.label())));
+            assert!(output.ends_with("cleanup: complete\n"));
+            assert_eq!(
+                output.contains("underlying cause: undetermined"),
+                cause == ResourceFailureCause::StorageReservationFailed
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_resource_failure_reports_primary_secondary_and_cleanup() {
+        use ash::eval::{
+            CleanupStatus, ResourceFailure, ResourceFailureCause, RuntimePhase, RuntimeResource,
+        };
+        let primary = RuntimeFailure::resource(ResourceFailure::new(
+            ResourceFailureCause::WorkBudgetExhausted,
+            RuntimePhase::Access,
+            RuntimeResource::WorkUnits,
+            Some(3),
+            Some(2),
+        ));
+        let failure = primary.with_teardown_failure(
+            ResourceFailure::new(
+                ResourceFailureCause::AllocatorRefused,
+                RuntimePhase::Teardown,
+                RuntimeResource::FrameStorage,
+                Some(8),
+                None,
+            ),
+            CleanupStatus::Incomplete,
+        );
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let status = execute_with_runner(
+            [OsString::from("injected.ash")],
+            &mut stdout,
+            &mut stderr,
+            |_| Err(FileFailure::Pipeline(PipelineFailure::Runtime(failure))),
+        );
+        assert_eq!(status, 2);
+        assert!(stdout.is_empty());
+        assert_eq!(stderr, b"runtime.work-budget-exhausted\nphase: access\nresource: runtime work units\nrequested: 3\navailable: 2\nteardown: runtime.allocator-refused\nphase: teardown\nresource: control frames\nrequested: 8\ncleanup: incomplete\n");
+    }
+
+    #[test]
+    fn resource_diagnostic_stops_at_first_writer_error_without_retry_or_flush() {
+        use ash::eval::{ResourceFailure, ResourceFailureCause, RuntimePhase, RuntimeResource};
+        struct Refuses {
+            calls: usize,
+        }
+        impl Write for Refuses {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                self.calls += 1;
+                Err(io::ErrorKind::Interrupted.into())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                panic!("must stop on write failure")
+            }
+        }
+        let failure = RuntimeFailure::resource(ResourceFailure::new(
+            ResourceFailureCause::AllocatorRefused,
+            RuntimePhase::Acquisition,
+            RuntimeResource::FrameStorage,
+            None,
+            None,
+        ));
+        let mut stdout = Vec::new();
+        let mut stderr = Refuses { calls: 0 };
+        let status = execute_with_runner(
+            [OsString::from("injected.ash")],
+            &mut stdout,
+            &mut stderr,
+            |_| Err(FileFailure::Pipeline(PipelineFailure::Runtime(failure))),
+        );
+        assert_eq!(status, 2);
+        assert!(stdout.is_empty());
+        assert_eq!(stderr.calls, 1);
+    }
+
+    #[test]
+    fn resource_diagnostics_fit_stack_storage_with_maximum_and_zero_amounts() {
+        use ash::eval::{
+            CleanupStatus, ResourceFailure, ResourceFailureCause, RuntimePhase, RuntimeResource,
+        };
+        for (cause, phase, cleanup) in [
+            (
+                ResourceFailureCause::ConfiguredCapacity,
+                RuntimePhase::Acquisition,
+                CleanupStatus::Unknown,
+            ),
+            (
+                ResourceFailureCause::AllocatorRefused,
+                RuntimePhase::Capture,
+                CleanupStatus::Incomplete,
+            ),
+            (
+                ResourceFailureCause::WorkBudgetExhausted,
+                RuntimePhase::Access,
+                CleanupStatus::Complete,
+            ),
+            (
+                ResourceFailureCause::StorageReservationFailed,
+                RuntimePhase::Teardown,
+                CleanupStatus::Unknown,
+            ),
+        ] {
+            let RuntimeFailure::Report(mut report) =
+                RuntimeFailure::resource(ResourceFailure::new(
+                    cause,
+                    phase,
+                    RuntimeResource::WorkUnits,
+                    Some(usize::MAX),
+                    Some(0),
+                ))
+            else {
+                panic!("report")
+            };
+            report.cleanup = cleanup;
+            let mut output = [0; 512];
+            let mut remaining = output.as_mut_slice();
+            render::write_runtime_report(&mut remaining, &report).unwrap();
+            let used = 512 - remaining.len();
+            let output = &output[..used];
+            assert!(output.starts_with(cause.reason_code().as_bytes()));
+            assert!(
+                output
+                    .windows(b"available: 0\n".len())
+                    .any(|part| part == b"available: 0\n")
+            );
+            assert!(
+                output
+                    .windows(phase.label().len())
+                    .any(|part| part == phase.label().as_bytes())
+            );
+            let maximum = usize::MAX.to_string();
+            assert!(
+                output
+                    .windows(maximum.len())
+                    .any(|part| part == maximum.as_bytes())
+            );
+            assert!(output.ends_with(format!("cleanup: {}\n", cleanup.label()).as_bytes()));
+            assert_eq!(
+                output
+                    .windows(b"underlying cause: undetermined\n".len())
+                    .any(|part| part == b"underlying cause: undetermined\n"),
+                cause == ResourceFailureCause::StorageReservationFailed
+            );
+        }
     }
 
     fn injected_validation_failure() -> FileFailure {

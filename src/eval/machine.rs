@@ -6,8 +6,41 @@ use std::{error::Error, fmt, sync::Arc};
 mod instantiation;
 use instantiation::Instantiation;
 
+#[path = "native_buffer.rs"]
+mod native_buffer;
+
+#[cfg(test)]
+pub(crate) fn reset_native_buffer_counters_for_test() {
+    native_buffer::tests::reset();
+}
+
+#[cfg(test)]
+pub(crate) fn native_buffer_counters_for_test() -> [usize; 6] {
+    use native_buffer::tests::{ADAPTER_CALLS, ATTEMPTS, OWNERS, READS, RELEASES, WRITES};
+    [
+        ATTEMPTS.get(),
+        ADAPTER_CALLS.get(),
+        READS.get(),
+        WRITES.get(),
+        OWNERS.get(),
+        RELEASES.get(),
+    ]
+}
+use native_buffer::NativeOwner;
+
+#[cfg(test)]
+pub(super) fn refuse_disposal_growth() -> bool {
+    native_buffer::tests::FAIL_DISPOSAL_GROWTH.replace(false)
+}
+
+#[cfg(test)]
+#[path = "native_buffer_tests.rs"]
+mod native_buffer_tests;
+
+use super::disposal::{self, Pending};
 use super::{
-    Closure, Value,
+    Closure, ResourceFailureCause, RuntimePhase, RuntimeResource, Value,
+    failure::{charge_runtime_work, resource_failure},
     value::{
         ActivationKey, ExecutableNode, ExecutableProgram, HeapCell, Location, ObservedHeap,
         ObservedValue,
@@ -20,7 +53,7 @@ use crate::{
         ValidatedProgram,
     },
     resolved::{BinderId, ResumeId},
-    types::{EffectInstance, OperationId, TypeWorkBudget, same_type_with_budget},
+    types::{ConstructorId, EffectInstance, OperationId, TypeWorkBudget, same_type_with_budget},
 };
 
 /// Inspectable lexical values available while evaluating one expression.
@@ -74,7 +107,7 @@ enum RecursiveMemberKind {
 
 impl Drop for EnvironmentEntry {
     fn drop(&mut self) {
-        let mut pending = Vec::new();
+        let mut pending = Pending::new(RuntimeResource::EnvironmentDisposal);
         self.take_owned_edges(&mut pending);
         while let Some(entry) = pending.pop() {
             // Shared roots may occur more than once in `pending`. Consuming one
@@ -89,8 +122,15 @@ impl Drop for EnvironmentEntry {
 }
 
 impl EnvironmentEntry {
-    fn take_owned_edges(&mut self, pending: &mut Vec<Arc<Self>>) {
+    fn take_owned_edges(&mut self, pending: &mut Pending<Arc<Self>>) {
         if let Some(parent) = self.parent.take() {
+            #[cfg(test)]
+            if native_buffer::tests::REFUSAL_PROBE_ACTIVE.get()
+                && pending.len() == pending.capacity()
+            {
+                native_buffer::tests::REFUSAL_ENV_GROWTH
+                    .set(native_buffer::tests::REFUSAL_ENV_GROWTH.get() + 1);
+            }
             pending.push(parent);
         }
         if let EnvironmentEntryKind::Binding { value, .. } = &mut self.kind {
@@ -100,6 +140,13 @@ impl EnvironmentEntry {
                 _ => return,
             };
             if let Some(captured) = environment.head.take() {
+                #[cfg(test)]
+                if native_buffer::tests::REFUSAL_PROBE_ACTIVE.get()
+                    && pending.len() == pending.capacity()
+                {
+                    native_buffer::tests::REFUSAL_ENV_GROWTH
+                        .set(native_buffer::tests::REFUSAL_ENV_GROWTH.get() + 1);
+                }
                 pending.push(captured);
             }
             environment.len = 0;
@@ -203,11 +250,18 @@ impl Environment {
         None
     }
 
-    fn extend(mut self, binder: BinderId, value: Value) -> Result<Self, RuntimeFailure> {
-        let len = self
-            .len
-            .checked_add(1)
-            .ok_or(RuntimeFailure::EnvironmentCapacity)?;
+    fn extend(self, binder: BinderId, value: Value) -> Result<Self, RuntimeFailure> {
+        self.extend_in_phase(binder, value, RuntimePhase::Evaluation)
+    }
+
+    fn extend_in_phase(
+        mut self,
+        binder: BinderId,
+        value: Value,
+        phase: RuntimePhase,
+    ) -> Result<Self, RuntimeFailure> {
+        disposal::check()?;
+        let len = checked_environment_len(self.len, 1, phase)?;
         Ok(Self {
             head: Some(Arc::new(EnvironmentEntry {
                 kind: EnvironmentEntryKind::Binding { binder, value },
@@ -231,10 +285,7 @@ impl Environment {
         mut self,
         mut members: Vec<RecursiveMemberTemplate>,
     ) -> Result<Self, RuntimeFailure> {
-        let len = self
-            .len
-            .checked_add(members.len())
-            .ok_or(RuntimeFailure::EnvironmentCapacity)?;
+        let len = checked_environment_len(self.len, members.len(), RuntimePhase::Evaluation)?;
         members.sort_unstable_by_key(|member| member.binder);
         if members.is_empty()
             || members
@@ -342,6 +393,8 @@ impl Evaluation {
 /// A structured evaluator invariant or runtime resource failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeFailure {
+    /// A bounded resource-failure or teardown report.
+    Report(super::RuntimeFailureReport),
     /// A validated handle did not identify a node in the validated program.
     MissingNode,
     /// A validated primitive reached a value kind outside its signature.
@@ -373,10 +426,68 @@ pub enum RuntimeFailure {
 }
 
 impl RuntimeFailure {
+    /// Adds resource details while retaining this failure's stable reason.
+    #[must_use]
+    pub const fn with_resource_details(self, failure: super::ResourceFailure) -> Self {
+        let mut report = match self {
+            Self::Report(report) => report,
+            other => super::RuntimeFailureReport {
+                primary: super::RuntimeFailureSummary {
+                    reason: other.reason_code(),
+                    resource: None,
+                },
+                teardown: None,
+                cleanup: super::CleanupStatus::Unknown,
+            },
+        };
+        if report.primary.resource.is_none() {
+            report.primary.resource = Some(failure);
+        }
+        Self::Report(report)
+    }
+
+    /// Records a resource failure; cleanup stays unknown until established.
+    #[must_use]
+    pub const fn resource(failure: super::ResourceFailure) -> Self {
+        Self::Report(super::RuntimeFailureReport {
+            primary: super::RuntimeFailureSummary {
+                reason: failure.cause.reason_code(),
+                resource: Some(failure),
+            },
+            teardown: None,
+            cleanup: super::CleanupStatus::Unknown,
+        })
+    }
+
+    /// Retains the original reason and first secondary teardown failure.
+    #[must_use]
+    pub const fn with_teardown_failure(
+        self,
+        failure: super::ResourceFailure,
+        cleanup: super::CleanupStatus,
+    ) -> Self {
+        let mut report = match self {
+            Self::Report(report) => report,
+            other => super::RuntimeFailureReport {
+                primary: super::RuntimeFailureSummary {
+                    reason: other.reason_code(),
+                    resource: None,
+                },
+                teardown: None,
+                cleanup: super::CleanupStatus::Unknown,
+            },
+        };
+        if report.teardown.is_none() {
+            report.teardown = Some(failure);
+        }
+        report.cleanup = cleanup;
+        Self::Report(report)
+    }
     /// Returns the stable reason code owned by this runtime failure.
     #[must_use]
     pub const fn reason_code(self) -> &'static str {
         match self {
+            Self::Report(report) => report.primary.reason_code(),
             Self::MissingNode => "runtime.missing-node",
             Self::UnexpectedPrimitiveValue => "runtime.unexpected-primitive-value",
             Self::UnexpectedFunctionValue => "runtime.unexpected-function-value",
@@ -398,6 +509,30 @@ impl RuntimeFailure {
 impl fmt::Display for RuntimeFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::Report(report) => {
+                write!(formatter, "{}", report.primary.reason_code())?;
+                if let Some(failure) = report.primary.resource() {
+                    if report.primary.reason_code() != failure.cause.reason_code() {
+                        write!(formatter, " ({})", failure.cause.reason_code())?;
+                    }
+                    write!(
+                        formatter,
+                        " during {} ({})",
+                        failure.phase.label(),
+                        failure.resource.label()
+                    )?;
+                }
+                if let Some(failure) = report.teardown {
+                    write!(
+                        formatter,
+                        "; teardown: {} during {} ({})",
+                        failure.cause.reason_code(),
+                        failure.phase.label(),
+                        failure.resource.label()
+                    )?;
+                }
+                return write!(formatter, "; cleanup: {}", report.cleanup.label());
+            }
             Self::MissingNode => "runtime node handle is absent from validated Core",
             Self::UnexpectedPrimitiveValue => {
                 "runtime primitive received a value outside its validated signature"
@@ -452,7 +587,7 @@ enum Frame {
     ResourceBoundary {
         node: NodeId,
         key: ActivationKey,
-        cell: crate::integer::Integer,
+        payload: ResourcePayload,
     },
     Bind {
         binder: BinderId,
@@ -515,6 +650,17 @@ enum Frame {
     },
 }
 
+#[derive(Debug)]
+enum ResourcePayload {
+    Cell(crate::integer::Integer),
+    NativeBuffer {
+        owner: NativeOwner,
+        // A real, unreachable heap cell reserved before native allocation.
+        // Owned discard clears only this owner's normal completion.
+        completion: Option<(Location, ConstructorId)>,
+    },
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RegistrationKey(u32);
 
@@ -529,12 +675,22 @@ const MAX_CAPTURED_FRAME_CELLS: usize = (isize::MAX as usize) / std::mem::size_o
 
 impl Drop for CapturedContinuation {
     fn drop(&mut self) {
-        let mut pending = std::mem::take(&mut self.frames);
+        let mut pending = Pending::from_vec(
+            std::mem::take(&mut self.frames),
+            RuntimeResource::CapturedDisposal,
+        );
         while let Some(mut frame) = pending.pop() {
             if let Frame::ClauseBoundary { continuation, .. } = &mut frame
                 && let Some(mut nested) = continuation.take()
             {
-                pending.append(&mut nested.frames);
+                #[cfg(test)]
+                if nested.frames.len() > pending.capacity() - pending.len() {
+                    let growth = &native_buffer::tests::CAPTURE_DISPOSAL_GROWTH;
+                    growth.set(growth.get() + 1);
+                }
+                for child in nested.frames.drain(..) {
+                    pending.push(child);
+                }
             }
         }
     }
@@ -648,8 +804,14 @@ impl Machine {
         }
     }
 
-    fn run(mut self) -> Result<Evaluation, RuntimeFailure> {
+    fn run(self) -> Result<Evaluation, RuntimeFailure> {
+        let scope = disposal::Scope::enter();
+        scope.finish(self.run_loop())
+    }
+
+    fn run_loop(mut self) -> Result<Evaluation, RuntimeFailure> {
         loop {
+            disposal::check()?;
             let control = self
                 .control
                 .take()
@@ -680,6 +842,7 @@ impl Machine {
                     }
                     let transition =
                         dispatch_entry(&self.program, node, environment, &mut self.heap)?;
+                    disposal::check()?;
                     self.apply(transition);
                 }
                 Control::Return(value) => {
@@ -735,6 +898,7 @@ impl Machine {
     }
 
     fn return_from(&mut self, frame: Frame, value: Value) -> Result<(), RuntimeFailure> {
+        disposal::check()?;
         match frame {
             Frame::CloseCompletion => {
                 if !matches!(value, Value::Unit) {
@@ -746,12 +910,17 @@ impl Machine {
                 action,
                 environment,
             } => {
-                self.instantiation_work
-                    .charge(2)
-                    .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
-                self.frames
-                    .try_reserve(1)
-                    .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+                charge_effect_work(&mut self.instantiation_work, 2, RuntimePhase::Cleanup)?;
+                self.frames.try_reserve(1).map_err(|_| {
+                    legacy_failure(
+                        RuntimeFailure::ResourceCapacity,
+                        ResourceFailureCause::StorageReservationFailed,
+                        RuntimePhase::Cleanup,
+                        RuntimeResource::FrameStorage,
+                        Some(1),
+                        None,
+                    )
+                })?;
                 self.frames.push(Frame::CleanupCompletion { saved: value });
                 self.control = Some(Control::Evaluate(action, environment));
             }
@@ -779,19 +948,41 @@ impl Machine {
                     .checked_sub(1)
                     .ok_or(RuntimeFailure::InvalidControlState)?;
                 drop(callback);
+                disposal::check()?;
                 self.live_registrations = live;
                 self.control = Some(Control::Return(value));
             }
             Frame::ResourceInitializer { node, environment } => {
                 self.acquire_resource(node, environment, value)?;
             }
-            Frame::ResourceBoundary { key, .. } => {
+            Frame::ResourceBoundary { key, payload, .. } => {
                 self.live_resources = self
                     .live_resources
                     .checked_sub(1)
                     .ok_or(RuntimeFailure::InvalidControlState)?;
+                let result = match payload {
+                    ResourcePayload::Cell(_) => value,
+                    ResourcePayload::NativeBuffer { owner, completion } => {
+                        // Release precedes publication. The reserved completion
+                        // cell and work cannot be consumed by the body.
+                        drop(owner);
+                        if let Some((location, success)) = completion {
+                            let cell = self
+                                .heap
+                                .get_mut(location)
+                                .ok_or(RuntimeFailure::InvalidControlState)?;
+                            if !matches!(cell, HeapCell::Uninitialized) {
+                                return Err(RuntimeFailure::InvalidControlState);
+                            }
+                            *cell = HeapCell::Constructor(success, Some(value));
+                            Value::Location(location)
+                        } else {
+                            value
+                        }
+                    }
+                };
                 self.trace_effect(EffectTraceEvent::ResourceReleased(key.0));
-                self.control = Some(Control::Return(value));
+                self.control = Some(Control::Return(result));
             }
             Frame::HandlerBoundary {
                 node, registration, ..
@@ -849,6 +1040,7 @@ impl Machine {
             }
             frame => {
                 let transition = dispatch_return(frame, value, &mut self.heap)?;
+                disposal::check()?;
                 self.apply(transition);
             }
         }
@@ -883,9 +1075,11 @@ impl Machine {
         // Same-key clauses remain outside that handler with their owner, or
         // move with the owner in an outward capture. Their count must equal
         // pending invocations, including the one popped clause on its return.
-        self.instantiation_work
-            .charge(self.frames.len())
-            .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+        charge_effect_work(
+            &mut self.instantiation_work,
+            self.frames.len(),
+            RuntimePhase::Capture,
+        )?;
         let mut found = None;
         let mut handlers = 0;
         let mut clauses: usize = 0;
@@ -954,9 +1148,12 @@ impl Machine {
         scope: crate::core::effect::CleanupScopeNode,
         environment: Environment,
     ) -> Result<(), RuntimeFailure> {
-        self.instantiation_work
-            .charge(2usize.saturating_add(environment.len()))
-            .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+        disposal::check()?;
+        charge_effect_work(
+            &mut self.instantiation_work,
+            2usize.saturating_add(environment.len()),
+            RuntimePhase::Acquisition,
+        )?;
         let callback = environment
             .lookup(scope.callback, &self.program)
             .ok_or(RuntimeFailure::MissingBinding)?;
@@ -967,10 +1164,26 @@ impl Machine {
             .live_cleanups
             .checked_add(1)
             .filter(|live| *live <= self.cleanup_limit)
-            .ok_or(RuntimeFailure::ResourceCapacity)?;
-        self.frames
-            .try_reserve(1)
-            .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+            .ok_or_else(|| {
+                legacy_failure(
+                    RuntimeFailure::ResourceCapacity,
+                    ResourceFailureCause::ConfiguredCapacity,
+                    RuntimePhase::Acquisition,
+                    RuntimeResource::CleanupOwners,
+                    Some(1),
+                    Some(self.cleanup_limit.saturating_sub(self.live_cleanups)),
+                )
+            })?;
+        self.frames.try_reserve(1).map_err(|_| {
+            legacy_failure(
+                RuntimeFailure::ResourceCapacity,
+                ResourceFailureCause::StorageReservationFailed,
+                RuntimePhase::Acquisition,
+                RuntimeResource::FrameStorage,
+                Some(1),
+                None,
+            )
+        })?;
         self.frames.push(Frame::CleanupBoundary {
             action: scope.action,
             environment: environment.clone(),
@@ -986,6 +1199,7 @@ impl Machine {
         node: NodeId,
         environment: Environment,
     ) -> Result<(), RuntimeFailure> {
+        disposal::check()?;
         let scope = *self
             .registration(node)
             .ok_or(RuntimeFailure::InvalidControlState)?;
@@ -998,9 +1212,11 @@ impl Machine {
         let body = handler.body();
         // Two frames and their callback/handler relation, plus the lexical
         // lookup's upper bound, use the existing evaluator work ledger.
-        self.instantiation_work
-            .charge(3usize.saturating_add(environment.len()))
-            .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+        charge_effect_work(
+            &mut self.instantiation_work,
+            3usize.saturating_add(environment.len()),
+            RuntimePhase::Acquisition,
+        )?;
         let callback = environment
             .lookup(scope.callback, &self.program)
             .ok_or(RuntimeFailure::MissingBinding)?;
@@ -1008,21 +1224,60 @@ impl Machine {
             .live_registrations
             .checked_add(1)
             .filter(|live| *live <= self.registration_limit)
-            .ok_or(RuntimeFailure::ResourceCapacity)?;
-        let next = self
-            .next_registration
-            .checked_add(1)
-            .ok_or(RuntimeFailure::ResourceCapacity)?;
-        self.frames
-            .try_reserve(2)
-            .map_err(|_| RuntimeFailure::ResourceCapacity)?;
-        self.trace
-            .try_reserve(1)
-            .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+            .ok_or_else(|| {
+                legacy_failure(
+                    RuntimeFailure::ResourceCapacity,
+                    ResourceFailureCause::ConfiguredCapacity,
+                    RuntimePhase::Acquisition,
+                    RuntimeResource::RegistrationOwners,
+                    Some(1),
+                    Some(
+                        self.registration_limit
+                            .saturating_sub(self.live_registrations),
+                    ),
+                )
+            })?;
+        let next = self.next_registration.checked_add(1).ok_or_else(|| {
+            legacy_failure(
+                RuntimeFailure::ResourceCapacity,
+                ResourceFailureCause::ConfiguredCapacity,
+                RuntimePhase::Acquisition,
+                RuntimeResource::RegistrationKeys,
+                Some(1),
+                Some(0),
+            )
+        })?;
+        self.frames.try_reserve(2).map_err(|_| {
+            legacy_failure(
+                RuntimeFailure::ResourceCapacity,
+                ResourceFailureCause::StorageReservationFailed,
+                RuntimePhase::Acquisition,
+                RuntimeResource::FrameStorage,
+                Some(2),
+                None,
+            )
+        })?;
+        self.trace.try_reserve(1).map_err(|_| {
+            legacy_failure(
+                RuntimeFailure::ResourceCapacity,
+                ResourceFailureCause::StorageReservationFailed,
+                RuntimePhase::Acquisition,
+                RuntimeResource::EvaluationTrace,
+                Some(1),
+                None,
+            )
+        })?;
         if let Some(trace) = &mut self.effect_trace {
-            trace
-                .try_reserve(1)
-                .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+            trace.try_reserve(1).map_err(|_| {
+                legacy_failure(
+                    RuntimeFailure::ResourceCapacity,
+                    ResourceFailureCause::StorageReservationFailed,
+                    RuntimePhase::Acquisition,
+                    RuntimeResource::EffectTrace,
+                    Some(1),
+                    None,
+                )
+            })?;
         }
         let key = RegistrationKey(self.next_registration);
         // No fallible work follows publication. The owner surrounds the
@@ -1054,6 +1309,7 @@ impl Machine {
         mut environment: Environment,
         value: Value,
     ) -> Result<(), RuntimeFailure> {
+        disposal::check()?;
         let Value::Integer(cell) = value else {
             return Err(RuntimeFailure::InvalidControlState);
         };
@@ -1068,40 +1324,221 @@ impl Machine {
         if !api.registry(self.program.registry()) {
             return Err(RuntimeFailure::InvalidControlState);
         }
+        let native_length = if api.is_native_buffer() {
+            charge_runtime_work(&mut self.instantiation_work, 1, RuntimePhase::Acquisition)?;
+            let Some(len) = cell
+                .to_usize()
+                .filter(|len| *len != 0 && *len <= isize::MAX as usize)
+            else {
+                let result = self.prepare_native_result(api, Some(0), RuntimePhase::Acquisition)?;
+                self.control = Some(Control::Return(Value::Location(result)));
+                return Ok(());
+            };
+            // Initialization is proportional to the byte count. Fixed native
+            // publication and disposal are prepaid with the owner.
+            let charge = len.checked_add(2).ok_or_else(|| {
+                resource_failure(
+                    ResourceFailureCause::WorkBudgetExhausted,
+                    RuntimePhase::Acquisition,
+                    RuntimeResource::WorkUnits,
+                    None,
+                    Some(self.instantiation_work.remaining()),
+                )
+            })?;
+            charge_runtime_work(
+                &mut self.instantiation_work,
+                charge,
+                RuntimePhase::Acquisition,
+            )?;
+            Some(len)
+        } else {
+            None
+        };
         let live = self
             .live_resources
             .checked_add(1)
             .filter(|live| *live <= self.resource_limit)
-            .ok_or(RuntimeFailure::ResourceCapacity)?;
-        let next = self
-            .next_activation
-            .checked_add(1)
-            .ok_or(RuntimeFailure::ResourceCapacity)?;
+            .ok_or_else(|| {
+                if native_length.is_some() {
+                    resource_failure(
+                        ResourceFailureCause::ConfiguredCapacity,
+                        RuntimePhase::Acquisition,
+                        RuntimeResource::ResourceOwners,
+                        Some(1),
+                        Some(self.resource_limit.saturating_sub(self.live_resources)),
+                    )
+                } else {
+                    legacy_failure(
+                        RuntimeFailure::ResourceCapacity,
+                        ResourceFailureCause::ConfiguredCapacity,
+                        RuntimePhase::Acquisition,
+                        RuntimeResource::ResourceOwners,
+                        Some(1),
+                        Some(self.resource_limit.saturating_sub(self.live_resources)),
+                    )
+                }
+            })?;
+        let next = self.next_activation.checked_add(1).ok_or_else(|| {
+            if native_length.is_some() {
+                resource_failure(
+                    ResourceFailureCause::ConfiguredCapacity,
+                    RuntimePhase::Acquisition,
+                    RuntimeResource::ActivationKeys,
+                    Some(1),
+                    Some(0),
+                )
+            } else {
+                legacy_failure(
+                    RuntimeFailure::ResourceCapacity,
+                    ResourceFailureCause::ConfiguredCapacity,
+                    RuntimePhase::Acquisition,
+                    RuntimeResource::ActivationKeys,
+                    Some(1),
+                    Some(0),
+                )
+            }
+        })?;
         let key = ActivationKey(self.next_activation);
-        self.frames
-            .try_reserve(1)
-            .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+        self.frames.try_reserve(1).map_err(|_| {
+            if native_length.is_some() {
+                resource_failure(
+                    ResourceFailureCause::StorageReservationFailed,
+                    RuntimePhase::Acquisition,
+                    RuntimeResource::FrameStorage,
+                    Some(1),
+                    None,
+                )
+            } else {
+                legacy_failure(
+                    RuntimeFailure::ResourceCapacity,
+                    ResourceFailureCause::StorageReservationFailed,
+                    RuntimePhase::Acquisition,
+                    RuntimeResource::FrameStorage,
+                    Some(1),
+                    None,
+                )
+            }
+        })?;
         if let Some(trace) = &mut self.effect_trace {
-            trace
-                .try_reserve(1)
-                .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+            trace.try_reserve(1).map_err(|_| {
+                if native_length.is_some() {
+                    resource_failure(
+                        ResourceFailureCause::StorageReservationFailed,
+                        RuntimePhase::Acquisition,
+                        RuntimeResource::EffectTrace,
+                        Some(1),
+                        None,
+                    )
+                } else {
+                    legacy_failure(
+                        RuntimeFailure::ResourceCapacity,
+                        ResourceFailureCause::StorageReservationFailed,
+                        RuntimePhase::Acquisition,
+                        RuntimeResource::EffectTrace,
+                        Some(1),
+                        None,
+                    )
+                }
+            })?;
         }
         environment.instantiation = environment.instantiation.acquire(
             acquisition.identity,
             key,
             &mut self.instantiation_work,
+            native_length.map(|_| RuntimePhase::Acquisition),
         )?;
-        environment = environment.extend(acquisition.handle, Value::ResourceHandle(key))?;
+        disposal::check()?;
+        environment = environment.extend_in_phase(
+            acquisition.handle,
+            Value::ResourceHandle(key),
+            RuntimePhase::Acquisition,
+        )?;
+        let payload = if let Some(len) = native_length {
+            // Reserve both outcomes before C. The failure data is unreachable
+            // on success; the completion cell remains owned by this frame.
+            let result = self.prepare_native_result(api, Some(1), RuntimePhase::Acquisition)?;
+            let success =
+                ConstructorId::new(api.outcome().ok_or(RuntimeFailure::InvalidControlState)?, 0);
+            disposal::check()?;
+            let owner = match NativeOwner::allocate(len) {
+                Ok(owner) => owner,
+                Err(ash_native_buffer::AllocationError::AllocationFailed) => {
+                    let _delivery = disposal::NoGrowth::enter();
+                    drop(environment);
+                    disposal::check()?;
+                    self.control = Some(Control::Return(Value::Location(result)));
+                    return Ok(());
+                }
+                Err(ash_native_buffer::AllocationError::InvalidLength) => {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+            };
+            #[cfg(test)]
+            if native_buffer::tests::FAIL_PUBLICATION.replace(false) {
+                return Err(resource_failure(
+                    ResourceFailureCause::AllocatorRefused,
+                    RuntimePhase::Acquisition,
+                    RuntimeResource::FrameStorage,
+                    Some(1),
+                    None,
+                ));
+            }
+            self.heap[result] = HeapCell::Uninitialized;
+            ResourcePayload::NativeBuffer {
+                owner,
+                completion: Some((result, success)),
+            }
+        } else {
+            ResourcePayload::Cell(cell)
+        };
         // Publish only after every fallible preflight. The frame is the sole
         // payload owner; handles and lexical metadata carry only its key.
         self.frames
-            .push(Frame::ResourceBoundary { node, key, cell });
+            .push(Frame::ResourceBoundary { node, key, payload });
         self.live_resources = live;
         self.next_activation = next;
         self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
         self.trace_effect(EffectTraceEvent::ResourceAcquired(key.0));
         self.control = Some(Control::Evaluate(body, environment));
         Ok(())
+    }
+
+    // A prepared Success contains Unit until a copied read result replaces it.
+    // Failure data has no native dependency. No fallible heap growth follows
+    // an admitted write or successful native allocation.
+    fn prepare_native_result(
+        &mut self,
+        api: crate::resolved::ResourceApi,
+        error: Option<u32>,
+        phase: RuntimePhase,
+    ) -> Result<Location, RuntimeFailure> {
+        let outcome = api.outcome().ok_or(RuntimeFailure::InvalidControlState)?;
+        let error_type = api.error().ok_or(RuntimeFailure::InvalidControlState)?;
+        let cells = if error.is_some() { 2 } else { 1 };
+        charge_runtime_work(&mut self.instantiation_work, cells, phase)?;
+        self.heap.try_reserve(cells).map_err(|_| {
+            resource_failure(
+                ResourceFailureCause::StorageReservationFailed,
+                phase,
+                RuntimeResource::ResultHeapCells,
+                Some(cells),
+                None,
+            )
+        })?;
+        let (constructor, value) = if let Some(error) = error {
+            let location = self.heap.len();
+            self.heap.push(HeapCell::Constructor(
+                ConstructorId::new(error_type, error),
+                None,
+            ));
+            (ConstructorId::new(outcome, 1), Value::Location(location))
+        } else {
+            (ConstructorId::new(outcome, 0), Value::Unit)
+        };
+        let location = self.heap.len();
+        self.heap
+            .push(HeapCell::Constructor(constructor, Some(value)));
+        Ok(location)
     }
 
     fn return_type_application(
@@ -1148,6 +1585,7 @@ impl Machine {
         instantiation: &Instantiation,
         value: Value,
     ) -> Result<(), RuntimeFailure> {
+        disposal::check()?;
         let (effect, operation) = match self.program.node(node) {
             Some(ExecutableNode::Effect(expression)) => match &expression.kind {
                 EffectExprKind::Operation(EffectOperation::Request(request)) => {
@@ -1157,12 +1595,14 @@ impl Machine {
             },
             _ => return Err(RuntimeFailure::InvalidControlState),
         };
-        let effect = instantiation.effect(effect, &mut self.instantiation_work)?;
+        let effect = instantiation.effect(
+            effect,
+            &mut self.instantiation_work,
+            Some(RuntimePhase::Access),
+        )?;
         let mut selected = None;
         for (index, frame) in self.frames.iter().enumerate().rev() {
-            self.instantiation_work
-                .charge(1)
-                .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+            charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
             if let Frame::ResourceBoundary { node, key, .. } = frame {
                 let resource = self
                     .resource(*node)
@@ -1174,7 +1614,11 @@ impl Machine {
                 if effect.effect() == api.ops() && Instantiation::activation(&effect) == Some(*key)
                 {
                     self.trace_effect(EffectTraceEvent::Request(operation));
-                    return self.interpret_cell(index, operation, value);
+                    return if api.is_native_buffer() {
+                        self.interpret_native_buffer(index, operation, value)
+                    } else {
+                        self.interpret_cell(index, operation, value)
+                    };
                 }
                 continue;
             }
@@ -1194,14 +1638,17 @@ impl Machine {
             if handler.effect().effect() != effect.effect() {
                 continue;
             }
-            let handled = environment
-                .instantiation
-                .effect(handler.effect(), &mut self.instantiation_work)?;
+            let handled = environment.instantiation.effect(
+                handler.effect(),
+                &mut self.instantiation_work,
+                Some(RuntimePhase::Access),
+            )?;
             if same_effect_instance(&handled, &effect, &mut self.instantiation_work)? {
                 selected = Some(index);
                 break;
             }
         }
+        disposal::check()?;
         let selected = selected.ok_or(RuntimeFailure::InvalidControlState)?;
         let registration = match &self.frames[selected] {
             Frame::HandlerBoundary {
@@ -1226,9 +1673,16 @@ impl Machine {
             }
             Some((
                 index,
-                pending_invocations
-                    .checked_add(1)
-                    .ok_or(RuntimeFailure::ResourceCapacity)?,
+                pending_invocations.checked_add(1).ok_or_else(|| {
+                    legacy_failure(
+                        RuntimeFailure::ResourceCapacity,
+                        ResourceFailureCause::ConfiguredCapacity,
+                        RuntimePhase::Capture,
+                        RuntimeResource::RegistrationInvocations,
+                        Some(1),
+                        Some(0),
+                    )
+                })?,
             ))
         } else {
             None
@@ -1264,9 +1718,7 @@ impl Machine {
         };
         let clause_environment = handler_environment.extend_many(bindings)?;
         if let Some(trace) = &mut self.effect_trace {
-            trace
-                .try_reserve(3)
-                .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+            reserve_control(trace, 3, RuntimeResource::EffectTrace, false)?;
         }
         let continuation = self.capture_from(selected)?;
         if let Some((index, pending)) = registration_owner
@@ -1299,6 +1751,7 @@ impl Machine {
         operation: OperationId,
         value: Value,
     ) -> Result<(), RuntimeFailure> {
+        disposal::check()?;
         let Frame::ResourceBoundary { node, .. } = &self.frames[selected] else {
             return Err(RuntimeFailure::InvalidControlState);
         };
@@ -1323,7 +1776,12 @@ impl Machine {
         } else {
             return Err(RuntimeFailure::InvalidControlState);
         };
-        let Frame::ResourceBoundary { key, cell, .. } = &mut self.frames[selected] else {
+        let Frame::ResourceBoundary {
+            key,
+            payload: ResourcePayload::Cell(cell),
+            ..
+        } = &mut self.frames[selected]
+        else {
             return Err(RuntimeFailure::InvalidControlState);
         };
         if !matches!(handle, Value::ResourceHandle(found) if found == *key) {
@@ -1343,6 +1801,117 @@ impl Machine {
         Ok(())
     }
 
+    fn interpret_native_buffer(
+        &mut self,
+        selected: usize,
+        operation: OperationId,
+        value: Value,
+    ) -> Result<(), RuntimeFailure> {
+        disposal::check()?;
+        let Some(Frame::ResourceBoundary {
+            node,
+            key,
+            payload: ResourcePayload::NativeBuffer { owner, .. },
+        }) = self.frames.get(selected)
+        else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let api = self
+            .resource(*node)
+            .and_then(|resource| resource.acquisition.api())
+            .filter(|api| api.is_native_buffer())
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        if operation.owner() != api.ops() || operation.operation() > 2 {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let key = *key;
+        let len = owner.len();
+        charge_runtime_work(&mut self.instantiation_work, 3, RuntimePhase::Access)?;
+        let (handle, index, byte) = match operation.operation() {
+            0 => (&value, None, None),
+            ordinal => {
+                let Value::Location(location) = value else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                let location =
+                    resolve_location_with_work(&self.heap, location, &mut self.instantiation_work)?;
+                let Some(HeapCell::Tuple(elements)) = self.heap.get(location) else {
+                    return Err(RuntimeFailure::InvalidControlState);
+                };
+                match (ordinal, elements.as_ref()) {
+                    (1, [handle, Value::Integer(index)]) => (handle, Some(index), None),
+                    (2, [handle, Value::Integer(index), Value::Integer(byte)]) => {
+                        (handle, Some(index), Some(byte))
+                    }
+                    _ => return Err(RuntimeFailure::InvalidControlState),
+                }
+            }
+        };
+        if !matches!(handle, Value::ResourceHandle(found) if *found == key) {
+            return Err(RuntimeFailure::InvalidControlState);
+        }
+        let Some(index) = index else {
+            self.control = Some(Control::Return(Value::Integer(
+                crate::integer::Integer::from_usize(len),
+            )));
+            return Ok(());
+        };
+        let Some(index) = index.to_usize().filter(|index| *index < len) else {
+            let result = self.prepare_native_result(api, Some(2), RuntimePhase::Access)?;
+            self.control = Some(Control::Return(Value::Location(result)));
+            return Ok(());
+        };
+        let byte = match byte {
+            Some(byte) => {
+                let Some(byte) = byte.to_u8() else {
+                    let result = self.prepare_native_result(api, Some(3), RuntimePhase::Access)?;
+                    self.control = Some(Control::Return(Value::Location(result)));
+                    return Ok(());
+                };
+                Some(byte)
+            }
+            None => None,
+        };
+        let result = self.prepare_native_result(api, None, RuntimePhase::Access)?;
+        #[cfg(test)]
+        if byte.is_some() && native_buffer::tests::FAIL_WRITE_RESULT.replace(false) {
+            return Err(resource_failure(
+                ResourceFailureCause::AllocatorRefused,
+                RuntimePhase::Access,
+                RuntimeResource::ResultHeapCells,
+                Some(1),
+                None,
+            ));
+        }
+        let Frame::ResourceBoundary {
+            payload: ResourcePayload::NativeBuffer { owner, .. },
+            ..
+        } = &mut self.frames[selected]
+        else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let event = if let Some(byte) = byte {
+            if !owner.write(index, byte) {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            EffectTraceEvent::ResourceWritten(key.0)
+        } else {
+            let byte = owner
+                .read(index)
+                .ok_or(RuntimeFailure::InvalidControlState)?;
+            let HeapCell::Constructor(_, payload) = &mut self.heap[result] else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            *payload = Some(Value::Integer(crate::integer::Integer::from_usize(
+                usize::from(byte),
+            )));
+            EffectTraceEvent::ResourceRead(key.0)
+        };
+        self.trace_effect(event);
+        self.control = Some(Control::Return(Value::Location(result)));
+        Ok(())
+    }
+
     fn capture_from(&mut self, selected: usize) -> Result<CapturedContinuation, RuntimeFailure> {
         let captured_len = self
             .frames
@@ -1352,20 +1921,36 @@ impl Machine {
         let retained = self
             .captured_cells
             .checked_add(captured_len)
-            .ok_or(RuntimeFailure::CapturedControlCapacity)?;
+            .ok_or_else(|| {
+                control_failure(
+                    ResourceFailureCause::ConfiguredCapacity,
+                    RuntimeResource::FrameStorage,
+                    Some(captured_len),
+                    Some(usize::MAX - self.captured_cells),
+                )
+            })?;
         if retained > self.capture_limit {
-            return Err(RuntimeFailure::CapturedControlCapacity);
+            return Err(control_failure(
+                ResourceFailureCause::ConfiguredCapacity,
+                RuntimeResource::FrameStorage,
+                Some(captured_len),
+                Some(self.capture_limit.saturating_sub(self.captured_cells)),
+            ));
         }
         let mut frames = Vec::new();
-        frames
-            .try_reserve_exact(captured_len)
-            .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+        reserve_control(
+            &mut frames,
+            captured_len,
+            RuntimeResource::FrameStorage,
+            true,
+        )?;
         frames.extend(self.frames.drain(selected..));
         self.captured_cells = retained;
         Ok(CapturedContinuation { frames })
     }
 
     fn return_resume(&mut self, node: NodeId, value: Value) -> Result<(), RuntimeFailure> {
+        disposal::check()?;
         let (handler, owner) = match self.program.node(node) {
             Some(ExecutableNode::Effect(expression)) => match &expression.kind {
                 EffectExprKind::Operation(EffectOperation::Resume(resume)) => {
@@ -1417,9 +2002,11 @@ impl Machine {
             .ok_or(RuntimeFailure::InvalidControlState)?;
         let captured_len = captured.frames.len();
         if let Some(key) = registration {
-            self.instantiation_work
-                .charge(captured_len)
-                .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+            charge_effect_work(
+                &mut self.instantiation_work,
+                captured_len,
+                RuntimePhase::Capture,
+            )?;
             let Some(Frame::HandlerBoundary {
                 node,
                 registration: Some(found),
@@ -1450,9 +2037,11 @@ impl Machine {
             .checked_sub(captured_len)
             .ok_or(RuntimeFailure::InvalidControlState)?;
         if self.live_registrations != 0 {
-            self.instantiation_work
-                .charge(captured_len)
-                .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+            charge_effect_work(
+                &mut self.instantiation_work,
+                captured_len,
+                RuntimePhase::Capture,
+            )?;
             for frame in &captured.frames {
                 if let Frame::HandlerBoundary { node, .. } = frame {
                     self.handler(*node)
@@ -1461,13 +2050,19 @@ impl Machine {
             }
         }
         if let Some(trace) = &mut self.effect_trace {
-            trace
-                .try_reserve(captured_len.saturating_add(1))
-                .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+            reserve_control(
+                trace,
+                captured_len.saturating_add(1),
+                RuntimeResource::EffectTrace,
+                false,
+            )?;
         }
-        self.frames
-            .try_reserve(captured_len)
-            .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+        reserve_control(
+            &mut self.frames,
+            captured_len,
+            RuntimeResource::FrameStorage,
+            false,
+        )?;
         let Frame::ClauseBoundary { continuation, .. } = &mut self.frames[boundary_index] else {
             return Err(RuntimeFailure::InvalidControlState);
         };
@@ -1498,6 +2093,7 @@ impl Machine {
     }
 
     fn discard(&mut self, handler: HandlerId, owner: ResumeId) -> Result<(), RuntimeFailure> {
+        disposal::check()?;
         let (boundary_index, registration) = self
             .frames
             .iter()
@@ -1532,20 +2128,23 @@ impl Machine {
         let mut owners = 0usize;
         let mut registrations = Vec::new();
         let mut associated = Vec::new();
-        self.instantiation_work
-            .charge(1)
-            .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
-        pending
-            .try_reserve(1)
-            .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+        charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Capture)?;
+        reserve_control(&mut pending, 1, RuntimeResource::CaptureInspection, false)?;
         pending.push(captured);
         while let Some(capture) = pending.pop() {
-            self.instantiation_work
-                .charge(capture.frames.len().saturating_add(1))
-                .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
-            count = count
-                .checked_add(capture.frames.len())
-                .ok_or(RuntimeFailure::CapturedControlCapacity)?;
+            charge_effect_work(
+                &mut self.instantiation_work,
+                capture.frames.len().saturating_add(1),
+                RuntimePhase::Capture,
+            )?;
+            count = count.checked_add(capture.frames.len()).ok_or_else(|| {
+                control_failure(
+                    ResourceFailureCause::ConfiguredCapacity,
+                    RuntimeResource::FrameStorage,
+                    Some(capture.frames.len()),
+                    Some(usize::MAX - count),
+                )
+            })?;
             for frame in &capture.frames {
                 match frame {
                     Frame::CleanupCompletion { .. } | Frame::CloseCompletion => {
@@ -1557,23 +2156,32 @@ impl Machine {
                         ..
                     } => {
                         if let Some(nested) = continuation {
-                            pending
-                                .try_reserve(1)
-                                .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+                            reserve_control(
+                                &mut pending,
+                                1,
+                                RuntimeResource::CaptureInspection,
+                                false,
+                            )?;
                             pending.push(nested);
                         }
                         // Consuming a capture does not complete its registration clause.
                         if let Some(key) = registration {
-                            associated
-                                .try_reserve(1)
-                                .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+                            reserve_control(
+                                &mut associated,
+                                1,
+                                RuntimeResource::RegistrationIdentities,
+                                false,
+                            )?;
                             associated.push(*key);
                         }
                     }
                     Frame::RegistrationBoundary { key, .. } => {
-                        registrations
-                            .try_reserve(1)
-                            .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+                        reserve_control(
+                            &mut registrations,
+                            1,
+                            RuntimeResource::RegistrationIdentities,
+                            false,
+                        )?;
                         registrations.push(*key);
                         owners += 1;
                     }
@@ -1583,9 +2191,11 @@ impl Machine {
             }
         }
         for key in associated {
-            self.instantiation_work
-                .charge(registrations.len())
-                .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+            charge_effect_work(
+                &mut self.instantiation_work,
+                registrations.len(),
+                RuntimePhase::Capture,
+            )?;
             if !registrations.contains(&key) {
                 return Err(RuntimeFailure::InvalidControlState);
             }
@@ -1594,23 +2204,23 @@ impl Machine {
             .captured_cells
             .checked_sub(count)
             .ok_or(RuntimeFailure::InvalidControlState)?;
-        self.instantiation_work
-            .charge(count.saturating_add(owners).saturating_add(1))
-            .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+        charge_effect_work(
+            &mut self.instantiation_work,
+            count.saturating_add(owners).saturating_add(1),
+            RuntimePhase::Capture,
+        )?;
         let mut work = Vec::new();
         let mut closing = Vec::new();
-        work.try_reserve_exact(count)
-            .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
-        closing
-            .try_reserve_exact(owners)
-            .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
-        self.frames
-            .try_reserve(owners.saturating_add(1))
-            .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+        reserve_control(&mut work, count, RuntimeResource::FrameStorage, true)?;
+        reserve_control(&mut closing, owners, RuntimeResource::FrameStorage, true)?;
+        reserve_control(
+            &mut self.frames,
+            owners.saturating_add(1),
+            RuntimeResource::FrameStorage,
+            false,
+        )?;
         if let Some(trace) = &mut self.effect_trace {
-            trace
-                .try_reserve(1)
-                .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+            reserve_control(trace, 1, RuntimeResource::EffectTrace, false)?;
         }
         // All fallible checks precede consumption and accounting release.
         let Frame::ClauseBoundary { continuation, .. } = &mut self.frames[boundary_index] else {
@@ -1621,6 +2231,7 @@ impl Machine {
             .ok_or(RuntimeFailure::InvalidControlState)?;
         work.append(&mut captured.frames);
         while let Some(mut frame) = work.pop() {
+            disposal::check()?;
             match &mut frame {
                 Frame::ClauseBoundary {
                     continuation: Some(nested),
@@ -1635,12 +2246,17 @@ impl Machine {
                     *pending_invocations = 0;
                     closing.push(frame);
                 }
-                Frame::ResourceBoundary { .. } | Frame::CleanupBoundary { .. } => {
+                Frame::ResourceBoundary { payload, .. } => {
+                    if let ResourcePayload::NativeBuffer { completion, .. } = payload {
+                        *completion = None;
+                    }
                     closing.push(frame)
                 }
+                Frame::CleanupBoundary { .. } => closing.push(frame),
                 _ => {}
             }
         }
+        disposal::check()?;
         self.captured_cells = retained;
         if owners != 0 {
             self.frames.push(Frame::CloseCompletion);
@@ -1685,6 +2301,116 @@ impl Machine {
     }
 }
 
+fn legacy_failure(
+    reason: RuntimeFailure,
+    cause: ResourceFailureCause,
+    phase: RuntimePhase,
+    resource: RuntimeResource,
+    requested: Option<usize>,
+    available: Option<usize>,
+) -> RuntimeFailure {
+    reason.with_resource_details(super::ResourceFailure::new(
+        cause, phase, resource, requested, available,
+    ))
+}
+
+fn checked_environment_len(
+    len: usize,
+    additional: usize,
+    phase: RuntimePhase,
+) -> Result<usize, RuntimeFailure> {
+    len.checked_add(additional).ok_or_else(|| {
+        legacy_failure(
+            RuntimeFailure::EnvironmentCapacity,
+            ResourceFailureCause::ConfiguredCapacity,
+            phase,
+            RuntimeResource::EnvironmentBindings,
+            Some(additional),
+            Some(usize::MAX - len),
+        )
+    })
+}
+
+fn control_failure(
+    cause: ResourceFailureCause,
+    resource: RuntimeResource,
+    requested: Option<usize>,
+    available: Option<usize>,
+) -> RuntimeFailure {
+    RuntimeFailure::CapturedControlCapacity.with_resource_details(super::ResourceFailure::new(
+        cause,
+        RuntimePhase::Capture,
+        resource,
+        requested,
+        available,
+    ))
+}
+
+fn reserve_control<T>(
+    storage: &mut Vec<T>,
+    additional: usize,
+    resource: RuntimeResource,
+    exact: bool,
+) -> Result<(), RuntimeFailure> {
+    // Vec cannot represent more than isize::MAX bytes (or usize::MAX ZSTs).
+    // This bound is known before asking the allocator; later reservation
+    // errors retain their undetermined cause on stable Rust.
+    let maximum = if size_of::<T>() == 0 {
+        usize::MAX
+    } else {
+        isize::MAX as usize / size_of::<T>()
+    };
+    let available = maximum.saturating_sub(storage.len());
+    if additional > available {
+        return Err(control_failure(
+            ResourceFailureCause::ConfiguredCapacity,
+            resource,
+            Some(additional),
+            Some(available),
+        ));
+    }
+    #[cfg(test)]
+    if let Some(cause) = native_buffer::tests::FAIL_CONTROL_RESERVATION.take() {
+        return Err(control_failure(cause, resource, Some(additional), None));
+    }
+    let reservation = if exact {
+        storage.try_reserve_exact(additional)
+    } else {
+        storage.try_reserve(additional)
+    };
+    reservation.map_err(|_| {
+        control_failure(
+            ResourceFailureCause::StorageReservationFailed,
+            resource,
+            Some(additional),
+            None,
+        )
+    })
+}
+
+fn charge_effect_work(
+    work: &mut TypeWorkBudget,
+    requested: usize,
+    phase: RuntimePhase,
+) -> Result<(), RuntimeFailure> {
+    work.charge(requested)
+        .map_err(|()| effect_work_failure(work, Some(requested), phase))
+}
+
+fn effect_work_failure(
+    work: &TypeWorkBudget,
+    requested: Option<usize>,
+    phase: RuntimePhase,
+) -> RuntimeFailure {
+    RuntimeFailure::EnvironmentCapacity.with_resource_details(super::ResourceFailure::new(
+        ResourceFailureCause::WorkBudgetExhausted,
+        phase,
+        RuntimeResource::WorkUnits,
+        requested,
+        Some(work.remaining()),
+    ))
+}
+
 fn same_effect_instance(
     left: &EffectInstance,
     right: &EffectInstance,
@@ -1695,7 +2421,7 @@ fn same_effect_instance(
     }
     for (left, right) in left.arguments().iter().zip(right.arguments()) {
         if !same_type_with_budget(left, right, work)
-            .map_err(|()| RuntimeFailure::EnvironmentCapacity)?
+            .map_err(|()| effect_work_failure(work, None, RuntimePhase::Access))?
         {
             return Ok(false);
         }
@@ -2231,12 +2957,24 @@ fn return_application_argument(
 }
 
 fn allocate_heap(heap: &mut Vec<HeapCell>, cell: HeapCell) -> Result<Location, RuntimeFailure> {
-    if heap.len() == usize::MAX {
-        return Err(RuntimeFailure::HeapCapacity);
-    }
+    admit_heap_cell(heap.len())?;
     let location = heap.len();
     heap.push(cell);
     Ok(location)
+}
+
+fn admit_heap_cell(len: usize) -> Result<(), RuntimeFailure> {
+    if len == usize::MAX {
+        return Err(legacy_failure(
+            RuntimeFailure::HeapCapacity,
+            ResourceFailureCause::ConfiguredCapacity,
+            RuntimePhase::Evaluation,
+            RuntimeResource::HeapCells,
+            Some(1),
+            Some(0),
+        ));
+    }
+    Ok(())
 }
 
 fn resolve_location(heap: &[HeapCell], start: Location) -> Result<Location, RuntimeFailure> {
@@ -2253,6 +2991,25 @@ fn resolve_location(heap: &[HeapCell], start: Location) -> Result<Location, Runt
             None => return Err(RuntimeFailure::InvalidLocation),
         }
     }
+}
+
+fn resolve_location_with_work(
+    heap: &[HeapCell],
+    mut location: Location,
+    work: &mut TypeWorkBudget,
+) -> Result<Location, RuntimeFailure> {
+    // A terminating chain visits at most heap.len() cells. This bound detects
+    // cycles without allocating a visited set while native access is prepared.
+    for _ in 0..=heap.len() {
+        charge_runtime_work(work, 1, RuntimePhase::Access)?;
+        match heap.get(location) {
+            Some(HeapCell::Alias(next)) => location = *next,
+            Some(HeapCell::Uninitialized) => return Err(RuntimeFailure::UninitializedLocation),
+            Some(_) => return Ok(location),
+            None => return Err(RuntimeFailure::InvalidLocation),
+        }
+    }
+    Err(RuntimeFailure::AliasLoop)
 }
 
 fn matches_pattern(
@@ -2352,6 +3109,31 @@ fn apply_primitive(
 
 #[cfg(test)]
 mod tests {
+    pub(super) fn is_work_exhaustion(failure: super::RuntimeFailure) -> bool {
+        use super::{ResourceFailureCause, RuntimeFailure, RuntimeResource};
+        matches!(failure, RuntimeFailure::Report(report)
+            if report.primary.reason_code() == "runtime.environment-capacity"
+            && report.teardown.is_none()
+            && report.primary.resource().is_some_and(|details|
+                details.cause == ResourceFailureCause::WorkBudgetExhausted
+                && details.resource == RuntimeResource::WorkUnits
+                && details.available.is_some()))
+    }
+
+    fn is_configured_capacity(
+        failure: super::RuntimeFailure,
+        reason: super::RuntimeFailure,
+        resource: super::RuntimeResource,
+    ) -> bool {
+        use super::{ResourceFailureCause, RuntimeFailure};
+        matches!(failure, RuntimeFailure::Report(report)
+            if report.primary.reason_code() == reason.reason_code()
+            && report.teardown.is_none()
+            && report.primary.resource().is_some_and(|details|
+                details.cause == ResourceFailureCause::ConfiguredCapacity
+                && details.resource == resource))
+    }
+
     use std::sync::{Arc, Barrier};
 
     use super::*;
@@ -2403,10 +3185,7 @@ mod tests {
         const REQUIRED: usize = 11;
         let mut short = Machine::new_effect(&program);
         short.instantiation_work = TypeWorkBudget::with_limit(REQUIRED - 1);
-        assert_eq!(
-            short.run().unwrap_err(),
-            RuntimeFailure::EnvironmentCapacity
-        );
+        assert!(is_work_exhaustion(short.run().unwrap_err()));
         for _ in 0..2 {
             let mut exact = Machine::new_effect(&program);
             exact.instantiation_work = TypeWorkBudget::with_limit(REQUIRED);
@@ -2440,7 +3219,7 @@ mod tests {
             .unwrap();
     }
 
-    fn effect_program(text: &str) -> ValidatedEffectProgram {
+    pub(super) fn effect_program(text: &str) -> ValidatedEffectProgram {
         let path = std::env::temp_dir().join(format!(
             "ash-machine-effect-budget-{}-{}.ash",
             std::process::id(),
@@ -2500,7 +3279,7 @@ mod tests {
         )
     }
 
-    fn resource_node(program: &ValidatedEffectProgram) -> NodeId {
+    pub(super) fn resource_node(program: &ValidatedEffectProgram) -> NodeId {
         let mut pending = vec![program.root()];
         while let Some(id) = pending.pop() {
             let kind = &program.node(id).unwrap().kind;
@@ -2515,7 +3294,7 @@ mod tests {
         panic!("resource fixture has an acquisition")
     }
 
-    fn integer(value: &str) -> Value {
+    pub(super) fn integer(value: &str) -> Value {
         Value::Integer(Integer::parse_decimal(value).unwrap())
     }
 
@@ -2573,7 +3352,7 @@ mod tests {
             machine.instantiation_work = TypeWorkBudget::with_limit(allowance);
             let result = machine.acquire_cleanup(scope, environment.clone());
             if allowance < exact {
-                assert_eq!(result, Err(RuntimeFailure::EnvironmentCapacity));
+                assert!(is_work_exhaustion(result.unwrap_err()));
                 assert!(machine.frames.is_empty());
                 assert_eq!(machine.live_cleanups, 0);
             } else {
@@ -2586,10 +3365,13 @@ mod tests {
         machine.cleanup_limit = 1;
         for _ in 0..3 {
             machine.acquire_cleanup(scope, environment.clone()).unwrap();
-            assert_eq!(
-                machine.acquire_cleanup(scope, environment.clone()),
-                Err(RuntimeFailure::ResourceCapacity)
-            );
+            assert!(is_configured_capacity(
+                machine
+                    .acquire_cleanup(scope, environment.clone())
+                    .unwrap_err(),
+                RuntimeFailure::ResourceCapacity,
+                RuntimeResource::CleanupOwners
+            ));
             assert_eq!(machine.frames.len(), 1);
             let owner = machine.frames.pop().unwrap();
             machine.return_from(owner, integer("42")).unwrap();
@@ -2644,7 +3426,7 @@ mod tests {
             let result = machine.discard(handler, owner);
             assert_eq!(machine.live_cleanups, 2);
             if allowance < exact {
-                assert_eq!(result, Err(RuntimeFailure::EnvironmentCapacity));
+                assert!(is_work_exhaustion(result.unwrap_err()));
                 assert_eq!(machine.captured_cells, 3);
                 assert!(matches!(
                     machine.frames.as_slice(),
@@ -2658,10 +3440,9 @@ mod tests {
                     machine.control,
                     Some(Control::Return(Value::Unit))
                 ));
-                assert_eq!(
-                    machine.discard(handler, owner),
-                    Err(RuntimeFailure::EnvironmentCapacity)
-                );
+                assert!(is_work_exhaustion(
+                    machine.discard(handler, owner).unwrap_err()
+                ));
                 assert_eq!(machine.captured_cells, 3);
             } else {
                 result.unwrap();
@@ -2693,10 +3474,13 @@ mod tests {
         for _ in 0..3 {
             machine.acquire_cleanup(scope, environment.clone()).unwrap();
             let captured = machine.capture_from(machine.frames.len() - 1).unwrap();
-            assert_eq!(
-                machine.acquire_cleanup(scope, environment.clone()),
-                Err(RuntimeFailure::ResourceCapacity)
-            );
+            assert!(is_configured_capacity(
+                machine
+                    .acquire_cleanup(scope, environment.clone())
+                    .unwrap_err(),
+                RuntimeFailure::ResourceCapacity,
+                RuntimeResource::CleanupOwners
+            ));
             machine.frames.push(Frame::ClauseBoundary {
                 registration: None,
                 handler: HandlerId::new(0),
@@ -2706,16 +3490,22 @@ mod tests {
             machine
                 .discard(HandlerId::new(0), ResumeId::new(0))
                 .unwrap();
-            assert_eq!(
-                machine.acquire_cleanup(scope, environment.clone()),
-                Err(RuntimeFailure::ResourceCapacity)
-            );
+            assert!(is_configured_capacity(
+                machine
+                    .acquire_cleanup(scope, environment.clone())
+                    .unwrap_err(),
+                RuntimeFailure::ResourceCapacity,
+                RuntimeResource::CleanupOwners
+            ));
             let armed = machine.frames.pop().unwrap();
             machine.return_from(armed, Value::Unit).unwrap();
-            assert_eq!(
-                machine.acquire_cleanup(scope, environment.clone()),
-                Err(RuntimeFailure::ResourceCapacity)
-            );
+            assert!(is_configured_capacity(
+                machine
+                    .acquire_cleanup(scope, environment.clone())
+                    .unwrap_err(),
+                RuntimeFailure::ResourceCapacity,
+                RuntimeResource::CleanupOwners
+            ));
             let running = machine.frames.pop().unwrap();
             machine.return_from(running, Value::Unit).unwrap();
             assert_eq!(machine.live_cleanups, 0);
@@ -2738,7 +3528,7 @@ mod tests {
             let result = machine.return_from(owner, integer("42"));
             assert_eq!(machine.live_cleanups, 1);
             if allowance == 1 {
-                assert_eq!(result, Err(RuntimeFailure::EnvironmentCapacity));
+                assert!(is_work_exhaustion(result.unwrap_err()));
                 assert!(machine.frames.is_empty());
                 assert!(
                     !matches!(machine.control, Some(Control::Evaluate(node, _)) if node == scope.action)
@@ -2784,10 +3574,7 @@ mod tests {
                 let mut failure = Machine::new_effect(&program);
                 failure.work_trace = Some(Arc::clone(&observed));
                 failure.instantiation_work = TypeWorkBudget::with_limit(stop.1);
-                assert_eq!(
-                    failure.run().unwrap_err(),
-                    RuntimeFailure::EnvironmentCapacity
-                );
+                assert!(is_work_exhaustion(failure.run().unwrap_err()));
                 let trace = observed.lock().unwrap();
                 let visits = |marker| trace.iter().filter(|(node, _)| *node == marker).count();
                 // These strict markers run only after the preceding cell
@@ -2825,10 +3612,7 @@ mod tests {
                 let mut failure = Machine::new_effect(&program);
                 failure.work_trace = Some(Arc::clone(&observed));
                 failure.instantiation_work = TypeWorkBudget::with_limit(stop.1);
-                assert_eq!(
-                    failure.run().unwrap_err(),
-                    RuntimeFailure::EnvironmentCapacity
-                );
+                assert!(is_work_exhaustion(failure.run().unwrap_err()));
                 let actual = observed.lock().unwrap();
                 assert_eq!(actual.as_slice(), &baseline[..actual.len()]);
                 let visits = |node| {
@@ -2893,7 +3677,7 @@ mod tests {
                 let mut partial = Machine::new_effect(&program);
                 partial.work_trace = Some(Arc::clone(&observed));
                 partial.instantiation_work = TypeWorkBudget::with_limit(stop.1);
-                assert_eq!(partial.run().unwrap_err(), RuntimeFailure::EnvironmentCapacity);
+                assert!(is_work_exhaustion(partial.run().unwrap_err()));
                 let trace = observed.lock().unwrap();
                 assert_eq!(trace.as_slice(), &baseline[..trace.len()]);
                 assert_eq!(trace.iter().filter(|(node, _)| *node == stop.0).count(), 1);
@@ -2927,7 +3711,11 @@ mod tests {
                 assert_eq!(exact.run().unwrap().value.to_string(), "42");
                 let mut short = Machine::new_effect(&program);
                 short.cleanup_limit = 23;
-                assert_eq!(short.run().unwrap_err(), RuntimeFailure::ResourceCapacity);
+                assert!(is_configured_capacity(
+                    short.run().unwrap_err(),
+                    RuntimeFailure::ResourceCapacity,
+                    RuntimeResource::CleanupOwners
+                ));
             })
             .unwrap()
             .join()
@@ -2998,7 +3786,7 @@ mod tests {
             machine.instantiation_work = TypeWorkBudget::with_limit(allowance);
             let result = machine.acquire_registration(node, environment.clone());
             if allowance < work {
-                assert_eq!(result, Err(RuntimeFailure::EnvironmentCapacity));
+                assert!(is_work_exhaustion(result.unwrap_err()));
                 assert_eq!(machine.live_registrations, 0);
                 assert_eq!(machine.next_registration, 0);
                 assert!(machine.frames.is_empty());
@@ -3018,10 +3806,13 @@ mod tests {
                 matches!(machine.frames[0], Frame::RegistrationBoundary { key: RegistrationKey(key), .. } if key == expected)
             );
             let events = machine.effect_trace.clone();
-            assert_eq!(
-                machine.acquire_registration(node, environment.clone()),
-                Err(RuntimeFailure::ResourceCapacity)
-            );
+            assert!(is_configured_capacity(
+                machine
+                    .acquire_registration(node, environment.clone())
+                    .unwrap_err(),
+                RuntimeFailure::ResourceCapacity,
+                RuntimeResource::RegistrationOwners
+            ));
             assert_eq!(machine.effect_trace, events);
             assert_eq!(machine.live_registrations, 1);
             assert_eq!(machine.next_registration, expected + 1);
@@ -3032,10 +3823,13 @@ mod tests {
             assert_eq!(machine.live_registrations, 0);
         }
         machine.next_registration = u32::MAX;
-        assert_eq!(
-            machine.acquire_registration(node, environment.clone()),
-            Err(RuntimeFailure::ResourceCapacity)
-        );
+        assert!(is_configured_capacity(
+            machine
+                .acquire_registration(node, environment.clone())
+                .unwrap_err(),
+            RuntimeFailure::ResourceCapacity,
+            RuntimeResource::RegistrationKeys
+        ));
         assert!(machine.frames.is_empty());
         assert_eq!(machine.live_registrations, 0);
         let mut missing = Machine::new_effect(&program);
@@ -3058,7 +3852,7 @@ mod tests {
                 let mut machine = Machine::new_effect(&program);
                 machine.registration_limit = limit;
                 let result = machine.run();
-                if limit == 1 { assert!(matches!(result, Err(RuntimeFailure::ResourceCapacity))); }
+                if limit == 1 { assert!(is_configured_capacity(result.unwrap_err(), RuntimeFailure::ResourceCapacity, RuntimeResource::RegistrationOwners)); }
                 else {
                     let evaluation = result.unwrap();
                     assert_eq!(evaluation.registration_acquisitions, 2);
@@ -3091,7 +3885,7 @@ mod tests {
             machine.instantiation_work = TypeWorkBudget::with_limit(allowance);
             let result = machine.run();
             if allowance < exact {
-                assert!(matches!(result, Err(RuntimeFailure::EnvironmentCapacity)));
+                assert!(is_work_exhaustion(result.unwrap_err()));
             } else {
                 let result = result.unwrap();
                 assert_eq!(result.value.to_string(), "8");
@@ -3185,10 +3979,13 @@ mod tests {
         };
         environment.len = usize::MAX;
         let events = machine.effect_trace.clone();
-        assert_eq!(
-            machine.return_request(request, &Instantiation::default(), integer("3")),
-            Err(RuntimeFailure::EnvironmentCapacity)
-        );
+        assert!(is_configured_capacity(
+            machine
+                .return_request(request, &Instantiation::default(), integer("3"))
+                .unwrap_err(),
+            RuntimeFailure::EnvironmentCapacity,
+            RuntimeResource::EnvironmentBindings
+        ));
         assert_eq!(machine.frames.len(), 2);
         assert_eq!(machine.captured_cells, 0);
         assert_eq!(machine.live_registrations, 1);
@@ -3615,7 +4412,7 @@ mod tests {
                     failure.instantiation_work = TypeWorkBudget::with_limit(failure_work);
                     assert!(matches!(
                         failure.run(),
-                        Err(RuntimeFailure::EnvironmentCapacity)
+                        Err(failure) if is_work_exhaustion(failure)
                     ));
                 }
             })
@@ -3642,10 +4439,13 @@ mod tests {
             };
             assert_eq!(key, ActivationKey(expected));
             let events = machine.effect_trace.clone();
-            assert_eq!(
-                machine.acquire_resource(node, Environment::new(), integer("99")),
-                Err(RuntimeFailure::ResourceCapacity)
-            );
+            assert!(is_configured_capacity(
+                machine
+                    .acquire_resource(node, Environment::new(), integer("99"))
+                    .unwrap_err(),
+                RuntimeFailure::ResourceCapacity,
+                RuntimeResource::ResourceOwners
+            ));
             assert_eq!(machine.effect_trace, events);
             assert_eq!(machine.live_resources, 1);
             assert_eq!(machine.next_activation, expected + 1);
@@ -3655,10 +4455,13 @@ mod tests {
         }
         assert!(machine.heap.is_empty());
         machine.next_activation = u32::MAX;
-        assert_eq!(
-            machine.acquire_resource(node, Environment::new(), integer("41")),
-            Err(RuntimeFailure::ResourceCapacity)
-        );
+        assert!(is_configured_capacity(
+            machine
+                .acquire_resource(node, Environment::new(), integer("41"))
+                .unwrap_err(),
+            RuntimeFailure::ResourceCapacity,
+            RuntimeResource::ActivationKeys
+        ));
         assert!(machine.frames.is_empty());
         assert_eq!(machine.live_resources, 0);
     }
@@ -3675,7 +4478,11 @@ mod tests {
                 machine.resource_limit = limit;
                 let result = machine.run();
                 if limit == 1 {
-                    assert!(matches!(result, Err(RuntimeFailure::ResourceCapacity)));
+                    assert!(is_configured_capacity(
+                        result.unwrap_err(),
+                        RuntimeFailure::ResourceCapacity,
+                        RuntimeResource::ResourceOwners
+                    ));
                 } else {
                     let result = result.unwrap();
                     assert_eq!(result.value.to_string(), "42");
@@ -3754,7 +4561,7 @@ mod tests {
             machine.instantiation_work = TypeWorkBudget::with_limit(remaining);
             let result = machine.acquire_resource(node, Environment::new(), integer("41"));
             if remaining < work {
-                assert_eq!(result, Err(RuntimeFailure::EnvironmentCapacity));
+                assert!(is_work_exhaustion(result.unwrap_err()));
                 assert_eq!(machine.live_resources, 0);
                 assert_eq!(machine.next_activation, 0);
                 assert!(machine.frames.is_empty());
@@ -3771,10 +4578,13 @@ mod tests {
             len: usize::MAX,
             ..Environment::new()
         };
-        assert_eq!(
-            machine.acquire_resource(node, environment, integer("41")),
-            Err(RuntimeFailure::EnvironmentCapacity)
-        );
+        assert!(is_configured_capacity(
+            machine
+                .acquire_resource(node, environment, integer("41"))
+                .unwrap_err(),
+            RuntimeFailure::EnvironmentCapacity,
+            RuntimeResource::EnvironmentBindings
+        ));
         assert_eq!(machine.live_resources, 0);
         assert_eq!(machine.next_activation, 0);
         assert!(machine.frames.is_empty());
@@ -3808,17 +4618,20 @@ mod tests {
             machine.capture_limit = 0;
             assert!(matches!(
                 machine.capture_from(0),
-                Err(RuntimeFailure::CapturedControlCapacity)
+                Err(failure) if is_configured_capacity(failure, RuntimeFailure::CapturedControlCapacity, RuntimeResource::FrameStorage)
             ));
             assert_eq!(machine.frames.len(), 1);
             machine.capture_limit = 1;
             let captured = machine.capture_from(0).unwrap();
             assert_eq!(machine.live_resources, 1);
             assert_eq!(machine.captured_cells, 1);
-            assert_eq!(
-                machine.acquire_resource(node, Environment::new(), integer("99")),
-                Err(RuntimeFailure::ResourceCapacity)
-            );
+            assert!(is_configured_capacity(
+                machine
+                    .acquire_resource(node, Environment::new(), integer("99"))
+                    .unwrap_err(),
+                RuntimeFailure::ResourceCapacity,
+                RuntimeResource::ResourceOwners
+            ));
             let handler = HandlerId::new(0);
             let owner = ResumeId::new(0);
             machine.frames.push(Frame::ClauseBoundary {
@@ -3899,7 +4712,7 @@ mod tests {
                 Err(RuntimeFailure::InvalidControlState)
             );
             assert!(
-                matches!(&machine.frames[0], Frame::ResourceBoundary { cell, .. } if cell.to_string() == "41")
+                matches!(&machine.frames[0], Frame::ResourceBoundary { payload: ResourcePayload::Cell(cell), .. } if cell.to_string() == "41")
             );
         }
         machine
@@ -3945,7 +4758,9 @@ mod tests {
                             Frame::ResourceBoundary {
                                 node,
                                 key: ActivationKey(key as u32),
-                                cell: Integer::parse_decimal("41").unwrap(),
+                                payload: ResourcePayload::Cell(
+                                    Integer::parse_decimal("41").unwrap(),
+                                ),
                             },
                             Frame::ClauseBoundary {
                                 registration: None,
@@ -4046,18 +4861,20 @@ mod tests {
             node: root,
             instantiation: Instantiation::default(),
         });
-        assert_eq!(
+        assert!(is_configured_capacity(
             pure.capture_from(0).expect_err("Pure cannot capture"),
-            RuntimeFailure::CapturedControlCapacity
-        );
+            RuntimeFailure::CapturedControlCapacity,
+            RuntimeResource::FrameStorage
+        ));
         assert_eq!(pure.frames.len(), 1);
         assert_eq!(pure.captured_cells, 0);
 
         let mut one_short = capture_machine(2);
-        assert_eq!(
+        assert!(is_configured_capacity(
             one_short.capture_from(0).expect_err("one short must fail"),
-            RuntimeFailure::CapturedControlCapacity
-        );
+            RuntimeFailure::CapturedControlCapacity,
+            RuntimeResource::FrameStorage
+        ));
         assert_eq!(one_short.frames.len(), 3);
         assert_eq!(one_short.captured_cells, 0);
 
@@ -4074,10 +4891,11 @@ mod tests {
                 node,
                 instantiation: Instantiation::default(),
             });
-            assert_eq!(
+            assert!(is_configured_capacity(
                 exact.capture_from(0).expect_err("cumulative quota is full"),
-                RuntimeFailure::CapturedControlCapacity
-            );
+                RuntimeFailure::CapturedControlCapacity,
+                RuntimeResource::FrameStorage
+            ));
             assert_eq!(exact.frames.len(), 1);
             assert_eq!(exact.captured_cells, 3);
             drop(continuation);
@@ -4109,7 +4927,7 @@ mod tests {
         let program = sequential_effect_program();
         assert!(matches!(
             Machine::new_effect_with_capture_limit(&program, 1).run(),
-            Err(RuntimeFailure::CapturedControlCapacity)
+            Err(failure) if is_configured_capacity(failure, RuntimeFailure::CapturedControlCapacity, RuntimeResource::FrameStorage)
         ));
 
         let evaluation = Machine::new_effect_with_capture_limit(&program, 2)
@@ -4146,7 +4964,7 @@ mod tests {
         ));
         assert!(matches!(
             Machine::new_effect_with_capture_limit(&program, 1).run(),
-            Err(RuntimeFailure::CapturedControlCapacity)
+            Err(failure) if is_configured_capacity(failure, RuntimeFailure::CapturedControlCapacity, RuntimeResource::FrameStorage)
         ));
         for _ in 0..2 {
             let evaluation = Machine::new_effect_with_capture_limit(&program, 2)
@@ -4434,10 +5252,11 @@ mod tests {
                     } else {
                         machine.frames.append(&mut captured.frames);
                         machine.capture_limit = DEPTH - 1;
-                        assert_eq!(
+                        assert!(is_configured_capacity(
                             machine.capture_from(0).expect_err("one cell short"),
-                            RuntimeFailure::CapturedControlCapacity
-                        );
+                            RuntimeFailure::CapturedControlCapacity,
+                            RuntimeResource::FrameStorage
+                        ));
                         assert_eq!(machine.frames.len(), DEPTH);
                         assert_eq!(machine.captured_cells, 0);
                         machine.capture_limit = DEPTH;

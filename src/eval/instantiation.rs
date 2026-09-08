@@ -4,10 +4,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use super::super::value::ActivationKey;
 use super::RuntimeFailure;
+use super::{ResourceFailureCause, RuntimePhase, RuntimeResource};
 use crate::types::{
     ComputationType, EffectInstance, EffectRow, IterativeTypeOwner, Kind, Type, TypeVariableId,
-    TypeWorkBudget, clone_effect_row_with_budget, clone_type_with_budget, discard_type_iteratively,
-    substitute_type_and_row_variables_with,
+    TypeWorkBudget, clone_effect_row_with_budget_and_failure, clone_type_with_budget,
+    discard_type_iteratively, substitute_type_and_row_variables_with,
 };
 
 #[derive(Clone, Default)]
@@ -55,8 +56,68 @@ impl std::fmt::Debug for Instantiation {
     }
 }
 
-fn capacity(_: ()) -> RuntimeFailure {
-    RuntimeFailure::EnvironmentCapacity
+fn metadata_failure(
+    phase: Option<RuntimePhase>,
+    cause: ResourceFailureCause,
+    requested: Option<usize>,
+    available: Option<usize>,
+) -> RuntimeFailure {
+    RuntimeFailure::EnvironmentCapacity.with_resource_details(super::super::ResourceFailure::new(
+        cause,
+        phase.unwrap_or(RuntimePhase::Evaluation),
+        if cause == ResourceFailureCause::WorkBudgetExhausted {
+            RuntimeResource::WorkUnits
+        } else {
+            RuntimeResource::InstantiationStorage
+        },
+        requested,
+        available,
+    ))
+}
+
+fn admission_failure(
+    phase: Option<RuntimePhase>,
+    cause: ResourceFailureCause,
+    requested: Option<usize>,
+    available: Option<usize>,
+) -> RuntimeFailure {
+    let resource = if cause == ResourceFailureCause::WorkBudgetExhausted {
+        RuntimeResource::WorkUnits
+    } else {
+        RuntimeResource::InstantiationEntries
+    };
+    RuntimeFailure::EnvironmentCapacity.with_resource_details(super::super::ResourceFailure::new(
+        cause,
+        phase.unwrap_or(RuntimePhase::Evaluation),
+        resource,
+        requested,
+        available,
+    ))
+}
+
+fn clone_row(
+    row: &EffectRow,
+    work: &mut TypeWorkBudget,
+    phase: Option<RuntimePhase>,
+) -> Result<EffectRow, RuntimeFailure> {
+    let mut charge = |cells| {
+        work.charge(cells).map_err(|()| {
+            metadata_failure(
+                phase,
+                ResourceFailureCause::WorkBudgetExhausted,
+                Some(cells),
+                Some(work.remaining()),
+            )
+        })
+    };
+    clone_effect_row_with_budget_and_failure(row, &mut charge, |_| {
+        metadata_failure(
+            phase,
+            ResourceFailureCause::StorageReservationFailed,
+            None,
+            None,
+        )
+    })
 }
 
 impl Instantiation {
@@ -69,8 +130,9 @@ impl Instantiation {
         identity: TypeVariableId,
         key: ActivationKey,
         work: &mut TypeWorkBudget,
+        phase: Option<RuntimePhase>,
     ) -> Result<Self, RuntimeFailure> {
-        self.apply(
+        self.apply_in_phase(
             &Self::default(),
             &[(identity, Kind::Type)],
             &[Type::Inference(crate::types::InferenceVariableId::new(
@@ -78,6 +140,7 @@ impl Instantiation {
             ))],
             &[],
             work,
+            Some(phase.unwrap_or(RuntimePhase::Acquisition)),
         )
     }
 
@@ -96,48 +159,89 @@ impl Instantiation {
         row_arguments: &[EffectRow],
         work: &mut TypeWorkBudget,
     ) -> Result<Self, RuntimeFailure> {
+        self.apply_in_phase(caller, parameters, arguments, row_arguments, work, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_in_phase(
+        &self,
+        caller: &Self,
+        parameters: &[(TypeVariableId, Kind)],
+        arguments: &[Type],
+        row_arguments: &[EffectRow],
+        work: &mut TypeWorkBudget,
+        phase: Option<RuntimePhase>,
+    ) -> Result<Self, RuntimeFailure> {
         let mut bindings = Bindings::default();
         let previous = self.0.as_deref();
         let type_count = previous
             .map_or(0, |bindings| bindings.types.len())
             .checked_add(arguments.len())
-            .ok_or(RuntimeFailure::EnvironmentCapacity)?;
+            .ok_or_else(|| {
+                admission_failure(phase, ResourceFailureCause::ConfiguredCapacity, None, None)
+            })?;
         let row_count = previous
             .map_or(0, |bindings| bindings.rows.len())
             .checked_add(row_arguments.len())
-            .ok_or(RuntimeFailure::EnvironmentCapacity)?;
-        work.charge(
-            type_count
-                .checked_add(row_count)
-                .ok_or(RuntimeFailure::EnvironmentCapacity)?,
-        )
-        .map_err(capacity)?;
-        bindings
-            .types
-            .try_reserve(type_count)
-            .map_err(|_| RuntimeFailure::EnvironmentCapacity)?;
-        bindings
-            .rows
-            .try_reserve(row_count)
-            .map_err(|_| RuntimeFailure::EnvironmentCapacity)?;
+            .ok_or_else(|| {
+                admission_failure(phase, ResourceFailureCause::ConfiguredCapacity, None, None)
+            })?;
+        let requested = type_count.checked_add(row_count).ok_or_else(|| {
+            admission_failure(phase, ResourceFailureCause::ConfiguredCapacity, None, None)
+        })?;
+        work.charge(requested).map_err(|()| {
+            admission_failure(
+                phase,
+                ResourceFailureCause::WorkBudgetExhausted,
+                Some(requested),
+                Some(work.remaining()),
+            )
+        })?;
+        bindings.types.try_reserve(type_count).map_err(|_| {
+            admission_failure(
+                phase,
+                ResourceFailureCause::StorageReservationFailed,
+                Some(type_count),
+                None,
+            )
+        })?;
+        bindings.rows.try_reserve(row_count).map_err(|_| {
+            admission_failure(
+                phase,
+                ResourceFailureCause::StorageReservationFailed,
+                Some(row_count),
+                None,
+            )
+        })?;
         if let Some(previous) = previous {
             for (parameter, ty) in &previous.types {
                 bindings.insert_type(
                     *parameter,
-                    clone_type_with_budget(ty, work).map_err(capacity)?,
+                    clone_type_with_budget(ty, work).map_err(|()| {
+                        admission_failure(
+                            phase,
+                            ResourceFailureCause::WorkBudgetExhausted,
+                            None,
+                            Some(work.remaining()),
+                        )
+                    })?,
                 );
             }
             for (parameter, row) in &previous.rows {
-                bindings.insert_row(
-                    *parameter,
-                    clone_effect_row_with_budget(row, work).map_err(capacity)?,
-                );
+                bindings.insert_row(*parameter, clone_row(row, work, phase)?);
             }
         }
         let mut arguments = arguments.iter();
         let mut rows = row_arguments.iter();
         for (parameter, kind) in parameters {
-            work.charge(1).map_err(capacity)?;
+            work.charge(1).map_err(|()| {
+                admission_failure(
+                    phase,
+                    ResourceFailureCause::WorkBudgetExhausted,
+                    Some(1),
+                    Some(work.remaining()),
+                )
+            })?;
             if matches!(kind, Kind::EffectRow) {
                 let row = rows.next().ok_or(RuntimeFailure::InvalidControlState)?;
                 bindings.insert_row(*parameter, caller.row(row, work)?);
@@ -145,7 +249,7 @@ impl Instantiation {
                 let argument = arguments
                     .next()
                     .ok_or(RuntimeFailure::InvalidControlState)?;
-                let replacement = caller.ty(argument, work)?;
+                let replacement = caller.ty_in_phase(argument, work, phase)?;
                 bindings.insert_type(*parameter, replacement);
             }
         }
@@ -156,21 +260,53 @@ impl Instantiation {
     }
 
     pub(super) fn ty(&self, ty: &Type, work: &mut TypeWorkBudget) -> Result<Type, RuntimeFailure> {
+        self.ty_in_phase(ty, work, None)
+    }
+
+    fn ty_in_phase(
+        &self,
+        ty: &Type,
+        work: &mut TypeWorkBudget,
+        phase: Option<RuntimePhase>,
+    ) -> Result<Type, RuntimeFailure> {
         let Some(bindings) = &self.0 else {
-            return clone_type_with_budget(ty, work).map_err(capacity);
+            return clone_type_with_budget(ty, work).map_err(|()| {
+                metadata_failure(
+                    phase,
+                    ResourceFailureCause::WorkBudgetExhausted,
+                    None,
+                    Some(work.remaining()),
+                )
+            });
         };
         substitute_type_and_row_variables_with(
             ty,
             &bindings.types,
             &bindings.rows,
-            |cells| work.charge(cells).map_err(capacity),
-            || RuntimeFailure::EnvironmentCapacity,
+            |cells| {
+                work.charge(cells).map_err(|()| {
+                    metadata_failure(
+                        phase,
+                        ResourceFailureCause::WorkBudgetExhausted,
+                        Some(cells),
+                        Some(work.remaining()),
+                    )
+                })
+            },
+            || {
+                metadata_failure(
+                    phase,
+                    ResourceFailureCause::StorageReservationFailed,
+                    None,
+                    None,
+                )
+            },
         )?
         .map_err(|_| RuntimeFailure::InvalidControlState)
     }
 
     fn row(&self, row: &EffectRow, work: &mut TypeWorkBudget) -> Result<EffectRow, RuntimeFailure> {
-        let row = clone_effect_row_with_budget(row, work).map_err(capacity)?;
+        let row = clone_row(row, work, None)?;
         let wrapper = IterativeTypeOwner::new(Type::function_computation(
             Type::Unit,
             ComputationType::new(Type::Unit, row),
@@ -192,27 +328,45 @@ impl Instantiation {
         &self,
         effect: &EffectInstance,
         work: &mut TypeWorkBudget,
+        phase: Option<RuntimePhase>,
     ) -> Result<EffectInstance, RuntimeFailure> {
-        work.charge(
-            effect
-                .arguments()
-                .len()
-                .checked_mul(2)
-                .ok_or(RuntimeFailure::EnvironmentCapacity)?,
-        )
-        .map_err(capacity)?;
+        let requested = effect.arguments().len().checked_mul(2).ok_or_else(|| {
+            metadata_failure(phase, ResourceFailureCause::ConfiguredCapacity, None, None)
+        })?;
+        work.charge(requested).map_err(|()| {
+            metadata_failure(
+                phase,
+                ResourceFailureCause::WorkBudgetExhausted,
+                Some(requested),
+                Some(work.remaining()),
+            )
+        })?;
         let mut arguments = Vec::new();
         arguments
             .try_reserve(effect.arguments().len())
-            .map_err(|_| RuntimeFailure::EnvironmentCapacity)?;
+            .map_err(|_| {
+                metadata_failure(
+                    phase,
+                    ResourceFailureCause::StorageReservationFailed,
+                    Some(effect.arguments().len()),
+                    None,
+                )
+            })?;
         for argument in effect.arguments() {
-            arguments.push(IterativeTypeOwner::new(self.ty(argument, work)?));
+            arguments.push(IterativeTypeOwner::new(
+                self.ty_in_phase(argument, work, phase)?,
+            ));
         }
         // Admit the final owner before moving individually guarded types.
         let mut retained = Vec::new();
-        retained
-            .try_reserve(arguments.len())
-            .map_err(|_| RuntimeFailure::EnvironmentCapacity)?;
+        retained.try_reserve(arguments.len()).map_err(|_| {
+            metadata_failure(
+                phase,
+                ResourceFailureCause::StorageReservationFailed,
+                Some(arguments.len()),
+                None,
+            )
+        })?;
         retained.extend(arguments.into_iter().map(IterativeTypeOwner::into_inner));
         Ok(EffectInstance::new(
             effect.effect(),
@@ -223,7 +377,179 @@ impl Instantiation {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tests::is_work_exhaustion;
     use super::*;
+
+    fn fault_row(tail: TypeVariableId, offset: u32) -> EffectRow {
+        use crate::types::{EffectId, EffectRowVariable, effect_row_from_owned_parts_with_budget};
+        let module = crate::module::ModuleId::new(700);
+        effect_row_from_owned_parts_with_budget(
+            vec![EffectInstance::new(
+                EffectId::new(module, offset),
+                Box::new([Type::Int]),
+            )],
+            Some((
+                EffectRowVariable::rigid(tail),
+                vec![EffectInstance::new(
+                    EffectId::new(module, offset + 1),
+                    Box::new([Type::Bool]),
+                )],
+            )),
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .unwrap()
+    }
+
+    fn is_storage_failure(
+        result: Result<Result<impl Sized, RuntimeFailure>, Box<dyn std::any::Any + Send>>,
+    ) -> bool {
+        matches!(result, Ok(Err(RuntimeFailure::Report(report)))
+            if report.primary.reason_code() == "runtime.environment-capacity"
+            && report.primary.resource().is_some_and(|details|
+                details.cause == ResourceFailureCause::StorageReservationFailed
+                && details.resource == RuntimeResource::InstantiationStorage
+                && details.phase == RuntimePhase::Evaluation
+                && details.requested != Some(usize::MAX)))
+    }
+
+    #[test]
+    fn runtime_row_comparison_reservation_failures_are_not_work_charges() {
+        use crate::{
+            module::ModuleId,
+            types::{EffectId, EffectRowVariable, RowReservationSite, row_reservation_fault},
+        };
+        let empty = Instantiation::default();
+        let parameter = TypeVariableId::generated(700);
+        let effect = EffectId::new(ModuleId::new(700), 0);
+        let instance = |argument| EffectInstance::new(effect, Box::new([argument]));
+        let context = empty
+            .apply(
+                &empty,
+                &[(parameter, Kind::EffectRow)],
+                &[],
+                &[EffectRow::singleton(instance(Type::Int))],
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+        let canonical = crate::types::effect_row_from_owned_parts_with_budget(
+            vec![instance(Type::Int), instance(Type::Bool)],
+            None,
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .unwrap();
+        let membership = EffectRow::open(
+            EffectRowVariable::rigid(parameter),
+            Box::new([instance(Type::Bool)]),
+        );
+        let mut failures = Vec::new();
+        for (name, row) in [("canonical", canonical), ("tail membership", membership)] {
+            let source = IterativeTypeOwner::new(Type::function_computation(
+                Type::Unit,
+                ComputationType::new(Type::Int, row),
+            ));
+            let _fault = row_reservation_fault::fail(RowReservationSite::ComparisonWork, 0);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                context
+                    .ty(&source, &mut TypeWorkBudget::unbounded())
+                    .map(IterativeTypeOwner::new)
+            }));
+            if !is_storage_failure(result) {
+                failures.push(name);
+            }
+            assert_eq!(row_reservation_fault::hits(), 1);
+        }
+        assert!(
+            failures.is_empty(),
+            "comparison storage refusal misclassified: {failures:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_row_clone_reservation_failures_are_reports_not_panics() {
+        use crate::types::{RowReservationSite, row_reservation_fault};
+        let empty = Instantiation::default();
+        let parameter = TypeVariableId::generated(700);
+        let row = fault_row(parameter, 0);
+        let previous = empty
+            .apply(
+                &empty,
+                &[(parameter, Kind::EffectRow)],
+                &[],
+                std::slice::from_ref(&row),
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+        let mut failures = Vec::new();
+        for retained in [false, true] {
+            for site in [
+                RowReservationSite::CloneMembers,
+                RowReservationSite::CloneArguments,
+                RowReservationSite::CloneLacks,
+            ] {
+                let _fault = row_reservation_fault::fail(site, 0);
+                let mut work = TypeWorkBudget::unbounded();
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    if retained {
+                        previous.apply(&empty, &[], &[], &[], &mut work).map(drop)
+                    } else {
+                        empty.row(&row, &mut work).map(drop)
+                    }
+                }));
+                if !is_storage_failure(result) {
+                    failures.push((retained, site));
+                }
+                assert_eq!(row_reservation_fault::hits(), 1);
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "row clone did not report storage refusal: {failures:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_row_canonicalization_and_tail_reservation_failures_are_not_work_charges() {
+        use crate::types::{RowReservationSite, row_reservation_fault};
+        let empty = Instantiation::default();
+        let parameter = TypeVariableId::generated(700);
+        let replacement = fault_row(TypeVariableId::generated(701), 2);
+        let context = empty
+            .apply(
+                &empty,
+                &[(parameter, Kind::EffectRow)],
+                &[],
+                &[replacement],
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+        let source = IterativeTypeOwner::new(Type::function_computation(
+            Type::Unit,
+            ComputationType::new(Type::Int, fault_row(parameter, 0)),
+        ));
+        let mut failures = Vec::new();
+        for (site, skip) in [
+            (RowReservationSite::CanonicalMembers, 0),
+            (RowReservationSite::CanonicalMembers, 2),
+            (RowReservationSite::RebuildArguments, 0),
+            (RowReservationSite::RebuildRetained, 0),
+            (RowReservationSite::RebuildMembers, 0),
+            (RowReservationSite::RebuildLacks, 0),
+        ] {
+            let _fault = row_reservation_fault::fail(site, skip);
+            let mut work = TypeWorkBudget::unbounded();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                context.ty(&source, &mut work).map(IterativeTypeOwner::new)
+            }));
+            if !is_storage_failure(result) {
+                failures.push((site, skip));
+            }
+            assert_eq!(row_reservation_fault::hits(), skip + 1);
+        }
+        assert!(
+            failures.is_empty(),
+            "row storage refusal was lost or misclassified: {failures:?}"
+        );
+    }
 
     #[test]
     fn activation_atoms_survive_generic_and_row_substitution_without_rebinding_outer_context() {
@@ -239,10 +565,10 @@ mod tests {
         let instance = |id| EffectInstance::new(effect, Box::new([Type::Variable(id)]));
         let mut work = TypeWorkBudget::unbounded();
         let outer = empty
-            .acquire(identity, ActivationKey(7), &mut work)
+            .acquire(identity, ActivationKey(7), &mut work, None)
             .unwrap();
         let inner = outer
-            .acquire(identity, ActivationKey(8), &mut work)
+            .acquire(identity, ActivationKey(8), &mut work, None)
             .unwrap();
         for (caller, key) in [(&outer, ActivationKey(7)), (&inner, ActivationKey(8))] {
             let applied = empty
@@ -256,7 +582,9 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 Instantiation::activation(
-                    &applied.effect(&instance(parameter), &mut work).unwrap()
+                    &applied
+                        .effect(&instance(parameter), &mut work, None)
+                        .unwrap()
                 ),
                 Some(key)
             );
@@ -266,7 +594,7 @@ mod tests {
             assert_eq!(Instantiation::activation(&row.known()[0]), Some(key));
         }
         assert_eq!(
-            Instantiation::activation(&outer.effect(&instance(identity), &mut work).unwrap()),
+            Instantiation::activation(&outer.effect(&instance(identity), &mut work, None).unwrap()),
             Some(ActivationKey(7))
         );
         assert!(empty.0.is_none());
@@ -281,7 +609,7 @@ mod tests {
         let mut short = TypeWorkBudget::with_limit(2);
         assert!(matches!(
             empty.apply(&empty, &parameters, &[Type::Int], &[], &mut short),
-            Err(RuntimeFailure::EnvironmentCapacity)
+            Err(failure) if is_work_exhaustion(failure)
         ));
         assert!(empty.0.is_none());
         for _ in 0..2 {
@@ -371,7 +699,7 @@ mod tests {
                 let mut preflight = TypeWorkBudget::with_limit(if lacks { 5 } else { 4 });
                 assert!(matches!(
                     context.ty(&source, &mut preflight),
-                    Err(RuntimeFailure::EnvironmentCapacity),
+                    Err(failure) if is_work_exhaustion(failure)
                 ));
                 let mut measured = TypeWorkBudget::unbounded();
                 discard_type_iteratively(context.ty(&source, &mut measured).unwrap());
@@ -380,7 +708,7 @@ mod tests {
                         &source,
                         &mut TypeWorkBudget::with_limit(measured.used() - 1)
                     ),
-                    Err(RuntimeFailure::EnvironmentCapacity),
+                    Err(failure) if is_work_exhaustion(failure)
                 ));
                 for _ in 0..2 {
                     let mut exact = TypeWorkBudget::with_limit(measured.used());
@@ -423,7 +751,7 @@ mod tests {
                         &[],
                         &mut TypeWorkBudget::with_limit(required - 1)
                     ),
-                    Err(RuntimeFailure::EnvironmentCapacity)
+                    Err(failure) if is_work_exhaustion(failure)
                 ));
                 let context = empty
                     .apply(
@@ -453,7 +781,7 @@ mod tests {
                         &[],
                         &mut TypeWorkBudget::with_limit(measured.used() - 1)
                     ),
-                    Err(RuntimeFailure::EnvironmentCapacity)
+                    Err(failure) if is_work_exhaustion(failure)
                 ));
                 let retry = context
                     .apply(

@@ -1399,11 +1399,51 @@ work or retention, including nullary effect instances and row lacks facts.
 Exhaustion publishes no partial checked module or permission; ownership and
 failure disposal are iterative, and a fresh sufficient budget permits retry.
 
-This mechanism adds no general resource declarations, manual release,
+Cell acquisition adds no general resource declarations, manual release,
 general acquisition/destructor declarations, ownership transfer, existential package,
-foreign resource, abort, exception, cancellation, suspension or general
+general foreign API, abort, exception, cancellation, suspension or general
 cleanup. Local `newtype` keeps its separate erasure and escape rules; it does
 not acquire a resource or its sealed authority.
+
+## Scoped native buffers
+
+The compiler-owned `@builtin.native_buffer` API has these exact families:
+
+| Name | Contract |
+| --- | --- |
+| `Handle<R>` | Opaque, duplicable non-owning access while the owner is live. |
+| `Provider<R>` | Sealed exact relation introduced only for the acquired body. |
+| `Outcome<T>` | Ordinary data `Success(T)` or `Failure(Error)`. |
+| `Error` | Ordinary nullary `InvalidLength`, `AllocationFailed`, `InvalidIndex`, `InvalidByte`. |
+| `Ops<R>` | `length : Handle<R> -> Int`, `read : (Handle<R>, Int) -> Outcome<Int>`, `write : (Handle<R>, Int, Int) -> Outcome<Unit>`. |
+| `length`, `read`, `write` | Corresponding methods requiring exact `Provider<R>` and requesting `Ops<R>`. |
+
+In `resource native_buffer<R> b = length { body }`, the initializer checks as
+`Int` in the preceding scope. The body checks under fresh rigid `R`,
+`b : Handle<R>`, sealed `Provider<R>` and the exact builtin interpreter. A body
+of type `T` gives the acquisition type `Outcome<T>`, including when `T` is
+itself an `Outcome`. Its outward row is the initializer row union the body row
+after removing exactly `Ops<R>`.
+
+The cell resource-dependency and continuation rules apply unchanged: the result,
+outward row, stored captures, evidence and operation metadata cannot export this
+acquisition. An inner scope may return an outer dependency while its owner
+remains live. Success projection retains its body's dependencies; allocation
+failure carries none of this scope's authority. The failure continuation is
+reachable after initializer completion even when the body cannot return.
+Resuming a captured successful body preserves its result wrapper without
+reacquiring the resource.
+
+Exact source handlers retain precedence, including through generic coincidence
+and imported callbacks. Ordinary row and lacks checking continues to apply;
+native access imposes no universal closed-row restriction. A cleanup action may
+use a still-live builtin buffer, but cannot silently replace a removed exact
+source override with that builtin interpreter.
+
+`Provider<R>` establishes neither allocation success on every execution nor
+numeric bounds, disjointness or eventual release. Bounds are checked at runtime.
+No source pointer, manual release, general FFI, library-defined acquisition or
+existential ownership transfer is introduced.
 
 ## Interfaces and constrained schemes
 

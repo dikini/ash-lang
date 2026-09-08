@@ -151,6 +151,7 @@ fn runtime_value_class(value: &Value) -> &'static str {
 
 const fn runtime_failure_class(failure: RuntimeFailure) -> &'static str {
     match failure {
+        RuntimeFailure::Report(report) => report.primary.reason_code(),
         RuntimeFailure::MissingNode => "runtime.missing-node",
         RuntimeFailure::UnexpectedPrimitiveValue => "runtime.unexpected-primitive-value",
         RuntimeFailure::UnexpectedFunctionValue => "runtime.unexpected-function-value",

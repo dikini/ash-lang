@@ -49,6 +49,10 @@ impl TypeWorkBudget {
         self.used
     }
 
+    pub(crate) const fn remaining(&self) -> usize {
+        self.limit - self.used
+    }
+
     pub(crate) fn charge(&mut self, cells: usize) -> Result<(), ()> {
         let next = self.used.checked_add(cells).ok_or(())?;
         if next > self.limit {
@@ -80,6 +84,78 @@ impl<E, F: FnMut(usize) -> Result<(), E>> TypeWorkMeter for F {
 
 fn allocation_error<B: TypeWorkMeter>(budget: &mut B) -> B::Error {
     budget.charge(usize::MAX).expect_err("allocation failure")
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RowReservationSite {
+    CloneMembers,
+    CloneArguments,
+    CloneLacks,
+    RebuildArguments,
+    RebuildRetained,
+    RebuildMembers,
+    RebuildLacks,
+    CanonicalMembers,
+    ComparisonWork,
+}
+
+fn reserve_row<T>(
+    storage: &mut Vec<T>,
+    additional: usize,
+    _site: RowReservationSite,
+) -> Result<(), std::collections::TryReserveError> {
+    #[cfg(test)]
+    let additional = row_reservation_fault::request(_site, additional);
+    storage.try_reserve(additional)
+}
+
+#[cfg(test)]
+pub(crate) mod row_reservation_fault {
+    use super::RowReservationSite;
+    use std::cell::Cell;
+
+    #[derive(Clone, Copy, Default)]
+    struct State {
+        site: Option<RowReservationSite>,
+        skip: usize,
+        failed: bool,
+        hits: usize,
+    }
+
+    thread_local! { static STATE: Cell<State> = const { Cell::new(State {site: None, skip: 0, failed: false, hits: 0}) }; }
+
+    pub(crate) struct Guard(State);
+    pub(crate) fn fail(site: RowReservationSite, skip: usize) -> Guard {
+        Guard(STATE.replace(State {
+            site: Some(site),
+            skip,
+            ..State::default()
+        }))
+    }
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            STATE.set(self.0);
+        }
+    }
+    pub(crate) fn hits() -> usize {
+        STATE.get().hits
+    }
+    pub(super) fn request(site: RowReservationSite, additional: usize) -> usize {
+        let mut state = STATE.get();
+        let mut requested = additional;
+        if state.site == Some(site) {
+            state.hits += 1;
+            if state.skip > 0 {
+                state.skip -= 1;
+            } else if !state.failed {
+                state.failed = true;
+                // A real TryReserveError, without requesting physical memory.
+                requested = usize::MAX;
+            }
+            STATE.set(state);
+        }
+        requested
+    }
 }
 pub(crate) fn charge_type_cells<B: TypeWorkMeter>(
     ty: &Type,
@@ -176,30 +252,57 @@ pub(crate) fn clone_effect_row_with_budget<B: TypeWorkMeter>(
 }
 
 fn clone_effect_row(row: &EffectRow) -> EffectRow {
-    let clone_instance = |instance: &EffectInstance| -> EffectInstance {
+    clone_effect_row_with_failure(row, || ()).expect("an in-memory row can reserve its clone")
+}
+
+pub(crate) fn clone_effect_row_with_budget_and_failure<B: TypeWorkMeter>(
+    row: &EffectRow,
+    budget: &mut B,
+    mut storage_error: impl FnMut(&mut B) -> B::Error,
+) -> Result<EffectRow, B::Error> {
+    charge_effect_row_cells(row, budget)?;
+    clone_effect_row_with_failure(row, || storage_error(budget))
+}
+
+fn clone_effect_row_with_failure<E>(
+    row: &EffectRow,
+    mut storage_error: impl FnMut() -> E,
+) -> Result<EffectRow, E> {
+    fn clone_instance<E>(
+        instance: &EffectInstance,
+        storage_error: &mut impl FnMut() -> E,
+    ) -> Result<EffectInstance, E> {
         let mut arguments = Vec::new();
-        arguments
-            .try_reserve(instance.arguments.len())
-            .expect("an in-memory row can reserve its argument clone");
+        reserve_row(
+            &mut arguments,
+            instance.arguments.len(),
+            RowReservationSite::CloneArguments,
+        )
+        .map_err(|_| storage_error())?;
         for argument in &instance.arguments {
             arguments.push(clone_type(argument));
         }
-        EffectInstance::new(instance.effect, arguments.into_boxed_slice())
-    };
+        Ok(EffectInstance::new(
+            instance.effect,
+            arguments.into_boxed_slice(),
+        ))
+    }
     let mut known = Vec::new();
-    known
-        .try_reserve(row.known.len())
-        .expect("an in-memory row can reserve its member clone");
+    reserve_row(
+        &mut known,
+        row.known.len(),
+        RowReservationSite::CloneMembers,
+    )
+    .map_err(|_| storage_error())?;
     for instance in &row.known {
-        known.push(clone_instance(instance));
+        known.push(clone_instance(instance, &mut storage_error)?);
     }
     let tail = if let Some(tail) = &row.tail {
         let mut lacks = Vec::new();
-        lacks
-            .try_reserve(tail.lacks.len())
-            .expect("an in-memory row can reserve its lacks clone");
+        reserve_row(&mut lacks, tail.lacks.len(), RowReservationSite::CloneLacks)
+            .map_err(|_| storage_error())?;
         for instance in &tail.lacks {
-            lacks.push(clone_instance(instance));
+            lacks.push(clone_instance(instance, &mut storage_error)?);
         }
         Some(EffectRowTail {
             variable: tail.variable,
@@ -208,10 +311,10 @@ fn clone_effect_row(row: &EffectRow) -> EffectRow {
     } else {
         None
     };
-    EffectRow {
+    Ok(EffectRow {
         known: known.into_boxed_slice(),
         tail,
-    }
+    })
 }
 
 #[allow(
@@ -929,11 +1032,26 @@ impl EffectRow {
         replacement: &Self,
         budget: &mut B,
     ) -> Result<Result<Self, EffectRowError>, B::Error> {
+        self.substitute_tail_once_with_budget_and_failure(
+            target,
+            replacement,
+            budget,
+            allocation_error,
+        )
+    }
+
+    fn substitute_tail_once_with_budget_and_failure<B: TypeWorkMeter>(
+        &self,
+        target: EffectRowVariable,
+        replacement: &Self,
+        budget: &mut B,
+        mut storage_error: impl FnMut(&mut B) -> B::Error,
+    ) -> Result<Result<Self, EffectRowError>, B::Error> {
         let Some(tail) = &self.tail else {
-            return clone_effect_row_with_budget(self, budget).map(Ok);
+            return clone_effect_row_with_budget_and_failure(self, budget, storage_error).map(Ok);
         };
         if tail.variable != target {
-            return clone_effect_row_with_budget(self, budget).map(Ok);
+            return clone_effect_row_with_budget_and_failure(self, budget, storage_error).map(Ok);
         }
         if replacement
             .tail
@@ -943,26 +1061,35 @@ impl EffectRow {
             return Ok(Err(EffectRowError::Infinite));
         }
         for member in &replacement.known {
-            if contains_instance_with_budget(&tail.lacks, member, budget)? {
+            if find_instance_index_with_budget_and_failure(
+                &tail.lacks,
+                member,
+                budget,
+                &mut storage_error,
+            )?
+            .is_some()
+            {
                 return Ok(Err(EffectRowError::Missing));
             }
         }
 
         match &replacement.tail {
-            None => rebuild_effect_row_with_budget(
+            None => rebuild_effect_row_with_budget_and_failure(
                 self.known.iter().chain(replacement.known.iter()),
                 None,
                 std::iter::empty(),
                 |argument, budget| clone_type_with_budget(argument, budget),
                 budget,
+                &mut storage_error,
             )
             .map(Ok),
-            Some(replacement_tail) => rebuild_effect_row_with_budget(
+            Some(replacement_tail) => rebuild_effect_row_with_budget_and_failure(
                 self.known.iter().chain(replacement.known.iter()),
                 Some(replacement_tail.variable),
                 tail.lacks.iter().chain(replacement_tail.lacks.iter()),
                 |argument, budget| clone_type_with_budget(argument, budget),
                 budget,
+                &mut storage_error,
             )
             .map(Ok),
         }
@@ -990,8 +1117,22 @@ pub(crate) fn rebuild_effect_row_with_budget<'a, E, B: TypeWorkMeter>(
     known: impl IntoIterator<Item = &'a EffectInstance>,
     tail: Option<EffectRowVariable>,
     lacks: impl IntoIterator<Item = &'a EffectInstance>,
+    map: impl FnMut(&Type, &mut B) -> Result<Type, E>,
+    budget: &mut B,
+) -> Result<EffectRow, E>
+where
+    E: From<B::Error>,
+{
+    rebuild_effect_row_with_budget_and_failure(known, tail, lacks, map, budget, allocation_error)
+}
+
+fn rebuild_effect_row_with_budget_and_failure<'a, E, B: TypeWorkMeter>(
+    known: impl IntoIterator<Item = &'a EffectInstance>,
+    tail: Option<EffectRowVariable>,
+    lacks: impl IntoIterator<Item = &'a EffectInstance>,
     mut map: impl FnMut(&Type, &mut B) -> Result<Type, E>,
     budget: &mut B,
+    mut storage_error: impl FnMut(&mut B) -> B::Error,
 ) -> Result<EffectRow, E>
 where
     E: From<B::Error>,
@@ -1000,6 +1141,7 @@ where
         instance: &EffectInstance,
         map: &mut impl FnMut(&Type, &mut B) -> Result<Type, E>,
         budget: &mut B,
+        storage_error: &mut impl FnMut(&mut B) -> B::Error,
     ) -> Result<EffectInstance, E>
     where
         E: From<B::Error>,
@@ -1008,16 +1150,18 @@ where
         for argument in &instance.arguments {
             let argument = IterativeTypeOwner::new(map(argument, budget)?);
             budget.charge(1).map_err(E::from)?;
-            arguments
-                .try_reserve(1)
-                .map_err(|_| E::from(allocation_error(budget)))?;
+            reserve_row(&mut arguments, 1, RowReservationSite::RebuildArguments)
+                .map_err(|_| E::from(storage_error(budget)))?;
             arguments.push(argument);
         }
         let mut retained = Vec::new();
         budget.charge(arguments.len()).map_err(E::from)?;
-        retained
-            .try_reserve(arguments.len())
-            .map_err(|_| E::from(allocation_error(budget)))?;
+        reserve_row(
+            &mut retained,
+            arguments.len(),
+            RowReservationSite::RebuildRetained,
+        )
+        .map_err(|_| E::from(storage_error(budget)))?;
         retained.extend(arguments.into_iter().map(IterativeTypeOwner::into_inner));
         Ok(EffectInstance::new(
             instance.effect,
@@ -1027,28 +1171,32 @@ where
 
     let mut rebuilt_known = Vec::new();
     for instance in known {
-        let instance = rebuild_instance(instance, &mut map, budget)?;
+        let instance = rebuild_instance(instance, &mut map, budget, &mut storage_error)?;
         budget.charge(1).map_err(E::from)?;
-        rebuilt_known
-            .try_reserve(1)
-            .map_err(|_| E::from(allocation_error(budget)))?;
+        reserve_row(&mut rebuilt_known, 1, RowReservationSite::RebuildMembers)
+            .map_err(|_| E::from(storage_error(budget)))?;
         rebuilt_known.push(instance);
     }
     let rebuilt_tail = if let Some(variable) = tail {
         let mut rebuilt_lacks = Vec::new();
         for instance in lacks {
-            let instance = rebuild_instance(instance, &mut map, budget)?;
+            let instance = rebuild_instance(instance, &mut map, budget, &mut storage_error)?;
             budget.charge(1).map_err(E::from)?;
-            rebuilt_lacks
-                .try_reserve(1)
-                .map_err(|_| E::from(allocation_error(budget)))?;
+            reserve_row(&mut rebuilt_lacks, 1, RowReservationSite::RebuildLacks)
+                .map_err(|_| E::from(storage_error(budget)))?;
             rebuilt_lacks.push(instance);
         }
         Some((variable, rebuilt_lacks))
     } else {
         None
     };
-    effect_row_from_owned_parts_with_budget(rebuilt_known, rebuilt_tail, budget).map_err(E::from)
+    effect_row_from_owned_parts_with_budget_and_failure(
+        rebuilt_known,
+        rebuilt_tail,
+        budget,
+        storage_error,
+    )
+    .map_err(E::from)
 }
 
 fn contains_instance_with_budget<B: TypeWorkMeter>(
@@ -1064,8 +1212,19 @@ fn find_instance_index_with_budget<B: TypeWorkMeter>(
     target: &EffectInstance,
     budget: &mut B,
 ) -> Result<Option<usize>, B::Error> {
+    find_instance_index_with_budget_and_failure(instances, target, budget, &mut allocation_error)
+}
+
+fn find_instance_index_with_budget_and_failure<B: TypeWorkMeter>(
+    instances: &[EffectInstance],
+    target: &EffectInstance,
+    budget: &mut B,
+    storage_error: &mut impl FnMut(&mut B) -> B::Error,
+) -> Result<Option<usize>, B::Error> {
     for (index, instance) in instances.iter().enumerate() {
-        if compare_effect_instances_with_budget(instance, target, budget)? == Ordering::Equal {
+        if compare_effect_instances_with_charge(instance, target, budget, storage_error)?
+            == Ordering::Equal
+        {
             return Ok(Some(index));
         }
     }
@@ -1075,13 +1234,19 @@ fn find_instance_index_with_budget<B: TypeWorkMeter>(
 fn canonical_instances_with_budget<B: TypeWorkMeter>(
     instances: Vec<EffectInstance>,
     budget: &mut B,
+    storage_error: &mut impl FnMut(&mut B) -> B::Error,
 ) -> Result<Vec<EffectInstance>, B::Error> {
     let mut canonical = Vec::new();
     for instance in instances {
         let mut position = 0;
         let mut duplicate = false;
         while position < canonical.len() {
-            match compare_effect_instances_with_budget(&canonical[position], &instance, budget)? {
+            match compare_effect_instances_with_charge(
+                &canonical[position],
+                &instance,
+                budget,
+                storage_error,
+            )? {
                 Ordering::Less => position += 1,
                 Ordering::Equal => {
                     duplicate = true;
@@ -1094,17 +1259,20 @@ fn canonical_instances_with_budget<B: TypeWorkMeter>(
             continue;
         }
         budget.charge(1)?;
-        canonical
-            .try_reserve(1)
-            .map_err(|_| allocation_error(budget))?;
+        reserve_row(&mut canonical, 1, RowReservationSite::CanonicalMembers)
+            .map_err(|_| storage_error(budget))?;
         canonical.insert(position, instance);
     }
     Ok(canonical)
 }
 
 fn canonical_instances(instances: Vec<EffectInstance>) -> Vec<EffectInstance> {
-    canonical_instances_with_budget(instances, &mut TypeWorkBudget::unbounded())
-        .expect("an in-memory row can reserve its canonical member vector")
+    canonical_instances_with_budget(
+        instances,
+        &mut TypeWorkBudget::unbounded(),
+        &mut allocation_error,
+    )
+    .expect("an in-memory row can reserve its canonical member vector")
 }
 
 pub(crate) fn effect_row_from_owned_parts_with_budget<B: TypeWorkMeter>(
@@ -1112,13 +1280,24 @@ pub(crate) fn effect_row_from_owned_parts_with_budget<B: TypeWorkMeter>(
     tail: Option<(EffectRowVariable, Vec<EffectInstance>)>,
     budget: &mut B,
 ) -> Result<EffectRow, B::Error> {
+    effect_row_from_owned_parts_with_budget_and_failure(known, tail, budget, allocation_error)
+}
+
+fn effect_row_from_owned_parts_with_budget_and_failure<B: TypeWorkMeter>(
+    known: Vec<EffectInstance>,
+    tail: Option<(EffectRowVariable, Vec<EffectInstance>)>,
+    budget: &mut B,
+    mut storage_error: impl FnMut(&mut B) -> B::Error,
+) -> Result<EffectRow, B::Error> {
     budget.charge(1)?;
-    let known = canonical_instances_with_budget(known, budget)?.into_boxed_slice();
+    let known =
+        canonical_instances_with_budget(known, budget, &mut storage_error)?.into_boxed_slice();
     let tail = if let Some((variable, lacks)) = tail {
         budget.charge(1)?;
         Some(EffectRowTail {
             variable,
-            lacks: canonical_instances_with_budget(lacks, budget)?.into_boxed_slice(),
+            lacks: canonical_instances_with_budget(lacks, budget, &mut storage_error)?
+                .into_boxed_slice(),
         })
     } else {
         None
@@ -1151,13 +1330,14 @@ pub(crate) fn compare_effect_instances_with_budget<B: TypeWorkMeter>(
     right: &EffectInstance,
     budget: &mut B,
 ) -> Result<Ordering, B::Error> {
-    compare_effect_instances_with_charge(left, right, budget)
+    compare_effect_instances_with_charge(left, right, budget, &mut allocation_error)
 }
 
 fn compare_effect_instances_with_charge<B: TypeWorkMeter>(
     left: &EffectInstance,
     right: &EffectInstance,
     charge: &mut B,
+    storage_error: &mut impl FnMut(&mut B) -> B::Error,
 ) -> Result<Ordering, B::Error> {
     charge.charge(1)?;
     let effects = left.effect.cmp(&right.effect);
@@ -1169,7 +1349,7 @@ fn compare_effect_instances_with_charge<B: TypeWorkMeter>(
         return Ok(lengths);
     }
     for (left, right) in left.arguments.iter().zip(&right.arguments) {
-        let ordering = compare_types_with_charge(left, right, charge)?;
+        let ordering = compare_types_with_charge(left, right, charge, storage_error)?;
         if ordering != Ordering::Equal {
             return Ok(ordering);
         }
@@ -1202,8 +1382,12 @@ pub(crate) fn same_effect_rows_with_charge(
                 return Ok(false);
             }
             for (left, right) in left.lacks.iter().zip(&right.lacks) {
-                if compare_effect_instances_with_charge(left, right, &mut charge)?
-                    != Ordering::Equal
+                if compare_effect_instances_with_charge(
+                    left,
+                    right,
+                    &mut charge,
+                    &mut allocation_error,
+                )? != Ordering::Equal
                 {
                     return Ok(false);
                 }
@@ -1212,7 +1396,9 @@ pub(crate) fn same_effect_rows_with_charge(
         _ => return Ok(false),
     }
     for (left, right) in left.known.iter().zip(&right.known) {
-        if compare_effect_instances_with_charge(left, right, &mut charge)? != Ordering::Equal {
+        if compare_effect_instances_with_charge(left, right, &mut charge, &mut allocation_error)?
+            != Ordering::Equal
+        {
             return Ok(false);
         }
     }
@@ -1223,6 +1409,7 @@ fn compare_types_with_charge<B: TypeWorkMeter>(
     left: &Type,
     right: &Type,
     charge: &mut B,
+    storage_error: &mut impl FnMut(&mut B) -> B::Error,
 ) -> Result<Ordering, B::Error> {
     enum Task<'a> {
         Types(&'a Type, &'a Type),
@@ -1269,7 +1456,8 @@ fn compare_types_with_charge<B: TypeWorkMeter>(
     macro_rules! schedule {
         ($task:expr) => {{
             charge.charge(1)?;
-            work.try_reserve(1).map_err(|_| allocation_error(charge))?;
+            reserve_row(&mut work, 1, RowReservationSite::ComparisonWork)
+                .map_err(|_| storage_error(charge))?;
             work.push($task);
         }};
     }
@@ -1879,7 +2067,8 @@ pub fn discard_type_iteratively(root: Type) {
         EffectInstances(std::vec::IntoIter<EffectInstance>),
     }
 
-    let mut work = vec![Task::Visit(root)];
+    let mut work = crate::eval::disposal::Pending::new(crate::eval::RuntimeResource::TypeDisposal);
+    work.push(Task::Visit(root));
     #[cfg(test)]
     begin_type_discard_observation();
     while let Some(task) = work.pop() {
@@ -2861,10 +3050,19 @@ fn substitute_type_and_row_variables<E>(
                     .tail
                     .map(|(variable, lacks)| (variable, rebuild_instances(lacks, &mut arguments)));
                 debug_assert!(arguments.next().is_none());
-                let effects = effect_row_from_owned_parts_with_budget(known, tail, charge)?;
+                let effects = effect_row_from_owned_parts_with_budget_and_failure(
+                    known,
+                    tail,
+                    charge,
+                    |_| allocation_error(),
+                )?;
                 let effects = if let Some((target, replacement)) = shape.replacement {
-                    let substituted =
-                        effects.substitute_tail_once_with_budget(target, replacement, charge)?;
+                    let substituted = effects.substitute_tail_once_with_budget_and_failure(
+                        target,
+                        replacement,
+                        charge,
+                        |_| allocation_error(),
+                    )?;
                     match substituted {
                         Ok(effects) => effects,
                         Err(error) => return Ok(Err(error)),
@@ -3338,6 +3536,10 @@ impl fmt::Debug for Kind {
 
 impl Drop for Kind {
     fn drop(&mut self) {
+        if crate::eval::disposal::failure().is_some() {
+            std::mem::forget(std::mem::replace(self, Self::Type));
+            return;
+        }
         #[cfg(test)]
         let observing = begin_kind_discard_observation();
 
@@ -3363,7 +3565,8 @@ impl Drop for Kind {
             return;
         }
 
-        let mut work = Vec::new();
+        let mut work =
+            crate::eval::disposal::Pending::new(crate::eval::RuntimeResource::KindDisposal);
         work.push(std::mem::replace(codomain.as_mut(), Self::Type));
         work.push(std::mem::replace(domain.as_mut(), Self::Type));
         while let Some(mut kind) = work.pop() {

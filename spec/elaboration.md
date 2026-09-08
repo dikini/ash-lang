@@ -57,6 +57,14 @@ the authenticated lexical provider, whose ordinary method functions request
 the corresponding `Ops<R>` operations. This is not a generic provider registry
 or an ordinary source `with` declaration. Pure Core admits no resource carrier.
 
+The carrier selects the closed cell or native-buffer API. Cell acquisition
+retains the body's result type; native acquisition has the exact builtin
+`Outcome<body_type>` while its body remains unwrapped. Independent linked and
+Core validation authenticate the builtin kind, ordinary Outcome/Error
+constructors, sealed provider, generated methods, ownership, origins and exact
+result/row relation. Both transforms re-establish those checks. Core contains
+neither a native address nor an allocated owner.
+
 Resolution has already replaced source type spellings with stable nominal and
 type-parameter identities. Elaboration may introduce inference variables while
 checking, but it solves and removes every inference variable before constructing
@@ -647,7 +655,7 @@ rejects every effect operation. Effect Core validation independently checks:
   and one shared handler result and output row;
 - each resume's handler and owner, input and result types, and output row;
 - each discard's handler and owner, `Unit` type, least residual close row after
-  action-local and retained builtin cell interpretation,
+  action-local and retained builtin resource interpretation,
   owned-capture closure and inferred safety;
 - each resource's builtin origin, unique acquisition identity and handle,
   sealed provider and operation relation, initializer scope and `Int` type,
@@ -702,8 +710,9 @@ both transforms must re-establish the complete contract before execution.
 
 Static acquisition identities remain distinct from runtime activation keys.
 Core carries the former and contains no preallocated activation or mutable
-cell. Dynamic lexical instantiation binds each executed acquisition to a fresh
-activation; it cannot introduce an inference variable into validated Core or
+cell or native buffer. Dynamic lexical instantiation binds each executed
+acquisition to a fresh activation; it cannot introduce an inference variable
+into validated Core or
 feed execution metadata back into source typing.
 
 The lexical registration owner is likewise distinct from each runtime

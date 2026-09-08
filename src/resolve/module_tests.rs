@@ -28,6 +28,108 @@ use super::{
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
 #[test]
+fn native_buffer_summaries_authenticate_direct_and_facade_facts() {
+    use crate::resolved::BuiltinCellSummaryMutationForTest::*;
+    for facade in [false, true] {
+        for mutation in [
+            OperationResult,
+            ProviderResult,
+            MissingHandle,
+            MissingOps,
+            NativeSuccessPayload,
+            NativeErrorPayload,
+        ] {
+            let tree = TempTree::create();
+            tree.write("facade.ash", "pub import @builtin.native_buffer (length, Outcome, Success, Failure, Error, InvalidLength, AllocationFailed, InvalidIndex, InvalidByte)\n");
+            let graph = load(
+                &tree,
+                if facade {
+                    "import facade (length)\n"
+                } else {
+                    "import @builtin.native_buffer as Buffer\n"
+                },
+                &[],
+            );
+            let builtin = &graph.modules()[0];
+            let builtin_checked = check_module(resolve_module(builtin, &[]).unwrap()).unwrap();
+            let mut summary = if facade {
+                let facade = &graph.modules()[1];
+                let dependency =
+                    DependencyExports::new(&facade.dependencies()[0], builtin_checked.exports())
+                        .unwrap();
+                check_module(resolve_module(facade, &[dependency]).unwrap())
+                    .unwrap()
+                    .into_exports()
+            } else {
+                builtin_checked.into_exports()
+            };
+            summary.corrupt_builtin_fact_for_test(mutation);
+            let entry = graph.module(graph.entry()).unwrap();
+            let dependency = DependencyExports::new(&entry.dependencies()[0], &summary).unwrap();
+            assert!(
+                matches!(resolve_module(entry, &[dependency]), Err(ResolveModuleError::Resolution(ref error)) if error.reason == ResolveReason::InternalState)
+            );
+        }
+    }
+}
+
+#[test]
+fn native_buffer_facade_does_not_authorize_acquisition() {
+    let tree = TempTree::create();
+    tree.write(
+        "facade.ash",
+        "pub import @builtin.native_buffer (length, Outcome)\n",
+    );
+    let graph = load(
+        &tree,
+        "import facade (length, Outcome)\nmain : Unit -> Outcome<Int>\nmain () = resource native_buffer<R> b = 4 {\nlength b\n}\n",
+        &[],
+    );
+    let builtin = check_module(resolve_module(&graph.modules()[0], &[]).unwrap()).unwrap();
+    let facade = &graph.modules()[1];
+    let dependency = DependencyExports::new(&facade.dependencies()[0], builtin.exports()).unwrap();
+    let facade = check_module(resolve_module(facade, &[dependency]).unwrap()).unwrap();
+    let entry = graph.module(graph.entry()).unwrap();
+    let dependency = DependencyExports::new(&entry.dependencies()[0], facade.exports()).unwrap();
+    assert!(
+        matches!(resolve_module(entry, &[dependency]), Err(ResolveModuleError::Resolution(ref error)) if error.reason == ResolveReason::ResourceBuiltinRequired)
+    );
+}
+
+#[test]
+fn native_buffer_identity_is_cached_and_copied_source_cannot_acquire() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import @builtin.native_buffer as First\nimport @builtin.cell as Cell\nimport @builtin.native_buffer as Second\n",
+        &[],
+    );
+    assert_eq!(graph.modules().len(), 3);
+    let entry = graph.module(graph.entry()).unwrap();
+    assert_eq!(
+        entry.dependencies()[0].target(),
+        entry.dependencies()[2].target()
+    );
+    assert_ne!(
+        entry.dependencies()[0].target(),
+        entry.dependencies()[1].target()
+    );
+    let native = graph.module(entry.dependencies()[0].target()).unwrap();
+    tree.write("copy.ash", native.source().text());
+    let graph = load(
+        &tree,
+        "import copy as Buffer\nmain : Unit -> Buffer.Outcome<Int>\nmain () = resource native_buffer<R> b = 4 {\n42\n}\n",
+        &[],
+    );
+    let copy = check_module(resolve_module(&graph.modules()[0], &[]).unwrap()).unwrap();
+    let entry = graph.module(graph.entry()).unwrap();
+    let dependency = DependencyExports::new(&entry.dependencies()[0], copy.exports()).unwrap();
+    assert!(
+        matches!(resolve_module(entry, &[dependency]), Err(ResolveModuleError::Resolution(ref error)) if error.reason == ResolveReason::ResourceBuiltinRequired)
+    );
+}
+
+#[test]
 fn builtin_cell_summary_rejects_well_kinded_operation_tampering() {
     use crate::resolved::BuiltinCellSummaryMutationForTest;
     let tree = TempTree::create();

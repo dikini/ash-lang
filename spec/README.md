@@ -103,6 +103,16 @@ Each execution has a fresh activation, and capture/resume moves the owned
 scope without duplication. Normal completion or owned abandonment releases it
 once.
 
+`resource native_buffer<R> b = length { body }` uses the fixed
+`@builtin.native_buffer` API to acquire zeroed native bytes. Checked length,
+read and write operations preserve the same scoped authority and activation
+rules as cells. Acquisition returns ordinary `Failure(Error)` without entering
+the body, or releases on normal completion and returns `Success(body_value)`.
+Nested outcomes remain nested. Owned discard skips the abandoned wrapper;
+internal host teardown invokes no source cleanup and reports detectable resource
+failure without claiming incomplete cleanup succeeded.
+This provider adds no source pointers or general FFI.
+
 `hook H { body }` supplies the empty identity chain for an exact effect API
 with one endomorphic `publish` operation. `register H transformer { body }`
 evaluates one ordinary transformer and retains it for that scope. Publication
@@ -118,7 +128,7 @@ dependencies remain checked.
 Normal completion invokes it, then returns the saved body value unchanged.
 Capture/resume transfers the invocation owner; copies of the callable gain no
 cleanup authority. Owned abandonment invokes actions under the surviving
-context and still-live builtin cells, not restored captured source handlers.
+context and still-live builtin resources, not restored captured source handlers.
 Required removed interpreters reject at each action's closing position.
 An executing action and its unfinished close operation remain required
 completions and cannot be discarded. Action effects and stored dependencies

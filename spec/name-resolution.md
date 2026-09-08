@@ -40,8 +40,9 @@ select the first reported failure deterministically.
 `@builtin.cell` denotes one compiler-owned module, without a configured root
 or filesystem source. `builtin` is a reserved root name: configuring it as a
 filesystem root fails with `invocation.reserved-root` before filesystem
-inspection. Any other path beneath that root, including `@builtin.cell.extra`,
-fails with `module.unknown-builtin`.
+inspection. The only modules beneath that root are `@builtin.cell` and
+`@builtin.native_buffer`. Other paths, including `@builtin.cell.extra`, fail
+with `module.unknown-builtin`.
 
 The module exports exactly `Handle`, `Provider`, `Ops`, `read` and `write`.
 Complete imports, targeted imports, renaming and public re-exports preserve
@@ -49,7 +50,7 @@ their defining identities. Direct and facade routes reach the same module;
 a facade creates no additional provider authority. An ordinary file named
 `cell.ash` or copied API declarations have no compiler-owned origin.
 
-A module containing a resource expression must directly import `@builtin.cell`.
+A module containing a `resource cell` expression must directly import `@builtin.cell`.
 Either a complete or targeted import satisfies this requirement, independently
 of which public names the targeted import selects. Importing only a facade
 does not; resolution reports `resolve.resource-builtin-required`. Helpers that
@@ -59,6 +60,20 @@ do not acquire a resource may use the ordinary re-exported API.
 local `with` declarations cannot introduce the exact builtin `Provider`
 relation. Acquisition introduces its authenticated lexical evidence; ordinary
 name resolution or copied signatures cannot grant that authority.
+
+### Compiler-owned native-buffer module
+
+`@builtin.native_buffer` follows the same defining-identity, alias, facade and
+sealed-authority rules. It exports `Handle`, `Provider`, `Ops`, `length`, `read`,
+`write`, `Outcome`, `Error`, and the ordinary constructors `Success`, `Failure`,
+`InvalidLength`, `AllocationFailed`, `InvalidIndex` and `InvalidByte`.
+Only the opaque `Handle` constructor remains unavailable to source expressions
+and patterns. `Outcome` and `Error` are ordinary data families.
+
+A `resource native_buffer` expression requires a direct complete or targeted
+import of this module. A cell import, facade-only import, source file or copied
+API cannot authorize native acquisition. Helpers may forward the exact API
+through ordinary imports without themselves acquiring a buffer.
 
 ## Imports and namespaces
 

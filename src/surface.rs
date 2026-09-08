@@ -393,9 +393,20 @@ pub enum SurfaceExprKind {
     Discard,
 }
 
-/// Source ownership of one builtin cell acquisition.
+/// The closed set of builtin acquisition designators.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SurfaceResourceKind {
+    /// A scoped mutable integer cell.
+    Cell,
+    /// A checked native byte-buffer allocation.
+    NativeBuffer,
+}
+
+/// Source ownership of one builtin acquisition.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceResourceExpr {
+    /// The contextual designator selected after `resource`.
+    pub kind: SurfaceResourceKind,
     /// The uppercase rigid identity binder, scoped only over `body`.
     pub identity: SurfaceName,
     /// The ordinary handle binder, scoped only over `body`.

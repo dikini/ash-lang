@@ -1891,6 +1891,23 @@ fn resource_cell_documentation_example_has_exact_cli_output() {
 }
 
 #[test]
+fn native_buffer_documentation_example_has_exact_cli_output() {
+    let text = "import @builtin.native_buffer as Buffer\n\nmain : Unit -> Buffer.Outcome<Buffer.Outcome<Int>>\nmain () = resource native_buffer<R> b = 4 {\nmatch Buffer.write (b, 0, 42) {\nBuffer.Success(()) => Buffer.read (b, 0)\nBuffer.Failure(error) => Buffer.Failure error\n}\n}\n";
+    let source = TempFile::write(text);
+    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .arg(source.path())
+        .output()
+        .expect("the documented native-buffer executable should start");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        output.stdout,
+        b"Success(Success(42)) : Outcome<Outcome<Int>>\n"
+    );
+    assert!(output.stderr.is_empty());
+    assert_documented("docs/tools/ash.md", text);
+}
+
+#[test]
 fn synchronous_hooks_documentation_example_has_exact_cli_output() {
     let text = "effect Adjust {\n    publish : Int -> Int\n}\n\nincrement : Int -> Int\nincrement value = value + 1\n\ndouble : Int -> Int\ndouble value = value * 2\n\nmain : Unit -> Int\nmain () = hook Adjust {\n    register Adjust increment {\n        register Adjust double {\n            perform Adjust.publish 3\n        }\n    }\n}\n";
     let source = TempFile::write(text);
