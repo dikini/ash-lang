@@ -278,8 +278,7 @@ main () = {
         }
     }
     match observed {
-        Report(Failed(primary), FailureItem(first, FailureItem(second, NoFailures))) =>
-            primary * 10000 + first * 100 + second
+        Report(Failed(primary), FailureItem(first, FailureItem(second, NoFailures))) => primary * 10000 + first * 100 + second
         _ => 0
     }
 }
@@ -468,3 +467,7 @@ These are design and documentation reviews, not execution evidence. The
 proposed example and CLEAN-01 through CLEAN-11 remain implementation obligations.
 The user accepted the full proposal and separately authorized implementation
 under [TASK-0029](../tasks/TASK-0029-implement-reliable-cleanup.md).
+
+Implementation checking corrected the final example arm's line layout: its
+expression starts on the same line as `=>`, as the existing grammar requires.
+This changes no expression, result, cleanup rule or accepted requirement.

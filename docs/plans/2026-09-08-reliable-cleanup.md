@@ -220,3 +220,12 @@ recheck passed after the final mechanical edits. Strict all-target Clippy,
 formatting and diff checks passed. The seven specification files describe this
 implemented normal-execution checkpoint; armed abandonment remains deliberately
 rejected until step 3 supplies the accepted full contract.
+
+Step 3 retained the complete reporting program as a failing test. Its first
+failure exposed a proposal formatting error: a line end directly after the
+final match arrow. Keeping that unchanged expression on the same line follows
+existing syntax without adding a grammar rule. The corrected complete program
+now fails at `discard` with `effect.discard-unsafe`, relating the `Stop` request
+and inner cleanup owner. Owned-cell and unused-registration examples reach the
+same intended ownership rejection. These are failing implementation witnesses,
+not completed acceptance evidence.

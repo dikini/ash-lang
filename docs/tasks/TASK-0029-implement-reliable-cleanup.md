@@ -75,6 +75,11 @@ feature ancestry proof and worktree/branch removal. No main merge or publication
 
 ## Discoveries
 
+The exact reporting example initially failed parsing because its final match
+arm put a line end directly after `=>`. CP-0019's example now places the same
+expression on that line, following existing syntax. No language rule or
+acceptance result changed; the test retains the corrected complete program.
+
 Moving the checkout preserved cached test binaries with the old absolute source
 path. The first baseline exposed this in architecture tests; source files were
 unchanged. Ash package artifacts were cleared and the full baseline restarted.
