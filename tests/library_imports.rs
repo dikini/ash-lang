@@ -197,6 +197,75 @@ fn check_graph(graph: &ModuleGraph) -> Vec<ash::resolved::CheckedModule> {
 }
 
 #[test]
+fn method_rich_capture_publication_fits_the_default_type_work_budget() {
+    use std::fmt::Write as _;
+
+    let tree = ModuleTree::create();
+    let mut dependency = String::from(
+        "pub interface Equal<A> {\nequal : (A, A) -> Bool\n}\npub impl Equal<Int> {\nequal (a, b) = a == b\n}\n",
+    );
+    for index in 0..128 {
+        writeln!(dependency, "pub value{index} : Unit -> Bool")
+            .expect("writing to a string succeeds");
+        writeln!(dependency, "value{index} () = equal({index}, {index})")
+            .expect("writing to a string succeeds");
+    }
+    let graph = load(
+        &tree,
+        "import dep as Dep\nmain : Unit -> Bool\nmain () = Dep.value0(())\n",
+        &[("dep.ash", &dependency)],
+    );
+    let checked = check_graph(&graph);
+    assert_eq!(checked.len(), 2);
+}
+
+#[test]
+fn shared_capture_graph_exports_fit_the_default_type_work_budget() {
+    use std::fmt::Write as _;
+
+    let tree = ModuleTree::create();
+    let mut dependency = String::new();
+    for index in 0..192 {
+        writeln!(dependency, "pub value{index} : Unit -> Int")
+            .expect("writing to a string succeeds");
+        writeln!(
+            dependency,
+            "value{index} () = 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8"
+        )
+        .expect("writing to a string succeeds");
+    }
+    let graph = load(
+        &tree,
+        "import dep as Dep\nmain : Unit -> Int\nmain () = Dep.value0(())\n",
+        &[("dep.ash", &dependency)],
+    );
+    let checked = check_graph(&graph);
+    assert_eq!(checked.len(), 2);
+}
+
+#[test]
+fn unreferenced_private_constructor_families_do_not_invalidate_exports() {
+    let tree = ModuleTree::create();
+    let graph = load(
+        &tree,
+        "import dep as Dep\nmain : Unit -> Int\nmain () = Dep.answer(())\n",
+        &[(
+            "dep.ash",
+            "type Unused = Unused\npub answer : Unit -> Int\nanswer () = 42\n",
+        )],
+    );
+    let checked = check_graph(&graph);
+    assert_eq!(checked.len(), 2);
+    let output = run_path(RunConfiguration {
+        entry: tree.0.join("entry.ash"),
+        roots: ModuleRoots::empty(),
+    })
+    .expect("unused private constructors must not invalidate the public API");
+    assert_eq!(output.value_display(), "42");
+    assert_eq!(output.type_display(), "Int");
+}
+
+#[test]
 fn name_only_import_does_not_select_implementation() {
     let tree = ModuleTree::create();
     let graph = load(
