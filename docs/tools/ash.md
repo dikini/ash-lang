@@ -196,6 +196,84 @@ scope begins, and normal scope return removes its registration. Subscriber
 effects require handlers around the registration, not merely around the
 publication site. Hooks add no automatic module registration or cleanup.
 
+`cleanup action { body }` retains one `Unit -> Unit` action. Normal return
+invokes it and preserves the body value. Checked `discard` invokes actions in
+its owned abandoned control before continuing the clause; it does not replay
+the body or remaining publication callbacks.
+
+The following complete example uses ordinary source declarations to retain
+cleanup failures separately from an application failure. Its collector resumes
+each report, then prepends that error to the returned list, preserving emission
+order. Save it as `cleanup.ash` and run `ash cleanup.ash`:
+
+```ash
+type Outcome<T, P> = Success(T)
+| Failed(P)
+type CloseResult<E> = Closed
+| CloseFailed(E)
+type Failures<E> = NoFailures
+| FailureItem(E, Failures<E>)
+type Report<A, E> = Report(A, Failures<E>)
+
+effect CleanupFailure<E> {
+    report : E -> Unit
+}
+effect Stop {
+    stop : Int -> Unit
+}
+
+reportClose<E> : CloseResult<E> -> Unit ! {CleanupFailure<E>}
+reportClose result = match result {
+    Closed => ()
+    CloseFailed(error) => perform CleanupFailure<E>.report error
+}
+
+outer : Unit -> Unit ! {CleanupFailure<Int>}
+outer ignored = reportClose (CloseFailed 11)
+inner : Unit -> Unit ! {CleanupFailure<Int>}
+inner ignored = reportClose (CloseFailed 22)
+
+main : Unit -> Int
+main () = {
+    let observed : Report<Outcome<Int, Int>, Int> = handle {
+        let outcome : Outcome<Int, Int> = handle (cleanup outer {
+            cleanup inner {
+                let ignored = perform Stop.stop 7
+                Success 42
+            }
+        }) with Stop {
+            stop primary => {
+                let done = discard
+                Failed primary
+            }
+        }
+        Report(outcome, NoFailures)
+    } with CleanupFailure<Int> {
+        report error => match (resume ()) {
+            Report(outcome, errors) => Report(outcome, FailureItem(error, errors))
+        }
+    }
+    match observed {
+        Report(Failed(primary), FailureItem(first, FailureItem(second, NoFailures))) => primary * 10000 + first * 100 + second
+        _ => 0
+    }
+}
+```
+
+It prints `72211 : Int` followed by a newline, with empty standard error:
+application failure `7`, inner cleanup failure `22`, then outer failure `11`.
+Removing the `Stop` request and its handler leaves normal `Success 42`, with
+the same ordered failures. These constructors and the reporting effect are not
+builtins. Ignoring an ordinary `CloseFailed` value does not report it, and no
+adapter or runtime step implicitly retries a failed release.
+
+The collector must survive the abandonment. Cleanup cannot use a captured
+source or generated hook handler that has been removed, nor silently substitute
+an outer handler for a nearer matching removed handler. It can use its own
+handlers, surviving outer handlers and still-live unshadowed builtin cells.
+Internal exhaustion and process termination do not promise source cleanup or
+successful native release.
+
 Global functions have module-wide recursive scope. The executable test
 `tool_recursive_example_has_exact_cli_observation` runs this mutually recursive
 module, in which the earlier equational definition refers forward to the later
@@ -551,9 +629,11 @@ runtime-internal status-`2` failures, not source outcomes.
 
 Resource-dependent escape reports `type.resource-escape` with status `1` and
 labels the escaping expression and known acquisition/capture causes. Discard
-that abandons or skips cell or registration completion reports
-`effect.discard-unsafe`.
-The effect machine's live-cell or live-registration capacity failure is `runtime.resource-capacity`,
+that skips required outside completion or abandons a running cleanup or close
+operation reports `effect.discard-unsafe`. A cleanup action requiring a removed
+interpreter reports `effect.cleanup-context`, with discard, action and handler
+labels. Safely owned cells, registrations and armed actions can be closed.
+The effect machine's live-cell, registration or cleanup capacity failure is `runtime.resource-capacity`,
 an internal status-`2` failure. It publishes no partial acquisition. There is
 no source-level allocation-failure branch or use-after-release outcome.
 

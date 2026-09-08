@@ -646,7 +646,9 @@ rejects every effect operation. Effect Core validation independently checks:
 - exhaustive handler clauses, exact-instance removal, pattern scope and type,
   and one shared handler result and output row;
 - each resume's handler and owner, input and result types, and output row;
-- each discard's handler and owner, `Unit` type, empty row and inferred safety;
+- each discard's handler and owner, `Unit` type, least residual close row after
+  action-local and retained builtin cell interpretation,
+  owned-capture closure and inferred safety;
 - each resource's builtin origin, unique acquisition identity and handle,
   sealed provider and operation relation, initializer scope and `Int` type,
   body scope, exact row discharge and result contract;
@@ -658,6 +660,9 @@ rejects every effect operation. Effect Core validation independently checks:
 - each cleanup scope's unique owner, preceding action binding, `Unit -> Unit`
   callback contract, ordinary invocation, preserved body result, least outward
   row and source origins;
+- each abandoned action's structural closing position and actual transitive
+  interpreter requirements, preserving exact-instance precedence and lexical
+  type/row authority without restoring removed handlers;
 - exactly-once structural completion through resume or discard, and barriers
   against escape into functions, recursive members, supplied methods, or nested
   clauses;
@@ -674,6 +679,9 @@ Capture validation independently derives request obligations from the actual
 linked Core control after ordinary validation. It does not trust an elaborator
 permission or imported summary in place of that derivation. A transformed
 program must re-establish the same safety property.
+Cleanup row validation also reconstructs invoked actions from those actual
+relationships. A same-typed callback substitution cannot retain a stale
+discard row, dependency, completion or interpreter permission.
 
 Resource and registration validation also reconstruct stored value and callable
 dependencies and completion obligations from actual linked Core, even when

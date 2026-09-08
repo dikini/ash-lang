@@ -8288,6 +8288,13 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 ValidationReason::DiscardUnsafe,
                 Some(NodeId::new(self.program.arena, unsafe_discard.node as u32)),
             ),
+            super::capture::Failure::CleanupContext { .. } => {
+                ValidationError::new(ValidationReason::DiscardUnsafe, None)
+            }
+            super::capture::Failure::CleanupRow { node, .. } => ValidationError::new(
+                ValidationReason::EffectRow,
+                Some(NodeId::new(self.program.arena, node as u32)),
+            ),
         })?;
         Ok(())
     }
@@ -8677,7 +8684,6 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     has_discard = true;
                     if discard.use_state() != ResumeUse::Consumed
                         || !self.same_type_charged(&node.ty, &Type::Unit)?
-                        || !node.effects.is_empty()
                     {
                         return Err(ValidationError::new(ValidationReason::Resume, Some(id)));
                     }
@@ -9162,7 +9168,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                             self.union_effect_rows_charged(&EffectRow::empty(), source, id)?
                         }
                         EffectExprKind::Operation(EffectOperation::Discard(_)) => {
-                            EffectRow::empty()
+                            self.union_effect_rows_charged(&EffectRow::empty(), &node.effects, id)?
                         }
                         EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
                             let mut row =
@@ -9576,6 +9582,68 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_duplicate_callback_owner_rejects_after_both_transforms() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for pass in 0..3 {
+            let (mut core, sources, relations) = hook_source_fixture(
+                "effect Report {\nreport : Int -> Unit\n}\nmain : Unit -> Int\nmain () = handle (cleanup fn(ignored) {\nperform Report.report 1\n} {\ncleanup fn(ignored) {\nperform Report.report 2\n} {\n42\n}\n}) with Report {\nreport value => resume ()\n}\n",
+            );
+            let borrowed = sources.iter().collect::<Vec<_>>();
+            if pass > 0 {
+                let valid =
+                    super::super::validate_effect_modules(core, &borrowed, &relations).unwrap();
+                core = if pass == 1 {
+                    super::super::transform::identity_effect_traversal(&valid)
+                } else {
+                    super::super::transform::fold_effect_literal_primitives(&valid)
+                }
+                .unwrap();
+            }
+            let mut scopes = core
+                .nodes
+                .iter()
+                .enumerate()
+                .filter_map(|(index, node)| match &node.kind {
+                    EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
+                        Some((index, *scope))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(scopes.len(), 2);
+            scopes.sort_by_key(|(_, scope)| scope.span.range().start());
+            let (_, outer) = scopes[0];
+            let (inner_index, inner) = scopes[1];
+            assert_ne!(outer.callback, inner.callback);
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(action))) =
+                &core.nodes[inner.action.index().unwrap()].kind
+            else {
+                panic!("cleanup retains an ordinary callback application")
+            };
+            let function_index = action.function().index().unwrap();
+            let EffectExprKind::Pure(PureExprKind::Variable(function)) =
+                &mut core.nodes[function_index].kind
+            else {
+                panic!("cleanup application refers to its callback binding")
+            };
+            *function = crate::core::variable::VariableNode::new(outer.callback);
+            let EffectExprKind::Operation(EffectOperation::Cleanup(scope)) =
+                &mut core.nodes[inner_index].kind
+            else {
+                unreachable!()
+            };
+            scope.callback = outer.callback;
+            assert_eq!(
+                super::super::validate_effect_modules(core, &borrowed, &relations)
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Handler,
+                "pass {pass}: two scopes cannot share one acquisition binding"
+            );
+        }
+    }
+
+    #[test]
     fn cleanup_imported_generic_open_row_factory_preserves_both_transforms() {
         prove_registration_transforms(hook_modules_fixture(
             "import actions (Report, make)\nmain : Unit -> Int\nmain () = handle (cleanup (make ()) {\n42\n}) with Report {\nreport value => resume ()\n}\n",
@@ -9587,6 +9655,13 @@ mod tests {
         prove_registration_transforms(hook_source_fixture(
             "effect Report {\nreport : Int -> Unit\n}\nscoped<E : EffectRow> : (Unit -> Unit ! {| E}) -> Int ! {| E}\nscoped action = cleanup action {\n42\n}\nreport : Unit -> Unit ! {Report}\nreport ignored = perform Report.report 7\nmain : Unit -> Int\nmain () = handle (scoped report) with Report {\nreport value => resume ()\n}\n",
         ));
+    }
+
+    #[test]
+    fn cleanup_row_replay_preserves_nested_resume_after_both_transforms() {
+        prove_registration_transforms(hook_source_fixture(include_str!(
+            "../../tests/fixtures/effects/capture-prefix-after.ash"
+        )));
     }
 
     #[test]
@@ -9696,6 +9771,188 @@ mod tests {
                 "pass {pass}"
             );
         }
+    }
+
+    fn cleanup_linked_abandonment_fixture(argument: &str, argument_type: &str) -> HookFixture {
+        hook_modules_fixture(
+            &format!(
+                "import actions (Log, make)\neffect Stop {{\nstop : Unit -> Unit\n}}\nmain : Unit -> Int\nmain () = handle {{\nlet logged = perform Log<{argument_type}>.log ()\nhandle (handle (cleanup (make {argument}) {{\nlet logged = perform Log<Bool>.log ()\nlet stopped = perform Stop.stop ()\n42\n}}) with Log<Bool> {{\nlog ignored => (resume ()) + 1\n}}) with Stop {{\nstop ignored => {{\nlet done = discard\n7\n}}\n}}\n}} with Log<{argument_type}> {{\nlog ignored => resume ()\n}}\n"
+            ),
+            &[(
+                "actions.ash",
+                "pub effect Log<T> {\nlog : Unit -> Unit\n}\npub make<T> : T -> (Unit -> Unit ! {Log<T>})\nmake value = {\nlet dangerous : Unit -> Unit ! {Log<T>} = fn(ignored) {\nperform Log<T>.log ()\n}\nlet safe : Unit -> Unit ! {Log<T>} = fn(ignored) {\nhandle (perform Log<T>.log ()) with Log<T> {\nlog ignored => resume ()\n}\n}\nsafe\n}\n",
+            )],
+        )
+    }
+
+    #[test]
+    fn cleanup_linked_callback_substitution_rechecks_generic_handler_coincidence() {
+        use super::super::effect::EffectExprKind;
+        for pass in 0..3 {
+            for (argument, argument_type, safe) in [("1", "Int", true), ("true", "Bool", false)] {
+                let (mut core, sources, relations) =
+                    cleanup_linked_abandonment_fixture(argument, argument_type);
+                let borrowed = sources.iter().collect::<Vec<_>>();
+                registration_proof_check(&core, &borrowed, &relations).unwrap();
+                if pass > 0 {
+                    let valid =
+                        super::super::validate_effect_modules(core, &borrowed, &relations).unwrap();
+                    assert_eq!(
+                        crate::eval::evaluate_effect(&valid)
+                            .unwrap()
+                            .value
+                            .to_string(),
+                        "7"
+                    );
+                    core = if pass == 1 {
+                        super::super::transform::identity_effect_traversal(&valid)
+                    } else {
+                        super::super::transform::fold_effect_literal_primitives(&valid)
+                    }
+                    .unwrap();
+                }
+                let mut selected = None;
+                let mut replacement = None;
+                for node in &core.nodes {
+                    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                        binding,
+                    ))) = &node.kind
+                    else {
+                        continue;
+                    };
+                    let span = binding.binder().origin().primary_span();
+                    let source = sources
+                        .iter()
+                        .find(|source| source.id() == span.source())
+                        .unwrap();
+                    match &source.text()[span.range().start() as usize..span.range().end() as usize]
+                    {
+                        "safe" => selected = Some((binding.binder().id(), binding.binder().ty())),
+                        "dangerous" => {
+                            replacement = Some((binding.binder().id(), binding.binder().ty()))
+                        }
+                        _ => {}
+                    }
+                }
+                let (selected, selected_type) = selected.unwrap();
+                let (replacement, replacement_type) = replacement.unwrap();
+                assert_eq!(selected_type, replacement_type);
+                let mut replaced = 0;
+                for node in &mut core.nodes {
+                    if let EffectExprKind::Pure(PureExprKind::Variable(variable)) = &mut node.kind
+                        && variable.binder() == selected
+                    {
+                        *variable = crate::core::variable::VariableNode::new(replacement);
+                        replaced += 1;
+                    }
+                }
+                assert_eq!(replaced, 1);
+                let result = super::super::validate_effect_modules(core, &borrowed, &relations);
+                if safe {
+                    let valid =
+                        result.expect("a distinct captured instance does not intercept cleanup");
+                    assert_eq!(
+                        crate::eval::evaluate_effect(&valid)
+                            .unwrap()
+                            .value
+                            .to_string(),
+                        "7"
+                    );
+                } else {
+                    assert_eq!(
+                        result.unwrap_err().reason(),
+                        ValidationReason::DiscardUnsafe,
+                        "pass {pass}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cleanup_abandonment_forged_discard_row_rejects_after_both_transforms() {
+        use super::super::{
+            capture,
+            effect::{EffectExprKind, EffectOperation},
+        };
+        for pass in 0..3 {
+            let (mut core, sources, relations) = cleanup_linked_abandonment_fixture("1", "Int");
+            let borrowed = sources.iter().collect::<Vec<_>>();
+            if pass > 0 {
+                let valid =
+                    super::super::validate_effect_modules(core, &borrowed, &relations).unwrap();
+                core = if pass == 1 {
+                    super::super::transform::identity_effect_traversal(&valid)
+                } else {
+                    super::super::transform::fold_effect_literal_primitives(&valid)
+                }
+                .unwrap();
+            }
+            let discard = core
+                .nodes
+                .iter_mut()
+                .find(|node| {
+                    matches!(
+                        node.kind,
+                        EffectExprKind::Operation(EffectOperation::Discard(_))
+                    )
+                })
+                .unwrap();
+            assert!(!discard.effects.is_empty());
+            discard.effects = EffectRow::empty();
+            let independent = capture::check_nodes(
+                &core.nodes,
+                &[],
+                &[],
+                |kind| match kind {
+                    EffectExprKind::Operation(operation) => Some(operation),
+                    _ => None,
+                },
+                &mut TypeWorkBudget::with_limit(crate::types::TYPE_WORK_LIMIT),
+            );
+            assert!(
+                matches!(independent, Err(capture::Failure::CleanupRow { .. })),
+                "pass {pass}"
+            );
+            assert_eq!(
+                super::super::validate_effect_modules(core, &borrowed, &relations)
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::EffectRow,
+                "pass {pass}"
+            );
+        }
+    }
+
+    #[test]
+    fn cleanup_abandonment_capture_work_is_exact_one_short_and_retryable() {
+        use super::super::{capture, effect::EffectExprKind};
+        let (core, _, _) = cleanup_linked_abandonment_fixture("1", "Int");
+        let run = |budget: &mut TypeWorkBudget| {
+            capture::check_nodes(
+                &core.nodes,
+                &[],
+                &[],
+                |kind| match kind {
+                    EffectExprKind::Operation(operation) => Some(operation),
+                    _ => None,
+                },
+                budget,
+            )
+        };
+        let mut generous = TypeWorkBudget::with_limit(crate::types::TYPE_WORK_LIMIT);
+        run(&mut generous).unwrap();
+        let exact = generous.used();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(exact - 1)),
+            Err(capture::Failure::Resource)
+        ));
+        for _ in 0..2 {
+            let mut retry = TypeWorkBudget::with_limit(exact);
+            run(&mut retry).unwrap();
+            assert_eq!(retry.used(), exact);
+        }
+        core.discard_iteratively();
     }
 
     fn prove_registration_transforms(fixture: HookFixture) {

@@ -32,6 +32,44 @@ and their reviews. Parent owns planning/status/specification, staging and Git.
 Reviewers are read-only and do not run competing Cargo commands. Keep reports
 short; record actual evidence once rather than repeating broad histories.
 
+Step 3 permits bounded parallel work: the runtime reviewer owns only
+`src/eval/machine.rs` for the consumed-clause association regression and fix,
+while the implementation writer owns inference and other files. The latter
+retains the sole Cargo permit. They exchange explicit file release and test
+requests; all writers freeze for architecture scans. This changes coordination,
+not scope or acceptance requirements.
+That exception is now closed: the regression passed after its observed failure,
+and `machine.rs` ownership returned to the implementation writer.
+While row recomputation is corrected, a medium-reasoning test writer owns only
+new `tests/cleanup_reporting.rs` for independent ordinary reporting variants.
+The implementation writer still owns Cargo and every other product/test file;
+the same scan freeze and explicit handoff rules apply.
+The reporting writer has returned that file after its first run passed all
+eight tests. The implementation writer again owns all product/test files.
+The implementation writer subsequently released only new
+`tests/cleanup_partial_acquisition.rs` to the medium-reasoning reporting writer
+for the abandoned-later-initializer witness. Cargo and all other product/test
+files remain with the implementation writer; the same handoff rules apply.
+Parent also received and returned `tests/spec_examples.rs` for one exact
+documented cleanup CLI test, reusing its existing temporary-file guard. No
+parallel Cargo commands were run.
+The partial-acquisition file has also returned after its first test run passed;
+the implementation writer again owns every product/test file and Cargo.
+For the remaining acceptance checks, the writer released only
+`src/core/validate.rs` to the high-reasoning typed-scope agent for independent
+abandonment authority and validation-budget tests. Runtime and row-solving
+implementation, all other files and Cargo remain with the primary writer.
+That agent returned `validate.rs` with three new authority/budget tests for
+the primary writer's first run; all product/test files are again under one owner.
+The writer then released only new `tests/cleanup_interactions.rs` to the
+medium-reasoning reporting agent for the remaining source interaction witnesses.
+All other files and Cargo stay with the primary writer.
+That file returned with five tests covering ten programs, including normal and
+discarded open-row lacks pairs. Its first execution is pending; the primary
+writer again owns all product/test files and Cargo.
+Parent briefly received and returned `src/core/validate.rs` for one duplicate
+cleanup-acquisition witness; no other product file or Cargo ownership changed.
+
 Reuse the existing Effect family, capture analysis and explicit evaluator.
 No new exception mechanism, error registry, generic ownership framework,
 second interpreter, blanket rejection of accepted positives or raised limits.
@@ -55,9 +93,19 @@ push, tag or merge main.
   rechecks; all 32 architecture tests, strict all-target Clippy, formatting and
   diff checks passed. The retained small-stack bound is unchanged. The plan
   records the contextual-row and stack corrections.
-- Owned abandonment, effectful discard rows and closing-position interpreter
-  checks are next. Armed abandonment remains temporarily rejected; this normal
-  execution checkpoint does not complete CP-0019.
+- Owned abandonment, effectful discard rows, closing-position interpreter checks
+  and the full reporting contract are implemented and verified. Corrections
+  preserve the retained stack bounds and independently validated least row
+  replay. Semantic, Rust/resource and bounded correction reviews passed.
+- Fresh full `CARGO_INCREMENTAL=0 cargo xtask verify` exited 0: 2,545 top-level
+  tests plus eight logged subprocess rechecks, all 32 architecture checks,
+  strict Clippy and warnings-denied rustdoc passed. Markdown, whitespace,
+  local-link and notation/authority checks passed. Evidence is retained in
+  [the report](../design/effect-ash/reliable-cleanup-evidence.md); the execution
+  log is `/tmp/ash-cleanup-step3-full-verify-complete-20260908.log`.
+- Remaining lifecycle work: retain this complete product checkpoint, remove
+  transition artifacts, perform the unsigned local integration and verify the
+  merged checkout, then remove the clean feature worktree and branch.
 
 ## Verification
 

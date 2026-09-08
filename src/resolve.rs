@@ -8613,7 +8613,31 @@ impl Resolver {
         while let Some(task) = tasks.pop() {
             match task {
                 ResolveTask::VisitExpr(expression) => {
-                    self.visit_expression(expression, &mut tasks, &mut expressions)?;
+                    if let SurfaceExprKind::Match(match_expression) = &expression.kind {
+                        self.visit_match_expression(
+                            match_expression,
+                            expression.span,
+                            &mut expressions,
+                        )?;
+                    } else {
+                        self.visit_expression(expression, &mut tasks, &mut expressions)?;
+                    }
+                }
+                ResolveTask::FinishPerform {
+                    effect,
+                    operation,
+                    spelling,
+                    operation_span,
+                    span,
+                } => {
+                    Self::finish_perform(
+                        effect,
+                        operation,
+                        spelling,
+                        operation_span,
+                        span,
+                        &mut expressions,
+                    )?;
                 }
                 ResolveTask::FinishHook { effect, span } => {
                     let body = expressions.pop_owned().ok_or_else(|| {
@@ -9245,6 +9269,81 @@ impl Resolver {
         Ok(result.into_inner())
     }
 
+    // Keep request construction's owned temporaries out of the resolver driver
+    // frame, which existing nested match resolution can reenter.
+    fn finish_perform(
+        effect: ResolvedEffectInstance,
+        operation: crate::types::OperationId,
+        spelling: &str,
+        operation_span: Span,
+        span: Span,
+        expressions: &mut ResolvedExpressionBuffer,
+    ) -> Result<(), ResolveError> {
+        let operand = expressions.pop_owned().ok_or_else(|| {
+            error(
+                ResolveReason::InternalState,
+                span,
+                "request operand resolution produced no expression",
+            )
+        })?;
+        expressions.push(ResolvedExpr {
+            kind: ResolvedExprKind::Perform(ResolvedPerformExpr {
+                effect,
+                operation,
+                spelling: spelling.to_owned(),
+                operand: Box::new(operand.into_inner()),
+                origin: Origin::Source(operation_span),
+            }),
+            span,
+        });
+        Ok(())
+    }
+
+    // Keep recursive match resolution outside the ordinary expression dispatch frame.
+    fn visit_match_expression(
+        &mut self,
+        match_expression: &crate::surface::SurfaceMatchExpr,
+        span: Span,
+        expressions: &mut ResolvedExpressionBuffer,
+    ) -> Result<(), ResolveError> {
+        let scrutinee =
+            ResolvedExpressionOwner::new(self.resolve_expr(&match_expression.scrutinee)?);
+        let mut arms = ResolvedMatchArmBuffer(Vec::with_capacity(match_expression.arms.len()));
+        for arm in &match_expression.arms {
+            let scope_checkpoint = self.scopes.len();
+            let (patterns, binders) =
+                self.resolve_pattern_vector(std::slice::from_ref(&arm.pattern))?;
+            let mut patterns = ResolvedPatternBuffer(patterns);
+            let pattern = patterns.pop().ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    arm.span,
+                    "the resolver produced no match pattern",
+                )
+            })?;
+            let pattern = ResolvedPatternOwner::new(pattern);
+            self.push_binder_scope_many(&binders);
+            let body = self
+                .resolve_expr(&arm.body)
+                .map(ResolvedExpressionOwner::new);
+            self.scopes.truncate(scope_checkpoint);
+            let body = body?;
+            arms.0.push(ResolvedMatchArm {
+                pattern: pattern.into_inner(),
+                body: body.into_inner(),
+                span: arm.span,
+            });
+        }
+        expressions.push(ResolvedExpr {
+            kind: ResolvedExprKind::Match(ResolvedMatchExpr {
+                scrutinee: Box::new(scrutinee.into_inner()),
+                arms: arms.into_vec(),
+            }),
+            span,
+        });
+        Ok(())
+    }
+
     fn visit_expression<'a>(
         &mut self,
         expression: &'a SurfaceExpr,
@@ -9536,42 +9635,7 @@ impl Resolver {
                 tasks.extend(elements.iter().rev().map(ResolveTask::VisitExpr));
             }
             SurfaceExprKind::Match(match_expression) => {
-                let scrutinee =
-                    ResolvedExpressionOwner::new(self.resolve_expr(&match_expression.scrutinee)?);
-                let mut arms =
-                    ResolvedMatchArmBuffer(Vec::with_capacity(match_expression.arms.len()));
-                for arm in &match_expression.arms {
-                    let scope_checkpoint = self.scopes.len();
-                    let (patterns, binders) =
-                        self.resolve_pattern_vector(std::slice::from_ref(&arm.pattern))?;
-                    let mut patterns = ResolvedPatternBuffer(patterns);
-                    let pattern = patterns.pop().ok_or_else(|| {
-                        error(
-                            ResolveReason::InternalState,
-                            arm.span,
-                            "the resolver produced no match pattern",
-                        )
-                    })?;
-                    let pattern = ResolvedPatternOwner::new(pattern);
-                    self.push_binder_scope_many(&binders);
-                    let body = self
-                        .resolve_expr(&arm.body)
-                        .map(ResolvedExpressionOwner::new);
-                    self.scopes.truncate(scope_checkpoint);
-                    let body = body?;
-                    arms.0.push(ResolvedMatchArm {
-                        pattern: pattern.into_inner(),
-                        body: body.into_inner(),
-                        span: arm.span,
-                    });
-                }
-                expressions.push(ResolvedExpr {
-                    kind: ResolvedExprKind::Match(ResolvedMatchExpr {
-                        scrutinee: Box::new(scrutinee.into_inner()),
-                        arms: arms.into_vec(),
-                    }),
-                    span: expression.span,
-                });
+                self.visit_match_expression(match_expression, expression.span, expressions)?;
             }
             SurfaceExprKind::Perform(request) => {
                 let effect = self.resolve_effect_instance_parts(
@@ -9581,17 +9645,28 @@ impl Resolver {
                 )?;
                 let operation =
                     self.resolved_operation(effect.instance.effect(), &request.operation)?;
-                let operand = self.resolve_expr(&request.operand)?;
-                expressions.push(ResolvedExpr {
-                    kind: ResolvedExprKind::Perform(ResolvedPerformExpr {
-                        effect,
-                        operation,
-                        spelling: request.operation.text.clone(),
-                        operand: Box::new(operand),
-                        origin: Origin::Source(request.operation.span),
-                    }),
+                self.type_work.charge(2).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "request operand work exceeded its type-work budget",
+                    )
+                })?;
+                tasks.0.try_reserve(2).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "request operand work exceeded its type-work budget",
+                    )
+                })?;
+                tasks.push(ResolveTask::FinishPerform {
+                    effect,
+                    operation,
+                    spelling: &request.operation.text,
+                    operation_span: request.operation.span,
                     span: expression.span,
                 });
+                tasks.push(ResolveTask::VisitExpr(&request.operand));
             }
             SurfaceExprKind::Handle(handler) => {
                 let effect = self.resolve_effect_instance_parts(
@@ -9775,6 +9850,13 @@ impl Drop for PendingLexicalResolution<'_> {
 }
 
 enum ResolveTask<'a> {
+    FinishPerform {
+        effect: ResolvedEffectInstance,
+        operation: crate::types::OperationId,
+        spelling: &'a str,
+        operation_span: Span,
+        span: Span,
+    },
     FinishCleanup {
         span: Span,
     },
@@ -9877,6 +9959,7 @@ impl ResolveTask<'_> {
             Self::VisitBlock(block) => block.span,
             Self::VisitRecursiveGroup(group) => group.span,
             Self::FinishApplication { span }
+            | Self::FinishPerform { span, .. }
             | Self::FinishCleanup { span }
             | Self::FinishHook { span, .. }
             | Self::FinishRegistration { span, .. }

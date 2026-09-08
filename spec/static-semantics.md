@@ -1048,10 +1048,12 @@ T-Resume :=
 T-Discard :=
   active-resume = resume(Q, A, epsilon_out)
   active-resume is available
-  inferred captured segment has no other unfinished obligation
-  abandonment preserves required completion of owners outside that segment
+  owned closure includes the selected capture and its contained live captures
+  closing that closure preserves every outside and running completion owner
+  each action is compatible with its surviving interpreter context
+  epsilon_close is the least residual row of owned close execution
   ===>
-  GAMMA; active-resume |- discard ⇒ Unit ! {}, consumes-resume
+  GAMMA; active-resume |- discard ⇒ Unit ! epsilon_close, consumes-resume
 ```
 
 `T-Handle` chooses the least `epsilon_out` satisfying the body remainder and
@@ -1063,7 +1065,13 @@ consumes the capability, and gives the resumed computation the handler's result
 contract.
 `T-Discard` consumes the same capability without resuming its captured
 computation. Its result is `Unit`, not the handler's result type; subsequent
-clause work still checks against the handler contract.
+clause work still checks against the handler contract. Its inferred
+`epsilon_close` includes the effects of actions invoked by closing the owned
+capture after action-local and still-enclosing retained builtin cell
+interpretation. It does not export a captured cell's local identity merely
+because an action uses that cell before release. Surviving source handlers,
+including clause-local handlers around discard, check and discharge residual
+effects at their own boundaries. Discard is not universally pure.
 
 This complete handler discharges `Cell`, so `main` has a pure computation
 codomain and evaluates to `42`:
@@ -1108,10 +1116,12 @@ local binding, scheme, or stored function body.
 Discard permission is distinct from duplication permission. Ordinary values
 and their stored closure captures are duplicable, subject to the resource
 lifetime rules below. The hidden continuation
-capability is nonduplicable and nonescaping. A captured segment cannot be
-discarded while it carries another clause's live capability, including an
-obligation nested inside another captured segment. A consumed capability adds
-no unfinished obligation. Discard consumes its own owner only.
+capability is nonduplicable and nonescaping. Discard closes exactly the selected
+owned capture. Each live clause boundary inside it contributes its owned
+capture recursively at that boundary's structural position, and is consumed
+once. A consumed capability adds no further capture. Non-owning registration
+or handle associations do not authorize taking an enclosing owner. Required
+completion outside the owned closure must remain reachable in untouched control.
 
 Capture inference distinguishes stored values from latent requests. A helper
 can store only ordinary values yet request an operation while its caller or an
@@ -1131,7 +1141,7 @@ coincide; a proof cannot assume they remain distinct. Handler matching after
 specialization must retain that possibility. Recursive analysis must finish
 before publishing a permission. An unknown higher-order callee or open row
 rejects discard when the relevant request's obligations cannot be proved
-absent; this uncertainty alone does not reject resource-free resume-only code. There are no
+safely closable; this uncertainty alone does not reject resource-free resume-only code. There are no
 source capture annotations or capture-polymorphic function types.
 
 An unsafe or unproved discard has type-phase reason `effect.discard-unsafe`,
@@ -1211,11 +1221,12 @@ handlers installed only around publication in its body. The callback's saved
 ordinary values and lexical type/row instantiation retain their usual meaning.
 Creating an ordinary closure under a handler does not store that handler.
 
-Registration owners require normal completion even for pure callbacks and
-unused bodies. Capture and resume preserve that obligation. Checked discard is
-permitted inside a subscriber only when the generated clause and every
-surrounding owner still complete. Abandoning a registration, a pending resume,
-or an owner whose completion would be skipped remains `effect.discard-unsafe`.
+Registration owners require completion even for pure callbacks and unused
+bodies. Capture and resume preserve that obligation. Checked discard can close
+a registration inside its owned abandoned control without invoking its
+transformer or remaining publication callbacks. Subscriber-local discard must
+preserve required completion outside that owned closure. Skipping an outside
+owner or its scheduled resume remains `effect.discard-unsafe`.
 Subscribers receive no surrounding resume capability.
 
 Stored-dependency inference follows actual callback results, not merely their
@@ -1263,9 +1274,32 @@ The scope owns one invocation obligation independently of ordinary copies of
 the callback. Completion analysis follows the actual callback, including its
 imported and generic relationships. Starting the action consumes its eligibility
 for another invocation but retains a required completion until it returns.
-A discard that abandons an armed cleanup obligation or skips a running action
-is `effect.discard-unsafe`; an action-local discard may complete when the action
-and surrounding owners still complete.
+A discard may invoke an armed action in its owned closure. Skipping a running
+action or unfinished close operation is `effect.discard-unsafe`; an
+action-local discard may complete when the action, close operation and outside
+owners still complete. Outward requests may capture and resume running cleanup.
+
+Interpreter compatibility is checked at each action's structural closing
+position. Lookup includes the action's own handlers, still-enclosing captured
+boundaries and the surviving discard context, with exact lexical instantiation
+and precedence. Body-local handlers already passed before that closing position
+are excluded. Captured source and generated hook handlers are candidates for
+this proof only; cleanup does not restore or execute them.
+
+If the nearest matching candidate for an actual transitive action request is
+a removed source or generated handler, abandonment reports
+`effect.cleanup-context`, with discard, action and handler labels. An outer
+same-instance handler or builtin cell interpreter cannot replace that candidate.
+Action-local handlers, surviving outer handlers and still-live unshadowed
+builtin cells remain usable. Unknown necessary interpreter requirements reject
+the relevant abandonment, not every use of an ordinary callback. Imports,
+generic coincidence and open rows retain their existing lexical authority;
+neither guessed row exclusions nor a universal closed-row restriction applies.
+
+Cleanup effects and interpreter requirements survive summaries even when a
+captured handler discharged them from the original body's outward row.
+Independent linked Core validation reconstructs the actual callback and closing
+relationships, not a source permission or an empty discard annotation.
 
 Stored-dependency checks apply to the saved body result, the action's captures
 and its operation payloads. An action may access an enclosing cell while that
@@ -1335,13 +1369,13 @@ scope to a handler still inside its owner. The trusted interpreter at its own
 resource boundary is an admitted recipient. Resource-free payloads may cross
 to outer handlers, which may resume the captured scope.
 
-Capture retains the resource scope's completion obligation. Discard is unsafe
-if it abandons that scope or skips its required completion, including when the
-affected owner lies outside the immediate captured segment. Discard confined
-inside a resource scope remains permitted when all surrounding completion
-obligations are preserved. Normal completion releases inner scopes before
-outer scopes. Divergence remains divergence; checking does not prove eventual
-release or introduce a cleanup path.
+Capture retains the resource scope's completion obligation. Checked discard
+can release the scope when it belongs to the owned abandoned closure; skipping
+required completion outside that closure remains unsafe. Discard confined
+inside a resource scope remains permitted when outside completion obligations
+are preserved. Normal and abandoned completion release inner scopes before
+outer scopes, so an inner cleanup action can still use an enclosing cell.
+Divergence remains divergence; checking does not prove eventual release.
 
 Resource analysis runs even without a discard expression. It is finite and
 conservative: unknown relevant higher-order behavior rejects escape or
@@ -1366,7 +1400,7 @@ Exhaustion publishes no partial checked module or permission; ownership and
 failure disposal are iterative, and a fresh sufficient budget permits retry.
 
 This mechanism adds no general resource declarations, manual release,
-acquisition/destructor callbacks, ownership transfer, existential package,
+general acquisition/destructor declarations, ownership transfer, existential package,
 foreign resource, abort, exception, cancellation, suspension or general
 cleanup. Local `newtype` keeps its separate erasure and escape rules; it does
 not acquire a resource or its sealed authority.

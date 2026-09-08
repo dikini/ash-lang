@@ -89,10 +89,10 @@ Function computations carry rows of exact, parameterized effect identities.
 `perform` requests an operation, and an exhaustive lexical `handle` removes one
 exact instance. Each selected clause must consume its non-escaping continuation
 capability exactly once on every normally completing path, with `resume` or
-checked `discard`. Discard abandons the suspended segment only when inference
-proves it abandons or skips no other unfinished continuation or resource
-obligation; the clause then
-continues with `Unit`.
+checked `discard`. Discard closes the selected capture and recursively owned
+live captures in structural order, then continues the clause with `Unit`.
+Inference proves safe closure without skipping outside or running completion
+owners. Its effect row includes invoked cleanup actions.
 
 `resource cell<R> c = initializer { body }` acquires one scoped mutable integer
 cell through the compiler-owned `@builtin.cell` API. The scope owns release;
@@ -100,7 +100,8 @@ handles provide reusable access while it remains live. Inferred dependencies
 prevent handles, captured access and identity-indexed operations from escaping
 their owner, including through request payloads. Copied integers may escape.
 Each execution has a fresh activation, and capture/resume moves the owned
-scope without duplication. Normal completion releases it once.
+scope without duplication. Normal completion or owned abandonment releases it
+once.
 
 `hook H { body }` supplies the empty identity chain for an exact effect API
 with one endomorphic `publish` operation. `register H transformer { body }`
@@ -108,15 +109,22 @@ evaluates one ordinary transformer and retains it for that scope. Publication
 uses `perform H.publish value`; outer registrations transform before inner
 ones, and callbacks run under handlers surrounding their registration. An exact
 nested root starts a separate chain. Normal return removes each registration
-once; capture/resume preserves its owner, and checked discard cannot skip its
-completion. Callback effects and stored resource dependencies remain checked.
+once; capture/resume preserves its owner. Owned abandonment removes it without
+running its transformer or remaining publication callbacks; discard cannot
+skip required outside completion. Callback effects and stored resource
+dependencies remain checked.
 
 `cleanup action { body }` evaluates and retains one `Unit -> Unit` action.
 Normal completion invokes it, then returns the saved body value unchanged.
 Capture/resume transfers the invocation owner; copies of the callable gain no
-cleanup authority. An executing action remains a required completion and cannot
-be discarded. Action effects and stored dependencies remain checked. Internal
-termination or exhaustion provides no source-cleanup guarantee.
+cleanup authority. Owned abandonment invokes actions under the surviving
+context and still-live builtin cells, not restored captured source handlers.
+Required removed interpreters reject at each action's closing position.
+An executing action and its unfinished close operation remain required
+completions and cannot be discarded. Action effects and stored dependencies
+remain checked. Ordinary typed reporting can retain ordered cleanup failures
+separately from the body outcome; constructors have no implicit failure meaning.
+Internal termination or exhaustion provides no source-cleanup guarantee.
 
 The source path selected for execution is the entry module. It declares exactly
 one local, monomorphic, unconstrained `main : Unit -> R`, where `R` is closed.

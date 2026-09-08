@@ -92,14 +92,14 @@ fn body_local_handler_does_not_discharge_cleanup_effects() {
 }
 
 #[test]
-fn armed_and_running_cleanup_cannot_be_abandoned_yet() {
-    for source in [
+fn armed_cleanup_closes_but_running_cleanup_cannot_be_abandoned() {
+    for (source, expected) in [
         "effect Stop {\nstop : Unit -> Unit\n}\nmain : Unit -> Int\nmain () = handle (cleanup fn(ignored) {\n()\n} {\nlet ignored = perform Stop.stop ()\n42\n}) with Stop {\nstop ignored => {\nlet done = discard\n42\n}\n}\n",
         "effect Stop {\nstop : Unit -> Unit\n}\nmain : Unit -> Int\nmain () = handle (cleanup fn(ignored) {\nperform Stop.stop ()\n} {\n42\n}) with Stop {\nstop ignored => {\nlet done = discard\n42\n}\n}\n",
-    ] {
+    ].into_iter().zip([Ok("42".into()), Err("effect.discard-unsafe".into())]) {
         assert_eq!(
             check(source),
-            Err("effect.discard-unsafe".into()),
+            expected,
             "{source}"
         );
     }

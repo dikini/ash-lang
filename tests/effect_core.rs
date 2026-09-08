@@ -161,7 +161,7 @@ fn discard_core_checks_owners_types_rows_and_exact_once_before_safety() {
         ("wrong-handler", Some(ValidationReason::Resume)),
         ("available", Some(ValidationReason::Resume)),
         ("wrong-type", Some(ValidationReason::Resume)),
-        ("wrong-row", Some(ValidationReason::Resume)),
+        ("wrong-row", Some(ValidationReason::EffectRow)),
         ("double", Some(ValidationReason::Resume)),
         ("outside", Some(ValidationReason::Resume)),
         ("closure", Some(ValidationReason::Resume)),

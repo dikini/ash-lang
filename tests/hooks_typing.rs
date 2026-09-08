@@ -62,13 +62,13 @@ fn coincident_registration_callback_cannot_export_its_cell_dependency() {
 }
 
 #[test]
-fn registration_completion_rejects_outward_discard_with_or_without_coincidence() {
-    for argument in ["()", "true"] {
+fn owned_registration_closes_with_or_without_coincidence() {
+    for (argument, expected) in [("()", "4"), ("true", "3")] {
         assert_eq!(
             check(&format!(
                 "effect Mark<T> {{\npublish : Int -> Int\n}}\neffect Pause {{\nask : Int -> Int\n}}\nincrement : Int -> Int\nincrement value = value + 1\nprobe<T, U> : (T, U) -> Int ! {{Mark<T>, Mark<U>, Pause}}\nprobe ignored = register Mark<U> increment {{\nlet value = perform Mark<T>.publish 3\nperform Pause.ask value\n}}\nmain : Unit -> Int\nmain () = handle (hook Mark<Unit> {{\nhook Mark<Bool> {{\nprobe ((), {argument})\n}}\n}}) with Pause {{\nask value => {{\nlet done = discard\nvalue\n}}\n}}\n"
             )),
-            Err("effect.discard-unsafe".into()),
+            Ok(expected.into()),
             "argument: {argument}",
         );
     }
@@ -142,12 +142,12 @@ fn registration_callback_and_body_errors_precede_publication_gate() {
 }
 
 #[test]
-fn unused_pure_registration_still_requires_completion_before_outward_discard() {
+fn unused_owned_registration_closes_without_invoking_its_callback() {
     assert_eq!(
         check(
             "effect Adjust {\npublish : Int -> Int\n}\neffect Stop {\nstop : Unit -> Unit\n}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Int\nmain () = hook Adjust {\nhandle (register Adjust identity {\nlet ignored = perform Stop.stop ()\n42\n}) with Stop {\nstop ignored => {\nlet done = discard\n7\n}\n}\n}\n"
         ),
-        Err("effect.discard-unsafe".into())
+        Ok("7".into())
     );
 }
 
@@ -342,11 +342,8 @@ fn generic_coincidence_keeps_resource_payload_dependencies() {
 }
 
 #[test]
-fn generic_coincidence_preserves_pending_resume_completion() {
-    for (second, expected) in [
-        ("()", Ok("()".into())),
-        ("true", Err("effect.discard-unsafe".into())),
-    ] {
+fn generic_coincidence_closes_owned_pending_resume_completion() {
+    for (second, expected) in [("()", Ok("()".into())), ("true", Ok("()".into()))] {
         let source = format!(
             "effect Mark<T> {{\npublish : Unit -> Unit\n}}\neffect Begin {{\nstart : Unit -> Unit\n}}\nprobe<T, U> : (T, U) -> Unit ! {{Mark<T>}}\nprobe (first, second) = hook Mark<U> {{\nperform Mark<T>.publish ()\n}}\nmain : Unit -> Unit\nmain () = handle (handle (perform Begin.start ()) with Begin {{\nstart ignored => {{\nlet _ = probe ((), {second})\nresume ()\n}}\n}}) with Mark<Unit> {{\npublish ignored => discard\n}}\n"
         );

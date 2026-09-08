@@ -61,38 +61,26 @@ fn latent_effects<'a>(checked: &'a ash::resolved::CheckedModule, spelling: &str)
 }
 
 #[test]
-fn cyclic_opaque_resumption_leaves_no_owner_after_normal_return() {
-    for (clause, accepted) in [
-        ("let _ = resume ()\nperform B.ask ()", true),
-        ("let _ = perform B.ask ()\nresume ()", false),
+fn cyclic_opaque_resumption_consumes_or_owns_the_visible_clause_capture() {
+    for clause in [
+        "let _ = resume ()\nperform B.ask ()",
+        "let _ = perform B.ask ()\nresume ()",
     ] {
         let source = format!(
             "effect H {{\nask : Unit -> Unit\n}}\neffect B {{\nask : Unit -> Unit\n}}\n\
              run : (Unit -> Unit ! {{H}}) -> Unit\nrun action = handle (handle (action ()) with H {{\nask ignored => {{\n{clause}\n}}\n}}) with B {{\nask ignored => discard\n}}\n\
              main : Unit -> Unit\nmain () = ()\n"
         );
-        let result = try_check_source(&source);
-        if accepted {
-            result.expect("opaque H control returns before known B, with every H owner consumed");
-        } else {
-            assert!(
-                matches!(result,Err(ash::elaborate::TypeError::Source(error)) if error.reason==ash::elaborate::TypeReason::DiscardUnsafe)
-            );
-        }
+        try_check_source(&source)
+            .expect("the selected B capture owns every remaining visible H clause");
     }
 }
 
 #[test]
-fn repeated_handler_requests_keep_consumed_owners_during_post_resume_work() {
-    for (request, accepted) in [
-        (
-            "let _ = perform A.ask ()\nlet _ = resume ()\nperform B.ask ()",
-            true,
-        ),
-        (
-            "let _ = perform A.ask ()\nlet _ = perform B.ask ()\nresume ()",
-            false,
-        ),
+fn repeated_handler_requests_complete_consumed_or_owned_captured_clauses() {
+    for request in [
+        "let _ = perform A.ask ()\nlet _ = resume ()\nperform B.ask ()",
+        "let _ = perform A.ask ()\nlet _ = perform B.ask ()\nresume ()",
     ] {
         let source = format!(
             "effect H {{\nask : Unit -> Unit\n}}\neffect A {{\nask : Unit -> Unit\n}}\neffect B {{\nask : Unit -> Unit\n}}\n\
@@ -100,19 +88,13 @@ fn repeated_handler_requests_keep_consumed_owners_during_post_resume_work() {
              run : Unit -> Unit ! {{A, B}}\nrun () = handle (twice ()) with H {{\nask ignored => {{\n{request}\n}}\n}}\n\
              main : Unit -> Unit\nmain () = handle (handle (run ()) with A {{\nask ignored => handle ({{\nlet _ = resume ()\nperform B.ask ()\n}}) with B {{\nask ignored => discard\n}}\n}}) with B {{\nask ignored => resume ()\n}}\n"
         );
-        let result = try_check_source(&source);
-        if accepted {
-            result.expect("every H owner is consumed before post-resume B work unwinds");
-        } else {
-            assert!(
-                matches!(result, Err(ash::elaborate::TypeError::Source(error)) if error.reason == ash::elaborate::TypeReason::DiscardUnsafe)
-            );
-        }
+        try_check_source(&source)
+            .expect("H clauses are consumed or owned by the selected B capture");
     }
 }
 
 #[test]
-fn generic_local_discard_cannot_assume_distinct_type_parameters() {
+fn generic_local_discard_closes_owned_clauses_when_type_parameters_coincide() {
     for completion in ["discard", "resume ()"] {
         let source = format!(
             "effect E<T> {{\nask : Unit -> Unit\n}}\neffect A {{\nask : Unit -> Unit\n}}\neffect B {{\nask : Unit -> Unit\n}}\n\
@@ -120,15 +102,7 @@ fn generic_local_discard_cannot_assume_distinct_type_parameters() {
              invoke<T, U> : (T, U) -> Unit ! {{E<T>}}\ninvoke pair = handle (handle (route pair) with A {{\nask ignored => handle ({{\nlet _ = resume ()\nperform B.ask ()\n}}) with B {{\nask ignored => {completion}\n}}\n}}) with B {{\nask ignored => resume ()\n}}\n\
              main : Unit -> Unit\nmain () = ()\n"
         );
-        let result = try_check_source(&source);
-        if completion == "resume ()" {
-            result.expect("generic resume-only control has no abandonment obligation");
-        } else {
-            assert!(
-                matches!(result, Err(ash::elaborate::TypeError::Source(ref error)) if error.reason == ash::elaborate::TypeReason::DiscardUnsafe),
-                "generic discard must hold when T and U coincide: {result:?}"
-            );
-        }
+        try_check_source(&source).expect("coincident E clauses are owned by the selected capture");
     }
 }
 

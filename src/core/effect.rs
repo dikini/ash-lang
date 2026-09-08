@@ -602,6 +602,17 @@ impl CoreBuilder<EffectOperationFamily> {
         handler: HandlerId,
         owner: ResumeId,
     ) -> Result<(), super::BuildError> {
+        self.replay_effect_rows_in_range(range, output, handler, owner, false)
+    }
+
+    fn replay_effect_rows_in_range(
+        &mut self,
+        range: std::ops::Range<usize>,
+        output: &EffectRow,
+        handler: HandlerId,
+        owner: ResumeId,
+        provisional: bool,
+    ) -> Result<(), super::BuildError> {
         enum Equation {
             Registration(NodeId),
             Cleanup(NodeId, NodeId),
@@ -762,7 +773,9 @@ impl CoreBuilder<EffectOperationFamily> {
                             .map_err(|()| super::BuildError::TypeWorkExceeded)?
                         {
                             Ok(row) => row,
-                            Err(crate::types::EffectRowError::Missing) if hook_root => {
+                            Err(crate::types::EffectRowError::Missing)
+                                if hook_root || provisional =>
+                            {
                                 clone_effect_row_with_budget(body_effects, &mut self.type_work)
                                     .map_err(|()| super::BuildError::TypeWorkExceeded)?
                             }
@@ -803,6 +816,116 @@ impl CoreBuilder<EffectOperationFamily> {
             return Err(error);
         }
         Ok(())
+    }
+
+    /// Completes source-only cleanup row replay after its row variables are solved.
+    pub(crate) fn finish_cleanup_effect_rows(&mut self) -> Result<(), super::BuildError> {
+        let count = self.nodes.len();
+        self.charge_effect_metadata(count)?;
+        let mut previous = Vec::new();
+        previous
+            .try_reserve_exact(count)
+            .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+        let mut handlers = std::collections::HashMap::new();
+        for index in 0..count {
+            self.charge_effect_metadata(1)?;
+            previous.push(
+                clone_effect_row_with_budget(&self.nodes[index].effects, &mut self.type_work)
+                    .map_err(|()| super::BuildError::TypeWorkExceeded)?,
+            );
+            if let EffectExprKind::Operation(EffectOperation::Handler(handler)) =
+                &self.nodes[index].kind
+            {
+                self.type_work
+                    .charge(handler.clauses.len())
+                    .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+                handlers
+                    .try_reserve(handler.clauses.len())
+                    .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+                for clause in &handler.clauses {
+                    if handlers
+                        .insert((handler.id, clause.resume), index)
+                        .is_some()
+                    {
+                        return Err(super::BuildError::InvalidPayload);
+                    }
+                }
+            }
+        }
+        let result = (|| {
+            // Final type coincidence can shrink an earlier handler output. Start
+            // derived resume edges at bottom rather than retaining self-supporting
+            // cached labels or tails. Stable call/discard leaves retain their rows
+            // and authenticated lacks and reintroduce them during the replay.
+            for index in 0..count {
+                self.charge_effect_metadata(1)?;
+                if matches!(
+                    self.nodes[index].kind,
+                    EffectExprKind::Operation(EffectOperation::Resume(_))
+                ) {
+                    self.nodes[index].effects = EffectRow::empty();
+                }
+            }
+            // Solving fixes tail identities and exclusions. Replaying union and exact
+            // removal only propagates the finite known-label vocabulary monotonically.
+            // A nested handler can acquire an outer resume's output after its own
+            // clause was visited; refresh those resume edges until none changes.
+            loop {
+                self.replay_effect_rows_in_range(
+                    0..count,
+                    &EffectRow::empty(),
+                    HandlerId::new(u32::MAX),
+                    ResumeId::new(u32::MAX),
+                    true,
+                )?;
+                let mut changed = false;
+                for index in 0..count {
+                    self.charge_effect_metadata(1)?;
+                    let EffectExprKind::Operation(EffectOperation::Resume(resume)) =
+                        &self.nodes[index].kind
+                    else {
+                        continue;
+                    };
+                    let owner = *handlers
+                        .get(&(resume.handler, resume.owner))
+                        .ok_or(super::BuildError::InvalidPayload)?;
+                    // Operand work is intrinsic even while the owner output is
+                    // bottom. At the fixed point it is included in that output.
+                    let output = self.nodes[owner]
+                        .effects
+                        .union_with_budget(
+                            &self.nodes[resume.value.index()?].effects,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                        .map_err(|_| super::BuildError::InvalidPayload)?;
+                    if !crate::types::same_effect_rows_with_budget(
+                        &self.nodes[index].effects,
+                        &output,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                    {
+                        self.nodes[index].effects = output;
+                        changed = true;
+                    }
+                }
+                if !changed {
+                    return self.recompute_effect_rows_in_range(
+                        0..count,
+                        &EffectRow::empty(),
+                        HandlerId::new(u32::MAX),
+                        ResumeId::new(u32::MAX),
+                    );
+                }
+            }
+        })();
+        if result.is_err() {
+            for (node, row) in self.nodes.iter_mut().zip(previous) {
+                node.effects = row;
+            }
+        }
+        result
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1455,6 +1578,199 @@ mod tests {
             .expect("small-stack worker")
             .join()
             .expect("range teardown remains stack-safe");
+    }
+
+    #[test]
+    fn completed_cleanup_rows_propagate_nested_resumes_with_exact_atomic_retry() {
+        fn fixture() -> (EffectCoreBuilder, NodeId, NodeId, EffectRow) {
+            let source = SourceFile::new("nested-row-replay", "()").unwrap();
+            let origin = Origin::Source(source.span(ByteRange::new(0, 2).unwrap()).unwrap());
+            let mut builder =
+                EffectCoreBuilder::with_effect_registry(Arc::new(ResolvedRegistry::default()));
+            let unit = builder.unit(Type::Unit, origin.clone()).unwrap();
+            let effects = (0..3)
+                .map(|id| EffectInstance::new(EffectId::new(ModuleId::new(0), id), Box::new([])))
+                .collect::<Vec<_>>();
+            let mut request = |index: usize| {
+                builder
+                    .request(
+                        effects[index].clone(),
+                        OperationId::new(effects[index].effect(), 0),
+                        unit,
+                        Type::Unit,
+                        EffectRow::singleton(effects[index].clone()),
+                        origin.clone(),
+                    )
+                    .unwrap()
+            };
+            let first = request(0);
+            let outward = request(2);
+            let nested = request(1);
+            let binder = builder.binder(Type::Unit, origin.clone()).unwrap();
+            let body = builder
+                .binding(binder, first, outward, Type::Unit, origin.clone())
+                .unwrap();
+            let outer_resume = builder
+                .resume(
+                    HandlerId::new(0),
+                    ResumeId::new(0),
+                    ResumeUse::Consumed,
+                    unit,
+                    Type::Unit,
+                    EffectRow::empty(),
+                    origin.clone(),
+                )
+                .unwrap();
+            let binder = builder.binder(Type::Unit, origin.clone()).unwrap();
+            let nested_body = builder
+                .binding(binder, nested, outer_resume, Type::Unit, origin.clone())
+                .unwrap();
+            let inner_resume = builder
+                .resume(
+                    HandlerId::new(1),
+                    ResumeId::new(1),
+                    ResumeUse::Consumed,
+                    unit,
+                    Type::Unit,
+                    EffectRow::empty(),
+                    origin.clone(),
+                )
+                .unwrap();
+            let clause = |index: usize, body| {
+                EffectClause::new(
+                    OperationId::new(effects[index].effect(), 0),
+                    ResumeId::new(index as u32),
+                    CoreMatchArm::new(
+                        CorePattern::new(
+                            Type::Unit,
+                            origin.clone(),
+                            crate::core::CorePatternKind::Wildcard,
+                        ),
+                        body,
+                        origin.clone(),
+                    ),
+                )
+            };
+            let inner = builder
+                .handler(
+                    HandlerId::new(1),
+                    nested_body,
+                    effects[1].clone(),
+                    vec![clause(1, inner_resume)],
+                    Type::Unit,
+                    EffectRow::empty(),
+                    origin.clone(),
+                )
+                .unwrap();
+            let row = EffectRow::singleton(effects[2].clone());
+            builder
+                .handler(
+                    HandlerId::new(0),
+                    body,
+                    effects[0].clone(),
+                    vec![clause(0, inner)],
+                    Type::Unit,
+                    row.clone(),
+                    origin,
+                )
+                .unwrap();
+            (builder, outer_resume, inner_resume, row)
+        }
+        let (mut measured, outer, inner, row) = fixture();
+        let before = measured.type_work.used();
+        measured.finish_cleanup_effect_rows().unwrap();
+        let work = measured.type_work.used() - before;
+        // The inner owner learns D only after outer resume's first refresh,
+        // so reaching both equalities requires multiple full replay rounds.
+        assert_eq!(measured.nodes[outer.index().unwrap()].effects, row);
+        assert_eq!(measured.nodes[inner.index().unwrap()].effects, row);
+
+        let (mut short, _, _, _) = fixture();
+        let rows = short
+            .nodes
+            .iter()
+            .map(|node| node.effects.clone())
+            .collect::<Vec<_>>();
+        short
+            .charge_type_work_for_test(TYPE_WORK_LIMIT - short.type_work.used() - work + 1)
+            .unwrap();
+        assert_eq!(
+            short.finish_cleanup_effect_rows(),
+            Err(super::super::BuildError::TypeWorkExceeded)
+        );
+        assert_eq!(
+            short
+                .nodes
+                .iter()
+                .map(|node| node.effects.clone())
+                .collect::<Vec<_>>(),
+            rows
+        );
+        for _ in 0..2 {
+            let (mut retry, outer, inner, row) = fixture();
+            retry
+                .charge_type_work_for_test(TYPE_WORK_LIMIT - retry.type_work.used() - work)
+                .unwrap();
+            retry.finish_cleanup_effect_rows().unwrap();
+            assert_eq!(retry.nodes[outer.index().unwrap()].effects, row);
+            assert_eq!(retry.nodes[inner.index().unwrap()].effects, row);
+            assert_eq!(retry.type_work.used(), TYPE_WORK_LIMIT);
+        }
+        // After generic identities coincide, an old removed-label cache can
+        // become a self-supporting but nonleast H = base union Resume(H).
+        let (mut stale, outer, inner, row) = fixture();
+        for id in [outer, inner] {
+            stale.nodes[id.index().unwrap()].effects = EffectRow::singleton(EffectInstance::new(
+                EffectId::new(ModuleId::new(0), 0),
+                Box::new([]),
+            ));
+        }
+        stale.finish_cleanup_effect_rows().unwrap();
+        assert_eq!(stale.nodes[outer.index().unwrap()].effects, row);
+        assert_eq!(stale.nodes[inner.index().unwrap()].effects, row);
+
+        // The nested handler's member arrives only through the outer resume.
+        let (mut delayed, outer, inner, row) = fixture();
+        for node in &mut delayed.nodes {
+            if let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &mut node.kind
+                && handler.id == HandlerId::new(1)
+            {
+                handler.body = outer;
+                handler.effect = row.known()[0].clone();
+            }
+        }
+        delayed.finish_cleanup_effect_rows().unwrap();
+        assert_eq!(delayed.nodes[outer.index().unwrap()].effects, row);
+        assert!(delayed.nodes[inner.index().unwrap()].effects.is_empty());
+
+        // A genuinely absent member still fails the strict final sweep, with
+        // every entry row restored despite preceding successful replay rounds.
+        let (mut missing, _, _, _) = fixture();
+        for node in &mut missing.nodes {
+            if let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &mut node.kind
+                && handler.id == HandlerId::new(0)
+            {
+                handler.effect =
+                    EffectInstance::new(EffectId::new(ModuleId::new(0), 9), Box::new([]));
+            }
+        }
+        let rows = missing
+            .nodes
+            .iter()
+            .map(|node| node.effects.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            missing.finish_cleanup_effect_rows(),
+            Err(super::super::BuildError::InvalidPayload)
+        );
+        assert_eq!(
+            missing
+                .nodes
+                .iter()
+                .map(|node| node.effects.clone())
+                .collect::<Vec<_>>(),
+            rows
+        );
     }
 }
 

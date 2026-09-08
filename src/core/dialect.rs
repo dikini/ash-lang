@@ -1881,6 +1881,7 @@ pub struct CoreBuilder<F: CoreOperationFamily = PureOperationFamily> {
     pub(super) type_work: TypeWorkBudget,
     rewrite_type_work: TypeWorkBudget,
     requires_type_rewrite: bool,
+    deferred_cleanup_rows: HashSet<crate::types::InferenceVariableId>,
 }
 
 impl Default for CoreBuilder<PureOperationFamily> {
@@ -1947,6 +1948,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             type_work,
             rewrite_type_work: TypeWorkBudget::default(),
             requires_type_rewrite: false,
+            deferred_cleanup_rows: HashSet::new(),
         }
     }
 
@@ -3219,9 +3221,9 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         Ok(rewritten_requires_type_rewrite)
     }
 
-    /// Reports whether an admitted Core type still contains inference state.
-    pub(crate) const fn requires_type_rewrite(&self) -> bool {
-        self.requires_type_rewrite
+    /// Reports whether admitted types or pending cleanup-derived rows need rewriting.
+    pub(crate) fn requires_type_rewrite(&self) -> bool {
+        self.requires_type_rewrite || !self.deferred_cleanup_rows.is_empty()
     }
 
     /// Finishes unchecked construction at `root`.
@@ -3229,7 +3231,12 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
     /// # Errors
     ///
     /// Returns [`BuildError::InvalidNodeId`] unless `root` belongs to this arena.
+    /// Returns [`BuildError::InvalidPayload`] while source cleanup row equations
+    /// remain unfinished.
     pub fn finish(mut self, root: NodeId) -> Result<UnvalidatedCoreProgram<F>, BuildError> {
+        if !self.deferred_cleanup_rows.is_empty() {
+            return Err(BuildError::InvalidPayload);
+        }
         let Some(arena) = self.arena else {
             return Err(BuildError::InvalidNodeId);
         };
@@ -3345,6 +3352,13 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
                     .ok_or(BuildError::InvalidNodeId)?
                     .effects,
             );
+            if self.is_deferred_cleanup_row(&effects) || self.is_deferred_cleanup_row(row) {
+                if self.is_deferred_cleanup_row(row) {
+                    effects = clone_effect_row_with_budget(row, &mut self.type_work)
+                        .map_err(|_| BuildError::TypeWorkExceeded)?;
+                }
+                continue;
+            }
             effects = effects
                 .union_with_budget(row, &mut self.type_work)
                 .map_err(|()| BuildError::TypeWorkExceeded)?
@@ -3357,6 +3371,12 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             let function = application.function().index()?;
             let function = self.nodes.get(function).ok_or(BuildError::InvalidNodeId)?;
             if let Type::EffectfulFunction(_, codomain) = &function.ty {
+                if self.is_deferred_cleanup_row(&effects)
+                    || self.is_deferred_cleanup_row(codomain.effects())
+                {
+                    return clone_effect_row_with_budget(codomain.effects(), &mut self.type_work)
+                        .map_err(|_| BuildError::TypeWorkExceeded);
+                }
                 effects = effects
                     .union_with_budget(codomain.effects(), &mut self.type_work)
                     .map_err(|()| BuildError::TypeWorkExceeded)?
@@ -3364,6 +3384,35 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             }
         }
         Ok(effects)
+    }
+
+    fn is_deferred_cleanup_row(&self, row: &EffectRow) -> bool {
+        row.tail().is_some_and(|tail| match tail.variable() {
+            EffectRowVariable::Inference(id) => self.deferred_cleanup_rows.contains(&id),
+            _ => false,
+        })
+    }
+
+    pub(crate) fn defer_cleanup_row(
+        &mut self,
+        id: crate::types::InferenceVariableId,
+    ) -> Result<(), BuildError> {
+        self.type_work
+            .charge(1)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        self.deferred_cleanup_rows
+            .try_reserve(1)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        self.deferred_cleanup_rows.insert(id);
+        Ok(())
+    }
+
+    pub(crate) fn finish_cleanup_rows(&mut self) {
+        self.deferred_cleanup_rows.clear();
+    }
+
+    pub(crate) fn forget_cleanup_row(&mut self, id: crate::types::InferenceVariableId) {
+        self.deferred_cleanup_rows.remove(&id);
     }
 
     pub(crate) fn push_operation(
@@ -3460,8 +3509,27 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
                 .get(function.index()?)
                 .ok_or(BuildError::InvalidNodeId)?;
             if let Type::EffectfulFunction(_, codomain) = &function.ty {
+                // Recomputing cleanup-dependent ancestors must not erase the
+                // lexical lacks attached when this application was elaborated.
+                // They are provisional builder facts: independent validation
+                // authenticates them against the enclosing forall contract.
+                let reported = F::effect_row(&self.nodes[index].effects);
+                let callable = match (codomain.effects().tail(), reported.tail()) {
+                    (Some(tail), Some(previous)) if tail.variable() == previous.variable() => {
+                        crate::types::rebuild_effect_row_with_budget(
+                            codomain.effects().known(),
+                            Some(tail.variable()),
+                            tail.lacks().iter().chain(previous.lacks()),
+                            crate::types::clone_type_with_budget,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| BuildError::TypeWorkExceeded)?
+                    }
+                    _ => clone_effect_row_with_budget(codomain.effects(), &mut self.type_work)
+                        .map_err(|()| BuildError::TypeWorkExceeded)?,
+                };
                 effects = effects
-                    .union_with_budget(codomain.effects(), &mut self.type_work)
+                    .union_with_budget(&callable, &mut self.type_work)
                     .map_err(|()| BuildError::TypeWorkExceeded)?
                     .map_err(|_| BuildError::InvalidPayload)?;
             }
@@ -6042,6 +6110,36 @@ mod tests {
             .expect_err("rewritten argument quantifiers must be admitted before storage");
 
         assert_eq!(error, BuildError::TypeWorkExceeded);
+    }
+
+    #[test]
+    fn pending_cleanup_equations_cannot_escape_source_builder() {
+        let source = SourceFile::new("pending-cleanup.ash", "()").unwrap();
+        let mut builder = CoreBuilder::new();
+        let root = builder
+            .unit(Type::Unit, generated_origin(&source, 0))
+            .unwrap();
+        builder
+            .defer_cleanup_row(crate::types::InferenceVariableId::new(0))
+            .unwrap();
+        assert!(matches!(
+            builder.finish(root),
+            Err(BuildError::InvalidPayload)
+        ));
+    }
+
+    #[test]
+    fn pending_cleanup_row_requires_rewrite_without_type_inference() {
+        let mut builder = CoreBuilder::new();
+        assert!(!builder.requires_type_rewrite());
+        builder
+            .defer_cleanup_row(crate::types::InferenceVariableId::new(0))
+            .unwrap();
+        assert!(builder.requires_type_rewrite());
+        builder.rewrite_types(|ty| Ok(ty.clone())).unwrap();
+        assert!(builder.requires_type_rewrite());
+        builder.finish_cleanup_rows();
+        assert!(!builder.requires_type_rewrite());
     }
 
     #[test]

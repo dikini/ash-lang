@@ -2172,9 +2172,13 @@ impl<'a> Analysis<'a> {
                     self.link(slot, *value, context, budget)?;
                 }
             }
-            Expr::Function { captures, .. } => {
+            Expr::Function { captures, body, .. } => {
                 for capture in captures {
-                    self.slot(*capture, context, budget)?;
+                    let source = self.slot(*capture, context, budget)?;
+                    if let Some(root) = self.roots.get(body).copied() {
+                        let target = self.slot(*capture, root, budget)?;
+                        self.edge(target, source, budget)?;
+                    }
                 }
                 self.atom(slot, Atom::Closure(expression, context), budget)?;
             }

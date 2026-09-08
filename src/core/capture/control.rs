@@ -38,6 +38,7 @@ pub(super) enum Control {
     Cleanup {
         body: usize,
         action: usize,
+        row_type: usize,
         source: Span,
     },
     Registration {
@@ -69,6 +70,8 @@ pub(super) enum Control {
     Discard {
         owner: usize,
         node: usize,
+        local: bool,
+        row_type: usize,
         source: Span,
     },
 }
@@ -143,10 +146,12 @@ impl Control {
             Self::Cleanup {
                 body,
                 action,
+                row_type,
                 source,
             } => Self::Cleanup {
                 body: body + code_offset,
                 action: action + code_offset,
+                row_type: row_type + type_offset,
                 source: *source,
             },
             Self::Registration { body, source } => Self::Registration {
@@ -203,9 +208,13 @@ impl Control {
                 owner,
                 node,
                 source,
+                row_type,
+                ..
             } => Self::Discard {
                 owner: owner + code_offset,
                 node: *node,
+                local: false,
+                row_type: row_type + type_offset,
                 source: *source,
             },
         })
@@ -263,6 +272,8 @@ struct Position {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum Site {
+    Closing(usize, bool),
+    RemovedHandler(usize),
     Cleanup(usize, bool),
     Registration(usize),
     Next(Position),
@@ -276,6 +287,7 @@ enum Region {
     Active,
     Capture(usize, usize),
     Completion(usize, usize),
+    Closing(usize, usize),
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -321,11 +333,25 @@ struct Event {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum Frame {
+    Closing {
+        code: usize,
+        site: Site,
+        context: usize,
+        value_context: usize,
+        capture: Option<Address>,
+        event: Event,
+    },
+    RemovedHandler {
+        code: usize,
+        context: usize,
+        value_context: usize,
+    },
     Cleanup {
         code: usize,
         context: usize,
         value_context: usize,
         running: bool,
+        closing: Option<usize>,
     },
     Registration {
         code: usize,
@@ -367,6 +393,8 @@ impl Frame {
     fn allocation_context(self) -> usize {
         match self {
             Self::Next { value_context, .. }
+            | Self::Closing { value_context, .. }
+            | Self::RemovedHandler { value_context, .. }
             | Self::Cleanup { value_context, .. }
             | Self::Registration { value_context, .. }
             | Self::Handler { value_context, .. }
@@ -377,6 +405,8 @@ impl Frame {
 
     fn site(self) -> Site {
         match self {
+            Self::Closing { site, .. } => site,
+            Self::RemovedHandler { code, .. } => Site::RemovedHandler(code),
             Self::Cleanup { code, running, .. } => Site::Cleanup(code, running),
             Self::Next { position, .. } => Site::Next(position),
             Self::Registration { code, .. } => Site::Registration(code),
@@ -389,6 +419,13 @@ impl Frame {
     }
     fn remap(&mut self, map: &HashMap<Address, Address>) {
         if let Self::Clause { capture, .. } = self {
+            *capture = map.get(capture).copied().unwrap_or(*capture);
+        }
+        if let Self::Closing {
+            capture: Some(capture),
+            ..
+        } = self
+        {
             *capture = map.get(capture).copied().unwrap_or(*capture);
         }
     }
@@ -601,6 +638,10 @@ impl State {
                     capture,
                     consumed: false,
                     ..
+                }
+                | Frame::Closing {
+                    capture: Some(capture),
+                    ..
                 } = edge.frame
                 {
                     pending.push(capture);
@@ -625,6 +666,9 @@ impl State {
                 Frame::Clause {
                     consumed: false,
                     ..
+                } | Frame::Closing {
+                    capture: Some(_),
+                    ..
                 }
             )
         {
@@ -636,6 +680,7 @@ impl State {
             charge(budget, 1)?;
             if edge.next == root
                 || matches!(edge.frame, Frame::Clause { capture, consumed: false, .. } if capture == root)
+                || matches!(edge.frame, Frame::Closing { capture: Some(capture), .. } if capture == root)
             {
                 return Ok(());
             }
@@ -759,6 +804,8 @@ pub(super) struct Analysis<'a> {
     candidates: HashSet<(usize, usize)>,
     focusing: bool,
     payloads: Vec<(usize, usize, usize)>,
+    pub(super) infer_cleanup_rows: bool,
+    pub(super) cleanup_rows: Vec<super::CleanupRequirement>,
 }
 
 impl<'a> Analysis<'a> {
@@ -858,6 +905,8 @@ impl<'a> Analysis<'a> {
             candidates: HashSet::new(),
             focusing: false,
             payloads: Vec::new(),
+            infer_cleanup_rows: false,
+            cleanup_rows: Vec::new(),
         })
     }
 
@@ -935,6 +984,14 @@ impl<'a> Analysis<'a> {
             charge(budget, 1)?;
             if previous.ambiguous_instance == label.ambiguous_instance
                 && same_effect(previous.effect.as_deref(), label.effect.as_deref(), budget)?
+                && match (&previous.opaque_row, &label.opaque_row) {
+                    (None, None) => true,
+                    (Some(left), Some(right)) => {
+                        crate::types::same_effect_rows_with_budget(left, right, budget)
+                            .map_err(|_| Failure::Resource)?
+                    }
+                    _ => false,
+                }
             {
                 return Ok(id);
             }
@@ -1011,6 +1068,17 @@ impl<'a> Analysis<'a> {
     ) -> Result<(bool, bool), Failure> {
         let a = &self.labels[request];
         let b = &self.labels[handler];
+        if let (Some(row), Some(effect)) = (&a.opaque_row, &b.effect)
+            && !a.ambiguous_instance
+            && !b.ambiguous_instance
+            && let Some(tail) = row.tail()
+        {
+            for excluded in tail.lacks() {
+                if same_effect(Some(excluded), Some(effect), budget)? {
+                    return Ok((false, true));
+                }
+            }
+        }
         let (Some(ae), Some(be)) = (&a.effect, &b.effect) else {
             return Ok((true, true));
         };
@@ -1400,6 +1468,9 @@ impl<'a> Analysis<'a> {
         self.candidates.clear();
         self.payloads.clear();
         self.discover(roots, None, budget)?;
+        if self.infer_cleanup_rows {
+            return Ok(());
+        }
         self.check_payloads(budget)?;
         if let Some(data) = &mut self.data {
             data.close(budget)?;
@@ -1524,6 +1595,7 @@ impl<'a> Analysis<'a> {
                                 context: next.context,
                                 value_context: next.value_context,
                                 running: false,
+                                closing: None,
                             }
                         } else if matches!(self.graph.code[code], Control::Resource { .. }) {
                             if !self.focusing {
@@ -1649,8 +1721,25 @@ impl<'a> Analysis<'a> {
                                 if effects.tail().is_some() {
                                     // Exact row bindings were expanded by substitute. Any
                                     // remaining tail is unknown, not the enclosing call's row.
-                                    let label =
-                                        self.intern_label(Request::unknown(source), budget)?;
+                                    let mut request = Request::unknown(source);
+                                    charge(
+                                        budget,
+                                        self.contexts[state.context].bindings.len()
+                                            + self.contexts[state.context].rows.len(),
+                                    )?;
+                                    request.ambiguous_instance = self.contexts[state.context]
+                                        .bindings
+                                        .iter()
+                                        .any(|(_, ty)| *ty == usize::MAX)
+                                        || self.contexts[state.context]
+                                            .rows
+                                            .iter()
+                                            .any(|row| row.unproved);
+                                    request.opaque_row = Some(Arc::new(
+                                        clone_effect_row_with_budget(effects, budget)
+                                            .map_err(|_| Failure::Resource)?,
+                                    ));
+                                    let label = self.intern_label(request, budget)?;
                                     charge(budget, 1)?;
                                     labels.try_reserve(1).map_err(|_| Failure::Resource)?;
                                     labels.push(label);
@@ -1788,6 +1877,23 @@ impl<'a> Analysis<'a> {
             .map_err(|_| Failure::Resource)?;
         for edge in &mut seed.heap {
             let cut = match &mut edge.frame {
+                Frame::Closing {
+                    code,
+                    value_context,
+                    ..
+                } => {
+                    let cut = data.restore_cut(
+                        *value_context,
+                        *code,
+                        usize::MAX - 5,
+                        *code,
+                        &[],
+                        true,
+                        budget,
+                    )?;
+                    *value_context = cut.context;
+                    cut
+                }
                 Frame::Next {
                     position,
                     value_context,
@@ -1843,6 +1949,11 @@ impl<'a> Analysis<'a> {
                     cut
                 }
                 Frame::Handler {
+                    code,
+                    value_context,
+                    ..
+                }
+                | Frame::RemovedHandler {
                     code,
                     value_context,
                     ..
@@ -1973,7 +2084,7 @@ impl<'a> Analysis<'a> {
     }
 
     fn returned(
-        &self,
+        &mut self,
         state: State,
         pending: &mut VecDeque<State>,
         visited: &mut HashSet<State>,
@@ -1992,17 +2103,38 @@ impl<'a> Analysis<'a> {
             let mut next = state.copy(budget)?;
             next.stack = edge.next;
             match edge.frame {
+                Frame::Closing {
+                    code,
+                    context,
+                    value_context,
+                    capture,
+                    event,
+                    ..
+                } => {
+                    next.context = context;
+                    next.value_context = value_context;
+                    next.position = Position { code: 0, next: 0 };
+                    if let Some(capture) = capture {
+                        self.close_segment(&state, &mut next, capture, code, event, budget)?;
+                    }
+                }
                 Frame::Cleanup {
                     code,
                     context,
                     value_context,
                     running,
+                    closing,
                 } => {
                     next.context = context;
                     next.value_context = value_context;
                     next.position = if running {
                         Position { code: 0, next: 0 }
                     } else {
+                        if let Some(discard) = closing {
+                            self.record_cleanup_row(
+                                &state, edge.next, code, context, discard, budget,
+                            )?;
+                        }
                         let Control::Cleanup { action, .. } = self.graph.code[code] else {
                             return Err(Failure::Invalid);
                         };
@@ -2012,6 +2144,7 @@ impl<'a> Analysis<'a> {
                                 context,
                                 value_context,
                                 running: true,
+                                closing,
                             },
                             budget,
                         )?;
@@ -2031,6 +2164,11 @@ impl<'a> Analysis<'a> {
                     next.value_context = value_context;
                 }
                 Frame::Handler {
+                    context,
+                    value_context,
+                    ..
+                }
+                | Frame::RemovedHandler {
                     context,
                     value_context,
                     ..
@@ -2057,7 +2195,7 @@ impl<'a> Analysis<'a> {
                     consumed,
                     ..
                 } => {
-                    if !consumed {
+                    if !consumed && !self.infer_cleanup_rows {
                         let Control::Handler { clauses, .. } = &self.graph.code[handler] else {
                             return Err(Failure::Invalid);
                         };
@@ -2075,7 +2213,14 @@ impl<'a> Analysis<'a> {
                     next.value_context = value_context;
                 }
             }
-            if matches!(edge.frame, Frame::Cleanup { running: false, .. }) {
+            if matches!(
+                edge.frame,
+                Frame::Cleanup { running: false, .. }
+                    | Frame::Closing {
+                        capture: Some(_),
+                        ..
+                    }
+            ) {
                 // Starting the action adds a new completion frame, so this is
                 // not the pop-only transition whose heap is already sorted.
                 Self::enqueue(next, pending, visited, budget)?;
@@ -2100,8 +2245,9 @@ impl<'a> Analysis<'a> {
         let mut matching = HashMap::new();
         charge(budget, state.heap.len())?;
         for edge in &state.heap {
-            if let Frame::Handler { code, context, .. } | Frame::Resource { code, context, .. } =
-                edge.frame
+            if let Frame::Handler { code, context, .. }
+            | Frame::Resource { code, context, .. }
+            | Frame::RemovedHandler { code, context, .. } = edge.frame
                 && !matching.contains_key(&(code, context))
             {
                 let label = self.label(code, context, budget)?;
@@ -2116,7 +2262,8 @@ impl<'a> Analysis<'a> {
             |frame| {
                 Ok(match frame {
                     Frame::Handler { code, context, .. }
-                    | Frame::Resource { code, context, .. } => matching[&(code, context)],
+                    | Frame::Resource { code, context, .. }
+                    | Frame::RemovedHandler { code, context, .. } => matching[&(code, context)],
                     _ => (false, true),
                 })
             },
@@ -2142,6 +2289,41 @@ impl<'a> Analysis<'a> {
             }
         }
         for selected in selected {
+            if let Frame::RemovedHandler { code, .. } = selected.boundary.frame {
+                if self.infer_cleanup_rows {
+                    self.returned(state.copy(budget)?, pending, visited, budget)?;
+                    continue;
+                }
+                let Control::Handler { effect, .. } = &self.graph.code[code] else {
+                    return Err(Failure::Invalid);
+                };
+                let Some((discard, _)) = state.abandoned else {
+                    return Err(Failure::Invalid);
+                };
+                let Control::Discard { source, .. } = self.graph.code[discard] else {
+                    return Err(Failure::Invalid);
+                };
+                let action = selected
+                    .prefix
+                    .iter()
+                    .find_map(|edge| match edge.frame {
+                        Frame::Cleanup {
+                            code,
+                            running: true,
+                            ..
+                        } => match self.graph.code[code] {
+                            Control::Cleanup { source, .. } => Some(source),
+                            _ => None,
+                        },
+                        _ => None,
+                    })
+                    .unwrap_or(self.source(event));
+                return Err(Failure::CleanupContext {
+                    discard: source,
+                    action,
+                    handler: effect.source,
+                });
+            }
             if matches!(selected.boundary.frame, Frame::Resource { .. }) {
                 if let (Some(data), Some(port)) = (&mut self.data, event.port) {
                     data.external_result(port, budget)?;
@@ -2250,6 +2432,246 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
+    fn record_cleanup_row(
+        &mut self,
+        state: &State,
+        outer: Address,
+        code: usize,
+        context: usize,
+        discard: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if !self.infer_cleanup_rows {
+            return Ok(());
+        }
+        let Control::Cleanup { row_type, .. } = self.graph.code[code] else {
+            return Err(Failure::Invalid);
+        };
+        let Control::Discard {
+            node,
+            local,
+            source,
+            row_type: discard_row_type,
+            ..
+        } = self.graph.code[discard]
+        else {
+            return Err(Failure::Invalid);
+        };
+        let mut holder = TypeArguments(Vec::new());
+        holder.0.try_reserve(1).map_err(|_| Failure::Resource)?;
+        holder
+            .0
+            .push(self.substitute(&self.graph.types.0[row_type], context, budget)?);
+        let row = match holder.0[0]
+            .function_view()
+            .and_then(|function| function.effects())
+        {
+            Some(row) => {
+                clone_effect_row_with_budget(row, budget).map_err(|_| Failure::Resource)?
+            }
+            None => EffectRow::empty(),
+        };
+        let (resources, _) = selections(
+            state,
+            outer,
+            |frame| {
+                Ok((
+                    matches!(frame, Frame::Resource { .. }),
+                    !matches!(
+                        frame,
+                        Frame::Closing {
+                            site: Site::Closing(_, _),
+                            ..
+                        }
+                    ),
+                ))
+            },
+            budget,
+        )?;
+        let mut retained = Vec::new();
+        let mut discard_context = None;
+        let (drivers, _) = selections(
+            state,
+            outer,
+            |frame| {
+                let selected = matches!(frame, Frame::Closing { site: Site::Closing(owner, false), .. } if owner == discard);
+                Ok((selected, !selected))
+            },
+            budget,
+        )?;
+        for driver in drivers {
+            let Frame::Closing { context, .. } = driver.boundary.frame else {
+                return Err(Failure::Invalid);
+            };
+            if discard_context.is_some_and(|previous| previous != context) {
+                return Err(Failure::Invalid);
+            }
+            discard_context = Some(context);
+        }
+        let discard_context = discard_context.ok_or(Failure::Invalid)?;
+        charge(budget, 1)?;
+        holder.0.try_reserve(1).map_err(|_| Failure::Resource)?;
+        holder.0.push(self.substitute(
+            &self.graph.types.0[discard_row_type],
+            discard_context,
+            budget,
+        )?);
+        let expected = match holder.0[1]
+            .function_view()
+            .and_then(|function| function.effects())
+        {
+            Some(row) => {
+                clone_effect_row_with_budget(row, budget).map_err(|_| Failure::Resource)?
+            }
+            None => EffectRow::empty(),
+        };
+        charge(budget, resources.len() + 1)?;
+        retained
+            .try_reserve(resources.len())
+            .map_err(|_| Failure::Resource)?;
+        for resource in resources {
+            let Frame::Resource { code, context, .. } = resource.boundary.frame else {
+                return Err(Failure::Invalid);
+            };
+            let label = self.label(code, context, budget)?;
+            if let Some(effect) = &self.labels[label].effect {
+                retained.push(
+                    crate::core::effect::clone_effect_instance_with_budget(effect, budget)
+                        .map_err(|_| Failure::Resource)?,
+                );
+            }
+        }
+        self.cleanup_rows
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        self.cleanup_rows.push(super::CleanupRequirement {
+            discard: node,
+            local,
+            code: discard,
+            source,
+            context: discard_context,
+            expected,
+            row,
+            retained,
+        });
+        Ok(())
+    }
+
+    fn close_segment(
+        &self,
+        source: &State,
+        target: &mut State,
+        root: Address,
+        discard: usize,
+        event: Event,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let mut pending = Vec::new();
+        let mut seen = HashSet::new();
+        let mut edges = Vec::new();
+        pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+        pending.push(root);
+        while let Some(address) = pending.pop() {
+            charge(budget, 1)?;
+            if matches!(address, Address::End | Address::Empty) || seen.contains(&address) {
+                continue;
+            }
+            seen.try_reserve(1).map_err(|_| Failure::Resource)?;
+            seen.insert(address);
+            for edge in source.edges(address, budget)? {
+                let mut edge = *edge;
+                let site = edge.frame.site();
+                edge.frame = match edge.frame {
+                    Frame::Cleanup {
+                        code,
+                        running: true,
+                        ..
+                    } if !self.infer_cleanup_rows => {
+                        let Control::Cleanup { source, .. } = self.graph.code[code] else {
+                            return Err(Failure::Invalid);
+                        };
+                        return Err(self.unsafe_discard(
+                            discard,
+                            event,
+                            Some(CompletionOwner::Cleanup(source)),
+                        ));
+                    }
+                    Frame::Closing { .. } if !self.infer_cleanup_rows => {
+                        return Err(self.unsafe_discard(discard, event, None));
+                    }
+                    Frame::Cleanup {
+                        code,
+                        context,
+                        value_context,
+                        running: false,
+                        ..
+                    } => Frame::Cleanup {
+                        code,
+                        context,
+                        value_context,
+                        running: false,
+                        closing: Some(discard),
+                    },
+                    Frame::Handler {
+                        code,
+                        context,
+                        value_context,
+                        ..
+                    } => Frame::RemovedHandler {
+                        code,
+                        context,
+                        value_context,
+                    },
+                    Frame::Next {
+                        context,
+                        value_context,
+                        ..
+                    }
+                    | Frame::Clause {
+                        context,
+                        value_context,
+                        consumed: true,
+                        ..
+                    } => Frame::Closing {
+                        code: discard,
+                        site,
+                        context,
+                        value_context,
+                        capture: None,
+                        event,
+                    },
+                    Frame::Clause {
+                        context,
+                        value_context,
+                        capture,
+                        ..
+                    } => Frame::Closing {
+                        code: discard,
+                        site,
+                        context,
+                        value_context,
+                        capture: Some(capture),
+                        event,
+                    },
+                    frame => frame,
+                };
+                edges.try_reserve(1).map_err(|_| Failure::Resource)?;
+                edges.push(edge);
+                pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+                pending.push(edge.next);
+            }
+        }
+        target.stack = target.copy_segment(
+            root,
+            &edges,
+            None,
+            target.stack,
+            Region::Closing(discard, event.code),
+            budget,
+        )?;
+        Ok(())
+    }
+
     fn completed(
         &mut self,
         state: State,
@@ -2300,75 +2722,8 @@ impl<'a> Analysis<'a> {
                     budget,
                 )?;
             }
-            if !resume {
-                if event.unknown {
-                    return Err(self.unsafe_discard(state.position.code, event, None));
-                }
-                let (live, _) = selections(
-                    &state,
-                    capture,
-                    |frame| {
-                        Ok((
-                            matches!(
-                                frame,
-                                Frame::Clause {
-                                    consumed: false,
-                                    ..
-                                } | Frame::Resource { .. }
-                                    | Frame::Cleanup { .. }
-                                    | Frame::Registration { .. }
-                            ),
-                            true,
-                        ))
-                    },
-                    budget,
-                )?;
-                if let Some(live) = live.first() {
-                    if let Frame::Cleanup { code, .. } = live.boundary.frame {
-                        let Control::Cleanup { source, .. } = self.graph.code[code] else {
-                            return Err(Failure::Invalid);
-                        };
-                        return Err(self.unsafe_discard(
-                            state.position.code,
-                            event,
-                            Some(CompletionOwner::Cleanup(source)),
-                        ));
-                    }
-                    if let Frame::Registration { code, .. } = live.boundary.frame {
-                        let Control::Registration { source, .. } = self.graph.code[code] else {
-                            return Err(Failure::Invalid);
-                        };
-                        return Err(self.unsafe_discard(
-                            state.position.code,
-                            event,
-                            Some(CompletionOwner::Registration(source)),
-                        ));
-                    }
-                    if let Frame::Resource { code, .. } = live.boundary.frame {
-                        let Control::Resource { effect, .. } = &self.graph.code[code] else {
-                            return Err(Failure::Invalid);
-                        };
-                        return Err(self.unsafe_discard(
-                            state.position.code,
-                            event,
-                            Some(CompletionOwner::Resource(effect.source)),
-                        ));
-                    }
-                    let Frame::Clause {
-                        handler, ordinal, ..
-                    } = live.boundary.frame
-                    else {
-                        return Err(Failure::Invalid);
-                    };
-                    let Control::Handler { clauses, .. } = &self.graph.code[handler] else {
-                        return Err(Failure::Invalid);
-                    };
-                    return Err(self.unsafe_discard(
-                        state.position.code,
-                        event,
-                        Some(CompletionOwner::Clause(clauses[ordinal].source)),
-                    ));
-                }
+            if !resume && event.unknown && !self.infer_cleanup_rows {
+                return Err(self.unsafe_discard(state.position.code, event, None));
             }
             let mut next = state.copy(budget)?;
             // Replacing this occurrence does not mutate an older activation
@@ -2457,6 +2812,25 @@ impl<'a> Analysis<'a> {
                 )?;
             } else {
                 next.abandoned = Some((state.position.code, event));
+                next.push(
+                    Frame::Closing {
+                        code: state.position.code,
+                        site: Site::Closing(state.position.code, false),
+                        context: state.context,
+                        value_context: state.value_context,
+                        capture: None,
+                        event,
+                    },
+                    budget,
+                )?;
+                self.close_segment(
+                    &state,
+                    &mut next,
+                    capture,
+                    state.position.code,
+                    event,
+                    budget,
+                )?;
             }
             next.position = Position { code: 0, next: 0 };
             Self::enqueue(next, pending, visited, budget)?;
@@ -3570,6 +3944,8 @@ mod tests {
                         Control::Discard {
                             owner: 2,
                             node: 2,
+                            local: true,
+                            row_type: 0,
                             source: span,
                         },
                     ],
@@ -3863,6 +4239,76 @@ mod tests {
             let context = analysis.call_context(0, 0, 0, budget)?;
             let actual = TypeArguments(vec![analysis.substitute(&callback(), context, budget)?]);
             assert_eq!(actual.0[0], pure());
+            Ok::<(), Failure>(())
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        run(&mut measured).unwrap();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        for _ in 0..2 {
+            run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+        }
+    }
+
+    #[test]
+    fn opaque_row_exclusions_are_exact_interned_and_charged() {
+        let source = SourceFile::new("opaque-exclusions", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let effect = EffectId::new(ModuleId::new(0), 0);
+        let instance = |ty| EffectInstance::new(effect, Box::new([ty]));
+        let graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: Vec::new(),
+            types: TypeArguments(Vec::new()),
+            code: Vec::new(),
+        };
+        let run = |budget: &mut TypeWorkBudget| {
+            for reverse in [false, true] {
+                for (excluded, handled, widened, matches) in [
+                    (
+                        Type::Variable(TypeVariableId::new(0)),
+                        Type::Variable(TypeVariableId::new(0)),
+                        false,
+                        false,
+                    ),
+                    (
+                        Type::Variable(TypeVariableId::new(0)),
+                        Type::Variable(TypeVariableId::new(1)),
+                        false,
+                        true,
+                    ),
+                    (Type::Int, Type::Int, false, false),
+                    (Type::Int, Type::Int, true, true),
+                ] {
+                    let mut analysis = Analysis::new(&graph, budget)?;
+                    let row = EffectRow::open(
+                        EffectRowVariable::rigid(TypeVariableId::new(2)),
+                        Box::new([instance(excluded)]),
+                    );
+                    let mut refined = Request::unknown(span);
+                    refined.opaque_row = Some(Arc::new(
+                        clone_effect_row_with_budget(&row, budget)
+                            .map_err(|_| Failure::Resource)?,
+                    ));
+                    refined.ambiguous_instance = widened;
+                    let bare = Request::unknown(span);
+                    let (bare, refined) = if reverse {
+                        let refined = analysis.intern_label(refined, budget)?;
+                        (analysis.intern_label(bare, budget)?, refined)
+                    } else {
+                        let bare = analysis.intern_label(bare, budget)?;
+                        (bare, analysis.intern_label(refined, budget)?)
+                    };
+                    assert_ne!(bare, refined);
+                    let handler = Request::effect(&instance(handled), span, budget)?;
+                    let handler = analysis.intern_label(handler, budget)?;
+                    assert!(analysis.match_labels(bare, handler, budget)?.0);
+                    assert_eq!(analysis.match_labels(refined, handler, budget)?.0, matches);
+                }
+            }
             Ok::<(), Failure>(())
         };
         let mut measured = TypeWorkBudget::unbounded();

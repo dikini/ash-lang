@@ -1905,6 +1905,34 @@ fn synchronous_hooks_documentation_example_has_exact_cli_output() {
 }
 
 #[test]
+fn reliable_cleanup_documentation_example_has_exact_cli_output() {
+    let document = include_str!("../docs/tools/ash.md");
+    let example = document
+        .split_once("Save it as `cleanup.ash` and run `ash cleanup.ash`:")
+        .expect("the cleanup example must retain its documented invocation")
+        .1
+        .split_once("```ash\n")
+        .expect("the cleanup example must contain an Ash block")
+        .1
+        .split_once("```")
+        .expect("the cleanup source block must be closed")
+        .0;
+    let source = TempFile::write(example);
+    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .arg(source.path())
+        .output()
+        .expect("the documented cleanup executable should start");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"72211 : Int\n");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn tool_module_newtype_observation_has_exact_cli_output() {
     let source = TempFile::write(MODULE_NEWTYPE_MODULE);
     let output = Command::new(env!("CARGO_BIN_EXE_ash"))
