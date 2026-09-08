@@ -92,7 +92,7 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 - [Milestone closure evidence](effect-ash/milestone-closure-evidence.md) —
   combined conformance, downstream-pressure and simplification audit; final
-  verification and main integration remain gated.
+  merged-main verification passed after signed integration.
 - [Narrow checked foreign-provider evidence](effect-ash/narrow-foreign-provider-evidence.md)
   — native allocation, checked access, scoped ownership, fail-stop resource
   reports, independent validation and verified local integration.

@@ -1,9 +1,11 @@
 # Effect Ash milestone closure evidence
 
-This informative report audits the combined milestone at `035b456` on
-`integration/effect-ash-foundations`. It is not a completed milestone claim:
-main integration, merged-main verification and artifact cleanup remain gated.
-The [branch specification](../../../spec/README.md) governs the implemented
+This informative report audits the combined milestone from `035b456` on
+`integration/effect-ash-foundations`. Signed main merge
+`5d126b2dc1ca82bd7c9dff196c914e7da2199716` retains all selected slices.
+Final merged-main verification and documentation checks passed, closing all
+100 relative planning units. The
+[specification](../../../spec/README.md) governs the implemented
 contracts; [DN-0028](../DN-0028-effect-ash-milestone-plan.md) defines the milestone
 completion obligations, not language semantics.
 
@@ -72,8 +74,18 @@ passed `cargo xtask verify` after the closure documentation corrections. This
 includes formatting, build, strict lint, the complete workspace test corpus and
 rustdoc. Independent documentation review approved the pre-integration changes.
 Changed-document Markdown has no new lint findings against the baseline;
-existing overlong lines remain. All 96 relative file links resolved. Verification
-of the merged main state and final status/artifact changes remains required.
+existing overlong lines remain. All 96 relative file links resolved.
+
+Final merged-main `cargo xtask verify` passed on 2026-09-09. Independent final
+documentation review approved the current/historical status and retained limits.
+All 297 relative file links resolve; Markdown has no new findings, and
+`git diff --check` passes.
+TASK-0031 and its execution plan are removed with inbound links updated; Git
+retains their work history. The user's existing main documentation changes were
+shelved before integration and verified unchanged after the signed merge. The
+user-authorized
+signed annotated `effect-ash` tag identifies the final documentation closeout
+above signed main merge `5d126b2`. No push was performed.
 
 Detected runtime resource failures stop source execution and preserve bounded
 primary/first-teardown reporting. Prepared atomic allocation refusal may return
@@ -87,7 +99,7 @@ the retained checker limit. Separate admitted witnesses cover recursive discard,
 mixed closing order and deep teardown; no limit was raised and no execution of
 the combined case is claimed.
 
-TASK-0024's ash-doc repair/migration is explicitly deferred until effect-ash
-integrates into main. It is neither silently absorbed by this closure nor
-represented as already repaired. General FFI, files and library acquisition
+TASK-0024's ash-doc repair/migration remains separate post-main work and has not
+started. It is neither absorbed by this closure nor represented as already
+repaired. General FFI, files and library acquisition
 remain later work.

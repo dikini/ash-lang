@@ -39,7 +39,7 @@ existing evidence. State the comparison corpus and disposal rule before writing
 experimental code.
 
 The module-`newtype`, local-`newtype`, and resume-required kernel product
-checkpoints are combined on `integration/effect-ash-foundations`. The
+checkpoints were combined on `integration/effect-ash-foundations`. The
 [local-newtype evidence](effect-ash/local-newtype-evidence.md) records lexical
 identity, escape, validation, and erasure. Scoped exact evidence is implemented
 and locally integrated on the milestone branch, with
@@ -56,8 +56,9 @@ Synchronous hooks are now also locally integrated and verified; their
 [evidence](effect-ash/synchronous-hooks-evidence.md) records the complete
 checkpoint and lifecycle closure. Reliable cleanup and the narrow native-buffer
 provider are also locally integrated and verified. Final milestone closure is
-active under [TASK-0031](../tasks/TASK-0031-close-effect-ash-milestone.md);
-completion still requires the separately approved main integration below.
+recorded in the [closure evidence](effect-ash/milestone-closure-evidence.md).
+Signed merge `5d126b2` retains all selected slices on `main`. Final merged-main
+verification passed; all 100 relative planning units are closed.
 
 ## Completion condition
 
@@ -716,9 +717,10 @@ admission, runtime execution, conformance tests, specification and independent
 reviews. The [provider evidence](effect-ash/narrow-foreign-provider-evidence.md)
 records full verification before and after unsigned local merge `c0f230f`.
 The clean feature worktree and branch were removed. The completed CP-0020,
-TASK-0030 and execution plan remain in Git history. This closes the 10-unit
-planning weight: 95 of 100 relative planning units are closed, with the separate
-5-unit milestone closure remaining. No main merge, push or tag is included.
+TASK-0030 and execution plan remain in Git history. That checkpoint closed the
+10-unit planning weight: 95 of 100 relative planning units were closed, with
+the separate 5-unit milestone closure remaining. No main merge, push or tag
+was included in that checkpoint.
 
 The implementation reuses static acquisition identities and runtime activation
 keys for checked authority, captured ownership and native release. It adds no
@@ -738,19 +740,20 @@ any separately justified runtime identity witness remain through their declared
 lifetime. Exclude general ABI design, dynamic libraries, package resolution,
 runtime interface lookup, and a provider registry.
 
-### Integrated closure — forecast 5 units
+### Integrated closure — final 5 units
 
-Prerequisite: every selected product increment integrated into `main`.
+Signed main merge `5d126b2dc1ca82bd7c9dff196c914e7da2199716` retains every
+selected product increment. Independent semantic, downstream-pressure,
+resource, simplification and documentation reviews found no demonstrated defect
+or unjustified removable mechanism. The
+[closure evidence](effect-ash/milestone-closure-evidence.md) maps the combined
+corpus, authority boundaries and residual risks. TASK-0031 and its temporary
+execution plan are retained in Git history.
 
-Run the combined effect/resource/hook/foreign corpus and all predecessor
-migration tests. Audit specification truth, diagnostics, authority provenance,
-Core dialect separation, transformed-Core revalidation, runtime state,
-resources, deep teardown, and pure locality. Request independent effects,
-proofs, existential/dynamic-composition, implementation/resource, and
-documentation reviews. Remove unjustified state and transition artifacts,
-update the trajectory and retained closure evidence, run `cargo xtask verify`,
-Markdown lint, link checks, and diff hygiene, then request explicit approval for
-integration and any milestone tag or push.
+Final merged-main verification and documentation checks passed. The final
+five planning units close the milestone at 100/100. The separately
+authorized signed annotated `effect-ash` tag identifies the final documentation
+closeout above signed main merge `5d126b2`. No push was performed.
 
 ## Stop and replan conditions
 
@@ -784,7 +787,7 @@ completed resume-required effect-kernel checkpoint also resolves the initial
 row, handler, and one-shot control questions. The local-newtype checkpoint
 settles sequential lexical identity, escape, and erased scope validation.
 Scoped exact evidence settles pure introduction, precedence, improvement,
-authentication, and erasure. The branch results are not current on `main`.
+authentication, and erasure. These results are now retained on `main`.
 The completed capture/discard checkpoint settles bounded continuation
 abandonment. Resource-scope composition now has a verified, locally integrated
 product checkpoint. This informative plan authorizes neither

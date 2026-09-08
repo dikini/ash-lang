@@ -3,8 +3,9 @@
 This report maps the retained implementation evidence for Ash's first
 resume-required effect kernel. It is informative, not normative. The
 [Ash specification](../../../spec/README.md) alone defines the current
-language on this integration branch; the result is not current on `main` until
-separately approved integration. The historical transition was authorized by
+language. The [milestone closure report](milestone-closure-evidence.md) records
+integration into `main` and final verification status. The historical transition
+was authorized by
 CP-0013; this retained report does not depend on that temporary proposal or its
 execution plan.
 

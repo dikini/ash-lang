@@ -2,9 +2,9 @@
 
 This report retains evidence for the local-newtype product checkpoint from
 `fa26025`, the combined module-newtype and resume-required kernel baseline.
-It is informative. The [branch specification](../../../spec/README.md) defines
-the implemented boundary; integration into `main` and the wider Effects Ash
-milestone remain separate.
+It is informative. The [specification](../../../spec/README.md) defines
+the implemented boundary. The [milestone closure report](milestone-closure-evidence.md)
+records integration into `main` and final verification status.
 
 ## Retained boundary
 
@@ -166,7 +166,8 @@ their commits remain retained by the explicit merge. `main`, remote refs, and
 tags are outside this local integration, and unrelated main-checkout work is
 preserved.
 
-Scoped exact evidence is the next identity-track checkpoint after integration.
+Scoped exact evidence was the next identity-track checkpoint after this
+integration.
 This checkpoint does not add local implementation search, runtime-fresh
 acquisition identity, resource lifetime, proof authority, existential packaging,
 or a general Core authority framework.

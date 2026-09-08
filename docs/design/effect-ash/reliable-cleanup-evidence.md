@@ -1,10 +1,11 @@
 # Reliable cleanup evidence
 
 This informative report records the verified reliable-cleanup implementation on
-checkpoint `a23ff85`, not current `main` semantics or completed milestone
-integration. Syntax is retained at `390708e`; typed normal completion at
+checkpoint `a23ff85`. The [milestone closure report](milestone-closure-evidence.md)
+records integration into `main` and final verification status.
+Syntax is retained at `390708e`; typed normal completion at
 `1aabffe`. The complete owned-abandonment and reporting contract has passed
-product verification. The [branch specification](../../../spec/README.md)
+product verification. The [specification](../../../spec/README.md)
 records the implemented transition; this report does not define language rules.
 
 ## Retained observations

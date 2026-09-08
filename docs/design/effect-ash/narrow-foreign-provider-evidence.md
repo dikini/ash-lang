@@ -1,10 +1,12 @@
 # Narrow checked foreign-provider evidence
 
 This informative report records the implemented and verified native-buffer
-increment on `integration/effect-ash-foundations`, not current `main` semantics.
+increment on `integration/effect-ash-foundations`. The
+[milestone closure report](milestone-closure-evidence.md) records integration
+into `main` and final verification status.
 Product checkpoint `3819a93` retains compiler admission, runtime execution,
 conformance tests, specification, review and full verification.
-The [branch specification](../../../spec/README.md) accompanies the implementation
+The [specification](../../../spec/README.md) accompanies the implementation
 and conformance tests. Unsigned local merge `c0f230f` passed full merged
 verification. The clean feature worktree and branch were removed; their history
 remains in the integration branch. No main merge, push or tag was performed.

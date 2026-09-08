@@ -5,8 +5,9 @@ scoped-evidence baseline `da3ea62`. Implementation, independent semantic,
 Rust/resource and documentation reviews, full verification and transition
 cleanup are complete. Local integration is recorded separately by merge
 ancestry.
-The branch specification remains prospective until separate integration into
-`main`; this report does not make the wider Effects Ash milestone current.
+The [milestone closure report](milestone-closure-evidence.md) records integration
+into `main` and final verification status. The specification defines language
+semantics; this report retains checkpoint evidence.
 
 ## Retained boundary
 

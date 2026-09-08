@@ -42,19 +42,20 @@ At the post-`lib-ash` baseline from which this outline was written, the
 following capabilities were absent. The product checkpoints now implement
 module and local `newtype`, scoped exact evidence, and the resume-required
 effect kernel, as described
-by the [branch specification](../../spec/README.md). Local declarations have
+by the [specification](../../spec/README.md). Local declarations have
 stable lexical identities and permit identity-free closure escape; they do
-not establish identities per execution. The wider milestone remains separate
-from integration into `main`. The completed safe-cell product checkpoint adds
+not establish identities per execution. The selected milestone slices are now
+integrated into `main`; final verification is recorded in the
+[closure evidence](effect-ash/milestone-closure-evidence.md).
+The completed safe-cell product checkpoint adds
 acquisition-local runtime activation, sealed provider relationships, reusable
 handles and stored-dependency checking, with scope-owned release on admitted
 exits. Its [evidence](effect-ash/resource-scope-evidence.md) retains full
-verification, reviews and verified local integration. The remaining gaps are:
+verification, reviews and verified local integration. Synchronous hooks,
+reliable cleanup and the narrow native-buffer provider are also implemented.
+The remaining gaps are:
 
 - general resource/provider declarations and ownership-transfer mechanisms;
-- reliable cleanup across the later admitted failure and abandonment paths;
-- a checked foreign-provider boundary;
-- runtime hook registration, publication, and registration lifetimes;
 - suspension, asynchronous hook execution, concurrency, cancellation, and
   replay-safe multi-shot continuations; and
 - dynamic module loading, runtime package resolution, and unloading.
@@ -66,8 +67,7 @@ continuations.
 The pure scoped-evidence checkpoint is implemented, independently reviewed,
 and verified. Its [implementation evidence](effect-ash/scoped-evidence-evidence.md)
 records complete-header and capture authentication, resource bounds, and the
-full gate. Local milestone integration remains separate from integration into
-`main`.
+full gate. Final milestone evidence records its integration into `main`.
 
 ## Leading boundary
 

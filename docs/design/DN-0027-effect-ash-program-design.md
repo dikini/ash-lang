@@ -25,8 +25,7 @@ Ash. Module structure and interface selection erased before evaluation, and
 Ash had no effect rows, handlers, source continuations, resource lifetimes,
 runtime interface lookup, or dynamic module loading. The completed
 module-`newtype`, local-`newtype`, and resume-required effect-kernel checkpoints
-supersede the first parts of that historical inventory on the integration branch.
-Those checkpoints are not current on `main` yet.
+supersede the first parts of that historical inventory on `main`.
 
 [DN-0026](DN-0026-effect-ash-resource-first-milestones.md) supplies the
 resource-first decomposition. It remains exploratory evidence. This note
@@ -51,12 +50,13 @@ and reviews. Pure supplied methods
 establish neither provider nor proof authority. The locally integrated
 [safe-resource checkpoint](effect-ash/resource-scope-evidence.md) now supplies
 acquisition-local activation, stored-dependency checks and scope-owned release.
-These branch results remain separate from `main`.
+The selected slices are integrated into `main`; final verification is recorded
+in the [closure evidence](effect-ash/milestone-closure-evidence.md).
 
 ## Closure boundary
 
-The current planning direction closes `effect-ash` after these retained
-capabilities compose:
+The selected `effect-ash` closure boundary comprises these retained
+capabilities:
 
 1. allocation-free module `newtype` declarations;
 2. lexically scoped local `newtype` declarations;
@@ -301,8 +301,8 @@ forwarding rules, capture classification, resource acquisition syntax,
 hook-chain mutation observation, cleanup order or failure combination, or the
 foreign representation. The completed module-`newtype`, local-`newtype`, and
 resume-required effect-kernel product checkpoints now resolve the bounded
-identity, lexical escape, row, and handler questions. Their branch specification
-does not make those checkpoints current on `main`.
+identity, lexical escape, row, and handler questions. Their implemented
+contracts are now current in the specification on `main`.
 
 The verified scoped-evidence checkpoint settles the bounded pure-evidence
 choices. The completed
@@ -310,12 +310,15 @@ choices. The completed
 implements inferred request obligations and consuming abandonment, with its
 reviews and full verification retained. The locally integrated safe-resource
 checkpoint adds stored resource dependencies and normal scope-owned release;
-general cleanup remains later work. The complete synchronous transforming-hook
+reliable cleanup now extends the admitted completion and abandonment paths.
+The narrow native-buffer provider supplies one checked foreign boundary.
+The complete synchronous transforming-hook
 checkpoint `ad2b0d4` retains implementation, specification, tests, reviews and
 full verification. Its [evidence](effect-ash/synchronous-hooks-evidence.md)
 records scoped registration, ordered callbacks and bounded normal release.
 Unsigned local merge `7dacce7` and its full merged-checkout verification close
-the checkpoint lifecycle. They do not make the feature current on `main`.
+the checkpoint lifecycle. The final milestone merge retains these slices on
+`main`; its verification is recorded separately in the closure evidence.
 
 ## Supporting evidence
 

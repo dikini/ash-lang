@@ -4,15 +4,16 @@ This informative report records the safe-resource checkpoint retained on
 `integration/effect-ash-foundations` by unsigned local merge `b8a5398`, above
 integration baseline `387c4ef`. Implementation, independent reviews, full
 verification, transition cleanup and verified local integration are complete.
-The branch specification is prospective until separate integration into `main`.
+The [milestone closure report](milestone-closure-evidence.md) records integration
+into `main` and final verification status.
 
 ## Retained boundary
 
 The accepted scope is one mutable integer cell per acquisition, reusable access
 while live, scope-owned release and rejection of resource-dependent escape.
 It adds no general ownership language, cleanup callback, foreign resource or
-escaping continuation. The [branch specification](../../../spec/README.md)
-owns the intended resulting semantics; this report records evidence, not rules.
+escaping continuation. The [specification](../../../spec/README.md)
+defines the implemented semantics; this report records evidence, not rules.
 
 Unsigned local checkpoints retain corrected effect instantiation (`8810a44`),
 the sealed API and syntax (`0ae5203`), acquisition typing and Core authority

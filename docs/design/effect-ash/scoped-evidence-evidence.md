@@ -3,9 +3,9 @@
 This report retains implementation and review evidence from `90f517d`, the
 combined module/local-newtype and resume-required kernel baseline. It is
 informative. Both independent reviews, the full gate, and transition artifacts
-are closed; the checkpoint is locally integrated. The branch specification is prepared
-with the implementation. Neither this report nor milestone integration makes
-the change current on `main`.
+are closed; the checkpoint was locally integrated. The [milestone closure report](milestone-closure-evidence.md)
+records integration into `main` and final verification status. The specification
+defines the implemented language; this report retains checkpoint evidence.
 
 ## Retained boundary
 
@@ -268,9 +268,9 @@ Main stays at `7195500b7a165f8191efa1485e1ca6f4114180fb`; its unrelated tracked
 and untracked changes, the two historical worktrees, other branch refs, remote
 refs, and tags are unchanged. No push or merge into `main` was performed.
 
-## Remaining boundary
+## Boundary at this checkpoint
 
-Capture/usage and checked discard remain separate work. This slice supplies no
+Capture/usage and checked discard were separate work. This slice supplies no
 resource-lifetime, provider, proof, existential, acquisition, or runtime-dispatch
 authority. Local integration targets `integration/effect-ash-foundations`;
 merging into `main`, pushing, and tagging are not authorized by this checkpoint.

@@ -3,7 +3,8 @@
 This report retains implementation evidence for the first bounded
 `effect-ash` input: module-owned, representation-preserving nominal types. It
 is informative, not normative. The [Ash specification](../../../spec/README.md)
-alone defines the current language on this product branch. Git history retains
+alone defines the current language. The [milestone closure report](milestone-closure-evidence.md)
+records integration into `main`. Git history retains
 the accepted proposal, implementation task, and execution plan after those
 transition-only artifacts leave the current tree.
 
@@ -11,7 +12,7 @@ Integration and any Effects Ash milestone tag are separate lifecycle actions.
 At the module-`newtype` checkpoint, local or runtime-fresh identity,
 existential escape, effects, handlers, resources, providers, hooks, dynamic
 loading, proof evidence, implicit coercions, runtime type tags, and ABI
-guarantees remained separate work. This integration branch now combines the
+guarantees remained separate work. The milestone later combined the
 separately completed resume-required effect kernel; this report remains scoped
 to the module-`newtype` checkpoint.
 

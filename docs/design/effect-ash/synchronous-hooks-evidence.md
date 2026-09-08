@@ -5,7 +5,8 @@ This informative report records the verified implementation of historical
 task-owned plan are retained in product checkpoint `ad2b0d4`. This report does not
 define language behavior. The complete hook contract passes its final reviews
 and verification and is locally integrated on the milestone branch.
-The branch specification remains prospective until integration into `main`.
+The [milestone closure report](milestone-closure-evidence.md) records integration
+into `main` and final verification status.
 
 ## Retained checkpoints
 
@@ -19,7 +20,8 @@ Unsigned product checkpoint `ad2b0d4` retains that complete implementation,
 specification, tests, review and verification. The finished proposal, task and
 execution plan are removed after that checkpoint; Git preserves them.
 Unsigned local merge `7dacce7` retains the feature on
-`integration/effect-ash-foundations`. No main merge, push or tag has occurred.
+`integration/effect-ash-foundations`. At that checkpoint, no main merge, push or
+tag had occurred.
 
 At `07bb726e`, both public Effect validators run registration proof before unconditionally
 rejecting executable registration admission. Owning tests use a private,
