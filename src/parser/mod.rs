@@ -46,6 +46,8 @@ pub enum NodeKind {
     ImportItem,
     /// A nominal type declaration.
     TypeDeclaration,
+    /// A representation-preserving nominal declaration.
+    NewtypeDeclaration,
     /// One nonempty declaration-level type-parameter list.
     TypeParameters,
     /// One declaration-level type parameter and its optional kind annotation.
@@ -54,6 +56,10 @@ pub enum NodeKind {
     ConstructorDeclaration,
     /// A method-only interface declaration.
     InterfaceDeclaration,
+    /// One module-owned effect API declaration.
+    EffectDeclaration,
+    /// One signature-only effect operation.
+    EffectOperation,
     /// One signature-only method in an interface.
     InterfaceMethod,
     /// One trailing nonempty `where` clause.
@@ -62,6 +68,8 @@ pub enum NodeKind {
     InterfaceApplication,
     /// One implementation declaration with flat method equations.
     ImplementationDeclaration,
+    /// A sequential exact evidence declaration.
+    LexicalEvidenceDeclaration,
     /// An equational global definition.
     EquationalGlobal,
     /// An external name and type interface.
@@ -84,6 +92,24 @@ pub enum NodeKind {
     FunctionExpression,
     /// A structured match expression.
     MatchExpression,
+    /// A lexical effect handler expression.
+    HandlerExpression,
+    /// One handler operation clause.
+    HandlerClause,
+    /// A loose-prefix resume expression.
+    ResumeExpression,
+    /// One builtin cell acquisition with an identity binder and scoped body.
+    ResourceExpression,
+    /// An empty-chain hook scope with an exact effect target and block body.
+    HookExpression,
+    /// A registration with an exact target, primary transformer, and block body.
+    RegistrationExpression,
+    /// A cleanup action expression followed by its owned block body.
+    CleanupExpression,
+    /// A primary-precedence operation request.
+    PerformExpression,
+    /// One effect-qualified operation reference.
+    OperationReference,
     /// One line-delimited match arm.
     MatchArm,
     /// The non-associative equality layer.
@@ -120,6 +146,10 @@ pub enum NodeKind {
     TypedPattern,
     /// A right-associated type.
     Type,
+    /// One written closed or open effect row.
+    EffectRow,
+    /// One effect instance in a written row.
+    EffectInstance,
     /// A right-associated kind.
     Kind,
     /// A grouped kind.
@@ -147,6 +177,8 @@ pub enum ExpectedForm {
     Identifier,
     /// A source type.
     Type,
+    /// An effect row.
+    EffectRow,
     /// A source kind.
     Kind,
     /// A source pattern.
@@ -155,6 +187,8 @@ pub enum ExpectedForm {
     InterfaceParameter,
     /// A signature-only interface method.
     InterfaceMethod,
+    /// A signature-only operation in an effect declaration.
+    EffectOperation,
     /// An interface application in a constraint or impl head.
     InterfaceApplication,
     /// An implementation method equation.
@@ -704,7 +738,18 @@ fn token_name(kind: &TokenKind) -> &'static str {
         TokenKind::Rec => "rec",
         TokenKind::And => "and",
         TokenKind::Type => "type",
+        TokenKind::Newtype => "newtype",
+        TokenKind::Effect => "effect",
         TokenKind::Match => "match",
+        TokenKind::Perform => "perform",
+        TokenKind::Handle => "handle",
+        TokenKind::With => "with",
+        TokenKind::Resume => "resume",
+        TokenKind::Resource => "resource",
+        TokenKind::Hook => "hook",
+        TokenKind::Register => "register",
+        TokenKind::Cleanup => "cleanup",
+        TokenKind::Discard => "discard",
         TokenKind::Import => "import",
         TokenKind::As => "as",
         TokenKind::Pub => "pub",
@@ -727,6 +772,7 @@ fn token_name(kind: &TokenKind) -> &'static str {
         TokenKind::Arrow => "->",
         TokenKind::FatArrow => "=>",
         TokenKind::Pipe => "|",
+        TokenKind::Bang => "!",
         TokenKind::Comma => ",",
         TokenKind::Less => "<",
         TokenKind::Greater => ">",
@@ -759,10 +805,12 @@ const fn expected_name(expected: ExpectedForm) -> &'static str {
         ExpectedForm::Operand => "an operand",
         ExpectedForm::Identifier => "an identifier",
         ExpectedForm::Type => "a type",
+        ExpectedForm::EffectRow => "an effect row",
         ExpectedForm::Kind => "a kind",
         ExpectedForm::Pattern => "a pattern",
         ExpectedForm::InterfaceParameter => "one interface type parameter",
         ExpectedForm::InterfaceMethod => "an interface method signature",
+        ExpectedForm::EffectOperation => "an effect operation signature",
         ExpectedForm::InterfaceApplication => "an interface application",
         ExpectedForm::ImplementationMethod => "an implementation method equation",
         ExpectedForm::Comma => ",",

@@ -3,10 +3,16 @@
 use std::{collections::HashMap, error::Error, fmt, io, path::PathBuf, sync::Arc};
 
 use crate::{
-    core::{UnvalidatedProgram, ValidatedProgram, ValidationError, validate_modules},
+    core::{
+        UnvalidatedProgram, ValidatedProgram, ValidationError, validate_effect_modules,
+        validate_modules,
+    },
     diagnostic::{Diagnostic, SourceLabel, compare_source_spans},
-    elaborate::{Elaborator, TypeError, check_module_with_budget, link_modules_with_budget},
-    eval::{Evaluation, ObservedHeap, RuntimeFailure, Value, evaluate},
+    elaborate::{
+        EffectElaborator, Elaborator, TypeError, check_module_with_budget,
+        checked_program_contains_effect_syntax, link_modules_with_budget,
+    },
+    eval::{Evaluation, ObservedHeap, RuntimeFailure, Value, evaluate, evaluate_effect},
     evidence_validation::{
         EvidenceValidationFailure, ValidatedInterfaceProgram,
         validate_interface_evidence_with_budget,
@@ -44,6 +50,8 @@ pub enum EntryReason {
     MainPolymorphic,
     /// The local `main` domain is not `Unit`.
     MainDomain,
+    /// The local `main` computation has an outstanding effect requirement.
+    MainEffects,
     /// The local `main` result is not closed.
     MainOpenResult,
     /// The local `main` requires interface evidence.
@@ -56,6 +64,7 @@ impl fmt::Display for EntryReason {
             Self::MissingMain => "entry.missing-main",
             Self::MainPolymorphic => "entry.main-polymorphic",
             Self::MainDomain => "entry.main-domain",
+            Self::MainEffects => "entry.main-effects",
             Self::MainOpenResult => "entry.main-open-result",
             Self::MainConstrained => "entry.main-constrained",
         })
@@ -75,6 +84,7 @@ impl EntryFailure {
             EntryReason::MissingMain => "this entry module declares no local main",
             EntryReason::MainPolymorphic => "this main has a polymorphic scheme",
             EntryReason::MainDomain => "this main does not accept Unit",
+            EntryReason::MainEffects => "this main has an outstanding effect requirement",
             EntryReason::MainOpenResult => "this main result is not closed",
             EntryReason::MainConstrained => "this main requires interface evidence",
         };
@@ -540,14 +550,17 @@ impl Error for FileFailure {}
 /// Returns a structured input, source-model, compiler, source-rejection, or
 /// runtime failure.
 pub fn run_path(configuration: RunConfiguration) -> Result<Observation, FileFailure> {
-    run_path_with_consumers(
+    run_path_with_consumers_internal(
         configuration,
+        &mut InterfaceConstraintBudget::default(),
         validate_interface_evidence_with_budget,
         validate_modules,
         evaluate,
+        true,
     )
 }
 
+#[cfg(test)]
 fn run_path_with_consumers<I, V, E>(
     configuration: RunConfiguration,
     interface_validator: I,
@@ -567,21 +580,54 @@ where
     ) -> Result<ValidatedProgram, ValidationError>,
     E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
 {
-    run_path_with_consumers_and_constraint_budget(
+    run_path_with_consumers_internal(
         configuration,
         &mut InterfaceConstraintBudget::default(),
         interface_validator,
         validator,
         evaluator,
+        false,
     )
 }
 
+#[cfg(test)]
 fn run_path_with_consumers_and_constraint_budget<I, V, E>(
     configuration: RunConfiguration,
     constraint_work: &mut InterfaceConstraintBudget,
     interface_validator: I,
     validator: V,
     evaluator: E,
+) -> Result<Observation, FileFailure>
+where
+    I: FnOnce(
+        ResolvedModuleProgram,
+        &mut InterfaceConstraintBudget,
+        &mut TypeWorkBudget,
+    ) -> Result<ValidatedInterfaceProgram, EvidenceValidationFailure>,
+    V: FnOnce(
+        UnvalidatedProgram,
+        &[&SourceFile],
+        &[(ModuleId, SourceId)],
+    ) -> Result<ValidatedProgram, ValidationError>,
+    E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
+{
+    run_path_with_consumers_internal(
+        configuration,
+        constraint_work,
+        interface_validator,
+        validator,
+        evaluator,
+        false,
+    )
+}
+
+fn run_path_with_consumers_internal<I, V, E>(
+    configuration: RunConfiguration,
+    constraint_work: &mut InterfaceConstraintBudget,
+    interface_validator: I,
+    validator: V,
+    evaluator: E,
+    select_effect_core: bool,
 ) -> Result<Observation, FileFailure>
 where
     I: FnOnce(
@@ -666,12 +712,18 @@ where
     if !main.scheme.type_parameters.is_empty() {
         return Err(entry_failure(EntryReason::MainPolymorphic, main_span));
     }
-    let result_type = match &main.scheme.value_type {
+    let (result_type, main_has_effects) = match &main.scheme.value_type {
         Type::Forall(_, _) => {
             return Err(entry_failure(EntryReason::MainPolymorphic, main_span));
         }
-        Type::Function(domain, result) if matches!(domain.as_ref(), Type::Unit) => result.as_ref(),
+        Type::Function(domain, result) if matches!(domain.as_ref(), Type::Unit) => {
+            (result.as_ref(), false)
+        }
+        Type::EffectfulFunction(domain, computation) if matches!(domain.as_ref(), Type::Unit) => {
+            (computation.value(), !computation.effects().is_empty())
+        }
         Type::Function(_, _)
+        | Type::EffectfulFunction(_, _)
         | Type::Int
         | Type::Bool
         | Type::Unit
@@ -683,6 +735,9 @@ where
             return Err(entry_failure(EntryReason::MainDomain, main_span));
         }
     };
+    if main_has_effects {
+        return Err(entry_failure(EntryReason::MainEffects, main_span));
+    }
     if !closed_entry_result(result_type) {
         return Err(entry_failure(EntryReason::MainOpenResult, main_span));
     }
@@ -692,31 +747,6 @@ where
     let linked = link_modules_with_budget(checked, graph.entry(), constraint_work)
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::Pipeline)?;
-    let mut linked_type_work = TypeWorkBudget::default();
-    let (ty, type_display, unchecked): (IterativeTypeOwner, String, UnvalidatedProgram) = {
-        let validated_interfaces =
-            interface_validator(linked, constraint_work, &mut linked_type_work)
-                .map_err(PipelineFailure::EvidenceValidation)
-                .map_err(FileFailure::Pipeline)?;
-        let registry = Arc::clone(validated_interfaces.registry());
-        let mut elaborator = Elaborator::for_module_program(&validated_interfaces)
-            .map_err(TypeError::Internal)
-            .map_err(PipelineFailure::Typing)
-            .map_err(FileFailure::Pipeline)?;
-        let typed = elaborator
-            .synthesize_module_program(&validated_interfaces)
-            .map_err(PipelineFailure::Typing)
-            .map_err(FileFailure::Pipeline)?;
-        let ty = IterativeTypeOwner::new(typed.ty);
-        let type_display = registry.display_type(&ty);
-        let unchecked = elaborator
-            .finish(typed.node)
-            .map_err(TypeError::Internal)
-            .map_err(PipelineFailure::Typing)
-            .map_err(FileFailure::Pipeline)?;
-        ::std::mem::drop(validated_interfaces);
-        (ty, type_display, unchecked)
-    };
     let sources = graph
         .modules()
         .iter()
@@ -727,6 +757,41 @@ where
         .iter()
         .map(|module| (module.id(), module.source().id()))
         .collect::<Vec<_>>();
+    let mut linked_type_work = TypeWorkBudget::default();
+    let (ty, type_display, unchecked): (IterativeTypeOwner, String, UnvalidatedProgram) = {
+        let validated_interfaces =
+            interface_validator(linked, constraint_work, &mut linked_type_work)
+                .map_err(PipelineFailure::EvidenceValidation)
+                .map_err(FileFailure::Pipeline)?;
+        let registry = Arc::clone(validated_interfaces.registry());
+        if select_effect_core
+            && checked_program_contains_effect_syntax(&validated_interfaces, &mut linked_type_work)
+                .map_err(PipelineFailure::Typing)
+                .map_err(FileFailure::Pipeline)?
+        {
+            return finish_effect_observation(&validated_interfaces, &sources, &module_sources);
+        }
+        let mut elaborator = Elaborator::for_module_program(&validated_interfaces)
+            .map_err(TypeError::Internal)
+            .map_err(PipelineFailure::Typing)
+            .map_err(FileFailure::Pipeline)?;
+        let typed = if select_effect_core {
+            elaborator.synthesize_module_program_after_effect_scan(&validated_interfaces)
+        } else {
+            elaborator.synthesize_module_program(&validated_interfaces)
+        }
+        .map_err(PipelineFailure::Typing)
+        .map_err(FileFailure::Pipeline)?;
+        let ty = IterativeTypeOwner::new(typed.ty);
+        let type_display = registry.display_type(&ty);
+        let unchecked = elaborator
+            .finish(typed.node)
+            .map_err(TypeError::Internal)
+            .map_err(PipelineFailure::Typing)
+            .map_err(FileFailure::Pipeline)?;
+        ::std::mem::drop(validated_interfaces);
+        (ty, type_display, unchecked)
+    };
     finish_observation(
         ty,
         type_display,
@@ -736,6 +801,42 @@ where
         validator,
         evaluator,
     )
+}
+
+// Keep later Effect-phase temporaries out of the source-checking caller's frame.
+fn finish_effect_observation(
+    validated_interfaces: &ValidatedInterfaceProgram,
+    sources: &[&SourceFile],
+    module_sources: &[(ModuleId, SourceId)],
+) -> Result<Observation, FileFailure> {
+    let mut elaborator = EffectElaborator::for_module_program(validated_interfaces)
+        .map_err(TypeError::Internal)
+        .map_err(PipelineFailure::Typing)
+        .map_err(FileFailure::Pipeline)?;
+    let typed = elaborator
+        .synthesize_effect_module_program(validated_interfaces)
+        .map_err(PipelineFailure::Typing)
+        .map_err(FileFailure::Pipeline)?;
+    let ty = IterativeTypeOwner::new(typed.ty);
+    let type_display = validated_interfaces.registry().display_type(&ty);
+    let unchecked = elaborator
+        .finish(typed.node)
+        .map_err(TypeError::Internal)
+        .map_err(PipelineFailure::Typing)
+        .map_err(FileFailure::Pipeline)?;
+    let validated = validate_effect_modules(unchecked, sources, module_sources)
+        .map_err(PipelineFailure::Validation)
+        .map_err(FileFailure::Pipeline)?;
+    let evaluation = evaluate_effect(&validated)
+        .map_err(PipelineFailure::Runtime)
+        .map_err(FileFailure::Pipeline)?;
+    let (value, heap) = evaluation.into_observation_parts();
+    Ok(Observation {
+        value,
+        ty: ty.into_inner(),
+        type_display: Some(type_display),
+        _heap: heap,
+    })
 }
 
 fn finish_observation<V, E>(
@@ -792,6 +893,16 @@ fn closed_entry_result(root: &Type) -> bool {
             }
             Type::Function(domain, codomain) => {
                 work.push(codomain);
+                work.push(domain);
+            }
+            Type::EffectfulFunction(domain, codomain) => {
+                if codomain.effects().tail().is_some() {
+                    return false;
+                }
+                for instance in codomain.effects().known() {
+                    work.extend(instance.arguments());
+                }
+                work.push(codomain.value());
                 work.push(domain);
             }
             Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
@@ -1254,10 +1365,14 @@ mod tests {
         // publication. The fixed graph order is base, short facade, first long
         // facade, second long facade, then entry; linking and linked evidence
         // validation contribute the final two additive boundaries.
+        // Each of the four importers also scans the retained data summaries:
+        // 18 repeated one-parameter nominal admissions, each charging shape,
+        // parameter record, Kind, and two Origins (18 * 5 = 90). Checking,
+        // linking, and linked-evidence validation contributions are unchanged.
         const EXPECTED_BOUNDARIES: [usize; 13] = [
-            0, 1, 829, 1_374, 1_658, 2_203, 2_487, 3_026, 3_314, 4_282, 4_707, 4_856, 6_516,
+            0, 1, 829, 1_464, 1_748, 2_383, 2_667, 3_296, 3_584, 4_642, 5_067, 5_216, 6_876,
         ];
-        const EXACT_CONSTRAINT_WORK: usize = 6_516;
+        const EXACT_CONSTRAINT_WORK: usize = 6_516 + 4 * 18 * 5;
         let source = relational_interface_graph_source();
         let directory = source
             .0
@@ -1550,7 +1665,7 @@ mod tests {
     fn deep_wide_public_routes_admit_and_reject_on_a_small_stack() {
         const DEPTH: usize = 48;
         const WIDTH: usize = 4;
-        const STACK_SIZE: usize = 256 * 1024;
+        const STACK_SIZE: usize = 320 * 1024;
 
         std::thread::Builder::new()
             .name(String::from("deep-public-route-budget"))

@@ -1,0 +1,1 @@
+newtype UserId = OtherId(Int)

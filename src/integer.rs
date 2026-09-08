@@ -12,6 +12,18 @@ pub struct Integer(num_bigint::BigInt);
 pub struct InvalidInteger;
 
 impl Integer {
+    pub(crate) fn to_usize(&self) -> Option<usize> {
+        usize::try_from(&self.0).ok()
+    }
+
+    pub(crate) fn to_u8(&self) -> Option<u8> {
+        u8::try_from(&self.0).ok()
+    }
+
+    pub(crate) fn from_usize(value: usize) -> Self {
+        Self(num_bigint::BigInt::from(value))
+    }
+
     /// Parses a decimal integer.
     ///
     /// # Errors
@@ -53,5 +65,26 @@ impl Mul for &Integer {
 
     fn mul(self, rhs: Self) -> Self::Output {
         Integer(&self.0 * &rhs.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checked_host_conversions_reject_negative_and_oversized_integers() {
+        for number in [-1, -256] {
+            let integer = Integer(num_bigint::BigInt::from(number));
+            assert_eq!(integer.to_usize(), None);
+            assert_eq!(integer.to_u8(), None);
+        }
+        assert_eq!(Integer::from_usize(0).to_usize(), Some(0));
+        assert_eq!(Integer::from_usize(usize::MAX).to_usize(), Some(usize::MAX));
+        assert_eq!(Integer::from_usize(255).to_u8(), Some(255));
+        assert_eq!(Integer::from_usize(256).to_u8(), None);
+        let oversized = Integer(num_bigint::BigInt::from(usize::MAX) + 1u8);
+        assert_eq!(oversized.to_usize(), None);
+        assert_eq!(oversized.to_u8(), None);
     }
 }

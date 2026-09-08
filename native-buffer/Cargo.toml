@@ -1,0 +1,23 @@
+[package]
+name = "ash-native-buffer"
+version = "0.0.0"
+description = "Isolated native byte-buffer owner for the Ash runtime"
+edition = "2024"
+rust-version = "1.97.1"
+publish = false
+
+[lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "deny"
+
+[lints.clippy]
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+style = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "deny"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"

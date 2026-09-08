@@ -13,6 +13,8 @@ pub struct SurfaceModule {
     pub type_declarations: Vec<SurfaceTypeDeclaration>,
     /// Interface declarations in source order.
     pub interfaces: Vec<SurfaceInterfaceDeclaration>,
+    /// Effect declarations in source order.
+    pub effects: Vec<SurfaceEffectDeclaration>,
     /// Implementation declarations in source order.
     pub implementations: Vec<SurfaceImplementation>,
     /// Global definitions in source order.
@@ -28,6 +30,8 @@ pub enum SurfaceDeclarationIndex {
     Type(usize),
     /// An interface declaration.
     Interface(usize),
+    /// An effect declaration.
+    Effect(usize),
     /// A global definition.
     Global(usize),
     /// An implementation declaration.
@@ -106,9 +110,20 @@ pub enum SurfaceTypeVisibility {
     PublicTransparent,
 }
 
+/// The source declaration kind for one nominal type declaration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SurfaceNominalDeclarationKind {
+    /// An ordinary allocating nominal data declaration.
+    Data,
+    /// A representation-preserving nominal declaration.
+    Newtype,
+}
+
 /// One source nominal type declaration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceTypeDeclaration {
+    /// Whether this declaration is ordinary data or a representation-preserving newtype.
+    pub declaration_kind: SurfaceNominalDeclarationKind,
     /// The declaration's module export mode.
     pub visibility: SurfaceTypeVisibility,
     /// The declared type spelling.
@@ -179,6 +194,32 @@ pub struct SurfaceInterfaceMethod {
     /// The declared source value type.
     pub annotation: SurfaceType,
     /// The complete method signature span.
+    pub span: Span,
+}
+
+/// One module-owned effect API declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceEffectDeclaration {
+    /// Whether the complete effect API is exported.
+    pub public: bool,
+    /// The declared effect spelling.
+    pub name: SurfaceName,
+    /// Ordered ordinary type parameters.
+    pub parameters: Vec<SurfaceTypeParameter>,
+    /// Nonempty operations in declaration order.
+    pub operations: Vec<SurfaceEffectOperation>,
+    /// The complete declaration span.
+    pub span: Span,
+}
+
+/// One signature-only operation local to its owning effect.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceEffectOperation {
+    /// The effect-local operation spelling.
+    pub name: SurfaceName,
+    /// The declared source value type.
+    pub annotation: SurfaceType,
+    /// The complete operation signature span.
     pub span: Span,
 }
 
@@ -276,6 +317,8 @@ pub struct SurfaceInlineOperationalHeader {
     pub parameters: Vec<SurfaceTypedPattern>,
     /// The declared result type.
     pub result_type: SurfaceType,
+    /// The optional explicit effect row on the result computation.
+    pub result_effects: Option<SurfaceEffectRow>,
     /// Ordered explicit interface requirements.
     pub requirements: Vec<SurfaceRequirement>,
     /// The complete header span, excluding the body.
@@ -332,6 +375,101 @@ pub enum SurfaceExprKind {
     Function(FunctionExpr),
     /// A structured total match.
     Match(SurfaceMatchExpr),
+    /// An operation request with a primary operand.
+    Perform(SurfacePerformExpr),
+    /// A lexical handler for one exact effect instance.
+    Handle(SurfaceHandleExpr),
+    /// A resume request owned by the nearest operation clause.
+    Resume(Box<SurfaceExpr>),
+    /// A parsed acquisition, pending resource identity and lifetime checking.
+    Resource(Box<SurfaceResourceExpr>),
+    /// An empty-chain scope, pending hook API and effect checking.
+    Hook(Box<SurfaceHookExpr>),
+    /// A scoped transformer, pending hook API and lifetime checking.
+    Registration(Box<SurfaceRegistrationExpr>),
+    /// A scoped action, pending cleanup type and lifetime checking.
+    Cleanup(Box<SurfaceCleanupExpr>),
+    /// Nullary consumption of the nearest clause's captured continuation.
+    Discard,
+}
+
+/// The closed set of builtin acquisition designators.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SurfaceResourceKind {
+    /// A scoped mutable integer cell.
+    Cell,
+    /// A checked native byte-buffer allocation.
+    NativeBuffer,
+}
+
+/// Source ownership of one builtin acquisition.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceResourceExpr {
+    /// The contextual designator selected after `resource`.
+    pub kind: SurfaceResourceKind,
+    /// The uppercase rigid identity binder, scoped only over `body`.
+    pub identity: SurfaceName,
+    /// The ordinary handle binder, scoped only over `body`.
+    pub handle: SurfaceName,
+    /// The primary initializer evaluated in the preceding scope.
+    pub initializer: SurfaceExpr,
+    /// The block owned by this acquisition.
+    pub body: SurfaceBlock,
+}
+
+/// Source ownership of one empty-chain hook scope.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceHookExpr {
+    /// The exact written target; this form introduces no source binder.
+    pub effect: SurfaceEffectInstance,
+    /// The block owned by this scope.
+    pub body: SurfaceBlock,
+}
+
+/// Source ownership of one scoped hook registration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceRegistrationExpr {
+    /// The exact written target; this form introduces no source binder.
+    pub effect: SurfaceEffectInstance,
+    /// The primary transformer evaluated in the preceding context.
+    pub transformer: SurfaceExpr,
+    /// The block executed with the registration active.
+    pub body: SurfaceBlock,
+}
+
+/// Source ownership of one cleanup invocation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceCleanupExpr {
+    /// The action evaluated in the preceding context.
+    pub action: SurfaceExpr,
+    /// The block executed with the cleanup obligation active.
+    pub body: SurfaceBlock,
+}
+
+/// One explicit source operation request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfacePerformExpr {
+    pub effect: SurfaceReference,
+    pub arguments: Vec<SurfaceType>,
+    pub operation: SurfaceName,
+    pub operand: Box<SurfaceExpr>,
+}
+
+/// One lexical source handler.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceHandleExpr {
+    pub body: Box<SurfaceExpr>,
+    pub effect: SurfaceEffectInstance,
+    pub clauses: Vec<SurfaceHandlerClause>,
+}
+
+/// One source-ordered handler operation clause.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceHandlerClause {
+    pub operation: SurfaceName,
+    pub pattern: SurfacePattern,
+    pub body: SurfaceExpr,
+    pub span: Span,
 }
 
 /// A structured match expression.
@@ -388,10 +526,25 @@ pub struct SurfaceBlock {
 /// The closed Ash local-declaration family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceLocalDeclaration {
+    /// Exact methods supplied to the following lexical remainder.
+    Evidence(Box<SurfaceLexicalEvidence>),
     /// A sequential nonrecursive binding.
     Binding(Box<SurfaceBinding>),
     /// A simultaneous recursive binding group.
     Recursive(SurfaceRecursiveGroup),
+    /// A private nominal representation declaration.
+    Newtype(SurfaceTypeDeclaration),
+}
+
+/// One sequential exact interface evidence declaration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceLexicalEvidence {
+    /// Complete interface application.
+    pub application: SurfaceInterfaceApplication,
+    /// Supplied equations in source order.
+    pub equations: Vec<SurfaceEquation>,
+    /// Complete declaration span.
+    pub span: Span,
 }
 
 /// One simultaneous local recursive binding group.
@@ -474,6 +627,8 @@ pub struct SurfaceKind {
 pub enum SurfaceKindKind {
     /// The kind of ordinary value types.
     Type,
+    /// The kind of computation effect rows.
+    EffectRow,
     /// A right-associated kind function.
     Function {
         /// The argument kind.
@@ -634,4 +789,28 @@ pub struct FunctionType {
     pub domain: Box<SurfaceType>,
     /// The result type.
     pub codomain: Box<SurfaceType>,
+    /// The explicitly written latent row on this codomain, when present.
+    pub effects: Option<SurfaceEffectRow>,
+}
+
+/// One written effect row on a computation codomain.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceEffectRow {
+    /// Known effect instances in source order.
+    pub effects: Vec<SurfaceEffectInstance>,
+    /// The optional open tail parameter.
+    pub tail: Option<SurfaceName>,
+    /// The complete braced row span.
+    pub span: Span,
+}
+
+/// One unresolved effect instance and its ordinary type arguments.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceEffectInstance {
+    /// The unqualified or module-qualified effect reference.
+    pub effect: SurfaceReference,
+    /// Ordered written arguments.
+    pub arguments: Vec<SurfaceType>,
+    /// The complete instance span.
+    pub span: Span,
 }

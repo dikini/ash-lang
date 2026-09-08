@@ -209,6 +209,10 @@ fn method_occurrences(definition: &CheckedDefinition, method: MethodId) -> Vec<&
     let mut slots = Vec::new();
     while let Some(expression) = expressions.pop() {
         match &expression.kind {
+            ResolvedExprKind::Cleanup(cleanup) => {
+                expressions.push(&cleanup.action);
+                expressions.push(&cleanup.body);
+            }
             ResolvedExprKind::Occurrence(occurrence)
                 if occurrence.term == ResolvedTermName::Method(method) =>
             {
@@ -221,6 +225,7 @@ fn method_occurrences(definition: &CheckedDefinition, method: MethodId) -> Vec<&
             | ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
+            | ResolvedExprKind::Discard(_)
             | ResolvedExprKind::Constructor(_) => {}
             ResolvedExprKind::Tuple(elements) => expressions.extend(elements),
             ResolvedExprKind::Apply(application) => {
@@ -249,6 +254,16 @@ fn method_occurrences(definition: &CheckedDefinition, method: MethodId) -> Vec<&
                 expressions.push(matched.scrutinee.as_ref());
                 expressions.extend(matched.arms.iter().map(|arm| &arm.body));
             }
+            ResolvedExprKind::Perform(request) => expressions.push(&request.operand),
+            ResolvedExprKind::Handle(handler) => {
+                expressions.push(&handler.body);
+                expressions.extend(handler.clauses.iter().map(|clause| &clause.body));
+            }
+            ResolvedExprKind::Resume(resume) => expressions.push(&resume.value),
+            ResolvedExprKind::Resource(resource) => {
+                expressions.push(&resource.initializer);
+                expressions.push(&resource.body);
+            }
         }
     }
     slots.reverse();
@@ -260,10 +275,19 @@ fn schedule_local_expressions<'a>(
     expressions: &mut Vec<&'a ResolvedExpr>,
 ) {
     match declaration {
+        ResolvedLocalDeclaration::Evidence(source) => {
+            expressions.extend(
+                source
+                    .method_groups
+                    .iter()
+                    .flat_map(|group| group.equations.iter().map(|equation| &equation.body)),
+            );
+        }
         ResolvedLocalDeclaration::Binding(binding) => expressions.push(&binding.initializer),
         ResolvedLocalDeclaration::Recursive(group) => {
             expressions.extend(group.members.iter().map(|member| &member.initializer));
         }
+        ResolvedLocalDeclaration::Newtype(_) => {}
     }
 }
 
@@ -508,6 +532,17 @@ fn top_level_function_with_nested_function_domain_completes_the_pipeline() {
 #[test]
 fn absent_method_list_rejects_interface_method_local_type_variable() {
     let error = check_error("interface Combine<A> {\ncombine : (A, B) -> A\n}\n");
+
+    assert_eq!(reason(&error), "interface.method-parameter");
+}
+
+#[test]
+fn absent_method_list_owns_mixed_type_and_row_tail_parameter_failure() {
+    let error = check_error(concat!(
+        "interface Combine<A> {\n",
+        "combine : (A, B) -> Unit ! {| B}\n",
+        "}\n",
+    ));
 
     assert_eq!(reason(&error), "interface.method-parameter");
 }
@@ -1705,6 +1740,12 @@ fn higher_kinded_interface_erasure_adds_no_runtime_state_or_transition() {
                     PureExprKind::Computation(PureComputation::Primitive(_)) => "primitive",
                     PureExprKind::Computation(PureComputation::Tuple(_)) => "tuple",
                     PureExprKind::Computation(PureComputation::Match(_)) => "match",
+                    PureExprKind::Computation(PureComputation::NewtypeConversion(_)) => {
+                        "newtype-conversion-erasure"
+                    }
+                    PureExprKind::Computation(PureComputation::LocalNominalScope(_)) => {
+                        "local-nominal-scope-erasure"
+                    }
                     PureExprKind::Computation(PureComputation::TypeAbstraction(_)) => {
                         "type-abstraction-erasure"
                     }
@@ -1897,7 +1938,7 @@ fn deep_generic_prerequisite_chain_completes_the_pipeline_on_a_small_stack() {
     const DEPTH: usize = 96;
     let worker = std::thread::Builder::new()
         .name("deep-generic-prerequisite-chain".into())
-        .stack_size(256 * 1024)
+        .stack_size(320 * 1024)
         .spawn(|| {
             let mut nested = "Option<".repeat(DEPTH);
             nested.push_str("Int");

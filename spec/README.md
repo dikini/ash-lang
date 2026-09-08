@@ -5,13 +5,14 @@ describes exactly the implemented language and runtime behavior.
 
 ## Current Ash
 
-Ash is a pure, rank-1 language whose programs are acyclic graphs of passive
-source modules. Each `.ash` source file defines one unnamed module containing
-imports followed by nominal type declarations, method-only interface
-declarations, anonymous implementation declarations, and global function
-definitions. Global signatures may state explicit interface constraints, and
-implementation heads may state explicit prerequisite constraints. A module has
-no result expression, runtime module value, or initialization.
+Ash is a rank-1 language whose programs are acyclic graphs of passive source
+modules. Each `.ash` source file defines one unnamed module containing
+imports followed by nominal data or `newtype` declarations, method-only
+interface declarations, effect declarations, anonymous implementation
+declarations, and global function definitions. Global signatures may state
+explicit interface constraints and latent effect rows, and implementation
+heads may state explicit prerequisite constraints. A module has no result
+expression, runtime module value, or initialization.
 
 Imports expose only public facts. A private complete import places a
 dependency's public namespaces under a module alias. A private targeted import
@@ -28,7 +29,31 @@ facades can select them transitively without changing their defining
 identities. Private nominal identities may flow through public schemes and
 implementation facts without becoming nameable. A `pub opaque type` exports a
 name without constructors, and a `pub type` exports its name and complete
-constructor family.
+constructor family. The corresponding `newtype` visibility modes use the same
+name and constructor access rules.
+
+A module `newtype` introduces a nominal type over one representation. It has
+exactly one same-spelled, one-field constructor. Construction and matching are
+explicit, and the nominal type remains distinct from its representation.
+After independent Core validation, wrapping and unwrapping erase without a
+wrapper allocation or runtime tag. Interface evidence remains nominal: an
+implementation for the representation does not satisfy a requirement for the
+`newtype`.
+
+A local `newtype` introduces one compile-time lexical identity for the
+following declarations and result of its block. Its representation sees the
+preceding type scope; later declarations may shadow the nominal and constructor
+names together. The identity cannot escape in a type, effect row, scheme, or
+requirement. A closure may capture and unwrap a local value when its exposed
+computation contains no such identity. Execution creates no fresh identity or
+scope state.
+
+A sequential local `with` supplies exact interface methods for a complete
+application whose selection key contains an active local nominal. It is not
+local implementation search. Supplied methods capture preceding ordinary values;
+the evidence is available only in the following lexical remainder. Selected
+methods lower to ordinary functions, and checked closures may retain them
+after that evidence block returns without exporting the evidence itself.
 
 An interface declares one or more ordered, fixed-kinded type parameters and an
 ordered set of method signatures. It may declare one total forward
@@ -45,24 +70,83 @@ later facades may select explicitly. Body-free summaries preserve canonical
 interface parameter and determination records, complete applications, method
 schemes, and their defining identities.
 
-Ash's monomorphic kind language contains `Type` and right-associative function
-kinds such as `Type -> Type`. Declaration parameters may state their kinds.
-Every omitted declaration kind annotation, and every binder introduced by an
-omitted global or implementation binder list, is fixed to `Type`; Ash does not
-infer a function kind from use. This is a phase-dependent constraint, not a
-commitment against later bounded declaration-local kind inference. A type
-constructor or parameter may remain bare or partially applied when its
+Ash's monomorphic kind language contains `Type`, `EffectRow`, and
+right-associative function kinds such as `Type -> Type`. Declaration parameters
+may state their kinds.
+Every omitted declaration kind annotation and every binder introduced by an
+omitted implementation binder list is fixed to `Type`. An omitted global
+binder list discovers ordinary free type variables and effect-row-tail
+variables in their shared first-occurrence order. A name occurring only in
+ordinary type positions has kind `Type`; one occurring only as an effect-row
+tail has kind `EffectRow`; using the same name in both roles is invalid. Ash
+does not infer a function kind from use. This is a phase-dependent constraint,
+not a commitment against later bounded declaration-local kind inference. A
+type constructor or parameter may remain bare or partially applied when its
 resulting kind satisfies the context that owns the type.
+
+An effect declaration defines one module-owned API with one or more operations.
+Function computations carry rows of exact, parameterized effect identities.
+`perform` requests an operation, and an exhaustive lexical `handle` removes one
+exact instance. Each selected clause must consume its non-escaping continuation
+capability exactly once on every normally completing path, with `resume` or
+checked `discard`. Discard closes the selected capture and recursively owned
+live captures in structural order, then continues the clause with `Unit`.
+Inference proves safe closure without skipping outside or running completion
+owners. Its effect row includes invoked cleanup actions.
+
+`resource cell<R> c = initializer { body }` acquires one scoped mutable integer
+cell through the compiler-owned `@builtin.cell` API. The scope owns release;
+handles provide reusable access while it remains live. Inferred dependencies
+prevent handles, captured access and identity-indexed operations from escaping
+their owner, including through request payloads. Copied integers may escape.
+Each execution has a fresh activation, and capture/resume moves the owned
+scope without duplication. Normal completion or owned abandonment releases it
+once.
+
+`resource native_buffer<R> b = length { body }` uses the fixed
+`@builtin.native_buffer` API to acquire zeroed native bytes. Checked length,
+read and write operations preserve the same scoped authority and activation
+rules as cells. Acquisition returns ordinary `Failure(Error)` without entering
+the body, or releases on normal completion and returns `Success(body_value)`.
+Nested outcomes remain nested. Owned discard skips the abandoned wrapper;
+internal host teardown invokes no source cleanup and reports detectable resource
+failure without claiming incomplete cleanup succeeded.
+This provider adds no source pointers or general FFI.
+
+`hook H { body }` supplies the empty identity chain for an exact effect API
+with one endomorphic `publish` operation. `register H transformer { body }`
+evaluates one ordinary transformer and retains it for that scope. Publication
+uses `perform H.publish value`; outer registrations transform before inner
+ones, and callbacks run under handlers surrounding their registration. An exact
+nested root starts a separate chain. Normal return removes each registration
+once; capture/resume preserves its owner. Owned abandonment removes it without
+running its transformer or remaining publication callbacks; discard cannot
+skip required outside completion. Callback effects and stored resource
+dependencies remain checked.
+
+`cleanup action { body }` evaluates and retains one `Unit -> Unit` action.
+Normal completion invokes it, then returns the saved body value unchanged.
+Capture/resume transfers the invocation owner; copies of the callable gain no
+cleanup authority. Owned abandonment invokes actions under the surviving
+context and still-live builtin resources, not restored captured source handlers.
+Required removed interpreters reject at each action's closing position.
+An executing action and its unfinished close operation remain required
+completions and cannot be discarded. Action effects and stored dependencies
+remain checked. Ordinary typed reporting can retain ordered cleanup failures
+separately from the body outcome; constructors have no implicit failure meaning.
+Internal termination or exhaustion provides no source-cleanup guarantee.
 
 The source path selected for execution is the entry module. It declares exactly
 one local, monomorphic, unconstrained `main : Unit -> R`, where `R` is closed.
-After checking every dependency, Ash links the module definition groups and
-evaluates `main ()`.
+Its computation row is empty. After checking every dependency, Ash links the
+module definition groups and evaluates `main ()`.
 Imports, exports, aliases, and opacity are static access rules and do not remain
 as runtime operations. Interface identities, implementation identities, and
 their checking registries also erase. Selected evidence lowers to ordinary
-functions, applications, and erased type operations; evaluation has no runtime
-module object, implementation registry, or interface lookup.
+functions, applications, and dialect-specific type operations. Pure erases
+instantiation; Effect retains lexical instantiation for exact operation
+matching across generic calls and returned closures. Evaluation has no runtime
+module object, implementation registry, interface lookup, or handler registry.
 
 Ordinary source value positions remain rank-1.
 No source annotation denotes a nested scheme. Source code cannot write
@@ -71,19 +155,34 @@ or constructor field a polymorphic annotation; store or return an
 uninstantiated method scheme; pass one to an ordinary parameter; add implicit
 method binders or method requirements; or use polymorphic recursion.
 Core admits a nested scheme only where authenticated compiler-generated method
-evidence requires it. Every other term slot and every runtime value remains
-monomorphic.
+evidence requires it. Every other source value position remains monomorphic;
+the internal lexical polymorphic functions retained by Effect execution do not
+make schemes first-class source values.
 
 Determination adds no associated-output syntax or projection, multiple or
-partial edges, effect row or handler authority, proposition or proof evidence,
-common universal evidence, or existential pack and unpack form. Those future
-features require separate source, Core, authentication, and dynamic rules.
+partial edges, proposition or proof evidence, common universal evidence, or
+existential pack and unpack form.
+
+Module and local `newtype` add no runtime-fresh identity,
+implicit coercion, general representational equality, local implementation,
+effect or resource mechanism, existential package, dynamic loading, runtime
+nominal registry, heap-inspection API, special value rendering, or general ABI
+or foreign-representation guarantee. Its canonical conversion establishes no
+interface, proof, provider, handler, or hook authority.
 
 Within a module, Ash provides global and explicit local recursion, rank-1
-polymorphism, nominal data, structural tuples, constructor values, typed
+polymorphism, nominal data, allocation-free module and local `newtype`, structural tuples, constructor values, typed
 patterns, exhaustive matches and equations, sequential bindings, method-only
-interfaces, explicit constraints, anonymous implementations, and pure
-expressions.
+interfaces, explicit constraints, anonymous implementations, and pure and
+effectful expressions with single-use, non-escaping handler continuations.
+
+Beyond the fixed sealed cell provider and acquisition form, the effect kernel
+adds no general provider or resource declarations, first-class registration
+tokens, arbitrary removal or priorities, general destructor declarations,
+foreign resources, escaping or multi-shot resume, asynchronous execution, or
+dynamic loading.
+A linked nonempty effect row is a source rejection rather than an
+unhandled-operation runtime result.
 
 ## Module examples
 
@@ -149,6 +248,86 @@ import arithmetic (answer as imported_answer)
 main : Unit -> Int
 main () = imported_answer(())
 ```
+
+### Module newtypes
+
+This complete module wraps and unwraps a distinct nominal `UserId`. The wrapper
+has the integer representation at runtime, so the program observes the value
+`42` while retaining the result type `UserId`:
+
+```ash
+newtype UserId = UserId(Int)
+
+increment : UserId -> UserId
+increment (UserId value) = UserId(value + 1)
+
+main : Unit -> UserId
+main () = increment(UserId(41))
+```
+
+The executable test `overview_module_newtype_example_is_executable` checks this
+example. Neither constructor use is an implicit conversion, and an importer
+may use the constructor only through a transparent authorized route.
+
+### Local newtypes
+
+This complete module returns a closure that captures a local representation,
+then calls it after `make` returns. The closure exposes only `Unit -> Int`, so
+the program observes `42 : Int` without exposing the local identity:
+
+```ash
+make : Unit -> (Unit -> Int)
+make () = {
+    newtype Offset = Offset(Int)
+    let offset = Offset(41)
+    fn(ignored) {
+        match offset {
+            Offset(value) => value + 1
+        }
+    }
+}
+
+main : Unit -> Int
+main () = make()()
+```
+
+The executable test `overview_local_newtype_closure_example_is_executable`
+checks this example. Local declarations are sequential and private; they do
+not add local implementations or implicit existential packages.
+
+### Scoped exact evidence
+
+This complete module supplies the relation `Read<Token, Int>` for a local
+identity. The supplied method captures `saved`; `forward` receives its ordinary
+method function through the existing constraint mechanism. The result is
+`42 : Int`:
+
+```ash
+interface Read<A, B> where A -> B {
+    read : A -> B
+}
+
+forward<A, B> : A -> B where Read<A, B>
+forward value = read(value)
+
+main : Unit -> Int
+main () = {
+    newtype Token = Token(Int)
+    let saved = Token(41)
+    with Read<Token, Int> {
+        read ignored = match saved {
+            Token(value) => value + 1
+        }
+    }
+    forward(saved)
+}
+```
+
+The test `overview_scoped_evidence_example_is_executable` checks this example
+and the direct `read(saved)` variant. Abstract requirements and exact-current
+implementation evidence precede lexical evidence; lexical evidence precedes
+concrete implementation matching. This form introduces no resource lifetime,
+proof authority, acquisition, or existential package.
 
 ### Interfaces and selected evidence
 
@@ -298,11 +477,12 @@ The program observes:
 (Box(true), Box(42)) : (Box<Bool>, Box<Int>)
 ```
 
-The method scheme is authenticated across both body-free summaries. Concrete
-evidence uses one generated adapter over the implementation method; its type
-operations erase through the existing evaluator rules. The source filename
-retained by the test corpus is `interface.ash`, but the executable tree stages
-that content as `api.ash` because `interface` is reserved in a module path.
+The method scheme is authenticated across both source-body-free summaries.
+Concrete evidence uses one generated adapter over the implementation method;
+this Pure program erases its type operations through the existing evaluator
+rules. The source filename retained by the test corpus is `interface.ash`, but
+the executable tree stages that content as `api.ash` because `interface` is reserved in
+a module path.
 
 ### Opaque types and smart constructors
 

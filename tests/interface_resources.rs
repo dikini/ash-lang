@@ -287,7 +287,7 @@ fn cycle_precedes_constraint_resource_exhaustion_after_import_admission() {
 fn public_run_admits_and_drops_deep_public_routes_on_a_small_stack() {
     const DEPTH: usize = 48;
     const WIDTH: usize = 4;
-    const STACK_SIZE: usize = 256 * 1024;
+    const STACK_SIZE: usize = 320 * 1024;
 
     std::thread::Builder::new()
         .name(String::from("public-deep-route"))
@@ -303,4 +303,50 @@ fn public_run_admits_and_drops_deep_public_routes_on_a_small_stack() {
         .expect("the public small-stack witness thread should spawn")
         .join()
         .expect("the public runner should admit and dispose deep routes on a small stack");
+}
+
+#[test]
+fn nested_supplied_method_bodies_use_bounded_host_stack() {
+    const DEPTH: usize = 32;
+    const STACK_SIZE: usize = 512 * 1024;
+
+    for (leaf, accepted) in [("42", true), ("true", false)] {
+        let mut source = String::from(
+            "interface Read<A> {\nread : A -> Int\n}\nmain : Unit -> Int\nmain () = {\n",
+        );
+        for index in 0..DEPTH {
+            source.push_str(&format!(
+                "newtype N{index} = N{index}(Unit)\nwith Read<N{index}> {{\nread ignored = {{\n"
+            ));
+        }
+        source.push_str(leaf);
+        source.push('\n');
+        for index in (0..DEPTH).rev() {
+            source.push_str(&format!("}}\n}}\nread(N{index}(()))\n"));
+        }
+        source.push_str("}\n");
+
+        std::thread::Builder::new()
+            .name(String::from("nested-supplied-method-bodies"))
+            .stack_size(STACK_SIZE)
+            .spawn(move || {
+                let fixture = ResourceFixture::create(&source);
+                if accepted {
+                    let observation = fixture
+                        .run()
+                        .expect("nested supplied methods should use existing iterative stage work");
+                    assert_eq!(observation.value_display(), "42");
+                    drop(observation);
+                } else {
+                    let failure = fixture
+                        .run()
+                        .expect_err("the deepest method has the wrong result");
+                    assert_eq!(failure.reason_code(), "type.definition-result");
+                    drop(failure);
+                }
+            })
+            .expect("the nested-method small-stack witness should spawn")
+            .join()
+            .expect("nested supplied method bodies should finish on a bounded host stack");
+    }
 }

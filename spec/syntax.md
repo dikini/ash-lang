@@ -19,8 +19,10 @@ an EBNF production; it is not Ash source punctuation.
 module ::= { import_declaration line_end } { module_declaration line_end } ;
 module_declaration ::=
     type_declaration
+  | newtype_declaration
   | interface_declaration
   | implementation_declaration
+  | effect_declaration
   | global_definition ;
 
 import_declaration ::=
@@ -45,9 +47,20 @@ type_parameters ::=
   "<" type_parameter { "," type_parameter } ">" ;
 type_parameter ::= upper_identifier [ ":" kind ] ;
 kind ::= kind_atom [ "->" kind ] ;
-kind_atom ::= "Type" | "(" kind ")" ;
+kind_atom ::= "Type" | "EffectRow" | "(" kind ")" ;
 constructor_declaration ::=
   upper_identifier [ "(" type { "," type } ")" ] ;
+newtype_declaration ::=
+  [ "pub" [ "opaque" ] ]
+  "newtype" upper_identifier [ type_parameters ] "="
+  upper_identifier "(" type ")" ;
+
+effect_declaration ::=
+  [ "pub" ] "effect" upper_identifier [ type_parameters ]
+  "{" line_end
+  effect_operation { line_end effect_operation } [ line_end ]
+  "}" ;
+effect_operation ::= identifier ":" type ;
 
 interface_declaration ::=
   [ "pub" ] "interface" upper_identifier interface_parameters
@@ -80,7 +93,7 @@ equation ::= identifier pattern { pattern } "=" expression ;
 inline_operational_global ::=
   [ "pub" ] "fn" identifier [ type_parameters ]
   "(" typed_pattern { "," typed_pattern } ")"
-  "->" type [ where_clause ] block ;
+  "->" computation_type [ where_clause ] block ;
 
 where_clause ::= "where" constraint { "," constraint } ;
 constraint ::= interface_application ;
@@ -91,7 +104,19 @@ interface_reference ::=
 
 block ::=
   "{" line_end { local_declaration line_end } expression [ line_end ] "}" ;
-local_declaration ::= local_binding | recursive_binding_group ;
+local_declaration ::=
+    local_binding
+  | recursive_binding_group
+  | local_newtype_declaration
+  | local_evidence_declaration ;
+local_newtype_declaration ::=
+  "newtype" upper_identifier [ type_parameters ] "="
+  upper_identifier "(" type ")" ;
+local_evidence_declaration ::=
+  "with" interface_application
+  "{" line_end
+  [ impl_equation { line_end impl_equation } [ line_end ] ]
+  "}" ;
 local_binding ::= "let" pattern [ ":" type ] "=" expression ;
 recursive_binding_group ::=
   "let" "rec" recursive_member
@@ -102,10 +127,33 @@ match_expression ::=
   "match" expression "{" line_end
   match_arm { line_end match_arm } [ line_end ] "}" ;
 match_arm ::= pattern "=>" expression ;
+handler_expression ::=
+  "handle" expression "with" effect_instance
+  "{" line_end
+  handler_clause { line_end handler_clause } [ line_end ]
+  "}" ;
+handler_clause ::= identifier pattern "=>" expression ;
+resume_expression ::= "resume" expression ;
+discard_expression ::= "discard" ;
+resource_expression ::=
+  "resource" ("cell" | "native_buffer") "<" upper_identifier ">" identifier
+  "=" primary_expression block ;
+hook_expression ::= "hook" effect_instance block ;
+registration_expression ::=
+  "register" effect_instance primary_expression block ;
+cleanup_expression ::= "cleanup" expression block ;
 
-expression ::= block | function_expression | match_expression | equality_expression ;
+expression ::=
+    block
+  | function_expression
+  | match_expression
+  | handler_expression
+  | resume_expression
+  | resource_expression
+  | equality_expression ;
 equality_expression ::= additive_expression [ "==" additive_expression ] ;
-additive_expression ::= multiplicative_expression { "+" multiplicative_expression } ;
+additive_expression ::=
+  multiplicative_expression { "+" multiplicative_expression } ;
 multiplicative_expression ::=
   application_expression { "*" application_expression } ;
 application_expression ::= primary_expression { primary_expression } ;
@@ -115,9 +163,16 @@ primary_expression ::=
   | unit
   | unqualified_term_reference
   | qualified_term_reference
+  | perform_expression
+  | discard_expression
+  | hook_expression
+  | registration_expression
+  | cleanup_expression
   | parenthesized_expression ;
 unqualified_term_reference ::= identifier | upper_identifier ;
 qualified_term_reference ::= upper_identifier "." import_name ;
+perform_expression ::= "perform" operation_reference primary_expression ;
+operation_reference ::= effect_reference [ type_arguments ] "." identifier ;
 parenthesized_expression ::=
   "(" expression [ "," expression { "," expression } ] ")" ;
 
@@ -137,7 +192,8 @@ parenthesized_pattern ::=
 juxtaposed_constructor_pattern ::=
   constructor_reference ( pattern | juxtaposed_constructor_pattern ) ;
 typed_pattern ::= pattern ":" type ;
-type ::= atomic_type [ "->" type ] ;
+type ::= atomic_type | atomic_type "->" computation_type ;
+computation_type ::= type [ "!" effect_row ] ;
 atomic_type ::=
   "Int"
   | "Bool"
@@ -148,6 +204,15 @@ nominal_type_reference ::=
   upper_identifier | upper_identifier "." upper_identifier ;
 type_arguments ::= "<" type { "," type } ">" ;
 parenthesized_type ::= "(" type [ "," type { "," type } ] ")" ;
+effect_row ::=
+  "{"
+    [ effect_instance { "," effect_instance } [ "|" row_variable ]
+    | "|" row_variable ]
+  "}" ;
+effect_instance ::= effect_reference [ type_arguments ] ;
+effect_reference ::=
+  upper_identifier | upper_identifier "." upper_identifier ;
+row_variable ::= upper_identifier ;
 
 identifier ::= /[a-z_][a-zA-Z0-9_]*/ ;
 upper_identifier ::= /[A-Z][a-zA-Z0-9_]*/ ;
@@ -202,10 +267,13 @@ members, as in `List.Option` and `List.Some`. Qualification has exactly these
 two components; it does not repeat the dependency's path.
 
 An unmodified declaration is private. On a declaration, `pub` marks a global,
-nominal type, interface, or implementation as public. On an import, `pub`
-re-exports the selected channels. `pub opaque type` exports the nominal name
-without exporting its constructors. `opaque` is valid only between `pub` and
-`type`; constructors cannot carry individual modifiers. An equational global
+nominal data type, `newtype`, interface, effect, or implementation as public.
+On an import, `pub` re-exports the selected channels. `pub opaque type` exports
+the nominal name without exporting its constructors; `pub opaque newtype`
+applies the same access rule to the sole newtype constructor. `pub type` and
+`pub newtype` export the nominal name and accessible constructor or constructor
+family. `opaque` is valid only between `pub` and `type` or `newtype`;
+constructors cannot carry individual modifiers. An equational global
 writes `pub` once before its global signature, not on its equation heads. An
 inline operational global writes `pub` before `fn`.
 
@@ -222,6 +290,13 @@ provides no associated declaration, associated-output projection, default
 method, named implementation, general determination graph, or runtime
 dictionary form.
 
+An effect declaration has zero or more ordered parameters and one or more
+operations. Each operation writes one lowercase name and one type with exactly
+one outer function domain. That outer operation result has no effect-row
+annotation; the requested instance comes from the enclosing effect. An
+operation has no parameter list, requirement, visibility modifier, body,
+default, or associated declaration.
+
 A present method `type_parameters` list is nonempty by the existing production
 and uses the same optionally kinded `type_parameter` entries as other
 declarations. An absent list is syntactically distinct. Missing separators,
@@ -229,10 +304,13 @@ kinds, or the closing angle bracket are syntax failures; recovery does not
 publish a partial method binder list.
 
 Every declaration-level type binder uses `type_parameter`. Its optional kind
-annotation contains `Type`, a function kind, or a parenthesized kind. The
-spelling `Type` is contextual: it denotes the kind only inside a kind
-annotation and remains an ordinary `upper_identifier` elsewhere. For example,
-this complete entry module declares and uses a nominal type named `Type`:
+annotation contains `Type`, `EffectRow`, a function kind, or a parenthesized
+kind. Static semantics restricts `EffectRow` to complete global and eligible
+generalized-local binders and forbids it beneath a kind arrow. The spellings
+`Type` and `EffectRow` are contextual: they denote kinds only inside a kind
+annotation and remain ordinary `upper_identifier` spellings elsewhere. For
+example, this complete entry module declares and uses a nominal type named
+`Type`:
 
 ```ash
 type Type = Type
@@ -242,9 +320,9 @@ main () = Type
 ```
 
 Nominal declarations always write a parameter list when they have parameters.
-An interface always writes its nonempty parameter list. Either global presentation may
-place an optional parameter list after the global name, and an implementation
-may place one after `impl`. [Name
+An interface always writes its nonempty parameter list. Either global
+presentation may place an optional parameter list after the global name, and
+an implementation may place one after `impl`. [Name
 resolution](name-resolution.md#type-binder-identity-and-scope) defines the
 explicit and omitted-list binder policies.
 
@@ -262,18 +340,73 @@ contains ordered local declarations and one result expression. An ordinary
 `let` is sequential. A `let rec` declaration is one simultaneous group; each
 following `and` member occupies another logical line.
 
+A local evidence declaration writes `with` and one complete interface
+application, followed by implementation equations. It is private and sequential:
+it has no `pub`, head parameter list, or `where` clause, and cannot occur at
+module level or inside a recursive group. Its equations reuse implementation
+equation syntax. Static semantics checks that every required method is supplied
+exactly once and that the selection key contains an active local nominal.
+
+A local `newtype` is a sequential declaration with the module form's single
+representation field. `pub` and `opaque` are not admitted in a block. The
+grammar admits no local `type`, `effect`, `interface`, or `impl`, and a local
+`newtype` cannot appear as a recursive-group member.
+
 Every recursive member has a required type annotation. The grammar accepts an
 arbitrary initializer expression so static semantics can distinguish safe
 function- or constructor-rooted initialization from malformed syntax.
 
 A nominal declaration binds its ordered type parameters only in its
-constructor payload types. A named source type may occur without arguments or
+constructor payload or representation types. A `newtype` has exactly one
+constructor, parentheses, and exactly one field. Parsing owns a missing
+constructor, nullary constructor, extra field, or extra constructor. Name
+resolution requires the constructor spelling to equal the nominal spelling.
+A named source type may occur without arguments or
 with one or more comma-separated arguments. Syntax does not require a nominal
 constructor to be saturated and does not distinguish nominal constructors from
 type parameters. Resolution distinguishes them by identity; static semantics
 checks each resulting application against its kinds. Source expressions have
 no explicit type abstraction or type-application form; `value<Type>` is not an
 expression.
+
+A function result may carry a row of exact effect instances and at most one row
+tail. Omitting `! effect_row` means the empty row. A row tail is one uppercase
+variable after `|`; name resolution and static semantics require it to denote an
+admitted `EffectRow` binder. Effect arguments use the same nonempty ordered
+`type_arguments` form as named types. Empty rows write `{}`, closed rows list
+instances, and open rows either append `| R` to known instances or write only
+`| R`.
+
+`perform` consumes one primary-expression operand. A non-primary operand must be
+parenthesized. A handler contains one or more clauses, each with one operation
+name, one pattern, and one expression body. `resume` consumes one expression;
+`discard` is a nullary primary expression. Name resolution and static semantics
+restrict both completion forms to their owning operation clause.
+
+A resource expression selects one fixed provider, `cell` or `native_buffer`.
+It writes exactly one uppercase identity binder, one ordinary value binder,
+one primary-expression initializer
+and a block body. Neither binder has a parameter list or annotation, and the
+value binder is not a pattern or wildcard. The designators remain ordinary
+identifiers outside this position. A non-primary initializer, such as `40 + 1`
+or `make ()`, must be parenthesized. The initializer precedes the binders' scope;
+both binders are
+visible only in the body. There is no resource declaration or first-class
+acquisition function.
+
+A hook expression names an exact effect instance followed by a block. A
+registration expression names an exact effect instance, one primary-expression
+transformer and a block. A non-primary transformer, such as a function
+expression or application, must be parenthesized. Neither form introduces a
+source-visible binder. Static semantics determines whether the target is a
+hook API and checks the transformer's type.
+
+A cleanup expression contains an action expression followed by its body block.
+Unlike a registration transformer, its action may be an ungrouped application,
+operator expression or function expression. The action ends before the following
+body block; grouping disambiguates an action with a trailing block. Cleanup is
+a primary expression and introduces no source-visible binder or namespace.
+Both action-owned blocks and the cleanup body retain the ordinary line-end rules.
 
 The executable test `syntax_local_recursive_group_example_is_executable`
 checks a complete entry module containing a two-member recursive group. The
@@ -303,6 +436,26 @@ multiplication, addition, and equality. Application, multiplication, and
 addition associate to the left. Equality is non-associative, so `a == b == c`
 is invalid. Function arrows associate to the right, so `Int -> Int -> Int`
 means `Int -> (Int -> Int)`.
+
+`perform` has primary-expression precedence after consuming its single primary
+operand. `handle` and `resume` have the same loose prefix boundary as `match`:
+their operand extends to the handler delimiter or the end of the surrounding
+expression. A handled or resumed expression must be parenthesized to serve as
+an application or infix operand. Therefore `resume x + y` resumes with `x + y`,
+while `(resume x) + y` resumes with `x` and then adds `y`.
+
+A resource expression ends at its body block. Like a block, it must be
+parenthesized to serve as an application or infix operand. The primary
+initializer rule does not make the complete resource expression primary.
+
+Hook and registration expressions also end at their body blocks, but both are
+primary expressions. Their complete forms can therefore serve as application
+or infix operands without additional parentheses.
+
+`!` attaches to the complete computation codomain immediately to its left after
+parentheses are applied. Thus `A -> B -> C ! {E}` is a pure call from `A` that
+returns a function whose call from `B` may request `E`. In `A -> (B -> C) !
+{E}`, the call from `A` may request `E` while returning a pure function.
 
 Kind arrows also associate to the right, so `Type -> Type -> Type` means
 `Type -> (Type -> Type)`. Parentheses may instead group a kind on either side

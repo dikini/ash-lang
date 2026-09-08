@@ -58,10 +58,36 @@ fn recognizes_interface_reserved_words_without_stealing_identifier_boundaries() 
 }
 
 #[test]
+fn recognizes_effect_reserved_words_without_stealing_identifier_boundaries() {
+    let source = SourceFile::new(
+        "effect-keywords.ash",
+        "effect perform handle with resume effectful performer handler within resumed !",
+    )
+    .expect("the keyword fixture should fit");
+    assert_eq!(
+        token_kinds(&source),
+        vec![
+            TokenKind::Effect,
+            TokenKind::Perform,
+            TokenKind::Handle,
+            TokenKind::With,
+            TokenKind::Resume,
+            TokenKind::Identifier("effectful".into()),
+            TokenKind::Identifier("performer".into()),
+            TokenKind::Identifier("handler".into()),
+            TokenKind::Identifier("within".into()),
+            TokenKind::Identifier("resumed".into()),
+            TokenKind::Bang,
+            TokenKind::EndOfFile,
+        ]
+    );
+}
+
+#[test]
 fn recognizes_data_and_pattern_tokens_without_stealing_identifier_boundaries() {
     let source = SourceFile::new(
         "data-pattern-tokens.ash",
-        "type match _ Tree Leaf _tail | =>",
+        "type newtype match _ Tree Leaf newtype_ _tail | =>",
     )
     .expect("the token source should fit");
 
@@ -69,10 +95,12 @@ fn recognizes_data_and_pattern_tokens_without_stealing_identifier_boundaries() {
         token_kinds(&source),
         vec![
             TokenKind::Type,
+            TokenKind::Newtype,
             TokenKind::Match,
             TokenKind::Wildcard,
             TokenKind::UpperIdentifier("Tree".into()),
             TokenKind::UpperIdentifier("Leaf".into()),
+            TokenKind::Identifier("newtype_".into()),
             TokenKind::Identifier("_tail".into()),
             TokenKind::Pipe,
             TokenKind::FatArrow,
@@ -85,7 +113,7 @@ fn recognizes_data_and_pattern_tokens_without_stealing_identifier_boundaries() {
 fn recognizes_module_tokens_with_exact_spans_and_reserved_word_boundaries() {
     let source = SourceFile::new(
         "module-tokens.ash",
-        "import as pub opaque importable as_ pubx opaque_ @ .\n",
+        "import as pub opaque newtype importable as_ pubx opaque_ newtypex @ .\n",
     )
     .expect("the token source should fit");
     let lexed = lex(&source).expect("the source should remain representable while lexing");
@@ -94,14 +122,16 @@ fn recognizes_module_tokens_with_exact_spans_and_reserved_word_boundaries() {
         (TokenKind::As, 7, 9),
         (TokenKind::Pub, 10, 13),
         (TokenKind::Opaque, 14, 20),
-        (TokenKind::Identifier("importable".into()), 21, 31),
-        (TokenKind::Identifier("as_".into()), 32, 35),
-        (TokenKind::Identifier("pubx".into()), 36, 40),
-        (TokenKind::Identifier("opaque_".into()), 41, 48),
-        (TokenKind::At, 49, 50),
-        (TokenKind::Dot, 51, 52),
-        (TokenKind::LineEnd, 52, 53),
-        (TokenKind::EndOfFile, 53, 53),
+        (TokenKind::Newtype, 21, 28),
+        (TokenKind::Identifier("importable".into()), 29, 39),
+        (TokenKind::Identifier("as_".into()), 40, 43),
+        (TokenKind::Identifier("pubx".into()), 44, 48),
+        (TokenKind::Identifier("opaque_".into()), 49, 56),
+        (TokenKind::Identifier("newtypex".into()), 57, 65),
+        (TokenKind::At, 66, 67),
+        (TokenKind::Dot, 68, 69),
+        (TokenKind::LineEnd, 69, 70),
+        (TokenKind::EndOfFile, 70, 70),
     ];
 
     assert!(lexed.diagnostics.is_empty());
@@ -122,7 +152,7 @@ fn assert_range(token: &Token, start: u32, end: u32) {
 fn recognizes_the_closed_token_family_and_reserved_word_boundaries() {
     let source = SourceFile::new(
         "tokens.ash",
-        "fn let Int Bool Unit true false name_1 fnn 18446744073709551616 ( ) { } : = == + * -> , < > ;",
+        "fn let type newtype Int Bool Unit true false name_1 fnn newtype_ 18446744073709551616 ( ) { } : = == + * -> , < > ;",
     )
     .expect("the token source should fit");
 
@@ -131,6 +161,8 @@ fn recognizes_the_closed_token_family_and_reserved_word_boundaries() {
         vec![
             TokenKind::Fn,
             TokenKind::Let,
+            TokenKind::Type,
+            TokenKind::Newtype,
             TokenKind::IntType,
             TokenKind::BoolType,
             TokenKind::UnitType,
@@ -138,6 +170,7 @@ fn recognizes_the_closed_token_family_and_reserved_word_boundaries() {
             TokenKind::False,
             TokenKind::Identifier("name_1".into()),
             TokenKind::Identifier("fnn".into()),
+            TokenKind::Identifier("newtype_".into()),
             TokenKind::Integer(
                 ash::integer::Integer::parse_decimal("18446744073709551616")
                     .expect("the test literal should be valid"),
@@ -163,7 +196,8 @@ fn recognizes_the_closed_token_family_and_reserved_word_boundaries() {
 
 #[test]
 fn every_closed_token_kind_has_an_exact_span_in_one_stream() {
-    let source_text = "name 0 true false fn let Int Bool Unit ( ) { } : = == + * -> , < > ;\n";
+    let source_text =
+        "name 0 true false fn let type newtype Int Bool Unit ( ) { } : = == + * -> , < > ;\n";
     let source =
         SourceFile::new("closed-family.ash", source_text).expect("the token source should fit");
     let lexed = lex(&source).expect("the source should remain representable while lexing");
@@ -181,25 +215,27 @@ fn every_closed_token_kind_has_an_exact_span_in_one_stream() {
         (TokenKind::False, 12, 17),
         (TokenKind::Fn, 18, 20),
         (TokenKind::Let, 21, 24),
-        (TokenKind::IntType, 25, 28),
-        (TokenKind::BoolType, 29, 33),
-        (TokenKind::UnitType, 34, 38),
-        (TokenKind::LeftParen, 39, 40),
-        (TokenKind::RightParen, 41, 42),
-        (TokenKind::LeftBrace, 43, 44),
-        (TokenKind::RightBrace, 45, 46),
-        (TokenKind::Colon, 47, 48),
-        (TokenKind::Equal, 49, 50),
-        (TokenKind::EqualEqual, 51, 53),
-        (TokenKind::Plus, 54, 55),
-        (TokenKind::Star, 56, 57),
-        (TokenKind::Arrow, 58, 60),
-        (TokenKind::Comma, 61, 62),
-        (TokenKind::Less, 63, 64),
-        (TokenKind::Greater, 65, 66),
-        (TokenKind::Semicolon, 67, 68),
-        (TokenKind::LineEnd, 68, 69),
-        (TokenKind::EndOfFile, 69, 69),
+        (TokenKind::Type, 25, 29),
+        (TokenKind::Newtype, 30, 37),
+        (TokenKind::IntType, 38, 41),
+        (TokenKind::BoolType, 42, 46),
+        (TokenKind::UnitType, 47, 51),
+        (TokenKind::LeftParen, 52, 53),
+        (TokenKind::RightParen, 54, 55),
+        (TokenKind::LeftBrace, 56, 57),
+        (TokenKind::RightBrace, 58, 59),
+        (TokenKind::Colon, 60, 61),
+        (TokenKind::Equal, 62, 63),
+        (TokenKind::EqualEqual, 64, 66),
+        (TokenKind::Plus, 67, 68),
+        (TokenKind::Star, 69, 70),
+        (TokenKind::Arrow, 71, 73),
+        (TokenKind::Comma, 74, 75),
+        (TokenKind::Less, 76, 77),
+        (TokenKind::Greater, 78, 79),
+        (TokenKind::Semicolon, 80, 81),
+        (TokenKind::LineEnd, 81, 82),
+        (TokenKind::EndOfFile, 82, 82),
     ];
 
     assert!(lexed.diagnostics.is_empty());

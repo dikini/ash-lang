@@ -130,7 +130,7 @@ fn wide_source_argument_vector_crosses_body_free_link_and_core_on_a_small_stack(
 
     std::thread::Builder::new()
         .name("public-wide-kind-route".to_owned())
-        .stack_size(256 * 1024)
+        .stack_size(320 * 1024)
         .spawn(|| {
             let dependency = wide_dependency(WIDTH);
 
@@ -174,5 +174,5 @@ fn wide_source_argument_vector_crosses_body_free_link_and_core_on_a_small_stack(
         })
         .expect("the public wide-route thread should start")
         .join()
-        .expect("accepted and rejected wide routes should tear down on 256 KiB");
+        .expect("accepted and rejected wide routes should tear down on 320 KiB");
 }

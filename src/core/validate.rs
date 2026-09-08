@@ -12,11 +12,12 @@ use std::sync::Arc;
 
 use super::{
     dialect::{
-        CORE_PATTERN_DEPTH_LIMIT, DialectId, MethodEvidenceAnchor, MethodEvidenceAnchorRole,
-        MethodEvidenceExpectedRole, MethodEvidenceOwner, MethodEvidenceProducer, NodeId,
-        PureComputation, PureExprKind, PureProgram, PureValue, StoredNode, TypedExpr,
-        UnvalidatedProgram, ValidatedProgram, method_evidence_producer_matches,
-        origin_depth_within_limit,
+        CORE_PATTERN_DEPTH_LIMIT, CoreOperationFamily, CoreProgram, CoreTypedExpr, DialectId,
+        MethodEvidenceAnchor, MethodEvidenceAnchorRole, MethodEvidenceExpectedRole,
+        MethodEvidenceOwner, MethodEvidenceProducer, NodeId, PureComputation, PureExprKind,
+        PureOperationFamily, PureProgram, PureValue, StoredNode, TypedExpr, UnvalidatedCoreProgram,
+        UnvalidatedProgram, ValidatedCoreProgram, ValidatedProgram,
+        method_evidence_producer_matches, origin_depth_within_limit,
     },
     variable::TypedBinder,
 };
@@ -26,14 +27,17 @@ use crate::{
     module::ModuleId,
     pattern::{UsefulnessBudget, missing_witness_for_types_with_budget, usefulness_with_budget},
     resolved::{
-        BinderId, ResolvedConstructor, ResolvedNominalType, ResolvedTypeVariable,
+        BinderId, ResolvedConstructor, ResolvedNominalDeclarationKind, ResolvedNominalType,
+        ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResolvedTypeVariable,
         same_resolved_type_variables_with_charge,
     },
     source::{Origin, SourceFile, SourceId, Span},
     types::{
-        ConstructorId, IterativeTypeOwner, Kind, TYPE_WORK_LIMIT, Type, TypeWorkBudget,
-        clone_type_with_budget, discard_type_iteratively, same_type_with_budget,
-        substitute_type_variables_with,
+        ConstructorId, EffectInstance, EffectRow, IterativeTypeOwner, Kind, OperationId,
+        TYPE_WORK_LIMIT, Type, TypeWorkBudget, clone_effect_row_with_budget,
+        clone_type_with_budget, discard_type_iteratively, rebuild_effect_row_with_budget,
+        same_effect_rows_with_budget, same_type_with_budget,
+        substitute_type_and_row_variables_with, substitute_type_variables_with,
     },
 };
 
@@ -137,13 +141,20 @@ impl OwnedTypeSequence {
 type CoreTypeBinders<'a> = HashMap<crate::types::TypeVariableId, (&'a Kind, NodeId)>;
 type CoreAbstractionOwners = HashMap<NodeId, BinderId>;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RegistryParameterOwner {
+    Nominal(crate::types::NominalTypeId),
+    Effect(crate::types::EffectId),
+}
+
+type RegistryParameterOwners = HashMap<crate::types::TypeVariableId, RegistryParameterOwner>;
+
 #[derive(Clone, Copy)]
 enum MonotypeVariableKinds<'scope, 'kind> {
     Core(&'scope CoreTypeBinders<'kind>),
     Registry {
         owner: crate::types::NominalTypeId,
-        parameter_owners:
-            &'scope HashMap<crate::types::TypeVariableId, crate::types::NominalTypeId>,
+        parameter_owners: &'scope RegistryParameterOwners,
     },
 }
 
@@ -190,6 +201,20 @@ pub enum ValidationReason {
     TypeOperation,
     /// A Core type variable occurs outside its abstraction scope.
     TypeScope,
+    /// A module-newtype conversion does not match its canonical representation relation.
+    NewtypeConversion,
+    /// A retained effect or operation does not authenticate against its registry.
+    EffectIdentity,
+    /// A retained computation row or effect-row equation is false.
+    EffectRow,
+    /// A retained handler does not cover or discharge its exact instance.
+    Handler,
+    /// A retained resume violates ownership, use, or non-escape.
+    Resume,
+    /// Discard has no authenticated proof of capture safety.
+    DiscardUnsafe,
+    /// A stored value crosses the boundary of its resource owner.
+    ResourceEscape,
 }
 
 impl fmt::Display for ValidationReason {
@@ -211,6 +236,13 @@ impl fmt::Display for ValidationReason {
             Self::Resource => "core.validation.resource",
             Self::TypeOperation => "core.validation.type-operation",
             Self::TypeScope => "core.validation.type-scope",
+            Self::NewtypeConversion => "core.validation.newtype-conversion",
+            Self::EffectIdentity => "core.validation.effect-identity",
+            Self::EffectRow => "core.validation.effect-row",
+            Self::Handler => "core.validation.handler",
+            Self::Resume => "core.validation.resume",
+            Self::DiscardUnsafe => "core.validation.discard-unsafe",
+            Self::ResourceEscape => "core.validation.resource-escape",
         })
     }
 }
@@ -223,7 +255,7 @@ pub struct ValidationError {
 }
 
 impl ValidationError {
-    const fn new(reason: ValidationReason, node: Option<NodeId>) -> Self {
+    pub(super) const fn new(reason: ValidationReason, node: Option<NodeId>) -> Self {
         Self { reason, node }
     }
 
@@ -265,6 +297,12 @@ fn valid_upper_spelling(spelling: &str) -> bool {
         && !matches!(spelling, "Int" | "Bool" | "Unit")
 }
 
+fn valid_lower_spelling(spelling: &str) -> bool {
+    let mut bytes = spelling.bytes();
+    bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
 fn constructor_belongs_to_owner(owner: &ResolvedNominalType, constructor: ConstructorId) -> bool {
     if constructor.owner() != owner.id {
         return false;
@@ -273,6 +311,21 @@ fn constructor_belongs_to_owner(owner: &ResolvedNominalType, constructor: Constr
         .ok()
         .and_then(|index| owner.constructors.get(index))
         .is_some_and(|owned| *owned == constructor)
+}
+
+fn span_contains(outer: Span, inner: Span) -> bool {
+    outer.source() == inner.source()
+        && outer.range().start() <= inner.range().start()
+        && inner.range().end() <= outer.range().end()
+}
+
+fn representation_provenance_span(node: &ResolvedTypeProvenanceNode) -> Span {
+    match node {
+        ResolvedTypeProvenanceNode::Fact(span)
+        | ResolvedTypeProvenanceNode::Tuple { span, .. }
+        | ResolvedTypeProvenanceNode::Function { span, .. }
+        | ResolvedTypeProvenanceNode::Application { span, .. } => *span,
+    }
 }
 
 /// Consumes unchecked Core and returns the capability required by consumers.
@@ -288,6 +341,13 @@ pub fn validate(
     program: UnvalidatedProgram,
     sources: &[&SourceFile],
 ) -> Result<ValidatedProgram, ValidationError> {
+    validate_family(program, sources)
+}
+
+pub(super) fn validate_family<F: CoreOperationFamily + ScopeFamily>(
+    program: UnvalidatedCoreProgram<F>,
+    sources: &[&SourceFile],
+) -> Result<ValidatedCoreProgram<F>, ValidationError> {
     if let Err(error) = Validator::new(&program, sources).run() {
         program.discard_iteratively();
         return Err(error);
@@ -304,17 +364,91 @@ pub fn validate(
                 Some(node),
             ));
         };
-        nodes.push(TypedExpr {
+        nodes.push(CoreTypedExpr {
             ty: stored.ty,
+            effects: stored.effects,
             origin,
             kind: stored.kind,
         });
     }
 
-    Ok(ValidatedProgram::new(PureProgram::new(
+    Ok(ValidatedCoreProgram::new(CoreProgram::new(
         registry,
         method_evidence,
         method_evidence_anchors,
+        arena,
+        nodes,
+        root,
+    )))
+}
+
+pub(super) fn validate_effect_family(
+    program: UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+    sources: &[&SourceFile],
+) -> Result<ValidatedCoreProgram<super::effect::EffectOperationFamily>, ValidationError> {
+    let mut validator = Validator::new(&program, sources);
+    if let Err(error) = validator.run_effect() {
+        program.discard_iteratively();
+        return Err(error);
+    }
+    let (registry, method_evidence, anchors, arena, stored, root) = program.into_parts();
+    let mut nodes = Vec::with_capacity(stored.len());
+    for (index, stored) in stored.into_iter().enumerate() {
+        let id = node_id(arena, index)?;
+        let Some(origin) = stored.origin else {
+            return Err(ValidationError::new(ValidationReason::Provenance, Some(id)));
+        };
+        nodes.push(CoreTypedExpr {
+            ty: stored.ty,
+            effects: stored.effects,
+            origin,
+            kind: stored.kind,
+        });
+    }
+    Ok(ValidatedCoreProgram::new(CoreProgram::new(
+        registry,
+        method_evidence,
+        anchors,
+        arena,
+        nodes,
+        root,
+    )))
+}
+
+pub(super) fn validate_effect_modules_family(
+    program: UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+    sources: &[&SourceFile],
+    module_sources: &[(ModuleId, SourceId)],
+) -> Result<ValidatedCoreProgram<super::effect::EffectOperationFamily>, ValidationError> {
+    let mut validator = match Validator::new_modules(&program, sources, module_sources) {
+        Ok(validator) => validator,
+        Err(error) => {
+            program.discard_iteratively();
+            return Err(error);
+        }
+    };
+    if let Err(error) = validator.run_effect() {
+        program.discard_iteratively();
+        return Err(error);
+    }
+    let (registry, method_evidence, anchors, arena, stored, root) = program.into_parts();
+    let mut nodes = Vec::with_capacity(stored.len());
+    for (index, stored) in stored.into_iter().enumerate() {
+        let id = node_id(arena, index)?;
+        let Some(origin) = stored.origin else {
+            return Err(ValidationError::new(ValidationReason::Provenance, Some(id)));
+        };
+        nodes.push(CoreTypedExpr {
+            ty: stored.ty,
+            effects: stored.effects,
+            origin,
+            kind: stored.kind,
+        });
+    }
+    Ok(ValidatedCoreProgram::new(CoreProgram::new(
+        registry,
+        method_evidence,
+        anchors,
         arena,
         nodes,
         root,
@@ -337,13 +471,14 @@ pub fn validate_modules(
     sources: &[&SourceFile],
     module_sources: &[(ModuleId, SourceId)],
 ) -> Result<ValidatedProgram, ValidationError> {
-    let validator = match Validator::new_modules(&program, sources, module_sources) {
-        Ok(validator) => validator,
-        Err(error) => {
-            program.discard_iteratively();
-            return Err(error);
-        }
-    };
+    let mut validator =
+        match Validator::<PureOperationFamily>::new_modules(&program, sources, module_sources) {
+            Ok(validator) => validator,
+            Err(error) => {
+                program.discard_iteratively();
+                return Err(error);
+            }
+        };
     if let Err(error) = validator.run() {
         program.discard_iteratively();
         return Err(error);
@@ -362,6 +497,7 @@ pub fn validate_modules(
         };
         nodes.push(TypedExpr {
             ty: stored.ty,
+            effects: stored.effects,
             origin,
             kind: stored.kind,
         });
@@ -377,8 +513,8 @@ pub fn validate_modules(
     )))
 }
 
-struct Validator<'program, 'source> {
-    program: &'program UnvalidatedProgram,
+struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily> {
+    program: &'program UnvalidatedCoreProgram<F>,
     sources: HashMap<SourceId, &'source SourceFile>,
     module_sources: Option<HashMap<ModuleId, SourceId>>,
     binders: HashMap<BinderId, &'program TypedBinder>,
@@ -386,11 +522,123 @@ struct Validator<'program, 'source> {
     #[cfg(test)]
     owner_parameter_index_work: Cell<usize>,
     #[cfg(test)]
+    newtype_conversion_parameter_work: Cell<usize>,
+    #[cfg(test)]
     type_validation_pending_peak: Cell<usize>,
 }
 
-impl<'program, 'source> Validator<'program, 'source> {
-    fn new(program: &'program UnvalidatedProgram, sources: &[&'source SourceFile]) -> Self {
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum ScopeRequirementKey {
+    Binder(BinderId),
+    LocalNominal(crate::types::NominalTypeId),
+    Resume(super::effect::HandlerId, crate::resolved::ResumeId),
+}
+
+#[derive(Clone, Copy)]
+struct ScopeRequirement {
+    occurrence: NodeId,
+    paths: u8,
+}
+
+type ScopeRequirements = HashMap<ScopeRequirementKey, ScopeRequirement>;
+
+pub(super) trait ScopeFamily: CoreOperationFamily {
+    fn resource_scope(_kind: &Self::Kind) -> Option<&super::effect::ResourceScopeNode> {
+        None
+    }
+    fn resume_capability(
+        _kind: &Self::Kind,
+    ) -> Option<(super::effect::HandlerId, crate::resolved::ResumeId)> {
+        None
+    }
+
+    fn clause_capability(
+        _kind: &Self::Kind,
+        _child: usize,
+    ) -> Option<(super::effect::HandlerId, crate::resolved::ResumeId)> {
+        None
+    }
+
+    fn visit_operation_child_binders(
+        _kind: &Self::Kind,
+        _child: usize,
+        _visit: &mut dyn FnMut(BinderId),
+    ) {
+    }
+}
+
+impl ScopeFamily for PureOperationFamily {}
+
+impl ScopeFamily for super::effect::EffectOperationFamily {
+    fn resource_scope(kind: &Self::Kind) -> Option<&super::effect::ResourceScopeNode> {
+        match kind {
+            super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Resource(
+                resource,
+            )) => Some(resource),
+            _ => None,
+        }
+    }
+    fn resume_capability(
+        kind: &Self::Kind,
+    ) -> Option<(super::effect::HandlerId, crate::resolved::ResumeId)> {
+        use super::effect::{EffectExprKind, EffectOperation};
+        match kind {
+            EffectExprKind::Operation(EffectOperation::Resume(resume)) => {
+                Some((resume.handler(), resume.owner()))
+            }
+            EffectExprKind::Operation(EffectOperation::Discard(discard)) => {
+                Some((discard.handler(), discard.owner()))
+            }
+            _ => None,
+        }
+    }
+
+    fn clause_capability(
+        kind: &Self::Kind,
+        child: usize,
+    ) -> Option<(super::effect::HandlerId, crate::resolved::ResumeId)> {
+        let super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Handler(
+            handler,
+        )) = kind
+        else {
+            return None;
+        };
+        child
+            .checked_sub(1)
+            .and_then(|index| handler.clauses().get(index))
+            .map(|clause| (handler.id(), clause.resume()))
+    }
+
+    fn visit_operation_child_binders(
+        kind: &Self::Kind,
+        child: usize,
+        visit: &mut dyn FnMut(BinderId),
+    ) {
+        if child == 1
+            && let Some(resource) = Self::resource_scope(kind)
+        {
+            visit(resource.handle.id());
+        }
+        let super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Handler(
+            handler,
+        )) = kind
+        else {
+            return;
+        };
+        let Some(clause) = child
+            .checked_sub(1)
+            .and_then(|index| handler.clauses().get(index))
+        else {
+            return;
+        };
+        for binder in clause.pattern().binder_iter() {
+            visit(binder.id());
+        }
+    }
+}
+
+impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program, 'source, F> {
+    fn new(program: &'program UnvalidatedCoreProgram<F>, sources: &[&'source SourceFile]) -> Self {
         Self {
             program,
             sources: sources
@@ -403,12 +651,14 @@ impl<'program, 'source> Validator<'program, 'source> {
             #[cfg(test)]
             owner_parameter_index_work: Cell::new(0),
             #[cfg(test)]
+            newtype_conversion_parameter_work: Cell::new(0),
+            #[cfg(test)]
             type_validation_pending_peak: Cell::new(0),
         }
     }
 
     fn new_modules(
-        program: &'program UnvalidatedProgram,
+        program: &'program UnvalidatedCoreProgram<F>,
         sources: &[&'source SourceFile],
         module_sources: &[(ModuleId, SourceId)],
     ) -> Result<Self, ValidationError> {
@@ -425,6 +675,17 @@ impl<'program, 'source> Validator<'program, 'source> {
             .try_reserve(module_sources.len())
             .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
         for (module, source) in module_sources.iter().copied() {
+            if let Some(api) = crate::resolved::ResourceApi::for_module(module) {
+                if !api.registry(&program.registry) {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                for ordinal in 0..api.method_names().len() {
+                    let id = crate::interface::MethodId::new(api.provider(), ordinal as u32);
+                    if program.method_evidence.method(id).is_none() {
+                        return Err(ValidationError::new(ValidationReason::Registry, None));
+                    }
+                }
+            }
             if !validator.sources.contains_key(&source)
                 || relation.insert(module, source).is_some()
                 || !mapped_sources.insert(source)
@@ -439,7 +700,7 @@ impl<'program, 'source> Validator<'program, 'source> {
         Ok(validator)
     }
 
-    fn run(mut self) -> Result<(), ValidationError> {
+    fn run(&mut self) -> Result<(), ValidationError> {
         let nominal_parameter_owners = self.validate_registry()?;
         let authenticated_method_evidence = self.validate_method_evidence_authority()?;
         self.validate_envelopes(&authenticated_method_evidence)?;
@@ -466,7 +727,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 continue;
             }
             let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
-                &self.node(anchor.node)?.kind
+                self.pure_kind(anchor.node)?
             else {
                 return Err(ValidationError::new(
                     ValidationReason::TypeOperation,
@@ -535,6 +796,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
         consumed.resize(catalog.expectations().len(), false);
         let mut anchors = HashMap::new();
+        let mut lexical_parameters = HashSet::new();
         anchors
             .try_reserve(self.program.method_evidence_anchors.len())
             .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
@@ -574,6 +836,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 || (!matches!(
                     anchor.role,
                     MethodEvidenceAnchorRole::ImplementationOwner { .. }
+                        | MethodEvidenceAnchorRole::LexicalCaptureUse { .. }
                 ) && anchors.insert(anchor.node, anchor).is_some())
             {
                 return Err(ValidationError::new(
@@ -588,6 +851,48 @@ impl<'program, 'source> Validator<'program, 'source> {
             };
             self.charge_type_work(exact_identity_work)?;
             let role_matches = match (expected.role, anchor.role) {
+                (MethodEvidenceExpectedRole::LexicalCaptureUse { owner, ordinal },
+                 MethodEvidenceAnchorRole::LexicalCaptureUse { owner: actual_owner, ordinal: actual_ordinal }) => {
+                    owner == actual_owner && ordinal == actual_ordinal
+                        && catalog.lexical_owners().get(owner).is_some_and(|row|
+                            row.method == anchor.method && row.captures.get(ordinal).is_some_and(|binder|
+                                matches!(self.pure_kind(anchor.node), Ok(PureExprKind::Variable(variable)) if variable.binder() == *binder)))
+                }
+                (
+                    MethodEvidenceExpectedRole::LexicalOwner { owner },
+                    MethodEvidenceAnchorRole::LexicalOwner { source, binder },
+                ) => {
+                    let Some(row) = catalog.lexical_owners().get(owner) else {
+                        return Err(ValidationError::new(
+                            ValidationReason::NodeType,
+                            Some(anchor.node),
+                        ));
+                    };
+                    row.source == source && row.binder == binder && row.method == anchor.method
+                        && self.validate_lexical_owner_parameters(anchor, row, &mut lexical_parameters)?
+                }
+                (
+                    MethodEvidenceExpectedRole::LexicalUse {
+                        owner,
+                        selection_node,
+                    },
+                    MethodEvidenceAnchorRole::LexicalUse {
+                        source,
+                        binder,
+                        selection_node: actual,
+                    },
+                ) => {
+                    let Some(row) = catalog.lexical_owners().get(owner) else {
+                        return Err(ValidationError::new(
+                            ValidationReason::NodeType,
+                            Some(anchor.node),
+                        ));
+                    };
+                    row.source == source
+                        && row.binder == binder
+                        && row.method == anchor.method
+                        && selection_node == actual
+                }
                 (
                     MethodEvidenceExpectedRole::ImplementationOwner { owner },
                     MethodEvidenceAnchorRole::ImplementationOwner {
@@ -617,11 +922,10 @@ impl<'program, 'source> Validator<'program, 'source> {
                         && domain.method == anchor.method
                         && domain.method_position == domain.method.declaration()
                         && matches!(
-                            self.program.nodes.get(anchor.node.index().unwrap_or(usize::MAX)),
-                            Some(StoredNode {
-                                kind: PureExprKind::Value(PureValue::Function(function)),
-                                ..
-                            }) if function.parameter().id() == binder
+                            self.program.nodes.get(anchor.node.index().unwrap_or(usize::MAX))
+                                .and_then(|node| F::pure(&node.kind)),
+                            Some(PureExprKind::Value(PureValue::Function(function)))
+                                if function.parameter().id() == binder
                         )
                 }),
                 (
@@ -645,12 +949,9 @@ impl<'program, 'source> Validator<'program, 'source> {
                         implementation: actual,
                         selection_node,
                     },
-                ) => catalog
-                    .adapters()
-                    .get(adapter)
-                    .is_some_and(|row| {
-                        actual == row.implementation && selection_node == row.selection_node
-                    }),
+                ) => catalog.adapters().get(adapter).is_some_and(|row| {
+                    actual == row.implementation && selection_node == row.selection_node
+                }),
                 (
                     MethodEvidenceExpectedRole::AdapterEdge { adapter, ordinal },
                     MethodEvidenceAnchorRole::AdapterEdge {
@@ -667,11 +968,10 @@ impl<'program, 'source> Validator<'program, 'source> {
                         && adapter_selection_node == row.selection_node
                         && ordinal == actual_ordinal
                         && matches!(
-                            self.program.nodes.get(anchor.node.index().unwrap_or(usize::MAX)),
-                            Some(StoredNode {
-                                kind: PureExprKind::Computation(PureComputation::Apply(application)),
-                                ..
-                            }) if application.argument() == producer_node
+                            self.program.nodes.get(anchor.node.index().unwrap_or(usize::MAX))
+                                .and_then(|node| F::pure(&node.kind)),
+                            Some(PureExprKind::Computation(PureComputation::Apply(application)))
+                                if application.argument() == producer_node
                         )
                         && row.prerequisites.get(ordinal).is_some_and(|edge| {
                             Some(edge.owner) == anchor.owner
@@ -701,11 +1001,9 @@ impl<'program, 'source> Validator<'program, 'source> {
                                                         producer_node
                                                             .index()
                                                             .unwrap_or(usize::MAX)
-                                                    ),
-                                                    Some(StoredNode {
-                                                        kind: PureExprKind::Variable(variable),
-                                                        ..
-                                                    }) if variable.binder() == binder
+                                                    ).and_then(|node| F::pure(&node.kind)),
+                                                    Some(PureExprKind::Variable(variable))
+                                                        if variable.binder() == binder
                                                 ),
                                                 (
                                                     MethodEvidenceProducer::Adapter { .. },
@@ -729,6 +1027,7 @@ impl<'program, 'source> Validator<'program, 'source> {
         if consumed.iter().any(|consumed| !consumed) {
             return Err(ValidationError::new(ValidationReason::NodeType, None));
         }
+        self.validate_lexical_capture_uses(&anchors)?;
         let mut carriers = HashSet::new();
         self.charge_type_work(self.program.nodes.len())?;
         carriers
@@ -738,6 +1037,41 @@ impl<'program, 'source> Validator<'program, 'source> {
         self.validate_method_evidence_owner_envelopes(&anchors, &mut carriers)?;
         for anchor in anchors.values() {
             match anchor.role {
+                MethodEvidenceAnchorRole::LexicalCaptureUse { .. } => {
+                    unreachable!("capture anchors are not primary method carriers")
+                }
+                MethodEvidenceAnchorRole::LexicalOwner { source, binder } => {
+                    let PureExprKind::Computation(PureComputation::Bind(binding)) =
+                        self.pure_kind(anchor.node)?
+                    else {
+                        return Err(ValidationError::new(
+                            ValidationReason::NodeType,
+                            Some(anchor.node),
+                        ));
+                    };
+                    if binding.binder().id() != binder
+                        || !self.lexical_method_scheme_matches(anchor, binding.binder().ty())?
+                        || self
+                            .program
+                            .method_evidence
+                            .lexical_owner(source, anchor.method)
+                            .is_none()
+                    {
+                        return Err(ValidationError::new(
+                            ValidationReason::NodeType,
+                            Some(anchor.node),
+                        ));
+                    }
+                    carriers.insert(binding.initializer());
+                }
+                MethodEvidenceAnchorRole::LexicalUse { source, binder, .. } => {
+                    if !matches!(self.pure_kind(anchor.node)?, PureExprKind::Variable(variable) if variable.binder() == binder)
+                        || !self.lexical_method_scheme_matches(anchor, &self.node(anchor.node)?.ty)?
+                        || !anchors.values().any(|owner| matches!(owner.role, MethodEvidenceAnchorRole::LexicalOwner { source: actual, binder: actual_binder } if actual == source && actual_binder == binder)) {
+                        return Err(ValidationError::new(ValidationReason::NodeType, Some(anchor.node)));
+                    }
+                    carriers.insert(anchor.node);
+                }
                 MethodEvidenceAnchorRole::ImplementationOwner { .. } => {}
                 MethodEvidenceAnchorRole::Domain { .. } => {
                     self.validate_method_evidence_domain(anchor, &anchors, &mut carriers)?;
@@ -745,7 +1079,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 MethodEvidenceAnchorRole::Instantiation { binder } => {
                     self.validate_method_instantiation(anchor, binder, &anchors)?;
                     let PureExprKind::Computation(PureComputation::TypeApplication(application)) =
-                        &self.node(anchor.node)?.kind
+                        self.pure_kind(anchor.node)?
                     else {
                         unreachable!()
                     };
@@ -755,7 +1089,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 MethodEvidenceAnchorRole::Application { .. } => {
                     self.validate_method_application(anchor, &anchors)?;
                     let PureExprKind::Computation(PureComputation::Apply(application)) =
-                        &self.node(anchor.node)?.kind
+                        self.pure_kind(anchor.node)?
                     else {
                         unreachable!()
                     };
@@ -795,11 +1129,11 @@ impl<'program, 'source> Validator<'program, 'source> {
                         }
                     };
                     let function = application.function();
-                    match &self.node(function)?.kind {
+                    match self.pure_kind(function)? {
                         PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
                             let source = operation.function();
                             if !matches!(
-                                &self.node(source)?.kind,
+                                self.pure_kind(source)?,
                                 PureExprKind::Variable(variable)
                                     if variable.binder() == expected_binder
                             ) {
@@ -874,7 +1208,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 MethodEvidenceAnchorRole::AdapterEdge { .. } => {
                     self.validate_adapter_edge(anchor, &anchors)?;
                     let PureExprKind::Computation(PureComputation::Apply(application)) =
-                        &self.node(anchor.node)?.kind
+                        self.pure_kind(anchor.node)?
                     else {
                         unreachable!()
                     };
@@ -889,19 +1223,19 @@ impl<'program, 'source> Validator<'program, 'source> {
         {
             carriers.insert(anchor.node);
             let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
-                &self.node(anchor.node)?.kind
+                self.pure_kind(anchor.node)?
             else {
                 unreachable!()
             };
             let mut current = abstraction.body();
             while let PureExprKind::Computation(PureComputation::Apply(application)) =
-                &self.node(current)?.kind
+                self.pure_kind(current)?
             {
                 carriers.insert(current);
                 current = application.function();
             }
             let PureExprKind::Computation(PureComputation::TypeApplication(application)) =
-                &self.node(current)?.kind
+                self.pure_kind(current)?
             else {
                 return Err(ValidationError::new(
                     ValidationReason::TypeOperation,
@@ -922,6 +1256,17 @@ impl<'program, 'source> Validator<'program, 'source> {
         let mut previous_interface_parameters = None;
         for method in catalog.methods() {
             self.charge_type_work(method.interface_parameters.len().saturating_add(1))?;
+            if let Some(api) =
+                crate::resolved::ResourceApi::for_module(method.id.interface().module())
+                && !api.method(
+                    method.id,
+                    &method.interface_parameters,
+                    &method.parameters,
+                    &method.value_type,
+                )
+            {
+                return Err(ValidationError::new(ValidationReason::NodeType, None));
+            }
             if previous_method.is_some_and(|previous| previous >= method.id)
                 || method.interface_parameters.is_empty()
             {
@@ -988,7 +1333,51 @@ impl<'program, 'source> Validator<'program, 'source> {
         };
 
         for owner in catalog.implementation_owners() {
+            if owner.application.interface().module().is_builtin_resource() {
+                return Err(ValidationError::new(ValidationReason::NodeType, None));
+            }
             validate_application(self, owner.implementation.method(), &owner.application)?;
+        }
+        self.charge_type_work(catalog.lexical_owners().len())?;
+        for owner in catalog.lexical_owners() {
+            if owner.application.interface().module().is_builtin_resource() {
+                let acquisition = owner
+                    .acquisition
+                    .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, None))?;
+                let api = acquisition
+                    .api()
+                    .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, None))?;
+                let ordinal = usize::try_from(owner.method.declaration())
+                    .map_err(|_| ValidationError::new(ValidationReason::NodeType, None))?;
+                if owner.source != acquisition.provider
+                    || owner.method.interface() != api.provider()
+                    || acquisition.methods.get(ordinal) != Some(&owner.binder)
+                    || !owner.source_parameters.is_empty()
+                    || !owner.captures.is_empty()
+                    || !matches!(owner.application.arguments(), [Type::Variable(identity)] if *identity == acquisition.identity)
+                {
+                    return Err(ValidationError::new(ValidationReason::NodeType, None));
+                }
+                let mut found = false;
+                for node in &self.program.nodes {
+                    self.charge_type_work(1)?;
+                    if let Some(resource) = F::resource_scope(&node.kind)
+                        && resource.acquisition == acquisition
+                    {
+                        if found {
+                            return Err(ValidationError::new(ValidationReason::NodeType, None));
+                        }
+                        found = true;
+                    }
+                }
+                if !found {
+                    return Err(ValidationError::new(ValidationReason::NodeType, None));
+                }
+            } else if owner.acquisition.is_some() {
+                return Err(ValidationError::new(ValidationReason::NodeType, None));
+            }
+            self.charge_type_work(catalog.methods().len())?;
+            validate_application(self, owner.method, &owner.application)?;
         }
         for domain in catalog.domains() {
             validate_application(self, domain.method, &domain.application)?;
@@ -1051,7 +1440,21 @@ impl<'program, 'source> Validator<'program, 'source> {
         self.charge_type_work(self.program.nodes.len())?;
         for (index, stored) in self.program.nodes.iter().enumerate() {
             let parent = node_id(self.program.arena, index)?;
-            let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &stored.kind
+            if !self.program.method_evidence.lexical_owners().is_empty()
+                && let Some(PureExprKind::Computation(PureComputation::Bind(binding))) =
+                    F::pure(&stored.kind)
+            {
+                self.charge_type_work(self.program.method_evidence_anchors.len())?;
+                if self.program.method_evidence_anchors.iter().any(|anchor| {
+                    anchor.node == parent
+                        && matches!(anchor.role, MethodEvidenceAnchorRole::LexicalOwner { binder, .. }
+                            if binder == binding.binder().id())
+                }) {
+                    owner_edges.insert((binding.initializer(), parent));
+                }
+            }
+            let Some(PureExprKind::Computation(PureComputation::RecursiveBind(group))) =
+                F::pure(&stored.kind)
             else {
                 continue;
             };
@@ -1087,9 +1490,9 @@ impl<'program, 'source> Validator<'program, 'source> {
         self.charge_type_work(self.program.nodes.len())?;
         for (index, stored) in self.program.nodes.iter().enumerate() {
             let parent = node_id(self.program.arena, index)?;
-            for child_index in 0..stored.kind.child_count() {
+            for child_index in 0..F::child_count(&stored.kind) {
                 self.charge_type_work(1)?;
-                let child = stored.kind.child_at(child_index).ok_or_else(|| {
+                let child = F::child_at(&stored.kind, child_index).ok_or_else(|| {
                     ValidationError::new(ValidationReason::NodeType, Some(parent))
                 })?;
                 if !carriers.contains(&child)
@@ -1119,6 +1522,12 @@ impl<'program, 'source> Validator<'program, 'source> {
             self.charge_type_work(1)?;
             match ty {
                 Type::Forall(_, _) => return Ok(true),
+                Type::EffectfulFunction(domain, computation) => {
+                    if !F::ALLOWS_EFFECTFUL_TYPES {
+                        return Ok(true);
+                    }
+                    self.schedule_effectful_type_children(&mut pending, domain, computation)?;
+                }
                 Type::Application(function, argument) | Type::Function(function, argument) => {
                     self.charge_type_work(2)?;
                     pending
@@ -1145,6 +1554,52 @@ impl<'program, 'source> Validator<'program, 'source> {
         Ok(false)
     }
 
+    fn schedule_effectful_type_children<'a>(
+        &self,
+        pending: &mut Vec<&'a Type>,
+        domain: &'a Type,
+        computation: &'a crate::types::ComputationType,
+    ) -> Result<(), ValidationError> {
+        let row = computation.effects();
+        let row_arguments = row
+            .known()
+            .iter()
+            .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+            .try_fold(0_usize, |count, instance| {
+                count.checked_add(instance.arguments().len())
+            })
+            .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?;
+        let children = row_arguments
+            .checked_add(2)
+            .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?;
+        let tail_metadata = row
+            .tail()
+            .map_or(Some(0), |tail| tail.lacks().len().checked_add(1));
+        let metadata = tail_metadata.and_then(|tail| row.known().len().checked_add(tail));
+        self.charge_type_work(
+            children
+                .checked_add(
+                    metadata
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+                )
+                .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+        )?;
+        pending
+            .try_reserve(children)
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        for instance in row.known() {
+            pending.extend(instance.arguments());
+        }
+        if let Some(tail) = row.tail() {
+            for instance in tail.lacks() {
+                pending.extend(instance.arguments());
+            }
+        }
+        pending.push(computation.value());
+        pending.push(domain);
+        Ok(())
+    }
+
     fn validate_method_evidence_domain_order(
         &self,
         anchors: &HashMap<NodeId, &MethodEvidenceAnchor>,
@@ -1167,7 +1622,8 @@ impl<'program, 'source> Validator<'program, 'source> {
                 })
                 .copied()
                 .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, None))?;
-            let PureExprKind::Value(PureValue::Function(function)) = &self.node(current.node)?.kind
+            let PureExprKind::Value(PureValue::Function(function)) =
+                self.pure_kind(current.node)?
             else {
                 return Err(ValidationError::new(
                     ValidationReason::NodeType,
@@ -1243,8 +1699,8 @@ impl<'program, 'source> Validator<'program, 'source> {
                     let mut initializer = None;
                     for node in &self.program.nodes {
                         self.charge_type_work(1)?;
-                        let PureExprKind::Computation(PureComputation::RecursiveBind(group)) =
-                            &node.kind
+                        let Some(PureExprKind::Computation(PureComputation::RecursiveBind(group))) =
+                            F::pure(&node.kind)
                         else {
                             continue;
                         };
@@ -1320,7 +1776,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 initializer
             } else {
                 let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
-                    &self.node(initializer)?.kind
+                    self.pure_kind(initializer)?
                 else {
                     return Err(ValidationError::new(
                         ValidationReason::NodeType,
@@ -1397,7 +1853,8 @@ impl<'program, 'source> Validator<'program, 'source> {
             let mut exact_members = 0usize;
             for node in &self.program.nodes {
                 self.charge_type_work(1)?;
-                let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &node.kind
+                let Some(PureExprKind::Computation(PureComputation::RecursiveBind(group))) =
+                    F::pure(&node.kind)
                 else {
                     continue;
                 };
@@ -1426,6 +1883,272 @@ impl<'program, 'source> Validator<'program, 'source> {
         Ok(())
     }
 
+    fn validate_lexical_capture_uses(
+        &self,
+        anchors: &HashMap<NodeId, &MethodEvidenceAnchor>,
+    ) -> Result<(), ValidationError> {
+        if self.program.method_evidence.lexical_owners().is_empty() {
+            return Ok(());
+        }
+        let mut capture_uses = HashSet::new();
+        for anchor in &self.program.method_evidence_anchors {
+            self.charge_type_work(1)?;
+            let MethodEvidenceAnchorRole::LexicalCaptureUse { owner, .. } = anchor.role else {
+                continue;
+            };
+            self.charge_type_work(1)?;
+            capture_uses
+                .try_reserve(1)
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(anchor.node)))?;
+            // Nested owners may share a variable, but each owner's recorded
+            // source occurrences must still identify distinct Core uses.
+            if !capture_uses.insert((owner, anchor.node)) {
+                return Err(ValidationError::new(
+                    ValidationReason::NodeType,
+                    Some(anchor.node),
+                ));
+            }
+            let row = self
+                .program
+                .method_evidence
+                .lexical_owners()
+                .get(owner)
+                .ok_or_else(|| {
+                    ValidationError::new(ValidationReason::NodeType, Some(anchor.node))
+                })?;
+            self.charge_type_work(anchors.capacity())?;
+            let owner = anchors.values().find(|owner| owner.method == row.method &&
+                matches!(owner.role, MethodEvidenceAnchorRole::LexicalOwner { source, binder } if source == row.source && binder == row.binder))
+                .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, Some(anchor.node)))?;
+            let PureExprKind::Computation(PureComputation::Bind(binding)) =
+                self.pure_kind(owner.node)?
+            else {
+                return Err(ValidationError::new(
+                    ValidationReason::NodeType,
+                    Some(owner.node),
+                ));
+            };
+            if !self.method_evidence_subtree_contains(binding.initializer(), anchor.node)? {
+                return Err(ValidationError::new(
+                    ValidationReason::NodeType,
+                    Some(anchor.node),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn method_evidence_subtree_contains(
+        &self,
+        root: NodeId,
+        node: NodeId,
+    ) -> Result<bool, ValidationError> {
+        let mut pending = Vec::new();
+        let mut visited = HashSet::new();
+        self.charge_type_work(1)?;
+        pending
+            .try_reserve(1)
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(node)))?;
+        pending.push(root);
+        while let Some(current) = pending.pop() {
+            self.charge_type_work(1)?;
+            visited
+                .try_reserve(1)
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(node)))?;
+            if !visited.insert(current) {
+                continue;
+            }
+            if current == node {
+                return Ok(true);
+            }
+            let stored = self.node(current)?;
+            let count = F::child_count(&stored.kind);
+            self.charge_type_work(count)?;
+            pending
+                .try_reserve(count)
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(node)))?;
+            for index in 0..count {
+                pending.push(F::child_at(&stored.kind, index).ok_or_else(|| {
+                    ValidationError::new(ValidationReason::NodeType, Some(current))
+                })?);
+            }
+        }
+        Ok(false)
+    }
+
+    fn validate_lexical_owner_parameters(
+        &self,
+        anchor: &MethodEvidenceAnchor,
+        owner: &super::dialect::MethodEvidenceLexicalOwner,
+        claimed: &mut HashSet<crate::types::TypeVariableId>,
+    ) -> Result<bool, ValidationError> {
+        self.charge_type_work(self.program.method_evidence.method_count())?;
+        let method = self
+            .program
+            .method_evidence
+            .method(owner.method)
+            .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, Some(anchor.node)))?;
+        if owner.source_parameters.len() != method.parameters.len() {
+            return Ok(false);
+        }
+        let PureExprKind::Computation(PureComputation::Bind(binding)) =
+            self.pure_kind(anchor.node)?
+        else {
+            return Ok(false);
+        };
+        if owner.source_parameters.is_empty() {
+            return Ok(true);
+        }
+        let Origin::Source(binder_span) = binding.binder().origin() else {
+            return Ok(false);
+        };
+        self.charge_type_work(owner.source_parameters.len())?;
+        claimed
+            .try_reserve(owner.source_parameters.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(anchor.node)))?;
+        let mut previous = None;
+        let mut group_span = None;
+        for (source, (declared, kind)) in owner.source_parameters.iter().zip(&method.parameters) {
+            let canonical = self
+                .program
+                .registry
+                .type_variable(*source)
+                .ok_or_else(|| {
+                    ValidationError::new(ValidationReason::Registry, Some(anchor.node))
+                })?;
+            let declaration = self
+                .program
+                .registry
+                .type_variable(*declared)
+                .ok_or_else(|| {
+                    ValidationError::new(ValidationReason::Registry, Some(anchor.node))
+                })?;
+            let Origin::Source(span) = &canonical.origin else {
+                return Ok(false);
+            };
+            self.charge_type_work(
+                canonical
+                    .spelling
+                    .len()
+                    .checked_add(declaration.spelling.len())
+                    .ok_or_else(|| {
+                        ValidationError::new(ValidationReason::Resource, Some(anchor.node))
+                    })?,
+            )?;
+            if source.module() != Some(owner.source.module())
+                || !claimed.insert(*source)
+                || previous.is_some_and(|previous| previous >= source.local())
+                || span.source() != binder_span.source()
+                || span.range().start() != binder_span.range().start()
+                || group_span.is_some_and(|previous| previous != span)
+                || canonical.spelling != declaration.spelling
+                || !self.same_kind_charged(&canonical.kind, kind)?
+            {
+                return Ok(false);
+            }
+            previous = Some(source.local());
+            group_span = Some(span);
+        }
+        Ok(true)
+    }
+
+    fn extend_lexical_method_replacements(
+        &self,
+        node: NodeId,
+        replacements: &mut TypeReplacementMap,
+    ) -> Result<(), ValidationError> {
+        if self.program.method_evidence.lexical_owners().is_empty() {
+            return Ok(());
+        }
+        for anchor in &self.program.method_evidence_anchors {
+            self.charge_type_work(1)?;
+            let MethodEvidenceAnchorRole::LexicalOwner { source, binder } = anchor.role else {
+                continue;
+            };
+            self.charge_type_work(self.program.method_evidence.lexical_owners().len())?;
+            let owner = self
+                .program
+                .method_evidence
+                .lexical_owner(source, anchor.method)
+                .ok_or_else(|| {
+                    ValidationError::new(ValidationReason::NodeType, Some(anchor.node))
+                })?;
+            if owner.source_parameters.is_empty() {
+                continue;
+            }
+            let PureExprKind::Computation(PureComputation::Bind(binding)) =
+                self.pure_kind(anchor.node)?
+            else {
+                return Err(ValidationError::new(
+                    ValidationReason::NodeType,
+                    Some(anchor.node),
+                ));
+            };
+            let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
+                self.pure_kind(binding.initializer())?
+            else {
+                return Err(ValidationError::new(
+                    ValidationReason::NodeType,
+                    Some(anchor.node),
+                ));
+            };
+            if binding.binder().id() != binder
+                || abstraction.parameters().len() != owner.source_parameters.len()
+            {
+                return Err(ValidationError::new(
+                    ValidationReason::NodeType,
+                    Some(anchor.node),
+                ));
+            }
+            if self.method_evidence_subtree_contains(abstraction.body(), node)? {
+                self.charge_type_work(owner.source_parameters.len())?;
+                replacements
+                    .try_reserve(owner.source_parameters.len())
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(node)))?;
+                for (source, (actual, _)) in
+                    owner.source_parameters.iter().zip(abstraction.parameters())
+                {
+                    replacements.insert_replacing(*source, Type::Variable(*actual));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn is_lexical_source_parameter(
+        &self,
+        id: crate::types::TypeVariableId,
+    ) -> Result<bool, ValidationError> {
+        for owner in self.program.method_evidence.lexical_owners() {
+            self.charge_type_work(
+                1usize
+                    .checked_add(owner.source_parameters.len())
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+            )?;
+            if owner.source_parameters.contains(&id) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn lexical_method_scheme_matches(
+        &self,
+        anchor: &MethodEvidenceAnchor,
+        actual: &Type,
+    ) -> Result<bool, ValidationError> {
+        let scheme = self.expected_method_scheme(anchor)?;
+        if matches!(&*scheme, Type::Forall(parameters, _) if parameters.is_empty()) {
+            let Type::Forall(_, body) = scheme.into_inner() else {
+                unreachable!()
+            };
+            let body = IterativeTypeOwner::new(*body);
+            self.same_type_charged(&body, actual)
+        } else {
+            self.adapter_scheme_matches(&scheme, actual)
+        }
+    }
+
     fn expected_method_scheme(
         &self,
         anchor: &MethodEvidenceAnchor,
@@ -1439,6 +2162,14 @@ impl<'program, 'source> Validator<'program, 'source> {
         application: &InterfaceApplication,
         node: NodeId,
     ) -> Result<IterativeTypeOwner, ValidationError> {
+        let contextual_application = if self.program.method_evidence.lexical_owners().is_empty() {
+            None
+        } else {
+            let mut replacements = self.enclosing_implementation_replacements(node)?;
+            self.extend_lexical_method_replacements(node, &mut replacements)?;
+            Some(self.substitute_interface_application(application, replacements.as_map())?)
+        };
+        let application = contextual_application.as_ref().unwrap_or(application);
         let method = self
             .program
             .method_evidence
@@ -1461,10 +2192,12 @@ impl<'program, 'source> Validator<'program, 'source> {
         {
             replacements.insert_replacing(*parameter, self.clone_type_charged(argument)?);
         }
-        let body =
-            substitute_type_variables_with(&method.value_type, replacements.as_map(), |cells| {
-                self.charge_type_work(cells)
-            })?;
+        let body = substitute_type_variables_with(
+            &method.value_type,
+            replacements.as_map(),
+            |cells| self.charge_type_work(cells),
+            || ValidationError::new(ValidationReason::Resource, None),
+        )?;
         let mut parameters = Vec::new();
         self.charge_type_work(method.parameters.len())?;
         parameters
@@ -1477,6 +2210,30 @@ impl<'program, 'source> Validator<'program, 'source> {
             parameters.into_boxed_slice(),
             Box::new(body),
         )))
+    }
+
+    fn enclosing_implementation_replacements(
+        &self,
+        node: NodeId,
+    ) -> Result<TypeReplacementMap, ValidationError> {
+        for anchor in &self.program.method_evidence_anchors {
+            self.charge_type_work(1)?;
+            let MethodEvidenceAnchorRole::ImplementationOwner { implementation, .. } = anchor.role
+            else {
+                continue;
+            };
+            if self.method_evidence_subtree_contains(anchor.node, node)? {
+                self.charge_type_work(self.program.method_evidence.implementation_owner_count())?;
+                self.charge_type_work(self.program.method_evidence_anchors.len())?;
+                return self.implementation_replacements(
+                    implementation,
+                    &HashMap::new(),
+                    node,
+                    false,
+                );
+            }
+        }
+        Ok(TypeReplacementMap::new())
     }
 
     fn validate_implementation_owner_anchor(
@@ -1494,8 +2251,10 @@ impl<'program, 'source> Validator<'program, 'source> {
         if expected.source_parameters.is_empty() {
             if expected.head_type_parameter_count != 0
                 || matches!(
-                    stored.kind,
-                    PureExprKind::Computation(PureComputation::TypeAbstraction(_))
+                    F::pure(&stored.kind),
+                    Some(PureExprKind::Computation(PureComputation::TypeAbstraction(
+                        _
+                    )))
                 )
             {
                 return Ok(false);
@@ -1503,7 +2262,8 @@ impl<'program, 'source> Validator<'program, 'source> {
             let mut initializer_matches = 0usize;
             for node in &self.program.nodes {
                 self.charge_type_work(1)?;
-                let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &node.kind
+                let Some(PureExprKind::Computation(PureComputation::RecursiveBind(group))) =
+                    F::pure(&node.kind)
                 else {
                     continue;
                 };
@@ -1524,8 +2284,8 @@ impl<'program, 'source> Validator<'program, 'source> {
         }
         let (
             Type::Forall(stored_parameters, stored_body),
-            PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)),
-        ) = (&stored.ty, &stored.kind)
+            Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))),
+        ) = (&stored.ty, F::pure(&stored.kind))
         else {
             return Ok(false);
         };
@@ -1563,7 +2323,8 @@ impl<'program, 'source> Validator<'program, 'source> {
         let mut initializer_matches = 0usize;
         for node in &self.program.nodes {
             self.charge_type_work(1)?;
-            let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &node.kind
+            let Some(PureExprKind::Computation(PureComputation::RecursiveBind(group))) =
+                F::pure(&node.kind)
             else {
                 continue;
             };
@@ -1612,7 +2373,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             })
             .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, Some(node)))?;
         let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
-            &self.node(owner_anchor.node)?.kind
+            self.pure_kind(owner_anchor.node)?
         else {
             return Err(ValidationError::new(ValidationReason::NodeType, Some(node)));
         };
@@ -1644,8 +2405,10 @@ impl<'program, 'source> Validator<'program, 'source> {
         carriers: &mut HashSet<NodeId>,
     ) -> Result<(), ValidationError> {
         let stored = self.node(anchor.node)?;
-        let (Type::Function(domain, codomain), PureExprKind::Value(PureValue::Function(function))) =
-            (&stored.ty, &stored.kind)
+        let (
+            Type::Function(domain, codomain),
+            Some(PureExprKind::Value(PureValue::Function(function))),
+        ) = (&stored.ty, F::pure(&stored.kind))
         else {
             return Err(ValidationError::new(
                 ValidationReason::NodeType,
@@ -1744,7 +2507,8 @@ impl<'program, 'source> Validator<'program, 'source> {
             return Ok(false);
         }
         let stored = self.node(anchor.node)?;
-        let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) = &stored.kind
+        let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
+            F::pure(&stored.kind)
         else {
             return Ok(false);
         };
@@ -1752,8 +2516,8 @@ impl<'program, 'source> Validator<'program, 'source> {
         let mut applied_prerequisites = 0usize;
         loop {
             let node = self.node(current)?;
-            match &node.kind {
-                PureExprKind::Computation(PureComputation::Apply(application)) => {
+            match F::pure(&node.kind) {
+                Some(PureExprKind::Computation(PureComputation::Apply(application))) => {
                     self.charge_type_work(1)?;
                     applied_prerequisites =
                         applied_prerequisites.checked_add(1).ok_or_else(|| {
@@ -1761,7 +2525,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                         })?;
                     current = application.function();
                 }
-                PureExprKind::Computation(PureComputation::TypeApplication(application)) => {
+                Some(PureExprKind::Computation(PureComputation::TypeApplication(application))) => {
                     if applied_prerequisites != expected.prerequisites.len()
                         || application.arguments().len()
                             != expected
@@ -1798,6 +2562,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                                 linked,
                                 scope_replacements.as_map(),
                                 |cells| self.charge_type_work(cells),
+                                || ValidationError::new(ValidationReason::Resource, None),
                             )?);
                         if !self.same_type_charged(actual, &expected_argument)? {
                             return Ok(false);
@@ -1828,8 +2593,8 @@ impl<'program, 'source> Validator<'program, 'source> {
                     }
                     let function = self.node(application.function())?;
                     let matches = matches!(
-                        &function.kind,
-                        PureExprKind::Variable(variable) if variable.binder() == expected.binder
+                        F::pure(&function.kind),
+                        Some(PureExprKind::Variable(variable)) if variable.binder() == expected.binder
                     );
                     return Ok(matches);
                 }
@@ -1879,6 +2644,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             expected_body,
             replacements.as_map(),
             |cells| self.charge_type_work(cells),
+            || ValidationError::new(ValidationReason::Resource, None),
         )?);
         self.same_type_charged(&renamed, actual_body)
     }
@@ -1920,6 +2686,21 @@ impl<'program, 'source> Validator<'program, 'source> {
                         .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
                     pending.push(body);
                 }
+                Type::EffectfulFunction(domain, computation) => {
+                    if !F::ALLOWS_EFFECTFUL_TYPES {
+                        return Ok(false);
+                    }
+                    let row = computation.effects();
+                    if row.tail().is_some_and(|tail| {
+                        matches!(
+                            tail.variable(),
+                            crate::types::EffectRowVariable::Rigid(variable) if variable == needle
+                        )
+                    }) {
+                        return Ok(true);
+                    }
+                    self.schedule_effectful_type_children(&mut pending, domain, computation)?;
+                }
                 Type::Int
                 | Type::Bool
                 | Type::Unit
@@ -1942,7 +2723,8 @@ impl<'program, 'source> Validator<'program, 'source> {
             .and_then(|slot| self.program.method_evidence.occurrence(slot))
             .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, Some(anchor.node)))?;
         let stored = self.node(anchor.node)?;
-        let PureExprKind::Computation(PureComputation::TypeApplication(application)) = &stored.kind
+        let Some(PureExprKind::Computation(PureComputation::TypeApplication(application))) =
+            F::pure(&stored.kind)
         else {
             return Err(ValidationError::new(
                 ValidationReason::TypeOperation,
@@ -1957,7 +2739,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 Some(anchor.node),
             ));
         }
-        let scope_replacements = match anchor.owner {
+        let mut scope_replacements = match anchor.owner {
             Some(MethodEvidenceOwner::Implementation(implementation))
                 if self
                     .program
@@ -1971,6 +2753,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             | Some(MethodEvidenceOwner::Global(_))
             | None => TypeReplacementMap::new(),
         };
+        self.extend_lexical_method_replacements(anchor.node, &mut scope_replacements)?;
         for (expected, actual) in occurrence
             .method_arguments
             .iter()
@@ -1980,6 +2763,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 expected,
                 scope_replacements.as_map(),
                 |cells| self.charge_type_work(cells),
+                || ValidationError::new(ValidationReason::Resource, None),
             )?);
             if !self.same_type_charged(&expected, actual)? {
                 return Err(ValidationError::new(
@@ -1993,6 +2777,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 expected,
                 scope_replacements.as_map(),
                 |cells| self.charge_type_work(cells),
+                || ValidationError::new(ValidationReason::Resource, None),
             )?);
             if !self.same_type_charged(&expected, &stored.ty)? {
                 return Err(ValidationError::new(
@@ -2023,8 +2808,8 @@ impl<'program, 'source> Validator<'program, 'source> {
         let function = self.node(application.function())?;
         let producer_matches = match binder {
             Some(binder) => {
-                matches!(source.role, MethodEvidenceAnchorRole::Domain { binder: expected } if expected == binder)
-                    && matches!(&function.kind, PureExprKind::Variable(variable) if variable.binder() == binder)
+                matches!(source.role, MethodEvidenceAnchorRole::Domain { binder: expected } | MethodEvidenceAnchorRole::LexicalOwner { binder: expected, .. } if expected == binder)
+                    && matches!(F::pure(&function.kind), Some(PureExprKind::Variable(variable)) if variable.binder() == binder)
             }
             None => {
                 source.node == application.function()
@@ -2047,7 +2832,9 @@ impl<'program, 'source> Validator<'program, 'source> {
         anchors: &HashMap<NodeId, &MethodEvidenceAnchor>,
     ) -> Result<(), ValidationError> {
         let stored = self.node(anchor.node)?;
-        let PureExprKind::Computation(PureComputation::Apply(application)) = &stored.kind else {
+        let Some(PureExprKind::Computation(PureComputation::Apply(application))) =
+            F::pure(&stored.kind)
+        else {
             return Err(ValidationError::new(
                 ValidationReason::ApplicationType,
                 Some(anchor.node),
@@ -2091,12 +2878,17 @@ impl<'program, 'source> Validator<'program, 'source> {
             ));
         };
         let producer_matches = match source.role {
+            MethodEvidenceAnchorRole::LexicalOwner { source, binder } => {
+                matches!(F::pure(&argument.kind), Some(PureExprKind::Variable(variable)) if variable.binder() == binder)
+                    && actual_producer == MethodEvidenceProducer::Lexical { source }
+                    && self.adapter_scheme_matches(&canonical, &argument.ty)?
+            }
             MethodEvidenceAnchorRole::Adapter { implementation, .. } => {
                 source.node == application.argument()
                     && actual_producer == MethodEvidenceProducer::Adapter { implementation }
             }
             MethodEvidenceAnchorRole::Domain { binder } => {
-                let PureExprKind::Variable(variable) = &argument.kind else {
+                let Some(PureExprKind::Variable(variable)) = F::pure(&argument.kind) else {
                     return Err(ValidationError::new(
                         ValidationReason::ApplicationType,
                         Some(anchor.node),
@@ -2207,7 +2999,8 @@ impl<'program, 'source> Validator<'program, 'source> {
                     .ok_or_else(|| {
                         ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
                     })? {
-                    EvidenceNode::Abstract { methods, .. } => {
+                    EvidenceNode::Abstract { methods, .. }
+                    | EvidenceNode::Lexical { methods, .. } => {
                         self.charge_type_work(methods.len())?;
                         for expected_method in methods {
                             let Some(retained) = retained_prerequisites.next() else {
@@ -2242,7 +3035,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             for prerequisite in source.prerequisites.iter().rev() {
                 self.charge_type_work(1)?;
                 let PureExprKind::Computation(PureComputation::Apply(application)) =
-                    &self.node(current)?.kind
+                    self.pure_kind(current)?
                 else {
                     return Ok(false);
                 };
@@ -2253,6 +3046,36 @@ impl<'program, 'source> Validator<'program, 'source> {
                     .ok_or_else(|| {
                         ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
                     })? {
+                    EvidenceNode::Lexical { source, methods } => {
+                        self.charge_type_work(
+                            self.program
+                                .method_evidence
+                                .lexical_owners()
+                                .len()
+                                .checked_add(methods.len())
+                                .ok_or_else(|| {
+                                    ValidationError::new(
+                                        ValidationReason::Resource,
+                                        Some(anchor.node),
+                                    )
+                                })?,
+                        )?;
+                        let owner = self
+                            .program
+                            .method_evidence
+                            .lexical_owner(source, prerequisite.method)
+                            .ok_or_else(|| {
+                                ValidationError::new(
+                                    ValidationReason::ApplicationType,
+                                    Some(anchor.node),
+                                )
+                            })?;
+                        if !methods.contains(&prerequisite.method)
+                            || !matches!(self.pure_kind(argument)?, PureExprKind::Variable(variable) if variable.binder() == owner.binder)
+                        {
+                            return Ok(false);
+                        }
+                    }
                     EvidenceNode::Abstract {
                         requirement,
                         methods,
@@ -2266,8 +3089,8 @@ impl<'program, 'source> Validator<'program, 'source> {
                         };
                         let binder = self.method_evidence_scope_binder(anchor, position)?;
                         if !matches!(
-                            self.node(argument)?.kind,
-                            PureExprKind::Variable(variable) if variable.binder() == binder
+                            F::pure(&self.node(argument)?.kind),
+                            Some(PureExprKind::Variable(variable)) if variable.binder() == binder
                         ) || !matches!(
                             occurrence.selection.node(prerequisite.selection_node),
                             Some(EvidenceNode::Abstract { requirement: actual, .. }) if actual == requirement
@@ -2289,7 +3112,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                             .program
                             .method_evidence
                             .method(prerequisite.method)
-                            .is_some()
+                            .is_some_and(|method| !method.parameters.is_empty())
                         {
                             self.charge_type_work(anchors.len())?;
                             if !anchors.values().any(|candidate| {
@@ -2326,14 +3149,14 @@ impl<'program, 'source> Validator<'program, 'source> {
             }
             if source.head_arguments.is_empty() {
                 if !matches!(
-                    self.node(current)?.kind,
-                    PureExprKind::Variable(variable) if variable.binder() == source.binder
+                    F::pure(&self.node(current)?.kind),
+                    Some(PureExprKind::Variable(variable)) if variable.binder() == source.binder
                 ) {
                     return Ok(false);
                 }
             } else {
                 let PureExprKind::Computation(PureComputation::TypeApplication(application)) =
-                    &self.node(current)?.kind
+                    self.pure_kind(current)?
                 else {
                     return Ok(false);
                 };
@@ -2347,8 +3170,8 @@ impl<'program, 'source> Validator<'program, 'source> {
                     }
                 }
                 if !matches!(
-                    self.node(application.function())?.kind,
-                    PureExprKind::Variable(variable) if variable.binder() == source.binder
+                    F::pure(&self.node(application.function())?.kind),
+                    Some(PureExprKind::Variable(variable)) if variable.binder() == source.binder
                 ) {
                     return Ok(false);
                 }
@@ -2408,7 +3231,9 @@ impl<'program, 'source> Validator<'program, 'source> {
             ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
         })?;
         let stored = self.node(anchor.node)?;
-        let PureExprKind::Computation(PureComputation::Apply(application)) = &stored.kind else {
+        let Some(PureExprKind::Computation(PureComputation::Apply(application))) =
+            F::pure(&stored.kind)
+        else {
             return Err(ValidationError::new(
                 ValidationReason::ApplicationType,
                 Some(anchor.node),
@@ -2433,7 +3258,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
         })?;
         let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
-            &self.node(adapter_anchor.node)?.kind
+            self.pure_kind(adapter_anchor.node)?
         else {
             return Err(ValidationError::new(
                 ValidationReason::ApplicationType,
@@ -2442,13 +3267,13 @@ impl<'program, 'source> Validator<'program, 'source> {
         };
         let mut adapter_source = abstraction.body();
         while let PureExprKind::Computation(PureComputation::Apply(application)) =
-            &self.node(adapter_source)?.kind
+            self.pure_kind(adapter_source)?
         {
             self.charge_type_work(1)?;
             adapter_source = application.function();
         }
         let PureExprKind::Computation(PureComputation::TypeApplication(adapter_application)) =
-            &self.node(adapter_source)?.kind
+            self.pure_kind(adapter_source)?
         else {
             return Err(ValidationError::new(
                 ValidationReason::ApplicationType,
@@ -2534,6 +3359,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             &edge.value_type,
             interface_replacement.as_map(),
             |cells| self.charge_type_work(cells),
+            || ValidationError::new(ValidationReason::Resource, None),
         )?;
         let expected_domain = if edge.method_parameters.is_empty() {
             IterativeTypeOwner::new(expected_body)
@@ -2561,8 +3387,8 @@ impl<'program, 'source> Validator<'program, 'source> {
                     match source.role {
                         MethodEvidenceAnchorRole::Domain { binder } => (
                             matches!(
-                                &argument.kind,
-                                PureExprKind::Variable(variable) if variable.binder() == binder
+                                F::pure(&argument.kind),
+                                Some(PureExprKind::Variable(variable)) if variable.binder() == binder
                             ) && source.requirement.is_some_and(|requirement| {
                                 producer == MethodEvidenceProducer::Abstract { requirement }
                             }),
@@ -2611,7 +3437,8 @@ impl<'program, 'source> Validator<'program, 'source> {
                             implementation,
                             application.argument(),
                         )?,
-                    MethodEvidenceProducer::Abstract { .. } => true,
+                    MethodEvidenceProducer::Abstract { .. }
+                    | MethodEvidenceProducer::Lexical { .. } => true,
                 };
                 (
                     concrete_source_matches
@@ -2627,8 +3454,8 @@ impl<'program, 'source> Validator<'program, 'source> {
             || adapter_selection_node != row.selection_node
             || match (producer, producer_binder) {
                 (MethodEvidenceProducer::Abstract { .. }, Some(binder)) => !matches!(
-                    argument.kind,
-                    PureExprKind::Variable(variable) if variable.binder() == binder
+                    F::pure(&argument.kind),
+                    Some(PureExprKind::Variable(variable)) if variable.binder() == binder
                 ),
                 (MethodEvidenceProducer::Adapter { .. }, None) => false,
                 _ => true,
@@ -2676,7 +3503,8 @@ impl<'program, 'source> Validator<'program, 'source> {
         self.charge_type_work(self.program.nodes.len())?;
         let mut initializer = None;
         for node in &self.program.nodes {
-            let PureExprKind::Computation(PureComputation::RecursiveBind(group)) = &node.kind
+            let Some(PureExprKind::Computation(PureComputation::RecursiveBind(group))) =
+                F::pure(&node.kind)
             else {
                 continue;
             };
@@ -2696,13 +3524,13 @@ impl<'program, 'source> Validator<'program, 'source> {
             ValidationError::new(ValidationReason::ApplicationType, Some(anchor.node))
         })?;
         if let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
-            &self.node(current)?.kind
+            self.pure_kind(current)?
         {
             current = abstraction.body();
         }
         for _ in 0..position {
             self.charge_type_work(1)?;
-            let PureExprKind::Value(PureValue::Function(function)) = &self.node(current)?.kind
+            let PureExprKind::Value(PureValue::Function(function)) = self.pure_kind(current)?
             else {
                 return Err(ValidationError::new(
                     ValidationReason::ApplicationType,
@@ -2712,7 +3540,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             current = function.body();
         }
         self.charge_type_work(1)?;
-        let PureExprKind::Value(PureValue::Function(function)) = &self.node(current)?.kind else {
+        let PureExprKind::Value(PureValue::Function(function)) = self.pure_kind(current)? else {
             return Err(ValidationError::new(
                 ValidationReason::ApplicationType,
                 Some(anchor.node),
@@ -2752,7 +3580,8 @@ impl<'program, 'source> Validator<'program, 'source> {
                 ValidationError::new(ValidationReason::ApplicationType, Some(adapter.node))
             })?;
         let stored = self.node(adapter.node)?;
-        let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) = &stored.kind
+        let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
+            F::pure(&stored.kind)
         else {
             return Err(ValidationError::new(
                 ValidationReason::TypeOperation,
@@ -2766,7 +3595,7 @@ impl<'program, 'source> Validator<'program, 'source> {
             .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(adapter.node)))?;
         let mut current = abstraction.body();
         while let PureExprKind::Computation(PureComputation::Apply(application)) =
-            &self.node(current)?.kind
+            self.pure_kind(current)?
         {
             self.charge_type_work(1)?;
             if actual.len() == expected.prerequisites.len() {
@@ -2809,10 +3638,7 @@ impl<'program, 'source> Validator<'program, 'source> {
         }
     }
 
-    fn validate_registry(
-        &self,
-    ) -> Result<HashMap<crate::types::TypeVariableId, crate::types::NominalTypeId>, ValidationError>
-    {
+    fn validate_registry(&self) -> Result<RegistryParameterOwners, ValidationError> {
         if self.module_sources.is_some() {
             return self.validate_module_registry();
         }
@@ -2849,6 +3675,14 @@ impl<'program, 'source> Validator<'program, 'source> {
         }
         let mut previous_nominal_end = None;
         for (index, nominal) in registry.nominals().iter().enumerate() {
+            if let Some(api) = crate::resolved::ResourceApi::for_module(nominal.id.module())
+                && (!registry
+                    .nominal_parameters(nominal.id)
+                    .is_some_and(|parameters| api.nominal(nominal, parameters))
+                    || !api.registry(registry))
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
             let index = u32::try_from(index)
                 .map_err(|_| ValidationError::new(ValidationReason::Registry, None))?;
             let Some(module) = registry_module else {
@@ -2907,17 +3741,21 @@ impl<'program, 'source> Validator<'program, 'source> {
             self.charge_type_work(1)?;
             let parameter_span = parameter.origin.primary_span();
             let parameter_range = parameter_span.range();
+            let contextual = self.is_lexical_source_parameter(parameter.id)?;
             if identity != parameter.id
                 || Some(parameter_span.source()) != registry_source
                 || !origin_depth_within_limit(&parameter.origin)
                 || !valid_upper_spelling(&parameter.spelling)
                 || parameter_range.start() >= parameter_range.end()
-                || previous_type_variable_start
-                    .is_some_and(|previous| parameter_range.start() <= previous)
+                || !contextual
+                    && previous_type_variable_start
+                        .is_some_and(|previous| parameter_range.start() <= previous)
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
-            previous_type_variable_start = Some(parameter_range.start());
+            if !contextual {
+                previous_type_variable_start = Some(parameter_range.start());
+            }
             self.validate_origin(&parameter.origin, self.program.root)?;
         }
         let mut parameter_owners = HashMap::new();
@@ -2934,7 +3772,9 @@ impl<'program, 'source> Validator<'program, 'source> {
                     .set(self.owner_parameter_index_work.get() + 1);
                 let parameter_span = parameter.origin.primary_span();
                 let parameter_range = parameter_span.range();
-                if parameter_owners.insert(parameter.id, nominal.id).is_some()
+                if parameter_owners
+                    .insert(parameter.id, RegistryParameterOwner::Nominal(nominal.id))
+                    .is_some()
                     || !parameter_names.insert(parameter.spelling.as_str())
                 {
                     return Err(ValidationError::new(ValidationReason::Registry, None));
@@ -2952,6 +3792,11 @@ impl<'program, 'source> Validator<'program, 'source> {
                 }
                 previous_parameter_start = Some(parameter_range.start());
             }
+            self.validate_nominal_representation(
+                nominal,
+                registry_source.expect("validated registry source exists"),
+                &parameter_owners,
+            )?;
         }
         let mut previous_constructor_start = None;
         for constructor in registry.constructors() {
@@ -3027,15 +3872,13 @@ impl<'program, 'source> Validator<'program, 'source> {
         }) {
             return Err(ValidationError::new(ValidationReason::Registry, None));
         }
+        self.validate_lexical_registry(&mut parameter_owners, registry_source)?;
         Ok(parameter_owners)
     }
 
     fn validate_global_parameter_rows(
         &self,
-        nominal_parameter_owners: &HashMap<
-            crate::types::TypeVariableId,
-            crate::types::NominalTypeId,
-        >,
+        nominal_parameter_owners: &RegistryParameterOwners,
     ) -> Result<(), ValidationError> {
         let registry = &self.program.registry;
         let rows = registry.global_parameter_rows();
@@ -3102,10 +3945,7 @@ impl<'program, 'source> Validator<'program, 'source> {
         Ok(())
     }
 
-    fn validate_module_registry(
-        &self,
-    ) -> Result<HashMap<crate::types::TypeVariableId, crate::types::NominalTypeId>, ValidationError>
-    {
+    fn validate_module_registry(&self) -> Result<RegistryParameterOwners, ValidationError> {
         let registry = &self.program.registry;
         let relation = self
             .module_sources
@@ -3118,6 +3958,14 @@ impl<'program, 'source> Validator<'program, 'source> {
 
         for nominal in registry.nominals() {
             let module = nominal.id.module();
+            if let Some(api) = crate::resolved::ResourceApi::for_module(module)
+                && (!registry
+                    .nominal_parameters(nominal.id)
+                    .is_some_and(|parameters| api.nominal(nominal, parameters))
+                    || !api.registry(registry))
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
             let Some(source) = relation.get(&module).copied() else {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             };
@@ -3179,21 +4027,25 @@ impl<'program, 'source> Validator<'program, 'source> {
             let parameter_span = parameter.origin.primary_span();
             let parameter_range = parameter_span.range();
             self.charge_type_work(1)?;
+            let contextual = self.is_lexical_source_parameter(parameter.id)?;
             if parameter.id.local() != *expected
                 || parameter_span.source() != source
                 || !origin_depth_within_limit(&parameter.origin)
                 || !valid_upper_spelling(&parameter.spelling)
                 || parameter_range.start() >= parameter_range.end()
-                || previous_type_variable_start
-                    .get(&module)
-                    .is_some_and(|previous| parameter_range.start() <= *previous)
+                || !contextual
+                    && previous_type_variable_start
+                        .get(&module)
+                        .is_some_and(|previous| parameter_range.start() <= *previous)
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
             *expected = expected
                 .checked_add(1)
                 .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
-            previous_type_variable_start.insert(module, parameter_range.start());
+            if !contextual {
+                previous_type_variable_start.insert(module, parameter_range.start());
+            }
             self.validate_origin(&parameter.origin, self.program.root)?;
         }
 
@@ -3212,7 +4064,9 @@ impl<'program, 'source> Validator<'program, 'source> {
                 let parameter_span = parameter.origin.primary_span();
                 let parameter_range = parameter_span.range();
                 if parameter.id.module() != Some(nominal.id.module())
-                    || parameter_owners.insert(parameter.id, nominal.id).is_some()
+                    || parameter_owners
+                        .insert(parameter.id, RegistryParameterOwner::Nominal(nominal.id))
+                        .is_some()
                     || !parameter_names.insert(parameter.spelling.as_str())
                 {
                     return Err(ValidationError::new(ValidationReason::Registry, None));
@@ -3230,6 +4084,11 @@ impl<'program, 'source> Validator<'program, 'source> {
                 }
                 previous_parameter_start = Some(parameter_range.start());
             }
+            let source = relation
+                .get(&nominal.id.module())
+                .copied()
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            self.validate_nominal_representation(nominal, source, &parameter_owners)?;
         }
 
         let mut constructor_ids = HashSet::new();
@@ -3311,10 +4170,413 @@ impl<'program, 'source> Validator<'program, 'source> {
         }) {
             return Err(ValidationError::new(ValidationReason::Registry, None));
         }
+        self.validate_lexical_registry(&mut parameter_owners, None)?;
         self.validate_global_parameter_rows(&parameter_owners)?;
         Ok(parameter_owners)
     }
 
+    fn validate_lexical_registry(
+        &self,
+        parameter_owners: &mut RegistryParameterOwners,
+        fallback_source: Option<SourceId>,
+    ) -> Result<(), ValidationError> {
+        let registry = &self.program.registry;
+        let relation = self.module_sources.as_ref();
+        self.charge_type_work(registry.lexical_nominals().len())?;
+        let mut identities = HashSet::new();
+        identities
+            .try_reserve(registry.lexical_nominals().len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        for nominal in registry.lexical_nominals() {
+            let source = relation
+                .and_then(|relation| relation.get(&nominal.id.module()).copied())
+                .or(fallback_source)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            if nominal.declaration_kind != ResolvedNominalDeclarationKind::Newtype
+                || !nominal.id.is_lexical()
+                || !identities.insert(nominal.id)
+                || nominal.origin.primary_span().source() != source
+                || !origin_depth_within_limit(&nominal.origin)
+                || !valid_upper_spelling(&nominal.spelling)
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            let nominal_range = nominal.origin.primary_span().range();
+            let parameters = registry
+                .nominal_parameters(nominal.id)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            self.charge_type_work(
+                parameters
+                    .len()
+                    .checked_mul(2)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+            )?;
+            parameter_owners
+                .try_reserve(parameters.len())
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+            let mut names = HashSet::new();
+            names
+                .try_reserve(parameters.len())
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+            for parameter in parameters {
+                let parameter_range = parameter.origin.primary_span().range();
+                let canonical = registry
+                    .type_variable(parameter.id)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+                if parameter.id.module() != Some(nominal.id.module())
+                    || parameter_owners
+                        .insert(parameter.id, RegistryParameterOwner::Nominal(nominal.id))
+                        .is_some()
+                    || !names.insert(parameter.spelling.as_str())
+                    || !self.same_registry_type_variable(canonical, parameter)?
+                    || parameter_range.start() < nominal_range.start()
+                    || parameter_range.end() > nominal_range.end()
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+            }
+            self.validate_nominal_representation(nominal, source, parameter_owners)?;
+        }
+        let expected = registry
+            .lexical_nominals()
+            .iter()
+            .flat_map(|nominal| nominal.constructors.iter().copied());
+        if !registry
+            .lexical_constructors()
+            .iter()
+            .map(|constructor| constructor.id)
+            .eq(expected)
+        {
+            return Err(ValidationError::new(ValidationReason::Registry, None));
+        }
+        for nominal in registry.lexical_nominals() {
+            let [constructor] = nominal.constructors.as_ref() else {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            };
+            let constructor = registry
+                .constructor(*constructor)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            let nominal_span = nominal.origin.primary_span();
+            let constructor_span = constructor.origin.primary_span();
+            if constructor.id != ConstructorId::new(nominal.id, 0)
+                || constructor.owner != nominal.id
+                || constructor.spelling != nominal.spelling
+                || constructor.payload.is_some()
+                || constructor_span.source() != nominal_span.source()
+                || !span_contains(nominal_span, constructor_span)
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_nominal_representation(
+        &self,
+        nominal: &ResolvedNominalType,
+        source: SourceId,
+        parameter_owners: &RegistryParameterOwners,
+    ) -> Result<(), ValidationError> {
+        match nominal.declaration_kind {
+            ResolvedNominalDeclarationKind::Data => {
+                if nominal.representation.is_some() || nominal.representation_provenance.is_some() {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+            }
+            ResolvedNominalDeclarationKind::Newtype => {
+                let [constructor] = nominal.constructors.as_ref() else {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                };
+                let Some(constructor) = self.program.registry.constructor(*constructor) else {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                };
+                let (Some(representation), Some(provenance)) = (
+                    nominal.representation.as_ref(),
+                    nominal.representation_provenance.as_ref(),
+                ) else {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                };
+                if !matches!(nominal.origin, Origin::Source(_))
+                    || !matches!(constructor.origin, Origin::Source(_))
+                    || constructor.owner != nominal.id
+                    || constructor.spelling != nominal.spelling
+                    || constructor.payload.is_some()
+                    || !self.valid_registry_payload(
+                        Some(representation),
+                        nominal.id,
+                        parameter_owners,
+                    )?
+                    || !self.valid_registry_payload_kind(
+                        Some(representation),
+                        nominal.id,
+                        parameter_owners,
+                    )?
+                    || !self.valid_representation_provenance(
+                        representation,
+                        provenance,
+                        source,
+                        constructor.origin.primary_span(),
+                    )?
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_effect_registry(
+        &self,
+        module_sources: Option<&HashMap<ModuleId, SourceId>>,
+        parameter_owners: &mut RegistryParameterOwners,
+    ) -> Result<(), ValidationError> {
+        let mut next_declaration = HashMap::<ModuleId, u32>::new();
+        self.charge_type_work(self.program.registry.effects().len())?;
+        next_declaration
+            .try_reserve(self.program.registry.effects().len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        for effect in self.program.registry.effects() {
+            self.charge_type_work(
+                effect
+                    .parameters
+                    .len()
+                    .checked_add(effect.operations.len())
+                    .and_then(|cells| cells.checked_add(1))
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+            )?;
+            let module = effect.id.module();
+            if let Some(api) = crate::resolved::ResourceApi::for_module(module)
+                && (!api.effect(effect) || !api.registry(&self.program.registry))
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            let expected_source = module_sources
+                .and_then(|relation| relation.get(&module).copied())
+                .or_else(|| {
+                    (module_sources.is_none() && self.sources.len() == 1)
+                        .then(|| self.sources.keys().next().copied())
+                        .flatten()
+                });
+            if expected_source != Some(effect.origin.primary_span().source()) {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            // Linked registries retain dependency-ordered module groups, not
+            // the total order of module namespaces. Declaration order remains
+            // exact within each defining module.
+            self.charge_type_work(1)?;
+            let expected = next_declaration.entry(module).or_insert(0);
+            if effect.id.declaration() != *expected
+                || effect.operations.is_empty()
+                || !valid_upper_spelling(&effect.spelling)
+                || !origin_depth_within_limit(&effect.origin)
+                || self.program.registry.effect(effect.id) != Some(effect)
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
+            *expected = expected
+                .checked_add(1)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            self.validate_origin(&effect.origin, self.program.root)?;
+            let mut parameter_ids = HashSet::new();
+            let mut parameter_spellings = HashSet::new();
+            let mut previous_parameter = None;
+            for parameter in &effect.parameters {
+                self.charge_type_work(3)?;
+                parameter_ids
+                    .try_reserve(1)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                parameter_spellings
+                    .try_reserve(1)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                parameter_owners
+                    .try_reserve(1)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                let Some(canonical) = self.program.registry.type_variable(parameter.id) else {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                };
+                if parameter.id.module() != Some(module)
+                    || previous_parameter.is_some_and(|previous| previous >= parameter.id.local())
+                    || !parameter_ids.insert(parameter.id)
+                    || !parameter_spellings.insert(parameter.spelling.as_str())
+                    || parameter_owners
+                        .insert(parameter.id, RegistryParameterOwner::Effect(effect.id))
+                        .is_some()
+                    || !valid_upper_spelling(&parameter.spelling)
+                    || !crate::kind::binder_kind_is_admitted(&parameter.kind, false)
+                    || !self.same_registry_type_variable(canonical, parameter)?
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                previous_parameter = Some(parameter.id.local());
+            }
+            let mut operation_spellings = HashSet::new();
+            let empty_type_binders = CoreTypeBinders::new();
+            for (ordinal, operation) in effect.operations.iter().enumerate() {
+                self.charge_type_work(1)?;
+                operation_spellings
+                    .try_reserve(1)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                if operation.id.owner() != effect.id
+                    || usize::try_from(operation.id.operation()) != Ok(ordinal)
+                    || !valid_lower_spelling(&operation.spelling)
+                    || !operation_spellings.insert(operation.spelling.as_str())
+                    || !origin_depth_within_limit(&operation.origin)
+                    || operation.origin.primary_span().source()
+                        != effect.origin.primary_span().source()
+                    || !matches!(operation.annotation.ty, Type::Function(_, _))
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                let Some(kind) = self.synthesize_monotype_kind(
+                    &operation.annotation.ty,
+                    MonotypeVariableKinds::Core(&empty_type_binders),
+                )?
+                else {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                };
+                if !self.same_kind_charged(&kind, &Kind::Type)? {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                let mut free = HashSet::new();
+                self.collect_free_type_variables(&operation.annotation.ty, &mut free)?;
+                if !free.is_subset(&parameter_ids) {
+                    return Err(ValidationError::new(ValidationReason::Registry, None));
+                }
+                self.validate_origin(&operation.origin, self.program.root)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn valid_representation_provenance(
+        &self,
+        representation: &Type,
+        provenance: &ResolvedTypeProvenance,
+        source: SourceId,
+        declaration: Span,
+    ) -> Result<bool, ValidationError> {
+        let nodes = provenance.nodes();
+        if nodes.is_empty() || provenance.root() >= nodes.len() {
+            return Ok(false);
+        }
+        self.charge_type_work(nodes.len())?;
+        let mut visited = HashSet::new();
+        visited
+            .try_reserve(nodes.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        let mut work = Vec::new();
+        self.charge_type_work(1)?;
+        work.try_reserve(1)
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        work.push((representation, provenance.root(), declaration));
+        while let Some((ty, index, parent)) = work.pop() {
+            self.charge_type_work(1)?;
+            let Some(node) = nodes.get(index) else {
+                return Ok(false);
+            };
+            if !visited.insert(index) {
+                return Ok(false);
+            }
+            let span = representation_provenance_span(node);
+            if span.source() != source
+                || span.range().start() >= span.range().end()
+                || !span_contains(parent, span)
+            {
+                return Ok(false);
+            }
+            match (ty, node) {
+                (
+                    Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_),
+                    ResolvedTypeProvenanceNode::Fact(_),
+                ) => {}
+                (
+                    Type::Application(function, argument),
+                    ResolvedTypeProvenanceNode::Application {
+                        function: function_index,
+                        argument: argument_index,
+                        argument_span,
+                        ..
+                    },
+                ) => {
+                    if nodes
+                        .get(*argument_index)
+                        .is_none_or(|node| representation_provenance_span(node) != *argument_span)
+                    {
+                        return Ok(false);
+                    }
+                    self.charge_type_work(2)?;
+                    work.try_reserve(2)
+                        .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                    work.push((argument, *argument_index, span));
+                    work.push((function, *function_index, span));
+                }
+                (
+                    Type::Tuple(elements),
+                    ResolvedTypeProvenanceNode::Tuple {
+                        elements: provenance_elements,
+                        ..
+                    },
+                ) if elements.len() == provenance_elements.len() => {
+                    self.charge_type_work(elements.len())?;
+                    work.try_reserve(elements.len())
+                        .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                    work.extend(
+                        elements
+                            .iter()
+                            .zip(provenance_elements.iter().copied())
+                            .rev()
+                            .map(|(element, index)| (element, index, span)),
+                    );
+                }
+                (
+                    Type::Function(domain, codomain),
+                    ResolvedTypeProvenanceNode::Function {
+                        domain: domain_index,
+                        codomain: codomain_index,
+                        effect_arguments,
+                        ..
+                    },
+                ) if effect_arguments.is_empty() => {
+                    self.charge_type_work(2)?;
+                    work.try_reserve(2)
+                        .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                    work.push((codomain, *codomain_index, span));
+                    work.push((domain, *domain_index, span));
+                }
+                (
+                    Type::EffectfulFunction(domain, codomain),
+                    ResolvedTypeProvenanceNode::Function {
+                        domain: domain_index,
+                        codomain: codomain_index,
+                        effect_arguments,
+                        ..
+                    },
+                ) if F::ALLOWS_EFFECTFUL_TYPES
+                    && effect_arguments.len() == codomain.effect_argument_count() =>
+                {
+                    let child_count = effect_arguments
+                        .len()
+                        .checked_add(2)
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?;
+                    self.charge_type_work(child_count)?;
+                    work.try_reserve(child_count)
+                        .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                    let argument_start = work.len();
+                    work.extend(
+                        codomain
+                            .effect_arguments()
+                            .zip(effect_arguments.iter().copied())
+                            .map(|(argument, index)| (argument, index, span)),
+                    );
+                    work[argument_start..].reverse();
+                    work.push((codomain.value(), *codomain_index, span));
+                    work.push((domain, *domain_index, span));
+                }
+                (Type::Forall(_, _) | Type::Inference(_), _) | (_, _) => return Ok(false),
+            }
+        }
+        Ok(visited.len() == nodes.len())
+    }
     fn valid_type(&self, root: Option<&Type>) -> Result<bool, ValidationError> {
         self.valid_type_with_scheme(root, true)
     }
@@ -3391,6 +4653,12 @@ impl<'program, 'source> Validator<'program, 'source> {
                             work.push(Task::Visit(codomain, false, child_depth, 0));
                             work.push(Task::Visit(domain, false, child_depth, 0));
                         }
+                        Type::EffectfulFunction(domain, codomain) if F::ALLOWS_EFFECTFUL_TYPES => {
+                            let child_depth = depth.saturating_add(1);
+                            work.push(Task::Visit(codomain.value(), false, child_depth, 0));
+                            work.push(Task::Visit(domain, false, child_depth, 0));
+                        }
+                        Type::EffectfulFunction(_, _) => return Ok(false),
                     }
                 }
                 Task::Sequence(mut remaining, depth) => {
@@ -3408,7 +4676,7 @@ impl<'program, 'source> Validator<'program, 'source> {
         &self,
         root: Option<&Type>,
         owner: crate::types::NominalTypeId,
-        parameter_owners: &HashMap<crate::types::TypeVariableId, crate::types::NominalTypeId>,
+        parameter_owners: &RegistryParameterOwners,
     ) -> Result<bool, ValidationError> {
         let Some(root) = root else {
             return Ok(true);
@@ -3440,7 +4708,11 @@ impl<'program, 'source> Validator<'program, 'source> {
                         return Ok(false);
                     }
                 }
-                Type::Variable(variable) if parameter_owners.get(variable) == Some(&owner) => {}
+                Type::Variable(variable)
+                    if parameter_owners.get(variable)
+                        == Some(&RegistryParameterOwner::Nominal(owner))
+                        || owner.is_lexical()
+                            && self.program.registry.type_variable(*variable).is_some() => {}
                 Type::Variable(_) | Type::Inference(_) | Type::Forall(_, _) => return Ok(false),
                 Type::Application(function, argument) => {
                     let child_depth = depth.saturating_add(1);
@@ -3456,6 +4728,12 @@ impl<'program, 'source> Validator<'program, 'source> {
                     work.push(Task::Visit(codomain, child_depth));
                     work.push(Task::Visit(domain, child_depth));
                 }
+                Type::EffectfulFunction(domain, codomain) if F::ALLOWS_EFFECTFUL_TYPES => {
+                    let child_depth = depth.saturating_add(1);
+                    work.push(Task::Visit(codomain.value(), child_depth));
+                    work.push(Task::Visit(domain, child_depth));
+                }
+                Type::EffectfulFunction(_, _) => return Ok(false),
             }
         }
         Ok(true)
@@ -3465,7 +4743,7 @@ impl<'program, 'source> Validator<'program, 'source> {
         &self,
         root: Option<&Type>,
         owner: crate::types::NominalTypeId,
-        parameter_owners: &HashMap<crate::types::TypeVariableId, crate::types::NominalTypeId>,
+        parameter_owners: &RegistryParameterOwners,
     ) -> Result<bool, ValidationError> {
         let Some(root) = root else {
             return Ok(true);
@@ -3545,7 +4823,7 @@ impl<'program, 'source> Validator<'program, 'source> {
         while let Some((left, right)) = work.pop() {
             self.charge_type_work(1)?;
             match (left, right) {
-                (Kind::Type, Kind::Type) => {}
+                (Kind::Type, Kind::Type) | (Kind::EffectRow, Kind::EffectRow) => {}
                 (
                     Kind::Arrow(left_domain, left_codomain),
                     Kind::Arrow(right_domain, right_codomain),
@@ -3602,6 +4880,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                 argument,
                 replacements,
                 |cells| self.charge_type_work(cells),
+                || ValidationError::new(ValidationReason::Resource, None),
             )?);
         }
         Ok(InterfaceApplication::new(
@@ -3617,6 +4896,106 @@ impl<'program, 'source> Validator<'program, 'source> {
         let result = clone_type_with_budget(ty, &mut budget);
         self.charge_type_work(budget.used())?;
         result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))
+    }
+
+    fn clone_effect_row_charged(&self, row: &EffectRow) -> Result<EffectRow, ValidationError> {
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let result = clone_effect_row_with_budget(row, &mut budget);
+        self.charge_type_work(budget.used())?;
+        result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))
+    }
+
+    fn same_effect_row_charged(
+        &self,
+        left: &EffectRow,
+        right: &EffectRow,
+        node: NodeId,
+    ) -> Result<bool, ValidationError> {
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let result = same_effect_rows_with_budget(left, right, &mut budget);
+        self.charge_type_work(budget.used())?;
+        result.map_err(|()| ValidationError::new(ValidationReason::Resource, Some(node)))
+    }
+
+    fn union_effect_rows_charged(
+        &self,
+        left: &EffectRow,
+        right: &EffectRow,
+        node: NodeId,
+    ) -> Result<EffectRow, ValidationError> {
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let result = left.union_with_budget(right, &mut budget);
+        self.charge_type_work(budget.used())?;
+        result
+            .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(node)))?
+            .map_err(|_| ValidationError::new(ValidationReason::EffectRow, Some(node)))
+    }
+
+    fn remove_effect_row_charged(
+        &self,
+        row: &EffectRow,
+        effect: &EffectInstance,
+        node: NodeId,
+    ) -> Result<EffectRow, ValidationError> {
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let result = row.remove_exact_with_budget(effect, &mut budget);
+        self.charge_type_work(budget.used())?;
+        result
+            .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(node)))?
+            .map_err(|_| ValidationError::new(ValidationReason::EffectRow, Some(node)))
+    }
+
+    fn handler_outward_row(
+        &self,
+        row: &EffectRow,
+        handler: &super::effect::HandlerNode,
+        node: NodeId,
+    ) -> Result<EffectRow, ValidationError> {
+        if handler.hook_root.is_none() && handler.hook_registration.is_none() {
+            return self.remove_effect_row_charged(row, &handler.effect, node);
+        }
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let result = row.remove_exact_with_budget(&handler.effect, &mut budget);
+        self.charge_type_work(budget.used())?;
+        match result.map_err(|()| ValidationError::new(ValidationReason::Resource, Some(node)))? {
+            Ok(row) => Ok(row),
+            Err(crate::types::EffectRowError::Missing) => {
+                self.union_effect_rows_charged(&EffectRow::empty(), row, node)
+            }
+            Err(_) => Err(ValidationError::new(
+                ValidationReason::EffectRow,
+                Some(node),
+            )),
+        }
+    }
+
+    fn singleton_effect_row_charged(
+        &self,
+        effect: &EffectInstance,
+        node: NodeId,
+    ) -> Result<EffectRow, ValidationError> {
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let result = rebuild_effect_row_with_budget(
+            std::iter::once(effect),
+            None,
+            std::iter::empty(),
+            clone_type_with_budget,
+            &mut budget,
+        );
+        self.charge_type_work(budget.used())?;
+        result.map_err(|()| ValidationError::new(ValidationReason::Resource, Some(node)))
     }
 
     fn constructor_value_type_matches(
@@ -3742,7 +5121,10 @@ impl<'program, 'source> Validator<'program, 'source> {
                             owner,
                             parameter_owners,
                         } => {
-                            if parameter_owners.get(identity) != Some(&owner) {
+                            if parameter_owners.get(identity)
+                                != Some(&RegistryParameterOwner::Nominal(owner))
+                                && !owner.is_lexical()
+                            {
                                 self.charge_type_work(1)?;
                                 return Err(ValidationError::new(ValidationReason::Registry, None));
                             }
@@ -3814,6 +5196,16 @@ impl<'program, 'source> Validator<'program, 'source> {
                     work.try_reserve(3).map_err(|_| resource())?;
                     work.push(Task::FinishFunction);
                     work.push(Task::Visit(codomain));
+                    work.push(Task::Visit(domain));
+                }
+                Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
+                    if !F::ALLOWS_EFFECTFUL_TYPES {
+                        return Ok(None);
+                    }
+                    self.charge_type_work(1)?;
+                    work.try_reserve(3).map_err(|_| resource())?;
+                    work.push(Task::FinishFunction);
+                    work.push(Task::Visit(codomain.value()));
                     work.push(Task::Visit(domain));
                 }
                 Task::Sequence(mut remaining) => {
@@ -3977,6 +5369,10 @@ impl<'program, 'source> Validator<'program, 'source> {
                     work.push(Task::Visit(codomain));
                     work.push(Task::Visit(domain));
                 }
+                Type::EffectfulFunction(domain, codomain) => {
+                    work.push(Task::Visit(codomain.value()));
+                    work.push(Task::Visit(domain));
+                }
                 Type::Forall(parameters, body) => {
                     self.charge_kinded_parameters(parameters)?;
                     work.push(Task::Visit(body));
@@ -4033,10 +5429,16 @@ impl<'program, 'source> Validator<'program, 'source> {
     ) -> Result<(), ValidationError> {
         for (index, node) in self.program.nodes.iter().enumerate() {
             let id = node_id(self.program.arena, index)?;
-            if !authenticated_method_evidence.contains(&id) && !self.valid_type(Some(&node.ty))? {
+            if !F::ALLOWS_EFFECTFUL_TYPES
+                && !authenticated_method_evidence.contains(&id)
+                && !self.valid_type(Some(&node.ty))?
+            {
                 return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
             }
-            if node.dialect != DialectId::PURE {
+            if F::REQUIRES_EMPTY_ROWS && !F::effect_row(&node.effects).is_empty() {
+                return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+            }
+            if node.dialect != DialectId::named(F::DIALECT_NAME) {
                 return Err(ValidationError::new(
                     ValidationReason::DialectMembership,
                     Some(id),
@@ -4112,10 +5514,17 @@ impl<'program, 'source> Validator<'program, 'source> {
                         Color::White => {}
                     }
                     colors[index] = Color::Gray;
-                    work.push(GraphTask::Exit(id));
                     let node = self.node(id)?;
-                    for child_index in (0..node.kind.child_count()).rev() {
-                        let Some(child) = node.kind.child_at(child_index) else {
+                    self.charge_type_work(F::operation_extra_edge_count(&node.kind))?;
+                    let child_count = F::child_count(&node.kind);
+                    let pending = child_count.checked_add(1).ok_or_else(|| {
+                        ValidationError::new(ValidationReason::Resource, Some(id))
+                    })?;
+                    work.try_reserve(pending)
+                        .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+                    work.push(GraphTask::Exit(id));
+                    for child_index in (0..child_count).rev() {
+                        let Some(child) = F::child_at(&node.kind, child_index) else {
                             return Err(ValidationError::new(
                                 ValidationReason::NodeBounds,
                                 Some(id),
@@ -4153,8 +5562,8 @@ impl<'program, 'source> Validator<'program, 'source> {
         let mut abstraction_owners = HashMap::new();
         for (index, node) in self.program.nodes.iter().enumerate() {
             let id = node_id(self.program.arena, index)?;
-            match &node.kind {
-                PureExprKind::Value(PureValue::Function(function)) => {
+            match F::pure(&node.kind) {
+                Some(PureExprKind::Value(PureValue::Function(function))) => {
                     self.collect_binder(
                         id,
                         function.parameter(),
@@ -4163,7 +5572,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                         false,
                     )?;
                 }
-                PureExprKind::Computation(PureComputation::Bind(binding)) => {
+                Some(PureExprKind::Computation(PureComputation::Bind(binding))) => {
                     self.collect_binder(
                         id,
                         binding.binder(),
@@ -4173,9 +5582,9 @@ impl<'program, 'source> Validator<'program, 'source> {
                     )?;
                     let initializer = binding.initializer();
                     if self.module_sources.is_some()
-                        && let PureExprKind::Computation(PureComputation::TypeAbstraction(
+                        && let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(
                             abstraction,
-                        )) = &self.node(initializer)?.kind
+                        ))) = F::pure(&self.node(initializer)?.kind)
                         && abstraction
                             .parameters()
                             .first()
@@ -4189,7 +5598,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                         ));
                     }
                 }
-                PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+                Some(PureExprKind::Computation(PureComputation::RecursiveBind(group))) => {
                     for member in group.members() {
                         self.collect_binder(
                             id,
@@ -4201,8 +5610,10 @@ impl<'program, 'source> Validator<'program, 'source> {
                         let initializer = member.initializer();
                         if self.module_sources.is_some()
                             && matches!(
-                                self.node(initializer)?.kind,
-                                PureExprKind::Computation(PureComputation::TypeAbstraction(_))
+                                F::pure(&self.node(initializer)?.kind),
+                                Some(PureExprKind::Computation(PureComputation::TypeAbstraction(
+                                    _
+                                )))
                             )
                         {
                             self.charge_type_work(1)?;
@@ -4219,7 +5630,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                         }
                     }
                 }
-                PureExprKind::Computation(PureComputation::Match(match_node)) => {
+                Some(PureExprKind::Computation(PureComputation::Match(match_node))) => {
                     for arm in match_node.arms() {
                         for binder in arm.pattern().binder_iter() {
                             self.collect_binder(
@@ -4232,20 +5643,40 @@ impl<'program, 'source> Validator<'program, 'source> {
                         }
                     }
                 }
-                PureExprKind::Value(
-                    PureValue::Integer(_)
-                    | PureValue::Boolean(_)
-                    | PureValue::Unit(_)
-                    | PureValue::Constructor(_),
-                )
-                | PureExprKind::Variable(_)
-                | PureExprKind::Computation(
-                    PureComputation::Apply(_)
-                    | PureComputation::Primitive(_)
-                    | PureComputation::Tuple(_)
-                    | PureComputation::TypeAbstraction(_)
-                    | PureComputation::TypeApplication(_),
+                Some(
+                    PureExprKind::Value(
+                        PureValue::Integer(_)
+                        | PureValue::Boolean(_)
+                        | PureValue::Unit(_)
+                        | PureValue::Constructor(_),
+                    )
+                    | PureExprKind::Variable(_)
+                    | PureExprKind::Computation(
+                        PureComputation::Apply(_)
+                        | PureComputation::Primitive(_)
+                        | PureComputation::Tuple(_)
+                        | PureComputation::NewtypeConversion(_)
+                        | PureComputation::LocalNominalScope(_)
+                        | PureComputation::TypeAbstraction(_)
+                        | PureComputation::TypeApplication(_),
+                    ),
                 ) => {}
+                None => {
+                    self.charge_type_work(F::operation_extra_edge_count(&node.kind))?;
+                    let mut result = Ok(());
+                    F::visit_operation_binders(&node.kind, &mut |binder| {
+                        if result.is_ok() {
+                            result = self.collect_binder(
+                                id,
+                                binder,
+                                ValidationReason::Pattern,
+                                false,
+                                false,
+                            );
+                        }
+                    });
+                    result?;
+                }
             }
         }
         Ok(abstraction_owners)
@@ -4290,17 +5721,34 @@ impl<'program, 'source> Validator<'program, 'source> {
 
     fn collect_type_binders(
         &self,
-        nominal_parameter_owners: &HashMap<
-            crate::types::TypeVariableId,
-            crate::types::NominalTypeId,
-        >,
+        nominal_parameter_owners: &RegistryParameterOwners,
         abstraction_owners: &CoreAbstractionOwners,
     ) -> Result<CoreTypeBinders<'program>, ValidationError> {
         let mut definitions = HashMap::new();
         let mut consumed_rows = 0_usize;
         for (index, node) in self.program.nodes.iter().enumerate() {
-            let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
-                &node.kind
+            if let Some(resource) = F::resource_scope(&node.kind) {
+                let id = node_id(self.program.arena, index)?;
+                self.charge_type_work(1)?;
+                let parameter = resource.acquisition.identity;
+                let canonical = self
+                    .program
+                    .registry
+                    .type_variable(parameter)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(id)))?;
+                if canonical.kind != Kind::Type
+                    || nominal_parameter_owners.contains_key(&parameter)
+                    || definitions.contains_key(&parameter)
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                }
+                definitions
+                    .try_reserve(1)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+                definitions.insert(parameter, (&canonical.kind, id));
+            }
+            let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
+                F::pure(&node.kind)
             else {
                 continue;
             };
@@ -4409,10 +5857,7 @@ impl<'program, 'source> Validator<'program, 'source> {
 
     fn validate_node_types(
         &self,
-        nominal_parameter_owners: &HashMap<
-            crate::types::TypeVariableId,
-            crate::types::NominalTypeId,
-        >,
+        nominal_parameter_owners: &RegistryParameterOwners,
         type_binders: &CoreTypeBinders<'program>,
         authenticated_method_evidence: &HashSet<NodeId>,
     ) -> Result<(), ValidationError> {
@@ -4420,8 +5865,10 @@ impl<'program, 'source> Validator<'program, 'source> {
             let id = node_id(self.program.arena, index)?;
             if !authenticated_method_evidence.contains(&id)
                 && !matches!(
-                    &node.kind,
-                    PureExprKind::Computation(PureComputation::TypeAbstraction(_))
+                    F::pure(&node.kind),
+                    Some(PureExprKind::Computation(PureComputation::TypeAbstraction(
+                        _
+                    )))
                 )
                 && !self
                     .valid_core_type_kind(&node.ty, type_binders)
@@ -4429,11 +5876,11 @@ impl<'program, 'source> Validator<'program, 'source> {
             {
                 return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
             }
-            match &node.kind {
-                PureExprKind::Value(value) => self
+            match F::pure(&node.kind) {
+                Some(PureExprKind::Value(value)) => self
                     .validate_value(id, node, value)
                     .map_err(|error| error.at_node(id))?,
-                PureExprKind::Variable(variable) => {
+                Some(PureExprKind::Variable(variable)) => {
                     let Some(binder) = self.binders.get(&variable.binder()) else {
                         return Err(ValidationError::new(ValidationReason::Scope, Some(id)));
                     };
@@ -4441,7 +5888,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                         return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                     }
                 }
-                PureExprKind::Computation(computation) => {
+                Some(PureExprKind::Computation(computation)) => {
                     self.validate_computation(
                         id,
                         node,
@@ -4452,15 +5899,47 @@ impl<'program, 'source> Validator<'program, 'source> {
                     )
                     .map_err(|error| error.at_node(id))?;
                 }
+                None => {}
             }
         }
         Ok(())
     }
 
+    fn effect_row_subset_charged(
+        &self,
+        subset: &EffectRow,
+        superset: &EffectRow,
+        node: NodeId,
+    ) -> Result<bool, ValidationError> {
+        let union = self.union_effect_rows_charged(subset, superset, node)?;
+        if self.same_effect_row_charged(&union, superset, node)? {
+            return Ok(true);
+        }
+        let Some(tail) = superset.tail() else {
+            return Ok(false);
+        };
+        // Written rows retain their known members without duplicating the
+        // corresponding tail constraints. Those members already prove lacks.
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let normalized = rebuild_effect_row_with_budget(
+            superset.known(),
+            Some(tail.variable()),
+            tail.lacks().iter().chain(superset.known()),
+            clone_type_with_budget,
+            &mut budget,
+        );
+        self.charge_type_work(budget.used())?;
+        let normalized = normalized
+            .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(node)))?;
+        self.same_effect_row_charged(&union, &normalized, node)
+    }
+
     fn validate_value(
         &self,
         id: NodeId,
-        node: &StoredNode,
+        node: &StoredNode<F>,
         value: &PureValue,
     ) -> Result<(), ValidationError> {
         let expected = match value {
@@ -4469,21 +5948,47 @@ impl<'program, 'source> Validator<'program, 'source> {
             PureValue::Unit(unit) => unit.expected_type(),
             PureValue::Function(function) => {
                 let body = self.node(function.body())?;
-                let Type::Function(actual_domain, actual_codomain) = &node.ty else {
+                let Some(function_type) = node.ty.function_view() else {
                     return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                 };
-                if !self.same_type_charged(actual_domain, function.parameter().ty())?
-                    || !self.same_type_charged(actual_codomain, &body.ty)?
+                let effects_match = match function_type.effects() {
+                    Some(effects) => {
+                        self.effect_row_subset_charged(F::effect_row(&body.effects), effects, id)?
+                    }
+                    None => F::effect_row(&body.effects).is_empty(),
+                };
+                if (!F::ALLOWS_EFFECTFUL_TYPES && function_type.effects().is_some())
+                    || !self.same_type_charged(function_type.domain(), function.parameter().ty())?
+                    || !self.same_type_charged(function_type.value(), &body.ty)?
+                    || !effects_match
                 {
                     return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
                 }
                 return Ok(());
             }
             PureValue::Constructor(constructor) => {
+                if crate::resolved::ResourceApi::for_module(
+                    constructor.constructor().owner().module(),
+                )
+                .is_some_and(|api| api.hides_constructor(constructor.constructor()))
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                }
                 let Some(info) = self.program.registry.constructor(constructor.constructor())
                 else {
                     return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
                 };
+                if self
+                    .program
+                    .registry
+                    .nominal(info.owner)
+                    .is_some_and(|owner| {
+                        owner.declaration_kind
+                            == crate::resolved::ResolvedNominalDeclarationKind::Newtype
+                    })
+                {
+                    return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                }
                 let parameters = self
                     .program
                     .registry
@@ -4504,13 +6009,10 @@ impl<'program, 'source> Validator<'program, 'source> {
     fn validate_computation(
         &self,
         id: NodeId,
-        node: &StoredNode,
+        node: &StoredNode<F>,
         computation: &PureComputation,
         type_binders: &CoreTypeBinders<'program>,
-        nominal_parameter_owners: &HashMap<
-            crate::types::TypeVariableId,
-            crate::types::NominalTypeId,
-        >,
+        nominal_parameter_owners: &RegistryParameterOwners,
         authenticated_method_evidence: bool,
     ) -> Result<(), ValidationError> {
         match computation {
@@ -4539,8 +6041,12 @@ impl<'program, 'source> Validator<'program, 'source> {
                     let initializer = self.node(member.initializer())?;
                     let safe = match member.binder().ty() {
                         Type::Function(_, _) => matches!(
-                            initializer.kind,
-                            PureExprKind::Value(PureValue::Function(_))
+                            F::pure(&initializer.kind),
+                            Some(PureExprKind::Value(PureValue::Function(_)))
+                        ),
+                        Type::EffectfulFunction(_, _) if F::ALLOWS_EFFECTFUL_TYPES => matches!(
+                            F::pure(&initializer.kind),
+                            Some(PureExprKind::Value(PureValue::Function(_)))
                         ),
                         ty if ty.outer_nominal().is_some() => match ty.outer_nominal() {
                             Some(owner) => {
@@ -4549,11 +6055,13 @@ impl<'program, 'source> Validator<'program, 'source> {
                             None => false,
                         },
                         Type::Forall(parameters, body)
-                            if matches!(body.as_ref(), Type::Function(_, _)) =>
+                            if matches!(body.as_ref(), Type::Function(_, _))
+                                || (F::ALLOWS_EFFECTFUL_TYPES
+                                    && matches!(body.as_ref(), Type::EffectfulFunction(_, _))) =>
                         {
-                            let PureExprKind::Computation(PureComputation::TypeAbstraction(
+                            let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(
                                 abstraction,
-                            )) = &initializer.kind
+                            ))) = F::pure(&initializer.kind)
                             else {
                                 return Err(ValidationError::new(
                                     ValidationReason::RecursiveBinding,
@@ -4564,8 +6072,8 @@ impl<'program, 'source> Validator<'program, 'source> {
                                 abstraction.parameters(),
                                 parameters.as_ref(),
                             )? && matches!(
-                                self.node(abstraction.body())?.kind,
-                                PureExprKind::Value(PureValue::Function(_))
+                                F::pure(&self.node(abstraction.body())?.kind),
+                                Some(PureExprKind::Value(PureValue::Function(_)))
                             )
                         }
                         Type::Int
@@ -4576,6 +6084,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                         | Type::Application(_, _)
                         | Type::Variable(_)
                         | Type::Inference(_)
+                        | Type::EffectfulFunction(_, _)
                         | Type::Forall(_, _) => false,
                     };
                     if !safe {
@@ -4596,15 +6105,15 @@ impl<'program, 'source> Validator<'program, 'source> {
             PureComputation::Apply(application) => {
                 let function = self.node(application.function())?;
                 let argument = self.node(application.argument())?;
-                let Type::Function(domain, codomain) = &function.ty else {
+                let Some(function_type) = function.ty.function_view() else {
                     return Err(ValidationError::new(
                         ValidationReason::ApplicationType,
                         Some(id),
                     ));
                 };
                 if (!authenticated_method_evidence
-                    && !self.same_type_charged(domain, &argument.ty)?)
-                    || !self.same_type_charged(codomain, &node.ty)?
+                    && !self.same_type_charged(function_type.domain(), &argument.ty)?)
+                    || !self.same_type_charged(function_type.value(), &node.ty)?
                 {
                     return Err(ValidationError::new(
                         ValidationReason::ApplicationType,
@@ -4679,6 +6188,28 @@ impl<'program, 'source> Validator<'program, 'source> {
                     return Err(ValidationError::new(ValidationReason::Coverage, Some(id)));
                 }
             }
+            PureComputation::NewtypeConversion(conversion) => {
+                if !self.valid_newtype_conversion(node, *conversion, type_binders)? {
+                    return Err(ValidationError::new(
+                        ValidationReason::NewtypeConversion,
+                        Some(id),
+                    ));
+                }
+            }
+            PureComputation::LocalNominalScope(scope) => {
+                let body = self.node(scope.body())?;
+                if !scope.owner().is_lexical()
+                    || self.program.registry.nominal(scope.owner()).is_none()
+                    || !self.same_type_charged(&node.ty, &body.ty)?
+                    || !self.same_effect_row_charged(
+                        F::effect_row(&node.effects),
+                        F::effect_row(&body.effects),
+                        id,
+                    )?
+                {
+                    return Err(ValidationError::new(ValidationReason::Scope, Some(id)));
+                }
+            }
             PureComputation::TypeAbstraction(abstraction) => {
                 let body = self.node(abstraction.body())?;
                 let Type::Forall(parameters, scheme_body) = &node.ty else {
@@ -4728,57 +6259,253 @@ impl<'program, 'source> Validator<'program, 'source> {
                 }
             }
             PureComputation::TypeApplication(application) => {
+                let invalid = || ValidationError::new(ValidationReason::TypeOperation, Some(id));
                 let function = self.node(application.function())?;
                 let Type::Forall(parameters, body) = &function.ty else {
-                    return Err(ValidationError::new(
-                        ValidationReason::TypeOperation,
-                        Some(id),
-                    ));
+                    return Err(invalid());
                 };
-                let mut invalid_argument = false;
-                for ((_, expected_kind), argument) in parameters.iter().zip(application.arguments())
+                if parameters.len()
+                    != application.arguments().len() + application.row_arguments().len()
+                    || (!F::ALLOWS_EFFECTFUL_TYPES && !application.row_arguments().is_empty())
                 {
-                    let Some(argument_kind) = self.synthesize_monotype_kind(
-                        argument,
-                        MonotypeVariableKinds::Core(type_binders),
-                    )?
-                    else {
-                        invalid_argument = true;
-                        continue;
-                    };
-                    invalid_argument |= !self.same_kind_charged(expected_kind, &argument_kind)?;
-                }
-                if parameters.len() != application.arguments().len() || invalid_argument {
-                    return Err(ValidationError::new(
-                        ValidationReason::TypeOperation,
-                        Some(id),
-                    ));
-                }
-                for argument in application.arguments() {
-                    self.charge_type_structure(argument)?;
+                    return Err(invalid());
                 }
                 self.charge_type_work(parameters.len())?;
                 let mut replacements = TypeReplacementMap::new();
+                let mut row_replacements = HashMap::new();
                 replacements
-                    .try_reserve(parameters.len())
+                    .try_reserve(application.arguments().len())
                     .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
-                for ((parameter, _), argument) in parameters.iter().zip(application.arguments()) {
-                    replacements.insert_replacing(*parameter, argument.clone());
+                row_replacements
+                    .try_reserve(application.row_arguments().len())
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+                let mut ordinary = application.arguments().iter();
+                let mut rows = application.row_arguments().iter();
+                for (parameter, kind) in parameters.iter() {
+                    if matches!(kind, Kind::EffectRow) {
+                        let row = rows.next().ok_or_else(invalid)?;
+                        row_replacements.insert(*parameter, self.clone_effect_row_charged(row)?);
+                    } else {
+                        let argument = ordinary.next().ok_or_else(invalid)?;
+                        let argument_kind = self
+                            .synthesize_monotype_kind(
+                                argument,
+                                MonotypeVariableKinds::Core(type_binders),
+                            )?
+                            .ok_or_else(invalid)?;
+                        if !self.same_kind_charged(kind, &argument_kind)? {
+                            return Err(invalid());
+                        }
+                        replacements
+                            .insert_replacing(*parameter, self.clone_type_charged(argument)?);
+                    }
                 }
-                let instantiated = IterativeTypeOwner::new(substitute_type_variables_with(
+                let instantiated = substitute_type_and_row_variables_with(
                     body,
                     replacements.as_map(),
+                    &row_replacements,
                     |cells| self.charge_type_work(cells),
-                )?);
+                    || ValidationError::new(ValidationReason::Resource, None),
+                )?
+                .map_err(|_| invalid())?;
+                let instantiated = IterativeTypeOwner::new(instantiated);
                 if !self.same_type_charged(&node.ty, &instantiated)? {
-                    return Err(ValidationError::new(
-                        ValidationReason::TypeOperation,
-                        Some(id),
-                    ));
+                    return Err(invalid());
                 }
             }
         }
         Ok(())
+    }
+
+    fn scoped_lexical_representation(
+        &self,
+        owner: crate::types::NominalTypeId,
+        occurrence: NodeId,
+    ) -> Result<IterativeTypeOwner, ValidationError> {
+        let nominal =
+            self.program.registry.nominal(owner).ok_or_else(|| {
+                ValidationError::new(ValidationReason::Registry, Some(occurrence))
+            })?;
+        let representation = nominal
+            .representation
+            .as_ref()
+            .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(occurrence)))?;
+        let mut captured = HashSet::new();
+        self.charge_type_structure(representation)?;
+        self.collect_free_type_variables(representation, &mut captured)?;
+        for parameter in self
+            .program
+            .registry
+            .nominal_parameters(owner)
+            .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(occurrence)))?
+        {
+            self.charge_type_work(1)?;
+            captured.remove(&parameter.id);
+        }
+        let mut replacements = TypeReplacementMap::new();
+        if !captured.is_empty() {
+            // Implementation bodies use generated binders. Reuse their independently
+            // authenticated source-to-Core parameter order only beneath that owner.
+            for anchor in &self.program.method_evidence_anchors {
+                self.charge_type_work(1)?;
+                let MethodEvidenceAnchorRole::ImplementationOwner { implementation, .. } =
+                    anchor.role
+                else {
+                    continue;
+                };
+                let Some(expected) = self
+                    .program
+                    .method_evidence
+                    .implementation_owner(implementation)
+                else {
+                    return Err(ValidationError::new(
+                        ValidationReason::Registry,
+                        Some(occurrence),
+                    ));
+                };
+                self.charge_type_work(expected.source_parameters.len())?;
+                if !expected
+                    .source_parameters
+                    .iter()
+                    .any(|(parameter, _)| captured.contains(parameter))
+                    || !self.node_reaches(anchor.node, occurrence)?
+                {
+                    continue;
+                }
+                replacements = self.implementation_replacements(
+                    implementation,
+                    &HashMap::new(),
+                    occurrence,
+                    false,
+                )?;
+                break;
+            }
+        }
+        Ok(IterativeTypeOwner::new(substitute_type_variables_with(
+            representation,
+            replacements.as_map(),
+            |cells| self.charge_type_work(cells),
+            || ValidationError::new(ValidationReason::Resource, Some(occurrence)),
+        )?))
+    }
+
+    fn node_reaches(&self, root: NodeId, target: NodeId) -> Result<bool, ValidationError> {
+        self.charge_type_work(1)?;
+        let mut pending = Vec::new();
+        pending
+            .try_reserve(1)
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(root)))?;
+        pending.push(root);
+        while let Some(id) = pending.pop() {
+            if id == target {
+                return Ok(true);
+            }
+            let node = self.node(id)?;
+            let children = F::child_count(&node.kind);
+            self.charge_type_work(children)?;
+            pending
+                .try_reserve(children)
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+            for index in 0..children {
+                pending.push(
+                    F::child_at(&node.kind, index).ok_or_else(|| {
+                        ValidationError::new(ValidationReason::NodeBounds, Some(id))
+                    })?,
+                );
+            }
+        }
+        Ok(false)
+    }
+
+    fn valid_newtype_conversion(
+        &self,
+        node: &StoredNode<F>,
+        conversion: super::NewtypeConversionNode,
+        type_binders: &CoreTypeBinders<'program>,
+    ) -> Result<bool, ValidationError> {
+        let Some(owner) = self.program.registry.nominal(conversion.owner()) else {
+            return Ok(false);
+        };
+        if owner.declaration_kind != ResolvedNominalDeclarationKind::Newtype {
+            return Ok(false);
+        }
+        let Some(representation) = owner.representation.as_ref() else {
+            return Ok(false);
+        };
+        let Some(parameters) = self.program.registry.nominal_parameters(owner.id) else {
+            return Ok(false);
+        };
+        let child = self.node(conversion.child())?;
+        let (nominal, actual_representation) = match conversion.direction() {
+            super::NewtypeConversionDirection::Wrap => (&node.ty, &child.ty),
+            super::NewtypeConversionDirection::Unwrap => (&child.ty, &node.ty),
+        };
+
+        self.charge_type_work(parameters.len())?;
+        #[cfg(test)]
+        self.newtype_conversion_parameter_work
+            .set(self.newtype_conversion_parameter_work.get() + parameters.len());
+        let mut arguments = Vec::new();
+        arguments
+            .try_reserve(parameters.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        let spine_work = parameters
+            .len()
+            .checked_add(1)
+            .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?;
+        self.charge_type_work(spine_work)?;
+        #[cfg(test)]
+        self.newtype_conversion_parameter_work
+            .set(self.newtype_conversion_parameter_work.get() + spine_work);
+        let mut head = nominal;
+        while let Type::Application(function, argument) = head {
+            if arguments.len() == parameters.len() {
+                return Ok(false);
+            }
+            arguments.push(argument.as_ref());
+            head = function;
+        }
+        if head != &Type::Nominal(owner.id) || arguments.len() != parameters.len() {
+            return Ok(false);
+        }
+
+        let mut replacements = TypeReplacementMap::new();
+        self.charge_type_work(parameters.len())?;
+        #[cfg(test)]
+        self.newtype_conversion_parameter_work
+            .set(self.newtype_conversion_parameter_work.get() + parameters.len());
+        replacements
+            .try_reserve(parameters.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        self.charge_type_work(parameters.len())?;
+        #[cfg(test)]
+        self.newtype_conversion_parameter_work
+            .set(self.newtype_conversion_parameter_work.get() + parameters.len());
+        for (parameter, argument) in parameters.iter().zip(arguments.into_iter().rev()) {
+            let Some(argument_kind) =
+                self.synthesize_monotype_kind(argument, MonotypeVariableKinds::Core(type_binders))?
+            else {
+                return Ok(false);
+            };
+            if !self.same_kind_charged(&parameter.kind, &argument_kind)? {
+                return Ok(false);
+            }
+            replacements.insert_replacing(parameter.id, self.clone_type_charged(argument)?);
+        }
+
+        let lexical_representation = owner
+            .id
+            .is_lexical()
+            .then(|| self.scoped_lexical_representation(owner.id, conversion.child()))
+            .transpose()?;
+        let representation = lexical_representation.as_deref().unwrap_or(representation);
+        let expected = IterativeTypeOwner::new(substitute_type_variables_with(
+            representation,
+            replacements.as_map(),
+            |cells| self.charge_type_work(cells),
+            || ValidationError::new(ValidationReason::Resource, None),
+        )?);
+        self.same_type_charged(&expected, actual_representation)
     }
 
     fn guarded_data_root(
@@ -4789,8 +6516,8 @@ impl<'program, 'source> Validator<'program, 'source> {
     ) -> Result<bool, ValidationError> {
         let initializer = self.erase_type_applications(initializer)?;
         let root = self.node(initializer)?;
-        let payload = match &root.kind {
-            PureExprKind::Value(PureValue::Constructor(constructor)) => {
+        let payload = match F::pure(&root.kind) {
+            Some(PureExprKind::Value(PureValue::Constructor(constructor))) => {
                 let Some(info) = self.program.registry.constructor(constructor.constructor())
                 else {
                     return Ok(false);
@@ -4800,9 +6527,10 @@ impl<'program, 'source> Validator<'program, 'source> {
                 }
                 return Ok(true);
             }
-            PureExprKind::Computation(PureComputation::Apply(application)) => {
+            Some(PureExprKind::Computation(PureComputation::Apply(application))) => {
                 let function = self.node(self.erase_type_applications(application.function())?)?;
-                let PureExprKind::Value(PureValue::Constructor(constructor)) = &function.kind
+                let Some(PureExprKind::Value(PureValue::Constructor(constructor))) =
+                    F::pure(&function.kind)
                 else {
                     return Ok(false);
                 };
@@ -4832,23 +6560,24 @@ impl<'program, 'source> Validator<'program, 'source> {
                 continue;
             }
             let node = self.node(id)?;
-            match &node.kind {
-                PureExprKind::Variable(variable) if recursive.contains(&variable.binder()) => {}
-                PureExprKind::Computation(PureComputation::Tuple(tuple)) => {
+            match F::pure(&node.kind) {
+                Some(PureExprKind::Variable(variable))
+                    if recursive.contains(&variable.binder()) => {}
+                Some(PureExprKind::Computation(PureComputation::Tuple(tuple))) => {
                     work.extend(tuple.elements().iter().copied());
                 }
-                PureExprKind::Computation(PureComputation::Apply(application)) => {
+                Some(PureExprKind::Computation(PureComputation::Apply(application))) => {
                     let function =
                         self.node(self.erase_type_applications(application.function())?)?;
                     if !matches!(
-                        function.kind,
-                        PureExprKind::Value(PureValue::Constructor(_))
+                        F::pure(&function.kind),
+                        Some(PureExprKind::Value(PureValue::Constructor(_)))
                     ) {
                         return Ok(false);
                     }
                     work.push(application.argument());
                 }
-                PureExprKind::Value(PureValue::Function(_)) => {}
+                Some(PureExprKind::Value(PureValue::Function(_))) => {}
                 _ => return Ok(false),
             }
         }
@@ -4858,8 +6587,8 @@ impl<'program, 'source> Validator<'program, 'source> {
     fn erase_type_applications(&self, mut id: NodeId) -> Result<NodeId, ValidationError> {
         loop {
             let node = self.node(id)?;
-            let PureExprKind::Computation(PureComputation::TypeApplication(application)) =
-                &node.kind
+            let Some(PureExprKind::Computation(PureComputation::TypeApplication(application))) =
+                F::pure(&node.kind)
             else {
                 return Ok(id);
             };
@@ -4887,23 +6616,30 @@ impl<'program, 'source> Validator<'program, 'source> {
                         continue;
                     }
                     let node = self.node(id)?;
+                    self.charge_type_work(F::operation_extra_edge_count(&node.kind))?;
+                    let child_count = F::child_count(&node.kind);
+                    work.try_reserve(child_count.checked_add(1).ok_or_else(|| {
+                        ValidationError::new(ValidationReason::Resource, Some(id))
+                    })?)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
                     work.push(Task::Finish(id));
-                    for index in 0..node.kind.child_count() {
-                        work.push(Task::Visit(node.kind.child_at(index).ok_or_else(|| {
-                            ValidationError::new(ValidationReason::NodeBounds, Some(id))
-                        })?));
+                    for index in 0..child_count {
+                        work.push(Task::Visit(F::child_at(&node.kind, index).ok_or_else(
+                            || ValidationError::new(ValidationReason::NodeBounds, Some(id)),
+                        )?));
                     }
                 }
                 Task::Finish(id) => {
                     let node = self.node(id)?;
                     let direct = matches!(
-                        &node.kind,
-                        PureExprKind::Variable(variable)
+                        F::pure(&node.kind),
+                        Some(PureExprKind::Variable(variable))
                             if recursive.contains(&variable.binder())
                     );
                     let mut reaches = direct;
-                    for index in 0..node.kind.child_count() {
-                        let child = node.kind.child_at(index).ok_or_else(|| {
+                    self.charge_type_work(F::operation_extra_edge_count(&node.kind))?;
+                    for index in 0..F::child_count(&node.kind) {
+                        let child = F::child_at(&node.kind, index).ok_or_else(|| {
                             ValidationError::new(ValidationReason::NodeBounds, Some(id))
                         })?;
                         reaches |= result.get(&child).copied().unwrap_or(false);
@@ -5048,6 +6784,11 @@ impl<'program, 'source> Validator<'program, 'source> {
                     constructor,
                     payload,
                 } => {
+                    if crate::resolved::ResourceApi::for_module(constructor.owner().module())
+                        .is_some_and(|api| api.hides_constructor(*constructor))
+                    {
+                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                    }
                     let Some((owner, arity)) =
                         self.nominal_application_head_and_arity(expected.as_type())?
                     else {
@@ -5056,6 +6797,17 @@ impl<'program, 'source> Validator<'program, 'source> {
                     let Some(info) = self.program.registry.constructor(*constructor) else {
                         return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
                     };
+                    if self
+                        .program
+                        .registry
+                        .nominal(info.owner)
+                        .is_some_and(|owner| {
+                            owner.declaration_kind
+                                == crate::resolved::ResolvedNominalDeclarationKind::Newtype
+                        })
+                    {
+                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                    }
                     if info.owner != owner {
                         return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
                     }
@@ -5087,6 +6839,7 @@ impl<'program, 'source> Validator<'program, 'source> {
                             payload,
                             replacements.as_map(),
                             |cells| self.charge_type_work(cells),
+                            || ValidationError::new(ValidationReason::Resource, None),
                         )?))
                     } else {
                         None
@@ -5115,19 +6868,67 @@ impl<'program, 'source> Validator<'program, 'source> {
     }
 
     fn validate_scopes(&self) -> Result<(), ValidationError> {
+        self.validate_local_scope_bijection()?;
         let analysis = self.analyze_free_binders()?;
         if analysis.analyzed_nodes != self.program.nodes.len() {
             return Err(ValidationError::new(ValidationReason::Scope, None));
         }
-        if let Some(occurrence) = analysis
+        if let Some((key, requirement)) = analysis
             .root_requirements
-            .values()
-            .min_by_key(|node| node.value())
+            .iter()
+            .min_by_key(|(_, requirement)| requirement.occurrence.value())
         {
             return Err(ValidationError::new(
-                ValidationReason::Scope,
-                Some(*occurrence),
+                if matches!(key, ScopeRequirementKey::Resume(_, _)) {
+                    ValidationReason::Resume
+                } else {
+                    ValidationReason::Scope
+                },
+                Some(requirement.occurrence),
             ));
+        }
+        Ok(())
+    }
+
+    fn validate_local_scope_bijection(&self) -> Result<(), ValidationError> {
+        let scope_count = self.program.registry.lexical_nominals().len();
+        if scope_count == 0 {
+            return Ok(());
+        }
+        self.charge_type_work(
+            scope_count
+                .checked_mul(2)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
+        )?;
+        let mut expected = HashSet::new();
+        expected
+            .try_reserve(scope_count)
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        expected.extend(
+            self.program
+                .registry
+                .lexical_nominals()
+                .iter()
+                .map(|nominal| nominal.id),
+        );
+        let mut introduced = HashSet::new();
+        introduced
+            .try_reserve(expected.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        for (index, node) in self.program.nodes.iter().enumerate() {
+            let Some(PureExprKind::Computation(PureComputation::LocalNominalScope(scope))) =
+                F::pure(&node.kind)
+            else {
+                continue;
+            };
+            let id = node_id(self.program.arena, index)?;
+            self.charge_type_work(1)?;
+            if !expected.contains(&scope.owner()) || !introduced.insert(scope.owner()) {
+                return Err(ValidationError::new(ValidationReason::Scope, Some(id)));
+            }
+        }
+        if introduced != expected {
+            return Err(ValidationError::new(ValidationReason::Scope, None));
         }
         Ok(())
     }
@@ -5138,10 +6939,9 @@ impl<'program, 'source> Validator<'program, 'source> {
         let mut remaining_uses = vec![0_usize; self.program.nodes.len()];
         for (index, node) in self.program.nodes.iter().enumerate() {
             let id = node_id(self.program.arena, index)?;
-            for child_index in 0..node.kind.child_count() {
-                let child = node
-                    .kind
-                    .child_at(child_index)
+            self.charge_type_work(F::operation_extra_edge_count(&node.kind))?;
+            for child_index in 0..F::child_count(&node.kind) {
+                let child = F::child_at(&node.kind, child_index)
                     .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, Some(id)))?;
                 let child_index = self.index(child)?;
                 remaining_uses[child_index] = remaining_uses[child_index]
@@ -5158,10 +6958,16 @@ impl<'program, 'source> Validator<'program, 'source> {
                         continue;
                     }
                     scheduled[index] = true;
-                    work.push(ScopeAnalysisTask::Finish(id));
                     let kind = &self.node(id)?.kind;
-                    for child_index in (0..kind.child_count()).rev() {
-                        let child = kind.child_at(child_index).ok_or_else(|| {
+                    self.charge_type_work(F::operation_extra_edge_count(kind))?;
+                    let child_count = F::child_count(kind);
+                    work.try_reserve(child_count.checked_add(1).ok_or_else(|| {
+                        ValidationError::new(ValidationReason::Resource, Some(id))
+                    })?)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+                    work.push(ScopeAnalysisTask::Finish(id));
+                    for child_index in (0..child_count).rev() {
+                        let child = F::child_at(kind, child_index).ok_or_else(|| {
                             ValidationError::new(ValidationReason::TypeScope, Some(id))
                         })?;
                         work.push(ScopeAnalysisTask::Enter(child));
@@ -5172,62 +6978,147 @@ impl<'program, 'source> Validator<'program, 'source> {
                     let mut free = HashSet::new();
                     self.charge_type_structure(&node.ty)?;
                     self.collect_free_type_variables(&node.ty, &mut free)?;
-                    for child_index in 0..node.kind.child_count() {
-                        let child = node.kind.child_at(child_index).ok_or_else(|| {
+                    self.collect_effect_row_type_variables(
+                        F::effect_row(&node.effects),
+                        &mut free,
+                    )?;
+                    self.charge_type_work(F::operation_extra_edge_count(&node.kind))?;
+                    for child_index in 0..F::child_count(&node.kind) {
+                        let child = F::child_at(&node.kind, child_index).ok_or_else(|| {
                             ValidationError::new(ValidationReason::TypeScope, Some(id))
                         })?;
-                        let child_free = self.take_type_scope_requirements(
+                        let mut child_free = self.take_type_scope_requirements(
                             &mut requirements,
                             &mut remaining_uses,
                             child,
                             id,
                         )?;
+                        if child_index == 1
+                            && let Some(resource) = F::resource_scope(&node.kind)
+                        {
+                            child_free.remove(&resource.acquisition.identity);
+                        }
                         self.merge_type_scope_requirements(&mut free, child_free)?;
                     }
-                    match &node.kind {
-                        PureExprKind::Value(PureValue::Function(function)) => {
+                    match F::pure(&node.kind) {
+                        Some(PureExprKind::Value(PureValue::Function(function))) => {
                             self.charge_type_structure(function.parameter().ty())?;
                             self.collect_free_type_variables(function.parameter().ty(), &mut free)?;
                         }
-                        PureExprKind::Computation(PureComputation::Bind(binding)) => {
+                        Some(PureExprKind::Computation(PureComputation::Bind(binding))) => {
                             self.charge_type_structure(binding.binder().ty())?;
                             self.collect_free_type_variables(binding.binder().ty(), &mut free)?;
+                            let owners = self.program.method_evidence.lexical_owners();
+                            if !owners.is_empty() {
+                                self.charge_type_work(owners.len())?;
+                                if let Some(owner) = owners
+                                    .iter()
+                                    .find(|owner| owner.binder == binding.binder().id())
+                                {
+                                    let mut replacements =
+                                        self.enclosing_implementation_replacements(id)?;
+                                    self.extend_lexical_method_replacements(id, &mut replacements)?;
+                                    let application = self.substitute_interface_application(
+                                        &owner.application,
+                                        replacements.as_map(),
+                                    )?;
+                                    for argument in application.arguments() {
+                                        self.charge_type_structure(argument)?;
+                                        self.collect_free_type_variables(argument, &mut free)?;
+                                    }
+                                }
+                            }
                         }
-                        PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+                        Some(PureExprKind::Computation(PureComputation::RecursiveBind(group))) => {
                             for member in group.members() {
                                 self.charge_type_structure(member.binder().ty())?;
                                 self.collect_free_type_variables(member.binder().ty(), &mut free)?;
                             }
                         }
-                        PureExprKind::Computation(PureComputation::Match(match_node)) => {
+                        Some(PureExprKind::Computation(PureComputation::Match(match_node))) => {
                             for arm in match_node.arms() {
                                 self.charge_pattern_type_structure(arm.pattern())?;
                                 self.collect_pattern_type_variables(arm.pattern(), &mut free)?;
                             }
                         }
-                        PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
+                        Some(PureExprKind::Computation(PureComputation::TypeApplication(
+                            operation,
+                        ))) => {
                             for argument in operation.arguments() {
                                 self.charge_type_structure(argument)?;
                                 self.collect_free_type_variables(argument, &mut free)?;
                             }
+                            for row in operation.row_arguments() {
+                                self.collect_effect_row_type_variables(row, &mut free)?;
+                            }
                         }
-                        PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
+                        Some(PureExprKind::Computation(PureComputation::TypeAbstraction(
+                            operation,
+                        ))) => {
                             for (parameter, _) in operation.parameters() {
                                 free.remove(parameter);
                             }
                         }
-                        PureExprKind::Value(
-                            PureValue::Integer(_)
-                            | PureValue::Boolean(_)
-                            | PureValue::Unit(_)
-                            | PureValue::Constructor(_),
-                        )
-                        | PureExprKind::Variable(_)
-                        | PureExprKind::Computation(
-                            PureComputation::Apply(_)
-                            | PureComputation::Primitive(_)
-                            | PureComputation::Tuple(_),
+                        Some(PureExprKind::Computation(PureComputation::LocalNominalScope(
+                            scope,
+                        ))) => {
+                            let representation =
+                                self.scoped_lexical_representation(scope.owner(), id)?;
+                            let mut captured = HashSet::new();
+                            self.charge_type_structure(&representation)?;
+                            self.collect_free_type_variables(&representation, &mut captured)?;
+                            for parameter in self
+                                .program
+                                .registry
+                                .nominal_parameters(scope.owner())
+                                .ok_or_else(|| {
+                                    ValidationError::new(ValidationReason::Registry, Some(id))
+                                })?
+                            {
+                                self.charge_type_work(1)?;
+                                captured.remove(&parameter.id);
+                            }
+                            self.merge_type_scope_requirements(&mut free, captured)?;
+                        }
+                        Some(
+                            PureExprKind::Value(
+                                PureValue::Integer(_)
+                                | PureValue::Boolean(_)
+                                | PureValue::Unit(_)
+                                | PureValue::Constructor(_),
+                            )
+                            | PureExprKind::Variable(_)
+                            | PureExprKind::Computation(
+                                PureComputation::Apply(_)
+                                | PureComputation::Primitive(_)
+                                | PureComputation::Tuple(_)
+                                | PureComputation::NewtypeConversion(_),
+                            ),
                         ) => {}
+                        None => {}
+                    }
+                    let mut metadata_error = None;
+                    F::visit_operation_type_metadata(&node.kind, &mut |metadata| {
+                        // The resource handle's exact type is authenticated at
+                        // its node; its sole variable is owned by that node.
+                        if metadata_error.is_some() || F::resource_scope(&node.kind).is_some() {
+                            return;
+                        }
+                        metadata_error = match metadata {
+                            super::dialect::OperationTypeMetadata::Type(ty) => self
+                                .charge_type_structure(ty)
+                                .and_then(|()| self.collect_free_type_variables(ty, &mut free))
+                                .err(),
+                            super::dialect::OperationTypeMetadata::Pattern(pattern) => self
+                                .charge_pattern_type_structure(pattern)
+                                .and_then(|()| {
+                                    self.collect_pattern_type_variables(pattern, &mut free)
+                                })
+                                .err(),
+                        };
+                    });
+                    if let Some(error) = metadata_error {
+                        return Err(error);
                     }
                     requirements[self.index(id)?] = Some(free);
                 }
@@ -5344,6 +7235,11 @@ impl<'program, 'source> Validator<'program, 'source> {
                     work.push(Task::Visit(codomain));
                     work.push(Task::Visit(domain));
                 }
+                Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
+                    self.collect_effect_row_type_variables(codomain.effects(), &mut discovered)?;
+                    work.push(Task::Visit(codomain.value()));
+                    work.push(Task::Visit(domain));
+                }
                 Task::Visit(Type::Forall(parameters, body)) => {
                     quantified.push(parameters.as_ref());
                     work.push(Task::Visit(body));
@@ -5365,6 +7261,37 @@ impl<'program, 'source> Validator<'program, 'source> {
             }
         }
         self.merge_type_scope_requirements(output, discovered)
+    }
+
+    fn collect_effect_row_type_variables(
+        &self,
+        row: &EffectRow,
+        output: &mut HashSet<crate::types::TypeVariableId>,
+    ) -> Result<(), ValidationError> {
+        self.charge_type_work(
+            row.known()
+                .len()
+                .saturating_add(usize::from(row.tail().is_some())),
+        )?;
+        for instance in row.known() {
+            for argument in instance.arguments() {
+                self.charge_type_structure(argument)?;
+                self.collect_free_type_variables(argument, output)?;
+            }
+        }
+        if let Some(tail) = row.tail() {
+            if let crate::types::EffectRowVariable::Rigid(variable) = tail.variable() {
+                self.retain_type_scope_requirement(output, variable)?;
+            }
+            self.charge_type_work(tail.lacks().len())?;
+            for instance in tail.lacks() {
+                for argument in instance.arguments() {
+                    self.charge_type_structure(argument)?;
+                    self.collect_free_type_variables(argument, output)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn collect_pattern_type_variables(
@@ -5420,10 +7347,16 @@ impl<'program, 'source> Validator<'program, 'source> {
                         continue;
                     }
                     scheduled[index] = true;
-                    work.push(ScopeAnalysisTask::Finish(id));
                     let kind = &self.node(id)?.kind;
-                    for child_index in (0..kind.child_count()).rev() {
-                        let child = kind.child_at(child_index).ok_or_else(|| {
+                    self.charge_type_work(F::operation_extra_edge_count(kind))?;
+                    let child_count = F::child_count(kind);
+                    work.try_reserve(child_count.checked_add(1).ok_or_else(|| {
+                        ValidationError::new(ValidationReason::Resource, Some(id))
+                    })?)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+                    work.push(ScopeAnalysisTask::Finish(id));
+                    for child_index in (0..child_count).rev() {
+                        let child = F::child_at(kind, child_index).ok_or_else(|| {
                             ValidationError::new(ValidationReason::Scope, Some(id))
                         })?;
                         work.push(ScopeAnalysisTask::Enter(child));
@@ -5431,82 +7364,201 @@ impl<'program, 'source> Validator<'program, 'source> {
                 }
                 ScopeAnalysisTask::Finish(id) => {
                     let node = self.node(id)?;
-                    let free = match &node.kind {
-                        PureExprKind::Variable(variable) => {
-                            HashMap::from([(variable.binder(), id)])
-                        }
-                        PureExprKind::Value(PureValue::Function(function)) => {
+                    let mut free = match F::pure(&node.kind) {
+                        Some(PureExprKind::Variable(variable)) => HashMap::from([(
+                            ScopeRequirementKey::Binder(variable.binder()),
+                            ScopeRequirement {
+                                occurrence: id,
+                                paths: 0,
+                            },
+                        )]),
+                        Some(PureExprKind::Value(PureValue::Function(function))) => {
                             let mut body = self.requirements_for(&requirements, function.body())?;
-                            body.remove(&function.parameter().id());
+                            self.reject_resume_capture(&body, id)?;
+                            body.remove(&ScopeRequirementKey::Binder(function.parameter().id()));
                             body
                         }
-                        PureExprKind::Computation(PureComputation::Bind(binding)) => {
-                            let initializer =
+                        Some(PureExprKind::Computation(PureComputation::Bind(binding))) => {
+                            let mut initializer =
                                 self.requirements_for(&requirements, binding.initializer())?;
+                            if !self.program.method_evidence.lexical_owners().is_empty() {
+                                self.charge_type_work(
+                                    self.program.method_evidence.lexical_owners().len(),
+                                )?;
+                                if let Some(owner) = self
+                                    .program
+                                    .method_evidence
+                                    .lexical_owners()
+                                    .iter()
+                                    .find(|owner| owner.binder == binding.binder().id())
+                                {
+                                    for argument in owner.application.arguments() {
+                                        self.collect_type_local_nominals(
+                                            argument,
+                                            id,
+                                            &mut initializer,
+                                        )?;
+                                    }
+                                    self.charge_type_work(owner.captures.len())?;
+                                    if owner.captures.iter().any(|capture| {
+                                        !initializer
+                                            .contains_key(&ScopeRequirementKey::Binder(*capture))
+                                    }) {
+                                        return Err(ValidationError::new(
+                                            ValidationReason::Scope,
+                                            Some(id),
+                                        ));
+                                    }
+                                }
+                            }
                             let mut body = self.requirements_for(&requirements, binding.body())?;
-                            body.remove(&binding.binder().id());
-                            union_requirements(initializer, body)
+                            body.remove(&ScopeRequirementKey::Binder(binding.binder().id()));
+                            self.union_scope_requirements(initializer, body, id)?
                         }
-                        PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
+                        Some(PureExprKind::Computation(PureComputation::RecursiveBind(group))) => {
                             let mut free = self.requirements_for(&requirements, group.body())?;
                             for member in group.members() {
                                 let initializer =
                                     self.requirements_for(&requirements, member.initializer())?;
-                                free = union_requirements(free, initializer);
+                                self.reject_resume_capture(&initializer, id)?;
+                                free = self.union_scope_requirements(free, initializer, id)?;
                             }
                             for member in group.members() {
-                                free.remove(&member.binder().id());
+                                free.remove(&ScopeRequirementKey::Binder(member.binder().id()));
                             }
                             free
                         }
-                        PureExprKind::Computation(PureComputation::Apply(application)) => {
+                        Some(PureExprKind::Computation(PureComputation::Apply(application))) => {
                             let function =
                                 self.requirements_for(&requirements, application.function())?;
                             let argument =
                                 self.requirements_for(&requirements, application.argument())?;
-                            union_requirements(function, argument)
+                            self.union_scope_requirements(function, argument, id)?
                         }
-                        PureExprKind::Computation(PureComputation::Primitive(primitive)) => {
+                        Some(PureExprKind::Computation(PureComputation::Primitive(primitive))) => {
                             let left = self.requirements_for(&requirements, primitive.left())?;
                             let right = self.requirements_for(&requirements, primitive.right())?;
-                            union_requirements(left, right)
+                            self.union_scope_requirements(left, right, id)?
                         }
-                        PureExprKind::Computation(PureComputation::Tuple(tuple)) => {
+                        Some(PureExprKind::Computation(PureComputation::Tuple(tuple))) => {
                             let mut free = HashMap::new();
                             for element in tuple.elements() {
-                                free = union_requirements(
+                                free = self.union_scope_requirements(
                                     free,
                                     self.requirements_for(&requirements, *element)?,
-                                );
+                                    id,
+                                )?;
                             }
                             free
                         }
-                        PureExprKind::Computation(PureComputation::Match(match_node)) => {
+                        Some(PureExprKind::Computation(PureComputation::Match(match_node))) => {
                             let mut free =
                                 self.requirements_for(&requirements, match_node.scrutinee())?;
+                            let mut branch_resumes: Option<ScopeRequirements> = None;
                             for arm in match_node.arms() {
                                 let mut arm_free =
                                     self.requirements_for(&requirements, arm.body())?;
                                 for binder in arm.pattern().binder_iter() {
-                                    arm_free.remove(&binder.id());
+                                    arm_free.remove(&ScopeRequirementKey::Binder(binder.id()));
                                 }
-                                free = union_requirements(free, arm_free);
+                                arm_free.retain(|key, requirement| match key {
+                                    ScopeRequirementKey::Binder(_)
+                                    | ScopeRequirementKey::LocalNominal(_) => {
+                                        free.entry(*key).or_insert(*requirement);
+                                        false
+                                    }
+                                    ScopeRequirementKey::Resume(_, _) => true,
+                                });
+                                if let Some(expected) = &branch_resumes {
+                                    if expected.len() != arm_free.len()
+                                        || expected.iter().any(|(key, requirement)| {
+                                            arm_free.get(key).is_none_or(|actual| {
+                                                actual.paths != requirement.paths
+                                            })
+                                        })
+                                    {
+                                        return Err(ValidationError::new(
+                                            ValidationReason::Resume,
+                                            Some(id),
+                                        ));
+                                    }
+                                } else {
+                                    branch_resumes = Some(arm_free);
+                                }
+                            }
+                            if let Some(resumes) = branch_resumes {
+                                free = self.union_scope_requirements(free, resumes, id)?;
                             }
                             free
                         }
-                        PureExprKind::Computation(PureComputation::TypeAbstraction(operation)) => {
-                            self.requirements_for(&requirements, operation.body())?
+                        Some(PureExprKind::Computation(PureComputation::TypeAbstraction(
+                            operation,
+                        ))) => {
+                            let body = self.requirements_for(&requirements, operation.body())?;
+                            self.reject_resume_capture(&body, id)?;
+                            body
                         }
-                        PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
-                            self.requirements_for(&requirements, operation.function())?
+                        Some(PureExprKind::Computation(PureComputation::NewtypeConversion(
+                            operation,
+                        ))) => self.requirements_for(&requirements, operation.child())?,
+                        Some(PureExprKind::Computation(PureComputation::LocalNominalScope(
+                            operation,
+                        ))) => {
+                            let mut body =
+                                self.requirements_for(&requirements, operation.body())?;
+                            body.remove(&ScopeRequirementKey::LocalNominal(operation.owner()));
+                            body
                         }
-                        PureExprKind::Value(
+                        Some(PureExprKind::Computation(PureComputation::TypeApplication(
+                            operation,
+                        ))) => self.requirements_for(&requirements, operation.function())?,
+                        Some(PureExprKind::Value(
                             PureValue::Integer(_)
                             | PureValue::Boolean(_)
                             | PureValue::Unit(_)
                             | PureValue::Constructor(_),
-                        ) => HashMap::new(),
+                        )) => HashMap::new(),
+                        None => {
+                            let mut free = HashMap::new();
+                            self.charge_type_work(F::operation_extra_edge_count(&node.kind))?;
+                            for child_index in 0..F::child_count(&node.kind) {
+                                let child =
+                                    F::child_at(&node.kind, child_index).ok_or_else(|| {
+                                        ValidationError::new(ValidationReason::Scope, Some(id))
+                                    })?;
+                                let mut child_free = self.requirements_for(&requirements, child)?;
+                                F::visit_operation_child_binders(
+                                    &node.kind,
+                                    child_index,
+                                    &mut |binder| {
+                                        child_free.remove(&ScopeRequirementKey::Binder(binder));
+                                    },
+                                );
+                                if let Some((handler, owner)) =
+                                    F::clause_capability(&node.kind, child_index)
+                                {
+                                    let capability = child_free
+                                        .remove(&ScopeRequirementKey::Resume(handler, owner));
+                                    if capability.is_none_or(|capability| capability.paths != 1)
+                                        || child_free.keys().any(|key| {
+                                            matches!(key, ScopeRequirementKey::Resume(_, _))
+                                        })
+                                    {
+                                        return Err(ValidationError::new(
+                                            ValidationReason::Resume,
+                                            Some(child),
+                                        ));
+                                    }
+                                }
+                                free = self.union_scope_requirements(free, child_free, id)?;
+                            }
+                            if let Some((handler, owner)) = F::resume_capability(&node.kind) {
+                                self.retain_resume_requirement(&mut free, handler, owner, id, 1)?;
+                            }
+                            free
+                        }
                     };
+                    self.collect_node_local_nominals(node, id, &mut free)?;
                     let index = self.index(id)?;
                     requirements[index] = Some(free);
                     analyzed_nodes += 1;
@@ -5526,14 +7578,289 @@ impl<'program, 'source> Validator<'program, 'source> {
 
     fn requirements_for(
         &self,
-        requirements: &[Option<HashMap<BinderId, NodeId>>],
+        requirements: &[Option<ScopeRequirements>],
         id: NodeId,
-    ) -> Result<HashMap<BinderId, NodeId>, ValidationError> {
+    ) -> Result<ScopeRequirements, ValidationError> {
         let index = self.index(id)?;
         let Some(free) = requirements.get(index).and_then(Option::as_ref) else {
             return Err(ValidationError::new(ValidationReason::Scope, Some(id)));
         };
-        Ok(free.clone())
+        let capability_count = free
+            .keys()
+            .filter(|key| {
+                matches!(
+                    key,
+                    ScopeRequirementKey::Resume(_, _) | ScopeRequirementKey::LocalNominal(_)
+                )
+            })
+            .count();
+        self.charge_type_work(capability_count)?;
+        let mut cloned = HashMap::new();
+        cloned
+            .try_reserve(free.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+        cloned.extend(free.iter().map(|(key, requirement)| (*key, *requirement)));
+        Ok(cloned)
+    }
+
+    fn reject_resume_capture(
+        &self,
+        requirements: &ScopeRequirements,
+        owner: NodeId,
+    ) -> Result<(), ValidationError> {
+        if requirements
+            .keys()
+            .any(|key| matches!(key, ScopeRequirementKey::Resume(_, _)))
+        {
+            Err(ValidationError::new(ValidationReason::Resume, Some(owner)))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn retain_resume_requirement(
+        &self,
+        requirements: &mut ScopeRequirements,
+        handler: super::effect::HandlerId,
+        owner: crate::resolved::ResumeId,
+        occurrence: NodeId,
+        paths: u8,
+    ) -> Result<(), ValidationError> {
+        let key = ScopeRequirementKey::Resume(handler, owner);
+        if let Some(current) = requirements.get_mut(&key) {
+            current.paths = current.paths.saturating_add(paths).min(2);
+            return Ok(());
+        }
+        self.charge_type_work(1)?;
+        requirements
+            .try_reserve(1)
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(occurrence)))?;
+        requirements.insert(key, ScopeRequirement { occurrence, paths });
+        Ok(())
+    }
+
+    fn union_scope_requirements(
+        &self,
+        mut left: ScopeRequirements,
+        right: ScopeRequirements,
+        _owner: NodeId,
+    ) -> Result<ScopeRequirements, ValidationError> {
+        for (key, requirement) in right {
+            match key {
+                ScopeRequirementKey::Binder(_) => {
+                    left.entry(key).or_insert(requirement);
+                }
+                ScopeRequirementKey::LocalNominal(owner) => {
+                    self.retain_local_nominal_requirement(&mut left, owner, requirement.occurrence)?
+                }
+                ScopeRequirementKey::Resume(handler, resume) => self.retain_resume_requirement(
+                    &mut left,
+                    handler,
+                    resume,
+                    requirement.occurrence,
+                    requirement.paths,
+                )?,
+            }
+        }
+        Ok(left)
+    }
+
+    fn retain_local_nominal_requirement(
+        &self,
+        requirements: &mut ScopeRequirements,
+        owner: crate::types::NominalTypeId,
+        occurrence: NodeId,
+    ) -> Result<(), ValidationError> {
+        let key = ScopeRequirementKey::LocalNominal(owner);
+        if requirements.contains_key(&key) {
+            return Ok(());
+        }
+        self.charge_type_work(1)?;
+        requirements
+            .try_reserve(1)
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(occurrence)))?;
+        requirements.insert(
+            key,
+            ScopeRequirement {
+                occurrence,
+                paths: 0,
+            },
+        );
+        Ok(())
+    }
+
+    fn collect_type_local_nominals(
+        &self,
+        ty: &Type,
+        occurrence: NodeId,
+        requirements: &mut ScopeRequirements,
+    ) -> Result<(), ValidationError> {
+        let mut identities = HashSet::new();
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let result = crate::resolved::collect_nominal_identities(ty, &mut identities, &mut budget);
+        self.charge_type_work(budget.used())?;
+        result.map_err(|()| ValidationError::new(ValidationReason::Resource, Some(occurrence)))?;
+        for owner in identities.into_iter().filter(|owner| owner.is_lexical()) {
+            self.retain_local_nominal_requirement(requirements, owner, occurrence)?;
+        }
+        Ok(())
+    }
+
+    fn collect_row_local_nominals(
+        &self,
+        row: &EffectRow,
+        occurrence: NodeId,
+        requirements: &mut ScopeRequirements,
+    ) -> Result<(), ValidationError> {
+        self.charge_type_work(1)?;
+        if row.tail().is_some() {
+            self.charge_type_work(1)?;
+        }
+        for instance in row
+            .known()
+            .iter()
+            .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+        {
+            self.charge_type_work(1)?;
+            for argument in instance.arguments() {
+                self.collect_type_local_nominals(argument, occurrence, requirements)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_pattern_local_nominals(
+        &self,
+        root: &CorePattern,
+        occurrence: NodeId,
+        requirements: &mut ScopeRequirements,
+    ) -> Result<(), ValidationError> {
+        let mut work = vec![root];
+        while let Some(pattern) = work.pop() {
+            self.collect_type_local_nominals(&pattern.ty, occurrence, requirements)?;
+            match &pattern.kind {
+                CorePatternKind::Binder(binder) => {
+                    self.collect_type_local_nominals(binder.ty(), occurrence, requirements)?;
+                }
+                CorePatternKind::Tuple(elements) => work.extend(elements),
+                CorePatternKind::Constructor {
+                    constructor,
+                    payload,
+                } => {
+                    if constructor.owner().is_lexical() {
+                        self.retain_local_nominal_requirement(
+                            requirements,
+                            constructor.owner(),
+                            occurrence,
+                        )?;
+                    }
+                    if let Some(payload) = payload.as_deref() {
+                        work.push(payload);
+                    }
+                }
+                CorePatternKind::Wildcard | CorePatternKind::Boolean(_) | CorePatternKind::Unit => {
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_node_local_nominals(
+        &self,
+        node: &StoredNode<F>,
+        occurrence: NodeId,
+        requirements: &mut ScopeRequirements,
+    ) -> Result<(), ValidationError> {
+        if self.program.registry.lexical_nominals().is_empty() {
+            return Ok(());
+        }
+        self.collect_type_local_nominals(&node.ty, occurrence, requirements)?;
+        self.collect_row_local_nominals(F::effect_row(&node.effects), occurrence, requirements)?;
+        match F::pure(&node.kind) {
+            Some(PureExprKind::Computation(PureComputation::LocalNominalScope(scope))) => {
+                let nominal = self
+                    .program
+                    .registry
+                    .nominal(scope.owner())
+                    .ok_or_else(|| {
+                        ValidationError::new(ValidationReason::Registry, Some(occurrence))
+                    })?;
+                let representation = nominal.representation.as_ref().ok_or_else(|| {
+                    ValidationError::new(ValidationReason::Registry, Some(occurrence))
+                })?;
+                self.collect_type_local_nominals(representation, occurrence, requirements)?;
+            }
+            Some(PureExprKind::Value(PureValue::Function(function))) => {
+                self.collect_type_local_nominals(
+                    function.parameter().ty(),
+                    occurrence,
+                    requirements,
+                )?;
+            }
+            Some(PureExprKind::Value(PureValue::Constructor(constructor))) => {
+                let owner = constructor.constructor().owner();
+                if owner.is_lexical() {
+                    self.retain_local_nominal_requirement(requirements, owner, occurrence)?;
+                }
+            }
+            Some(PureExprKind::Computation(PureComputation::Bind(binding))) => {
+                self.collect_type_local_nominals(binding.binder().ty(), occurrence, requirements)?;
+            }
+            Some(PureExprKind::Computation(PureComputation::RecursiveBind(group))) => {
+                for member in group.members() {
+                    self.collect_type_local_nominals(
+                        member.binder().ty(),
+                        occurrence,
+                        requirements,
+                    )?;
+                }
+            }
+            Some(PureExprKind::Computation(PureComputation::Match(matched))) => {
+                for arm in matched.arms() {
+                    self.collect_pattern_local_nominals(arm.pattern(), occurrence, requirements)?;
+                }
+            }
+            Some(PureExprKind::Computation(PureComputation::NewtypeConversion(conversion))) => {
+                if conversion.owner().is_lexical() {
+                    self.retain_local_nominal_requirement(
+                        requirements,
+                        conversion.owner(),
+                        occurrence,
+                    )?;
+                }
+            }
+            Some(PureExprKind::Computation(PureComputation::TypeApplication(application))) => {
+                for argument in application.arguments() {
+                    self.collect_type_local_nominals(argument, occurrence, requirements)?;
+                }
+                for row in application.row_arguments() {
+                    self.collect_row_local_nominals(row, occurrence, requirements)?;
+                }
+            }
+            Some(_) => {}
+            None => {
+                let mut failure = None;
+                F::visit_operation_type_metadata(&node.kind, &mut |metadata| {
+                    if failure.is_some() {
+                        return;
+                    }
+                    failure = match metadata {
+                        super::dialect::OperationTypeMetadata::Type(ty) => self
+                            .collect_type_local_nominals(ty, occurrence, requirements)
+                            .err(),
+                        super::dialect::OperationTypeMetadata::Pattern(pattern) => self
+                            .collect_pattern_local_nominals(pattern, occurrence, requirements)
+                            .err(),
+                    };
+                });
+                if let Some(error) = failure {
+                    return Err(error);
+                }
+            }
+        }
+        Ok(())
     }
 
     fn index(&self, id: NodeId) -> Result<usize, ValidationError> {
@@ -5546,12 +7873,1550 @@ impl<'program, 'source> Validator<'program, 'source> {
             .ok_or_else(|| ValidationError::new(ValidationReason::NodeBounds, Some(id)))
     }
 
-    fn node(&self, id: NodeId) -> Result<&'program StoredNode, ValidationError> {
+    fn node(&self, id: NodeId) -> Result<&'program StoredNode<F>, ValidationError> {
         let index = self.index(id)?;
         self.program
             .nodes
             .get(index)
             .ok_or_else(|| ValidationError::new(ValidationReason::NodeBounds, Some(id)))
+    }
+
+    fn pure_kind(&self, id: NodeId) -> Result<&'program PureExprKind, ValidationError> {
+        F::pure(&self.node(id)?.kind)
+            .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, Some(id)))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct EffectClauseContract {
+    handler: NodeId,
+    clause: usize,
+}
+
+impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperationFamily> {
+    fn validate_cleanup_owner(
+        &self,
+        id: NodeId,
+        node: &StoredNode<super::effect::EffectOperationFamily>,
+        scope: &super::effect::CleanupScopeNode,
+    ) -> Result<(), ValidationError> {
+        use super::effect::EffectExprKind;
+        let invalid = || ValidationError::new(ValidationReason::Handler, Some(id));
+        self.charge_type_work(4)?;
+        let action = self.node(scope.action)?;
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(application))) =
+            &action.kind
+        else {
+            return Err(invalid());
+        };
+        let function = self.node(application.function())?;
+        let argument = self.node(application.argument())?;
+        let EffectExprKind::Pure(PureExprKind::Variable(variable)) = &function.kind else {
+            return Err(invalid());
+        };
+        let Some(signature) = function.ty.function_view() else {
+            return Err(invalid());
+        };
+        let body = self.node(scope.body)?;
+        let effects = self.union_effect_rows_charged(&body.effects, &action.effects, id)?;
+        if variable.binder() != scope.callback
+            || !matches!(
+                &argument.kind,
+                EffectExprKind::Pure(PureExprKind::Value(PureValue::Unit(_)))
+            )
+            || !self.same_type_charged(signature.domain(), &Type::Unit)?
+            || !self.same_type_charged(signature.value(), &Type::Unit)?
+            || !self.same_type_charged(&node.ty, &body.ty)?
+            || !self.same_effect_row_charged(&node.effects, &effects, id)?
+            || node.origin.as_ref().map(Origin::primary_span) != Some(scope.span)
+            || [action, function, argument].iter().any(|child| {
+                child.origin.as_ref().map(Origin::primary_span) != Some(scope.action_span)
+            })
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
+    fn validate_registration_owner(
+        &self,
+        id: NodeId,
+        node: &StoredNode<super::effect::EffectOperationFamily>,
+        scope: &super::effect::RegistrationScopeNode,
+    ) -> Result<(), ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation};
+        let invalid = || ValidationError::new(ValidationReason::Handler, Some(id));
+        self.charge_type_work(1)?;
+        let child = self.node(scope.body)?;
+        let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &child.kind else {
+            return Err(invalid());
+        };
+        let registration = handler.hook_registration.as_ref().ok_or_else(invalid)?;
+        if handler.hook_root.is_some()
+            || handler.id != scope.handler
+            || registration.callback != scope.callback
+            || registration.span != scope.span
+            || node.origin.as_ref().map(Origin::primary_span) != Some(scope.span)
+            || !self.same_type_charged(&node.ty, &child.ty)?
+            || !self.same_effect_row_charged(&node.effects, &child.effects, id)?
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+
+    fn validate_registration_contract(
+        &self,
+        id: NodeId,
+        node: &StoredNode<super::effect::EffectOperationFamily>,
+        handler: &super::effect::HandlerNode,
+        contract: &crate::resolved::HookRegistrationContract,
+    ) -> Result<(), ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation};
+        let invalid = || ValidationError::new(ValidationReason::Handler, Some(id));
+        self.charge_type_work(18)?;
+        let declaration = self
+            .program
+            .registry
+            .effect(handler.effect.effect())
+            .ok_or_else(invalid)?;
+        let [operation] = &*declaration.operations else {
+            return Err(invalid());
+        };
+        let signature = operation
+            .annotation
+            .ty
+            .function_view()
+            .ok_or_else(invalid)?;
+        let [clause] = &*handler.clauses else {
+            return Err(invalid());
+        };
+        let CorePatternKind::Binder(input) = &clause.pattern().kind else {
+            return Err(invalid());
+        };
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let target_matches = crate::types::compare_effect_instances_with_budget(
+            &contract.target,
+            &handler.effect,
+            &mut budget,
+        );
+        self.charge_type_work(budget.used())?;
+        if target_matches
+            .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))?
+            != std::cmp::Ordering::Equal
+            || handler.hook_root.is_some()
+            || operation.spelling != "publish"
+            || !self.same_type_charged(signature.domain(), signature.value())?
+            || contract.operation != operation.id
+            || clause.operation() != contract.operation
+            || input.id() != contract.input
+            || clause.resume() != contract.resume
+            || node.origin.as_ref().map(Origin::primary_span) != Some(contract.span)
+            || contract.target_span.source() != contract.span.source()
+            || contract.target_span.range().start() < contract.span.range().start()
+            || contract.target_span.range().end() > contract.span.range().end()
+            || clause.origin().primary_span() != contract.target_span
+            || clause.pattern().origin.primary_span() != contract.target_span
+            || input.origin().primary_span() != contract.target_span
+        {
+            return Err(invalid());
+        }
+        let binders = [
+            contract.callback,
+            contract.input,
+            contract.previous,
+            contract.next,
+        ];
+        for (index, binder) in binders.iter().enumerate() {
+            if binders[..index].contains(binder) {
+                return Err(invalid());
+            }
+        }
+        let previous_node = self.node(clause.body())?;
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(previous))) =
+            &previous_node.kind
+        else {
+            return Err(invalid());
+        };
+        let next_node = self.node(previous.body())?;
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(next))) =
+            &next_node.kind
+        else {
+            return Err(invalid());
+        };
+        let request_node = self.node(previous.initializer())?;
+        let EffectExprKind::Operation(EffectOperation::Request(request)) = &request_node.kind
+        else {
+            return Err(invalid());
+        };
+        let application_node = self.node(next.initializer())?;
+        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(application))) =
+            &application_node.kind
+        else {
+            return Err(invalid());
+        };
+        let resume_node = self.node(next.body())?;
+        let EffectExprKind::Operation(EffectOperation::Resume(resume)) = &resume_node.kind else {
+            return Err(invalid());
+        };
+        let variable = |node, binder| -> Result<bool, ValidationError> {
+            let node = self.node(node)?;
+            Ok(
+                matches!(&node.kind, EffectExprKind::Pure(PureExprKind::Variable(value)) if value.binder() == binder)
+                    && node.origin.as_ref().map(Origin::primary_span) == Some(contract.target_span),
+            )
+        };
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let forwarding_matches = crate::types::compare_effect_instances_with_budget(
+            request.effect(),
+            &contract.target,
+            &mut budget,
+        );
+        self.charge_type_work(budget.used())?;
+        if forwarding_matches
+            .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))?
+            != std::cmp::Ordering::Equal
+            || previous.binder().id() != contract.previous
+            || next.binder().id() != contract.next
+            || request.operation() != contract.operation
+            || resume.handler() != handler.id()
+            || resume.owner() != contract.resume
+            || resume.use_state() != super::effect::ResumeUse::Consumed
+            || !variable(request.operand(), contract.input)?
+            || !variable(application.function(), contract.callback)?
+            || !variable(application.argument(), contract.previous)?
+            || !variable(resume.value(), contract.next)?
+        {
+            return Err(invalid());
+        }
+        for stored in [
+            previous_node,
+            next_node,
+            request_node,
+            application_node,
+            resume_node,
+        ] {
+            if stored.origin.as_ref().map(Origin::primary_span) != Some(contract.target_span) {
+                return Err(invalid());
+            }
+        }
+        for binder in [previous.binder(), next.binder()] {
+            if binder.origin().primary_span() != contract.target_span {
+                return Err(invalid());
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_registration_edges(&self) -> Result<(), ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation};
+        self.charge_type_work(self.program.nodes.len())?;
+        if !self.program.nodes.iter().any(|node| match &node.kind {
+            EffectExprKind::Operation(
+                EffectOperation::Registration(_) | EffectOperation::Cleanup(_),
+            ) => true,
+            EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
+                handler.hook_registration.is_some()
+            }
+            _ => false,
+        }) {
+            return Ok(());
+        }
+        let mut parents = Vec::new();
+        self.charge_type_work(self.program.nodes.len())?;
+        parents
+            .try_reserve_exact(self.program.nodes.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        parents.resize(self.program.nodes.len(), (0usize, None));
+        for (index, node) in self.program.nodes.iter().enumerate() {
+            self.charge_type_work(node.kind.child_count())?;
+            for ordinal in 0..node.kind.child_count() {
+                let child = node
+                    .kind
+                    .child_at(ordinal)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::NodeBounds, None))?;
+                let parent =
+                    parents
+                        .get_mut(child.index().map_err(|_| {
+                            ValidationError::new(ValidationReason::NodeBounds, None)
+                        })?)
+                        .ok_or_else(|| ValidationError::new(ValidationReason::NodeBounds, None))?;
+                parent.0 = parent
+                    .0
+                    .checked_add(1)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?;
+                parent.1 = Some(node_id(self.program.arena, index)?);
+            }
+        }
+        for (index, node) in self.program.nodes.iter().enumerate() {
+            self.charge_type_work(1)?;
+            let id = node_id(self.program.arena, index)?;
+            let invalid = || ValidationError::new(ValidationReason::Handler, Some(id));
+            match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
+                    let (count, parent) = parents[index];
+                    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                        binding,
+                    ))) = &self.node(parent.ok_or_else(invalid)?)?.kind
+                    else {
+                        return Err(invalid());
+                    };
+                    if count != 1
+                        || binding.body() != id
+                        || binding.binder().id() != scope.callback
+                        || binding.binder().origin().primary_span() != scope.action_span
+                        || parents[scope.action.index().map_err(|_| invalid())?].0 != 1
+                    {
+                        return Err(invalid());
+                    }
+                }
+                EffectExprKind::Operation(EffectOperation::Handler(handler))
+                    if handler.hook_registration.is_some() =>
+                {
+                    let (count, parent) = parents[index];
+                    let EffectExprKind::Operation(EffectOperation::Registration(scope)) =
+                        &self.node(parent.ok_or_else(invalid)?)?.kind
+                    else {
+                        return Err(invalid());
+                    };
+                    if count != 1 || scope.body != id {
+                        return Err(invalid());
+                    }
+                }
+                EffectExprKind::Operation(EffectOperation::Registration(scope)) => {
+                    let (count, parent) = parents[index];
+                    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                        binding,
+                    ))) = &self.node(parent.ok_or_else(invalid)?)?.kind
+                    else {
+                        return Err(invalid());
+                    };
+                    if count != 1 || binding.body() != id || binding.binder().id() != scope.callback
+                    {
+                        return Err(invalid());
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn run_effect(&mut self) -> Result<(), ValidationError> {
+        let mut nominal_parameter_owners = self.validate_registry()?;
+        self.validate_effect_registry(self.module_sources.as_ref(), &mut nominal_parameter_owners)?;
+        let empty_type_binders = CoreTypeBinders::new();
+        for nominal in self
+            .program
+            .registry
+            .nominals()
+            .iter()
+            .chain(self.program.registry.lexical_nominals())
+        {
+            if let Some(representation) = nominal.representation.as_ref() {
+                self.validate_effect_type_rows(
+                    representation,
+                    &empty_type_binders,
+                    self.program.root,
+                )?;
+            }
+        }
+        for constructor in self.program.registry.constructors() {
+            if let Some(payload) = constructor.payload.as_ref() {
+                self.validate_effect_type_rows(payload, &empty_type_binders, self.program.root)?;
+            }
+        }
+        for effect in self.program.registry.effects() {
+            for operation in &effect.operations {
+                self.validate_effect_type_rows(
+                    &operation.annotation.ty,
+                    &empty_type_binders,
+                    self.program.root,
+                )?;
+            }
+        }
+        let authenticated_method_evidence = self.validate_method_evidence_authority()?;
+        self.validate_envelopes(&authenticated_method_evidence)?;
+        self.validate_graph()?;
+        let abstraction_owners = self.collect_binders(&authenticated_method_evidence)?;
+        let type_binders =
+            self.collect_type_binders(&nominal_parameter_owners, &abstraction_owners)?;
+        self.validate_method_evidence_type_owners(&type_binders)?;
+        self.validate_node_types(
+            &nominal_parameter_owners,
+            &type_binders,
+            &authenticated_method_evidence,
+        )?;
+        let has_discard = self.validate_effect_nodes(&type_binders)?;
+        self.validate_registration_edges()?;
+        self.validate_effect_abstraction_shapes(&authenticated_method_evidence)?;
+        self.validate_scopes()?;
+        self.validate_type_scopes()?;
+        let mut has_resource = false;
+        for node in &self.program.nodes {
+            self.charge_type_work(1)?;
+            if matches!(
+                &node.kind,
+                super::effect::EffectExprKind::Operation(
+                    super::effect::EffectOperation::Resource(_)
+                        | super::effect::EffectOperation::Cleanup(_)
+                        | super::effect::EffectOperation::Registration(_)
+                )
+            ) {
+                has_resource = true;
+            }
+        }
+        if !has_discard && !has_resource {
+            return Ok(());
+        }
+        let mut capture_work = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let capture_result = super::capture::check_nodes(
+            &self.program.nodes,
+            &[],
+            &[],
+            |kind| match kind {
+                super::effect::EffectExprKind::Operation(operation) => Some(operation),
+                _ => None,
+            },
+            &mut capture_work,
+        );
+        self.charge_type_work(capture_work.used())?;
+        capture_result.map_err(|failure| match failure {
+            super::capture::Failure::Resource => {
+                ValidationError::new(ValidationReason::Resource, None)
+            }
+            super::capture::Failure::Invalid => {
+                ValidationError::new(ValidationReason::Handler, None)
+            }
+            super::capture::Failure::Escape { .. } => {
+                ValidationError::new(ValidationReason::ResourceEscape, None)
+            }
+            super::capture::Failure::Unsafe(unsafe_discard) => ValidationError::new(
+                ValidationReason::DiscardUnsafe,
+                Some(NodeId::new(self.program.arena, unsafe_discard.node as u32)),
+            ),
+            super::capture::Failure::CleanupContext { .. } => {
+                ValidationError::new(ValidationReason::DiscardUnsafe, None)
+            }
+            super::capture::Failure::CleanupRow { node, .. } => ValidationError::new(
+                ValidationReason::EffectRow,
+                Some(NodeId::new(self.program.arena, node as u32)),
+            ),
+        })?;
+        Ok(())
+    }
+
+    fn effect_signature(
+        &self,
+        instance: &EffectInstance,
+        operation: OperationId,
+        node: NodeId,
+        type_binders: &CoreTypeBinders<'_>,
+    ) -> Result<(IterativeTypeOwner, IterativeTypeOwner), ValidationError> {
+        let declaration = self
+            .program
+            .registry
+            .effect(instance.effect())
+            .ok_or_else(|| ValidationError::new(ValidationReason::EffectIdentity, Some(node)))?;
+        if operation.owner() != declaration.id
+            || declaration.parameters.len() != instance.arguments().len()
+        {
+            return Err(ValidationError::new(
+                ValidationReason::EffectIdentity,
+                Some(node),
+            ));
+        }
+        for (parameter, argument) in declaration.parameters.iter().zip(instance.arguments()) {
+            let Some(argument_kind) =
+                self.synthesize_monotype_kind(argument, MonotypeVariableKinds::Core(type_binders))?
+            else {
+                return Err(ValidationError::new(
+                    ValidationReason::EffectIdentity,
+                    Some(node),
+                ));
+            };
+            if !self.same_kind_charged(&parameter.kind, &argument_kind)? {
+                return Err(ValidationError::new(
+                    ValidationReason::EffectIdentity,
+                    Some(node),
+                ));
+            }
+        }
+        let Some(operation) = usize::try_from(operation.operation())
+            .ok()
+            .and_then(|index| declaration.operations.get(index))
+            .filter(|candidate| candidate.id == operation)
+        else {
+            return Err(ValidationError::new(
+                ValidationReason::EffectIdentity,
+                Some(node),
+            ));
+        };
+        let mut replacements = TypeReplacementMap::new();
+        replacements
+            .try_reserve(declaration.parameters.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(node)))?;
+        for (parameter, argument) in declaration.parameters.iter().zip(instance.arguments()) {
+            replacements.insert_replacing(parameter.id, self.clone_type_charged(argument)?);
+        }
+        let signature = substitute_type_variables_with(
+            &operation.annotation.ty,
+            replacements.as_map(),
+            |cells| self.charge_type_work(cells),
+            || ValidationError::new(ValidationReason::Resource, Some(node)),
+        )?;
+        let Type::Function(domain, result) = signature else {
+            discard_type_iteratively(signature);
+            return Err(ValidationError::new(
+                ValidationReason::EffectIdentity,
+                Some(node),
+            ));
+        };
+        Ok((
+            IterativeTypeOwner::new(*domain),
+            IterativeTypeOwner::new(*result),
+        ))
+    }
+
+    fn validate_effect_instance(
+        &self,
+        instance: &EffectInstance,
+        type_binders: &CoreTypeBinders<'_>,
+        node: NodeId,
+    ) -> Result<(), ValidationError> {
+        let declaration = self
+            .program
+            .registry
+            .effect(instance.effect())
+            .ok_or_else(|| ValidationError::new(ValidationReason::EffectIdentity, Some(node)))?;
+        if declaration.parameters.len() != instance.arguments().len() {
+            return Err(ValidationError::new(
+                ValidationReason::EffectIdentity,
+                Some(node),
+            ));
+        }
+        for (parameter, argument) in declaration.parameters.iter().zip(instance.arguments()) {
+            let Some(actual) =
+                self.synthesize_monotype_kind(argument, MonotypeVariableKinds::Core(type_binders))?
+            else {
+                return Err(ValidationError::new(
+                    ValidationReason::EffectIdentity,
+                    Some(node),
+                ));
+            };
+            if !self.same_kind_charged(&parameter.kind, &actual)? {
+                return Err(ValidationError::new(
+                    ValidationReason::EffectIdentity,
+                    Some(node),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_effect_row(
+        &self,
+        row: &EffectRow,
+        type_binders: &CoreTypeBinders<'_>,
+        node: NodeId,
+    ) -> Result<(), ValidationError> {
+        self.charge_type_work(row.known().len())?;
+        for instance in row.known() {
+            self.validate_effect_instance(instance, type_binders, node)?;
+        }
+        if let Some(tail) = row.tail() {
+            self.charge_type_work(tail.lacks().len().saturating_add(1))?;
+            let crate::types::EffectRowVariable::Rigid(identity) = tail.variable() else {
+                return Err(ValidationError::new(
+                    ValidationReason::TypeScope,
+                    Some(node),
+                ));
+            };
+            let kind = match identity {
+                crate::types::TypeVariableId::Resolved { .. } => self
+                    .program
+                    .registry
+                    .type_variable(identity)
+                    .map(|parameter| &parameter.kind),
+                crate::types::TypeVariableId::Generated(_) => {
+                    type_binders.get(&identity).map(|(kind, _)| *kind)
+                }
+            };
+            if kind.is_none_or(|kind| !matches!(kind, Kind::EffectRow)) {
+                return Err(ValidationError::new(
+                    ValidationReason::TypeScope,
+                    Some(node),
+                ));
+            }
+            for instance in tail.lacks() {
+                self.validate_effect_instance(instance, type_binders, node)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_effect_type_rows(
+        &self,
+        root: &Type,
+        type_binders: &CoreTypeBinders<'_>,
+        node: NodeId,
+    ) -> Result<(), ValidationError> {
+        self.charge_type_work(1)?;
+        let mut work = Vec::new();
+        work.try_reserve(1)
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(node)))?;
+        work.push(root);
+        while let Some(ty) = work.pop() {
+            match ty {
+                Type::Tuple(elements) => {
+                    self.charge_type_work(elements.len())?;
+                    work.try_reserve(elements.len()).map_err(|_| {
+                        ValidationError::new(ValidationReason::Resource, Some(node))
+                    })?;
+                    work.extend(elements.iter());
+                }
+                Type::Application(function, argument) | Type::Function(function, argument) => {
+                    self.charge_type_work(2)?;
+                    work.try_reserve(2).map_err(|_| {
+                        ValidationError::new(ValidationReason::Resource, Some(node))
+                    })?;
+                    work.push(argument);
+                    work.push(function);
+                }
+                Type::EffectfulFunction(domain, computation) => {
+                    self.validate_effect_row(computation.effects(), type_binders, node)?;
+                    self.charge_type_work(2)?;
+                    work.try_reserve(2).map_err(|_| {
+                        ValidationError::new(ValidationReason::Resource, Some(node))
+                    })?;
+                    work.push(computation.value());
+                    work.push(domain);
+                }
+                Type::Forall(_, body) => {
+                    self.charge_type_work(1)?;
+                    work.try_reserve(1).map_err(|_| {
+                        ValidationError::new(ValidationReason::Resource, Some(node))
+                    })?;
+                    work.push(body);
+                }
+                Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_)
+                | Type::Inference(_) => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn resource_outward_row(
+        &self,
+        body: &EffectRow,
+        acquisition: crate::resolved::ResourceAcquisition,
+        id: NodeId,
+    ) -> Result<EffectRow, ValidationError> {
+        let api = acquisition
+            .api()
+            .ok_or_else(|| ValidationError::new(ValidationReason::EffectIdentity, Some(id)))?;
+        self.charge_type_work(2)?;
+        let instance =
+            EffectInstance::new(api.ops(), Box::new([Type::Variable(acquisition.identity)]));
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let result = body.remove_exact_with_budget(&instance, &mut budget);
+        self.charge_type_work(budget.used())?;
+        match result.map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))? {
+            Ok(row) => Ok(row),
+            Err(crate::types::EffectRowError::Missing) => {
+                self.union_effect_rows_charged(&EffectRow::empty(), body, id)
+            }
+            Err(_) => Err(ValidationError::new(ValidationReason::EffectRow, Some(id))),
+        }
+    }
+
+    fn validate_resource_node(
+        &self,
+        id: NodeId,
+        node: &super::dialect::StoredNode<super::effect::EffectOperationFamily>,
+        resource: &super::effect::ResourceScopeNode,
+    ) -> Result<(), ValidationError> {
+        let authority = resource.acquisition;
+        let api = authority
+            .api()
+            .ok_or_else(|| ValidationError::new(ValidationReason::EffectIdentity, Some(id)))?;
+        let initializer = self.node(resource.initializer)?;
+        let body = self.node(resource.body)?;
+        if authority.handle != resource.handle.id()
+            || authority.handle.module() != Some(authority.provider.module())
+            || authority.identity.module() != Some(authority.provider.module())
+            || Some(authority.span) != node.origin.as_ref().map(Origin::primary_span)
+            || !matches!(resource.handle.ty(), Type::Application(head, argument) if **head == Type::Nominal(api.handle()) && **argument == Type::Variable(authority.identity))
+            || !self.same_type_charged(&initializer.ty, &Type::Int)?
+            || if let Some(outcome) = api.outcome() {
+                !matches!(&node.ty, Type::Application(head, argument) if **head == Type::Nominal(outcome) && self.same_type_charged(&body.ty, argument)?)
+            } else {
+                !self.same_type_charged(&body.ty, &node.ty)?
+            }
+        {
+            return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+        }
+        let outward = self.resource_outward_row(&body.effects, authority, id)?;
+        let expected = self.union_effect_rows_charged(&initializer.effects, &outward, id)?;
+        if !self.same_effect_row_charged(&node.effects, &expected, id)? {
+            return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+        }
+        if authority
+            .methods
+            .iter()
+            .enumerate()
+            .any(|(index, method)| authority.methods[..index].contains(method))
+        {
+            return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+        }
+        for (ordinal, binder) in authority.methods.iter().enumerate() {
+            self.charge_type_work(self.program.method_evidence.lexical_owners().len())?;
+            let mut owner_count = 0;
+            for owner in self.program.method_evidence.lexical_owners() {
+                if owner.acquisition == Some(authority)
+                    && owner.binder == *binder
+                    && owner.method
+                        == crate::interface::MethodId::new(api.provider(), ordinal as u32)
+                {
+                    owner_count += 1;
+                }
+            }
+            if owner_count != 1 {
+                return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+            }
+            let mut definition_count = 0;
+            for stored in &self.program.nodes {
+                self.charge_type_work(1)?;
+                let Some(PureExprKind::Computation(PureComputation::Bind(binding))) =
+                    super::effect::EffectOperationFamily::pure(&stored.kind)
+                else {
+                    continue;
+                };
+                if binding.binder().id() != *binder {
+                    continue;
+                }
+                definition_count += 1;
+                let Some(PureExprKind::Value(PureValue::Function(function))) =
+                    super::effect::EffectOperationFamily::pure(
+                        &self.node(binding.initializer())?.kind,
+                    )
+                else {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                };
+                let super::effect::EffectExprKind::Operation(
+                    super::effect::EffectOperation::Request(request),
+                ) = &self.node(function.body())?.kind
+                else {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                };
+                let Some(PureExprKind::Variable(operand)) =
+                    super::effect::EffectOperationFamily::pure(&self.node(request.operand())?.kind)
+                else {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                };
+                if request.operation() != OperationId::new(api.ops(), ordinal as u32)
+                    || request.effect().effect() != api.ops()
+                    || !matches!(request.effect().arguments(), [Type::Variable(identity)] if *identity == authority.identity)
+                    || operand.binder() != function.parameter().id()
+                    || binding.binder().origin().primary_span() != authority.span
+                {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+            }
+            if definition_count != 1 {
+                return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_effect_nodes(
+        &mut self,
+        type_binders: &CoreTypeBinders<'_>,
+    ) -> Result<bool, ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation, ResumeUse};
+
+        let mut handler_ids = HashSet::new();
+        let mut clause_contracts = HashMap::new();
+        let mut has_discard = false;
+
+        for index in 0..self.program.nodes.len() {
+            let id = node_id(self.program.arena, index)?;
+            let node = self.node(id)?;
+            self.validate_effect_type_rows(&node.ty, type_binders, id)?;
+            self.validate_effect_row(&node.effects, type_binders, id)?;
+            match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
+                    self.validate_cleanup_owner(id, node, scope)?
+                }
+                EffectExprKind::Operation(EffectOperation::Registration(scope)) => {
+                    self.validate_registration_owner(id, node, scope)?;
+                }
+                EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::TypeApplication(application),
+                )) => {
+                    for row in application.row_arguments() {
+                        self.validate_effect_row(row, type_binders, id)?;
+                    }
+                    self.validate_pure_effect_row(id, node, type_binders)?;
+                }
+                EffectExprKind::Pure(_) => self.validate_pure_effect_row(id, node, type_binders)?,
+                EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
+                    self.validate_resource_node(id, node, resource)?;
+                }
+                EffectExprKind::Operation(EffectOperation::Request(request)) => {
+                    self.validate_effect_instance(&request.effect, type_binders, id)?;
+                    let (domain, result) = self.effect_signature(
+                        &request.effect,
+                        request.operation,
+                        id,
+                        type_binders,
+                    )?;
+                    let operand = self.node(request.operand)?;
+                    if !self.same_type_charged(&operand.ty, &domain)? {
+                        return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+                    }
+                    let requested = self.singleton_effect_row_charged(&request.effect, id)?;
+                    let expected =
+                        self.union_effect_rows_charged(&operand.effects, &requested, id)?;
+                    if !self.same_type_charged(&node.ty, &result)?
+                        || !self.same_effect_row_charged(&node.effects, &expected, id)?
+                    {
+                        return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+                    }
+                }
+                EffectExprKind::Operation(EffectOperation::Resume(resume)) => {
+                    if resume.use_state != ResumeUse::Consumed {
+                        return Err(ValidationError::new(ValidationReason::Resume, Some(id)));
+                    }
+                }
+                EffectExprKind::Operation(EffectOperation::Discard(discard)) => {
+                    has_discard = true;
+                    if discard.use_state() != ResumeUse::Consumed
+                        || !self.same_type_charged(&node.ty, &Type::Unit)?
+                    {
+                        return Err(ValidationError::new(ValidationReason::Resume, Some(id)));
+                    }
+                }
+                EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
+                    self.validate_effect_handler(
+                        id,
+                        node,
+                        handler,
+                        type_binders,
+                        &mut handler_ids,
+                        &mut clause_contracts,
+                    )?;
+                }
+            }
+        }
+        for (index, node) in self.program.nodes.iter().enumerate() {
+            match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Resume(resume)) => self
+                    .validate_effect_resume(
+                        node_id(self.program.arena, index)?,
+                        node,
+                        resume,
+                        type_binders,
+                        &clause_contracts,
+                    )?,
+                EffectExprKind::Operation(EffectOperation::Discard(discard)) => {
+                    self.charge_type_work(1)?;
+                    if !clause_contracts.contains_key(&(discard.handler(), discard.owner())) {
+                        return Err(ValidationError::new(
+                            ValidationReason::Resume,
+                            Some(node_id(self.program.arena, index)?),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if self.module_sources.is_some() && !self.node(self.program.root)?.effects.is_empty() {
+            return Err(ValidationError::new(
+                ValidationReason::EffectRow,
+                Some(self.program.root),
+            ));
+        }
+        Ok(has_discard)
+    }
+
+    fn validate_effect_abstraction_shapes(
+        &self,
+        authenticated: &HashSet<NodeId>,
+    ) -> Result<(), ValidationError> {
+        let resource = || ValidationError::new(ValidationReason::Resource, None);
+        let mut adapters = HashSet::new();
+        self.charge_type_work(self.program.method_evidence_anchors.len())?;
+        for anchor in &self.program.method_evidence_anchors {
+            if matches!(anchor.role, MethodEvidenceAnchorRole::Adapter { .. })
+                && authenticated.contains(&anchor.node)
+            {
+                self.charge_type_work(1)?;
+                adapters.try_reserve(1).map_err(|_| resource())?;
+                adapters.insert(anchor.node);
+            }
+        }
+        let mut inert = HashSet::new();
+        let mut pending = Vec::new();
+        for (index, node) in self.program.nodes.iter().enumerate() {
+            self.charge_type_work(1)?;
+            let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
+                super::effect::EffectOperationFamily::pure(&node.kind)
+            else {
+                continue;
+            };
+            let root = node_id(self.program.arena, index)?;
+            if adapters.contains(&root) {
+                continue;
+            }
+            let mut current = abstraction.body();
+            loop {
+                self.charge_type_work(1)?;
+                if inert.contains(&current) {
+                    break;
+                }
+                self.charge_type_work(1)?;
+                pending.try_reserve(1).map_err(|_| resource())?;
+                pending.push(current);
+                match super::effect::EffectOperationFamily::pure(&self.node(current)?.kind) {
+                    Some(
+                        PureExprKind::Value(PureValue::Function(_) | PureValue::Constructor(_))
+                        | PureExprKind::Variable(_)
+                        | PureExprKind::Computation(PureComputation::TypeAbstraction(_)),
+                    ) => break,
+                    Some(PureExprKind::Computation(PureComputation::TypeApplication(
+                        application,
+                    ))) => current = application.function(),
+                    _ => {
+                        return Err(ValidationError::new(
+                            ValidationReason::TypeOperation,
+                            Some(root),
+                        ));
+                    }
+                }
+            }
+            // Each shared suffix enters this cache once; graph validation has
+            // already excluded cycles. Nested abstractions are checked separately.
+            self.charge_type_work(pending.len())?;
+            inert.try_reserve(pending.len()).map_err(|_| resource())?;
+            inert.extend(pending.drain(..));
+        }
+        Ok(())
+    }
+
+    fn row_owner_proves_lacks(
+        &self,
+        variable: crate::types::EffectRowVariable,
+        target: &EffectInstance,
+        type_binders: &CoreTypeBinders<'_>,
+        id: NodeId,
+    ) -> Result<bool, ValidationError> {
+        let invalid = || ValidationError::new(ValidationReason::EffectRow, Some(id));
+        let resource = || ValidationError::new(ValidationReason::Resource, Some(id));
+        self.charge_type_work(1)?;
+        let crate::types::EffectRowVariable::Rigid(variable_id) = variable else {
+            return Err(invalid());
+        };
+        let Some((Kind::EffectRow, owner)) = type_binders.get(&variable_id) else {
+            return Err(invalid());
+        };
+        let Type::Forall(_, contract) = &self.node(*owner)?.ty else {
+            return Err(invalid());
+        };
+        let mut work = Vec::new();
+        self.charge_type_work(1)?;
+        work.try_reserve(1).map_err(|_| resource())?;
+        work.push(&**contract);
+        while let Some(ty) = work.pop() {
+            self.charge_type_work(1)?;
+            if let Type::EffectfulFunction(_, codomain) = ty
+                && let Some(tail) = codomain.effects().tail()
+                && tail.variable() == variable
+            {
+                for fact in codomain.effects().known().iter().chain(tail.lacks()) {
+                    let mut budget = TypeWorkBudget::with_limit(
+                        CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+                    );
+                    let matches = crate::types::compare_effect_instances_with_budget(
+                        fact,
+                        target,
+                        &mut budget,
+                    );
+                    self.charge_type_work(budget.used())?;
+                    if matches.map_err(|()| resource())? == std::cmp::Ordering::Equal {
+                        return Ok(true);
+                    }
+                }
+            }
+            let children: &[Type] = match ty {
+                Type::Tuple(elements) => elements,
+                _ => &[],
+            };
+            self.charge_type_work(children.len().saturating_add(2))?;
+            work.try_reserve(children.len().saturating_add(2))
+                .map_err(|_| resource())?;
+            work.extend(children);
+            match ty {
+                Type::Function(left, right) | Type::Application(left, right) => {
+                    work.push(left);
+                    work.push(right);
+                }
+                Type::EffectfulFunction(domain, codomain) => {
+                    work.push(domain);
+                    work.push(codomain.value());
+                    for instance in codomain.effects().known().iter().chain(
+                        codomain
+                            .effects()
+                            .tail()
+                            .into_iter()
+                            .flat_map(|tail| tail.lacks()),
+                    ) {
+                        self.charge_type_work(instance.arguments().len().saturating_add(1))?;
+                        work.try_reserve(instance.arguments().len())
+                            .map_err(|_| resource())?;
+                        work.extend(instance.arguments());
+                    }
+                }
+                Type::Forall(_, body) => work.push(body),
+                _ => {}
+            }
+        }
+        Ok(false)
+    }
+
+    fn qualify_callable_row<'row>(
+        &self,
+        row: &'row EffectRow,
+        reported: &EffectRow,
+        type_binders: &CoreTypeBinders<'_>,
+        id: NodeId,
+    ) -> Result<std::borrow::Cow<'row, EffectRow>, ValidationError> {
+        let (Some(tail), Some(reported_tail)) = (row.tail(), reported.tail()) else {
+            return Ok(std::borrow::Cow::Borrowed(row));
+        };
+        if tail.variable() != reported_tail.variable() {
+            return Ok(std::borrow::Cow::Borrowed(row));
+        }
+        let resource = || ValidationError::new(ValidationReason::Resource, Some(id));
+        let mut same_lacks = tail.lacks().len() == reported_tail.lacks().len();
+        if same_lacks {
+            for (left, right) in tail.lacks().iter().zip(reported_tail.lacks()) {
+                let mut budget = TypeWorkBudget::with_limit(
+                    CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+                );
+                let matches =
+                    crate::types::compare_effect_instances_with_budget(left, right, &mut budget);
+                self.charge_type_work(budget.used())?;
+                if matches.map_err(|()| resource())? != std::cmp::Ordering::Equal {
+                    same_lacks = false;
+                    break;
+                }
+            }
+        }
+        if same_lacks {
+            return Ok(std::borrow::Cow::Borrowed(row));
+        }
+        let mut added = false;
+        for fact in reported_tail.lacks() {
+            let mut found = false;
+            for existing in tail.lacks() {
+                let mut budget = TypeWorkBudget::with_limit(
+                    CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+                );
+                let matches =
+                    crate::types::compare_effect_instances_with_budget(fact, existing, &mut budget);
+                self.charge_type_work(budget.used())?;
+                if matches.map_err(|()| resource())? == std::cmp::Ordering::Equal {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                if !self.row_owner_proves_lacks(tail.variable(), fact, type_binders, id)? {
+                    return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+                }
+                added = true;
+            }
+        }
+        if !added {
+            return Ok(std::borrow::Cow::Borrowed(row));
+        }
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let qualified = rebuild_effect_row_with_budget(
+            row.known(),
+            Some(tail.variable()),
+            tail.lacks().iter().chain(reported_tail.lacks()),
+            clone_type_with_budget,
+            &mut budget,
+        );
+        self.charge_type_work(budget.used())?;
+        qualified
+            .map(std::borrow::Cow::Owned)
+            .map_err(|()| resource())
+    }
+
+    fn validate_pure_effect_row(
+        &self,
+        id: NodeId,
+        node: &StoredNode<super::effect::EffectOperationFamily>,
+        type_binders: &CoreTypeBinders<'_>,
+    ) -> Result<(), ValidationError> {
+        let kind = super::effect::EffectOperationFamily::pure(&node.kind)
+            .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, Some(id)))?;
+        let mut expected = EffectRow::empty();
+        let effectful_children = match kind {
+            PureExprKind::Value(PureValue::Function(_))
+            | PureExprKind::Value(
+                PureValue::Integer(_)
+                | PureValue::Boolean(_)
+                | PureValue::Unit(_)
+                | PureValue::Constructor(_),
+            )
+            | PureExprKind::Variable(_) => false,
+            PureExprKind::Computation(_) => true,
+        };
+        if effectful_children {
+            for child_index in 0..kind.child_count() {
+                let child = kind
+                    .child_at(child_index)
+                    .ok_or_else(|| ValidationError::new(ValidationReason::NodeBounds, Some(id)))?;
+                expected =
+                    self.union_effect_rows_charged(&expected, &self.node(child)?.effects, id)?;
+            }
+            if let PureExprKind::Computation(PureComputation::Apply(application)) = kind {
+                let function = self.node(application.function())?;
+                if let Type::EffectfulFunction(_, codomain) = &function.ty {
+                    let latent = self.qualify_callable_row(
+                        codomain.effects(),
+                        &node.effects,
+                        type_binders,
+                        id,
+                    )?;
+                    expected = self.union_effect_rows_charged(&expected, &latent, id)?;
+                }
+            }
+        }
+        if self.same_effect_row_charged(&node.effects, &expected, id)? {
+            Ok(())
+        } else {
+            Err(ValidationError::new(ValidationReason::EffectRow, Some(id)))
+        }
+    }
+
+    fn least_handler_output(
+        &self,
+        root: NodeId,
+        type_binders: &CoreTypeBinders<'_>,
+    ) -> Result<EffectRow, ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation};
+
+        enum Task {
+            Collect(NodeId),
+            Enter(NodeId),
+            Exit(NodeId),
+        }
+
+        let mut handlers = HashSet::new();
+        let mut discovered = HashSet::new();
+        let mut work = Vec::new();
+        self.charge_type_work(1)?;
+        work.try_reserve(1)
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(root)))?;
+        work.push(Task::Collect(root));
+        while let Some(Task::Collect(id)) = work.pop() {
+            if discovered.contains(&id) {
+                continue;
+            }
+            self.charge_type_work(1)?;
+            discovered
+                .try_reserve(1)
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(root)))?;
+            discovered.insert(id);
+            let node = self.node(id)?;
+            if let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &node.kind
+                && !handlers.contains(&handler.id())
+            {
+                self.charge_type_work(1)?;
+                handlers
+                    .try_reserve(1)
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(root)))?;
+                handlers.insert(handler.id());
+            }
+            let child_count = super::effect::EffectOperationFamily::child_count(&node.kind);
+            self.charge_type_work(child_count)?;
+            work.try_reserve(child_count)
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(root)))?;
+            for index in 0..child_count {
+                work.push(Task::Collect(
+                    super::effect::EffectOperationFamily::child_at(&node.kind, index).ok_or_else(
+                        || ValidationError::new(ValidationReason::NodeBounds, Some(id)),
+                    )?,
+                ));
+            }
+        }
+        drop(discovered);
+
+        self.charge_type_work(1)?;
+        work.try_reserve(1)
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(root)))?;
+        work.push(Task::Enter(root));
+        let mut rows: HashMap<NodeId, Option<EffectRow>> = HashMap::new();
+        while let Some(task) = work.pop() {
+            match task {
+                Task::Collect(_) => unreachable!(),
+                Task::Enter(id) => {
+                    if rows.contains_key(&id) {
+                        continue;
+                    }
+                    self.charge_type_work(1)?;
+                    rows.try_reserve(1).map_err(|_| {
+                        ValidationError::new(ValidationReason::Resource, Some(root))
+                    })?;
+                    rows.insert(id, None);
+                    let node = self.node(id)?;
+                    let child_count = super::effect::EffectOperationFamily::child_count(&node.kind);
+                    let work_slots = child_count.checked_add(1).ok_or_else(|| {
+                        ValidationError::new(ValidationReason::Resource, Some(root))
+                    })?;
+                    self.charge_type_work(work_slots)?;
+                    work.try_reserve(work_slots).map_err(|_| {
+                        ValidationError::new(ValidationReason::Resource, Some(root))
+                    })?;
+                    work.push(Task::Exit(id));
+                    for index in (0..child_count).rev() {
+                        work.push(Task::Enter(
+                            super::effect::EffectOperationFamily::child_at(&node.kind, index)
+                                .ok_or_else(|| {
+                                    ValidationError::new(ValidationReason::NodeBounds, Some(id))
+                                })?,
+                        ));
+                    }
+                }
+                Task::Exit(id) => {
+                    let node = self.node(id)?;
+                    let child_row = |child: NodeId| {
+                        rows.get(&child).and_then(Option::as_ref).ok_or_else(|| {
+                            ValidationError::new(ValidationReason::EffectRow, Some(id))
+                        })
+                    };
+                    let row = match &node.kind {
+                        EffectExprKind::Pure(kind) => match kind {
+                            PureExprKind::Value(_) | PureExprKind::Variable(_) => {
+                                EffectRow::empty()
+                            }
+                            PureExprKind::Computation(computation) => {
+                                let mut row = EffectRow::empty();
+                                for index in 0..kind.child_count() {
+                                    row = self.union_effect_rows_charged(
+                                        &row,
+                                        child_row(kind.child_at(index).ok_or_else(|| {
+                                            ValidationError::new(
+                                                ValidationReason::NodeBounds,
+                                                Some(id),
+                                            )
+                                        })?)?,
+                                        id,
+                                    )?;
+                                }
+                                if let PureComputation::Apply(application) = computation
+                                    && let Type::EffectfulFunction(_, result) =
+                                        &self.node(application.function())?.ty
+                                {
+                                    let latent = self.qualify_callable_row(
+                                        result.effects(),
+                                        &node.effects,
+                                        type_binders,
+                                        id,
+                                    )?;
+                                    row = self.union_effect_rows_charged(&row, &latent, id)?;
+                                }
+                                row
+                            }
+                        },
+                        EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
+                            let outward = self.resource_outward_row(
+                                child_row(resource.body)?,
+                                resource.acquisition,
+                                id,
+                            )?;
+                            self.union_effect_rows_charged(
+                                child_row(resource.initializer)?,
+                                &outward,
+                                id,
+                            )?
+                        }
+                        EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => self
+                            .union_effect_rows_charged(
+                                child_row(scope.body)?,
+                                child_row(scope.action)?,
+                                id,
+                            )?,
+                        EffectExprKind::Operation(EffectOperation::Registration(scope)) => self
+                            .union_effect_rows_charged(
+                                &EffectRow::empty(),
+                                child_row(scope.body)?,
+                                id,
+                            )?,
+                        EffectExprKind::Operation(EffectOperation::Request(request)) => {
+                            let requested =
+                                self.singleton_effect_row_charged(request.effect(), id)?;
+                            self.union_effect_rows_charged(
+                                child_row(request.operand())?,
+                                &requested,
+                                id,
+                            )?
+                        }
+                        EffectExprKind::Operation(EffectOperation::Resume(resume)) => {
+                            let source = if handlers.contains(&resume.handler()) {
+                                child_row(resume.value())?
+                            } else {
+                                &node.effects
+                            };
+                            self.union_effect_rows_charged(&EffectRow::empty(), source, id)?
+                        }
+                        EffectExprKind::Operation(EffectOperation::Discard(_)) => {
+                            self.union_effect_rows_charged(&EffectRow::empty(), &node.effects, id)?
+                        }
+                        EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
+                            let mut row =
+                                self.handler_outward_row(child_row(handler.body())?, handler, id)?;
+                            for clause in handler.clauses() {
+                                row = self.union_effect_rows_charged(
+                                    &row,
+                                    child_row(clause.body())?,
+                                    id,
+                                )?;
+                            }
+                            row
+                        }
+                    };
+                    *rows.get_mut(&id).ok_or_else(|| {
+                        ValidationError::new(ValidationReason::EffectRow, Some(id))
+                    })? = Some(row);
+                }
+            }
+        }
+        rows.remove(&root)
+            .flatten()
+            .ok_or_else(|| ValidationError::new(ValidationReason::EffectRow, Some(root)))
+    }
+
+    fn validate_effect_handler(
+        &self,
+        id: NodeId,
+        node: &StoredNode<super::effect::EffectOperationFamily>,
+        handler: &super::effect::HandlerNode,
+        type_binders: &CoreTypeBinders<'_>,
+        handler_ids: &mut HashSet<super::effect::HandlerId>,
+        clause_contracts: &mut HashMap<
+            (super::effect::HandlerId, crate::resolved::ResumeId),
+            EffectClauseContract,
+        >,
+    ) -> Result<(), ValidationError> {
+        self.charge_type_work(1)?;
+        handler_ids
+            .try_reserve(1)
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+        if !handler_ids.insert(handler.id) {
+            return Err(ValidationError::new(ValidationReason::Handler, Some(id)));
+        }
+        self.validate_effect_instance(&handler.effect, type_binders, id)?;
+        let declaration = self
+            .program
+            .registry
+            .effect(handler.effect.effect())
+            .ok_or_else(|| ValidationError::new(ValidationReason::EffectIdentity, Some(id)))?;
+        if declaration.parameters.len() != handler.effect.arguments().len()
+            || handler.clauses.len() != declaration.operations.len()
+        {
+            return Err(ValidationError::new(ValidationReason::Handler, Some(id)));
+        }
+        let body = self.node(handler.body)?;
+        if let Some(contract) = &handler.hook_registration {
+            self.validate_registration_contract(id, node, handler, contract)?;
+        }
+        if let Some(root) = &handler.hook_root {
+            self.charge_type_work(1)?;
+            let invalid = || ValidationError::new(ValidationReason::Handler, Some(id));
+            let [operation] = &*declaration.operations else {
+                return Err(invalid());
+            };
+            let signature = operation
+                .annotation
+                .ty
+                .function_view()
+                .ok_or_else(invalid)?;
+            let [clause] = &*handler.clauses else {
+                return Err(invalid());
+            };
+            let CorePatternKind::Binder(input) = &clause.pattern().kind else {
+                return Err(invalid());
+            };
+            let clause_body = self.node(clause.body())?;
+            let super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Resume(
+                resume,
+            )) = &clause_body.kind
+            else {
+                return Err(invalid());
+            };
+            let value = self.node(resume.value())?;
+            let super::effect::EffectExprKind::Pure(PureExprKind::Variable(variable)) = &value.kind
+            else {
+                return Err(invalid());
+            };
+            let mut budget = TypeWorkBudget::with_limit(
+                CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+            );
+            let target_matches = crate::types::compare_effect_instances_with_budget(
+                &root.target,
+                &handler.effect,
+                &mut budget,
+            );
+            self.charge_type_work(budget.used())?;
+            if target_matches
+                .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))?
+                != std::cmp::Ordering::Equal
+                || operation.spelling != "publish"
+                || !self.same_type_charged(signature.domain(), signature.value())?
+                || root.operation != operation.id
+                || clause.operation() != root.operation
+                || root.input != input.id()
+                || variable.binder() != root.input
+                || root.resume != clause.resume()
+                || resume.owner() != root.resume
+                || resume.handler() != handler.id()
+                || resume.use_state() != super::effect::ResumeUse::Consumed
+                || node.origin.as_ref().map(Origin::primary_span) != Some(root.span)
+                || root.target_span.source() != root.span.source()
+                || root.target_span.range().start() < root.span.range().start()
+                || root.target_span.range().end() > root.span.range().end()
+                || clause.origin().primary_span() != root.target_span
+                || clause.pattern().origin.primary_span() != root.target_span
+                || input.origin().primary_span() != root.target_span
+                || clause_body.origin.as_ref().map(Origin::primary_span) != Some(root.target_span)
+                || value.origin.as_ref().map(Origin::primary_span) != Some(root.target_span)
+            {
+                return Err(invalid());
+            }
+        }
+        let remainder = self.handler_outward_row(&body.effects, handler, id)?;
+        if !self.same_type_charged(&body.ty, &node.ty)?
+            || !self.effect_row_subset_charged(&remainder, &node.effects, id)?
+        {
+            return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+        }
+        self.charge_type_work(declaration.operations.len())?;
+        let mut covered = Vec::new();
+        covered
+            .try_reserve_exact(declaration.operations.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+        covered.resize(declaration.operations.len(), false);
+        for (clause_index, clause) in handler.clauses.iter().enumerate() {
+            self.charge_type_work(1)?;
+            clause_contracts
+                .try_reserve(1)
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
+            if clause_contracts
+                .insert(
+                    (handler.id, clause.resume),
+                    EffectClauseContract {
+                        handler: id,
+                        clause: clause_index,
+                    },
+                )
+                .is_some()
+            {
+                return Err(ValidationError::new(ValidationReason::Handler, Some(id)));
+            }
+            self.validate_origin(clause.origin(), id)?;
+            let (domain, _result) =
+                self.effect_signature(&handler.effect, clause.operation, id, type_binders)?;
+            let ordinal = usize::try_from(clause.operation.operation())
+                .map_err(|_| ValidationError::new(ValidationReason::Handler, Some(id)))?;
+            let Some(slot) = covered.get_mut(ordinal) else {
+                return Err(ValidationError::new(ValidationReason::Handler, Some(id)));
+            };
+            if std::mem::replace(slot, true) {
+                return Err(ValidationError::new(ValidationReason::Handler, Some(id)));
+            }
+            let clause_body = self.node(clause.body())?;
+            self.validate_pattern(clause.pattern(), &domain, id)?;
+            let matrix = vec![vec![clause.pattern().clone()]];
+            let mut coverage_budget = UsefulnessBudget::default();
+            if missing_witness_for_types_with_budget(
+                &matrix,
+                std::slice::from_ref(&domain),
+                &self.program.registry,
+                &mut coverage_budget,
+            )
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?
+            .is_some()
+                || !self.same_type_charged(&clause_body.ty, &node.ty)?
+                || !self.effect_row_subset_charged(&clause_body.effects, &node.effects, id)?
+            {
+                return Err(ValidationError::new(ValidationReason::Handler, Some(id)));
+            }
+        }
+        let least = self.least_handler_output(id, type_binders)?;
+        if !self.same_effect_row_charged(&node.effects, &least, id)? {
+            return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+        }
+        Ok(())
+    }
+
+    fn validate_effect_resume(
+        &self,
+        id: NodeId,
+        node: &StoredNode<super::effect::EffectOperationFamily>,
+        resume: &super::effect::ResumeNode,
+        type_binders: &CoreTypeBinders<'_>,
+        contracts: &HashMap<
+            (super::effect::HandlerId, crate::resolved::ResumeId),
+            EffectClauseContract,
+        >,
+    ) -> Result<(), ValidationError> {
+        self.charge_type_work(1)?;
+        let contract = contracts
+            .get(&(resume.handler(), resume.owner()))
+            .ok_or_else(|| ValidationError::new(ValidationReason::Resume, Some(id)))?;
+        let handler_node = self.node(contract.handler)?;
+        let super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Handler(
+            handler,
+        )) = &handler_node.kind
+        else {
+            return Err(ValidationError::new(ValidationReason::Resume, Some(id)));
+        };
+        let clause = handler
+            .clauses()
+            .get(contract.clause)
+            .ok_or_else(|| ValidationError::new(ValidationReason::Resume, Some(id)))?;
+        let (_, result) =
+            self.effect_signature(handler.effect(), clause.operation(), id, type_binders)?;
+        let value = self.node(resume.value())?;
+        if resume.use_state() != super::effect::ResumeUse::Consumed
+            || !self.same_type_charged(&value.ty, &result)?
+            || !self.same_type_charged(&node.ty, &handler_node.ty)?
+            || !self.same_effect_row_charged(&node.effects, &handler_node.effects, id)?
+            || !self.effect_row_subset_charged(&value.effects, &handler_node.effects, id)?
+        {
+            return Err(ValidationError::new(ValidationReason::Resume, Some(id)));
+        }
+        Ok(())
     }
 }
 
@@ -5568,23 +9433,13 @@ enum GraphTask {
 }
 
 struct ScopeAnalysis {
-    root_requirements: HashMap<BinderId, NodeId>,
+    root_requirements: ScopeRequirements,
     analyzed_nodes: usize,
 }
 
 enum ScopeAnalysisTask {
     Enter(NodeId),
     Finish(NodeId),
-}
-
-fn union_requirements(
-    mut left: HashMap<BinderId, NodeId>,
-    right: HashMap<BinderId, NodeId>,
-) -> HashMap<BinderId, NodeId> {
-    for (binder, occurrence) in right {
-        left.entry(binder).or_insert(occurrence);
-    }
-    left
 }
 
 fn node_id(arena: super::dialect::ArenaId, index: usize) -> Result<NodeId, ValidationError> {
@@ -5594,17 +9449,1857 @@ fn node_id(arena: super::dialect::ArenaId, index: usize) -> Result<NodeId, Valid
 }
 
 #[cfg(test)]
+pub(super) use tests::{registration_proof_check, registration_proof_program};
+
+#[cfg(test)]
 mod tests {
+    type HookFixture = (
+        super::super::effect::UnvalidatedEffectProgram,
+        Vec<SourceFile>,
+        Vec<(ModuleId, SourceId)>,
+    );
+
+    fn hook_root_fixture() -> HookFixture {
+        hook_source_fixture(
+            "effect Mark<T> {\npublish : Int -> Int\n}\neffect Wrong {\nask : Int -> Int\n}\nmain : Unit -> Int\nmain () = hook Mark<Unit> {\nperform Mark<Unit>.publish 3\n}\n",
+        )
+    }
+
+    fn hook_source_fixture(source: &str) -> HookFixture {
+        hook_modules_fixture(source, &[])
+    }
+
+    fn hook_modules_fixture(source: &str, modules: &[(&str, &str)]) -> HookFixture {
+        let path = std::env::temp_dir().join(format!(
+            "ash-hook-validation-{}-{}",
+            std::process::id(),
+            SourceFile::new("hook", "").unwrap().id().value()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        for (name, source) in modules {
+            std::fs::write(path.join(name), source).unwrap();
+        }
+        std::fs::write(path.join("entry.ash"), source).unwrap();
+        let graph = crate::module::load_module_graph(
+            &path.join("entry.ash"),
+            &crate::module::ModuleRoots::empty(),
+        )
+        .unwrap();
+        std::fs::remove_dir_all(path).unwrap();
+        let mut checked: Vec<crate::resolved::CheckedModule> = Vec::new();
+        for module in graph.modules() {
+            let imports = module
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    crate::resolve::DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|module| module.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let resolved = crate::resolve::resolve_module(module, &imports).unwrap();
+            checked.push(crate::elaborate::check_module(resolved).unwrap());
+        }
+        let linked = crate::evidence_validation::validate_interface_evidence(
+            crate::elaborate::link_modules(checked, graph.entry()).unwrap(),
+        )
+        .unwrap();
+        let mut elaborator =
+            crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let core = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source().clone())
+            .collect();
+        let relations = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect();
+        (core, sources, relations)
+    }
+
+    // Borrowed proof checks support mutation controls; executable fixtures use
+    // the public validator and retain no separate admission path.
+    pub(in crate::core) fn registration_proof_check(
+        core: &super::super::effect::UnvalidatedEffectProgram,
+        sources: &[&SourceFile],
+        relations: &[(ModuleId, SourceId)],
+    ) -> Result<(), super::ValidationError> {
+        super::Validator::new_modules(core, sources, relations)?.run_effect()
+    }
+
+    pub(in crate::core) fn registration_proof_program(
+        core: super::super::effect::UnvalidatedEffectProgram,
+        sources: &[&SourceFile],
+        relations: &[(ModuleId, SourceId)],
+    ) -> super::super::effect::ValidatedEffectProgram {
+        super::super::validate_effect_modules(core, sources, relations).unwrap()
+    }
+
+    #[test]
+    fn cleanup_contract_rejects_forgery_before_and_after_both_transforms() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for pass in 0..3 {
+            for corruption in 0..6 {
+                let (mut core, sources, relations) = hook_source_fixture(
+                    "effect Report {\nreport : Int -> Unit\n}\nmain : Unit -> Int\nmain () = handle (cleanup fn(ignored) {\nperform Report.report 7\n} {\n40 + 2\n}) with Report {\nreport value => resume ()\n}\n",
+                );
+                let borrowed = sources.iter().collect::<Vec<_>>();
+                if pass > 0 {
+                    let valid =
+                        super::super::validate_effect_modules(core, &borrowed, &relations).unwrap();
+                    assert_eq!(
+                        crate::eval::evaluate_effect(&valid)
+                            .unwrap()
+                            .value
+                            .to_string(),
+                        "42"
+                    );
+                    core = if pass == 1 {
+                        super::super::transform::identity_effect_traversal(&valid)
+                    } else {
+                        super::super::transform::fold_effect_literal_primitives(&valid)
+                    }
+                    .unwrap();
+                }
+                let node = core
+                    .nodes
+                    .iter_mut()
+                    .find(|node| {
+                        matches!(
+                            node.kind,
+                            EffectExprKind::Operation(EffectOperation::Cleanup(_))
+                        )
+                    })
+                    .unwrap();
+                let EffectExprKind::Operation(EffectOperation::Cleanup(scope)) = &mut node.kind
+                else {
+                    unreachable!()
+                };
+                match corruption {
+                    0 => scope.callback = BinderId::generated(999),
+                    1 => std::mem::swap(&mut scope.body, &mut scope.action),
+                    2 => scope.action_span = scope.span,
+                    3 => scope.span = scope.action_span,
+                    4 => node.effects = EffectRow::empty(),
+                    _ => node.ty = Type::Unit,
+                }
+                assert!(
+                    super::super::validate_effect_modules(core, &borrowed, &relations).is_err(),
+                    "pass {pass}, corruption {corruption}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cleanup_duplicate_callback_owner_rejects_after_both_transforms() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for pass in 0..3 {
+            let (mut core, sources, relations) = hook_source_fixture(
+                "effect Report {\nreport : Int -> Unit\n}\nmain : Unit -> Int\nmain () = handle (cleanup fn(ignored) {\nperform Report.report 1\n} {\ncleanup fn(ignored) {\nperform Report.report 2\n} {\n42\n}\n}) with Report {\nreport value => resume ()\n}\n",
+            );
+            let borrowed = sources.iter().collect::<Vec<_>>();
+            if pass > 0 {
+                let valid =
+                    super::super::validate_effect_modules(core, &borrowed, &relations).unwrap();
+                core = if pass == 1 {
+                    super::super::transform::identity_effect_traversal(&valid)
+                } else {
+                    super::super::transform::fold_effect_literal_primitives(&valid)
+                }
+                .unwrap();
+            }
+            let mut scopes = core
+                .nodes
+                .iter()
+                .enumerate()
+                .filter_map(|(index, node)| match &node.kind {
+                    EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
+                        Some((index, *scope))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(scopes.len(), 2);
+            scopes.sort_by_key(|(_, scope)| scope.span.range().start());
+            let (_, outer) = scopes[0];
+            let (inner_index, inner) = scopes[1];
+            assert_ne!(outer.callback, inner.callback);
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(action))) =
+                &core.nodes[inner.action.index().unwrap()].kind
+            else {
+                panic!("cleanup retains an ordinary callback application")
+            };
+            let function_index = action.function().index().unwrap();
+            let EffectExprKind::Pure(PureExprKind::Variable(function)) =
+                &mut core.nodes[function_index].kind
+            else {
+                panic!("cleanup application refers to its callback binding")
+            };
+            *function = crate::core::variable::VariableNode::new(outer.callback);
+            let EffectExprKind::Operation(EffectOperation::Cleanup(scope)) =
+                &mut core.nodes[inner_index].kind
+            else {
+                unreachable!()
+            };
+            scope.callback = outer.callback;
+            assert_eq!(
+                super::super::validate_effect_modules(core, &borrowed, &relations)
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Handler,
+                "pass {pass}: two scopes cannot share one acquisition binding"
+            );
+        }
+    }
+
+    #[test]
+    fn cleanup_imported_generic_open_row_factory_preserves_both_transforms() {
+        prove_registration_transforms(hook_modules_fixture(
+            "import actions (Report, make)\nmain : Unit -> Int\nmain () = handle (cleanup (make ()) {\n42\n}) with Report {\nreport value => resume ()\n}\n",
+            &[(
+                "actions.ash",
+                "pub effect Report {\nreport : Int -> Unit\n}\npub make<A> : A -> (Unit -> Unit ! {Report})\nmake value = fn(ignored) {\nperform Report.report 7\n}\n",
+            )],
+        ));
+        prove_registration_transforms(hook_source_fixture(
+            "effect Report {\nreport : Int -> Unit\n}\nscoped<E : EffectRow> : (Unit -> Unit ! {| E}) -> Int ! {| E}\nscoped action = cleanup action {\n42\n}\nreport : Unit -> Unit ! {Report}\nreport ignored = perform Report.report 7\nmain : Unit -> Int\nmain () = handle (scoped report) with Report {\nreport value => resume ()\n}\n",
+        ));
+    }
+
+    #[test]
+    fn cleanup_row_replay_preserves_nested_resume_after_both_transforms() {
+        prove_registration_transforms(hook_source_fixture(include_str!(
+            "../../tests/fixtures/effects/capture-prefix-after.ash"
+        )));
+    }
+
+    #[test]
+    fn cleanup_owner_validation_has_an_exact_budget_and_fresh_retry() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (core, sources, relations) = hook_source_fixture(
+            "main : Unit -> Int\nmain () = cleanup fn(ignored) {\n()\n} {\n42\n}\n",
+        );
+        let borrowed = sources.iter().collect::<Vec<_>>();
+        let (index, node) = core
+            .nodes
+            .iter()
+            .enumerate()
+            .find(|(_, node)| {
+                matches!(
+                    node.kind,
+                    EffectExprKind::Operation(EffectOperation::Cleanup(_))
+                )
+            })
+            .unwrap();
+        let EffectExprKind::Operation(EffectOperation::Cleanup(scope)) = &node.kind else {
+            unreachable!()
+        };
+        let id = super::node_id(core.arena, index).unwrap();
+        let measured = super::Validator::new_modules(&core, &borrowed, &relations).unwrap();
+        let before = measured.type_work.get();
+        measured.validate_cleanup_owner(id, node, scope).unwrap();
+        let exact = measured.type_work.get() - before;
+        assert!(exact > 4);
+        for allowance in [exact - 1, exact, exact] {
+            let validator = super::Validator::new_modules(&core, &borrowed, &relations).unwrap();
+            validator
+                .type_work
+                .set(super::CORE_VALIDATION_TYPE_WORK_LIMIT - allowance);
+            let result = validator.validate_cleanup_owner(id, node, scope);
+            if allowance < exact {
+                assert_eq!(result.unwrap_err().reason(), ValidationReason::Resource);
+            } else {
+                result.unwrap();
+            }
+        }
+        core.discard_iteratively();
+    }
+
+    #[test]
+    fn cleanup_same_typed_callback_substitution_reconstructs_resource_dependencies() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for pass in 0..3 {
+            let (mut core, sources, relations) = hook_source_fixture(
+                "import @builtin.cell as Cell\neffect Report {\nreport : (Unit -> Int) -> Unit\n}\nconstant : Unit -> Int\nconstant ignored = 42\nmain : Unit -> Int\nmain () = handle (resource cell<R> c = 42 {\nlet dangerous : Unit -> Unit ! {Report} = fn(ignored) {\nlet saved : Unit -> Int = fn(ignored) {\nlet held = c\n42\n}\nperform Report.report saved\n}\nlet safe : Unit -> Unit ! {Report} = fn(ignored) {\nperform Report.report constant\n}\ncleanup safe {\n42\n}\n}) with Report {\nreport error => resume ()\n}\n",
+            );
+            let borrowed = sources.iter().collect::<Vec<_>>();
+            if pass > 0 {
+                let valid =
+                    super::super::validate_effect_modules(core, &borrowed, &relations).unwrap();
+                core = if pass == 1 {
+                    super::super::transform::identity_effect_traversal(&valid)
+                } else {
+                    super::super::transform::fold_effect_literal_primitives(&valid)
+                }
+                .unwrap();
+            }
+            let mut callback = None;
+            let mut dangerous = None;
+            for node in &core.nodes {
+                match &node.kind {
+                    EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
+                        callback = Some(scope.callback)
+                    }
+                    EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                        binding,
+                    ))) => {
+                        let span = binding.binder().origin().primary_span();
+                        let source = sources
+                            .iter()
+                            .find(|source| source.id() == span.source())
+                            .unwrap();
+                        if &source.text()
+                            [span.range().start() as usize..span.range().end() as usize]
+                            == "dangerous"
+                        {
+                            dangerous = Some(binding.binder().id());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let initializer = core
+                .nodes
+                .iter()
+                .find_map(|node| match &node.kind {
+                    EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                        binding,
+                    ))) if Some(binding.binder().id()) == callback => Some(binding.initializer()),
+                    _ => None,
+                })
+                .unwrap();
+            core.nodes[initializer.index().unwrap()].kind =
+                EffectExprKind::Pure(PureExprKind::Variable(
+                    crate::core::variable::VariableNode::new(dangerous.unwrap()),
+                ));
+            assert_eq!(
+                super::super::validate_effect_modules(core, &borrowed, &relations)
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::ResourceEscape,
+                "pass {pass}"
+            );
+        }
+    }
+
+    fn cleanup_linked_abandonment_fixture(argument: &str, argument_type: &str) -> HookFixture {
+        hook_modules_fixture(
+            &format!(
+                "import actions (Log, make)\neffect Stop {{\nstop : Unit -> Unit\n}}\nmain : Unit -> Int\nmain () = handle {{\nlet logged = perform Log<{argument_type}>.log ()\nhandle (handle (cleanup (make {argument}) {{\nlet logged = perform Log<Bool>.log ()\nlet stopped = perform Stop.stop ()\n42\n}}) with Log<Bool> {{\nlog ignored => (resume ()) + 1\n}}) with Stop {{\nstop ignored => {{\nlet done = discard\n7\n}}\n}}\n}} with Log<{argument_type}> {{\nlog ignored => resume ()\n}}\n"
+            ),
+            &[(
+                "actions.ash",
+                "pub effect Log<T> {\nlog : Unit -> Unit\n}\npub make<T> : T -> (Unit -> Unit ! {Log<T>})\nmake value = {\nlet dangerous : Unit -> Unit ! {Log<T>} = fn(ignored) {\nperform Log<T>.log ()\n}\nlet safe : Unit -> Unit ! {Log<T>} = fn(ignored) {\nhandle (perform Log<T>.log ()) with Log<T> {\nlog ignored => resume ()\n}\n}\nsafe\n}\n",
+            )],
+        )
+    }
+
+    #[test]
+    fn cleanup_linked_callback_substitution_rechecks_generic_handler_coincidence() {
+        use super::super::effect::EffectExprKind;
+        for pass in 0..3 {
+            for (argument, argument_type, safe) in [("1", "Int", true), ("true", "Bool", false)] {
+                let (mut core, sources, relations) =
+                    cleanup_linked_abandonment_fixture(argument, argument_type);
+                let borrowed = sources.iter().collect::<Vec<_>>();
+                registration_proof_check(&core, &borrowed, &relations).unwrap();
+                if pass > 0 {
+                    let valid =
+                        super::super::validate_effect_modules(core, &borrowed, &relations).unwrap();
+                    assert_eq!(
+                        crate::eval::evaluate_effect(&valid)
+                            .unwrap()
+                            .value
+                            .to_string(),
+                        "7"
+                    );
+                    core = if pass == 1 {
+                        super::super::transform::identity_effect_traversal(&valid)
+                    } else {
+                        super::super::transform::fold_effect_literal_primitives(&valid)
+                    }
+                    .unwrap();
+                }
+                let mut selected = None;
+                let mut replacement = None;
+                for node in &core.nodes {
+                    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                        binding,
+                    ))) = &node.kind
+                    else {
+                        continue;
+                    };
+                    let span = binding.binder().origin().primary_span();
+                    let source = sources
+                        .iter()
+                        .find(|source| source.id() == span.source())
+                        .unwrap();
+                    match &source.text()[span.range().start() as usize..span.range().end() as usize]
+                    {
+                        "safe" => selected = Some((binding.binder().id(), binding.binder().ty())),
+                        "dangerous" => {
+                            replacement = Some((binding.binder().id(), binding.binder().ty()))
+                        }
+                        _ => {}
+                    }
+                }
+                let (selected, selected_type) = selected.unwrap();
+                let (replacement, replacement_type) = replacement.unwrap();
+                assert_eq!(selected_type, replacement_type);
+                let mut replaced = 0;
+                for node in &mut core.nodes {
+                    if let EffectExprKind::Pure(PureExprKind::Variable(variable)) = &mut node.kind
+                        && variable.binder() == selected
+                    {
+                        *variable = crate::core::variable::VariableNode::new(replacement);
+                        replaced += 1;
+                    }
+                }
+                assert_eq!(replaced, 1);
+                let result = super::super::validate_effect_modules(core, &borrowed, &relations);
+                if safe {
+                    let valid =
+                        result.expect("a distinct captured instance does not intercept cleanup");
+                    assert_eq!(
+                        crate::eval::evaluate_effect(&valid)
+                            .unwrap()
+                            .value
+                            .to_string(),
+                        "7"
+                    );
+                } else {
+                    assert_eq!(
+                        result.unwrap_err().reason(),
+                        ValidationReason::DiscardUnsafe,
+                        "pass {pass}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cleanup_abandonment_forged_discard_row_rejects_after_both_transforms() {
+        use super::super::{
+            capture,
+            effect::{EffectExprKind, EffectOperation},
+        };
+        for pass in 0..3 {
+            let (mut core, sources, relations) = cleanup_linked_abandonment_fixture("1", "Int");
+            let borrowed = sources.iter().collect::<Vec<_>>();
+            if pass > 0 {
+                let valid =
+                    super::super::validate_effect_modules(core, &borrowed, &relations).unwrap();
+                core = if pass == 1 {
+                    super::super::transform::identity_effect_traversal(&valid)
+                } else {
+                    super::super::transform::fold_effect_literal_primitives(&valid)
+                }
+                .unwrap();
+            }
+            let discard = core
+                .nodes
+                .iter_mut()
+                .find(|node| {
+                    matches!(
+                        node.kind,
+                        EffectExprKind::Operation(EffectOperation::Discard(_))
+                    )
+                })
+                .unwrap();
+            assert!(!discard.effects.is_empty());
+            discard.effects = EffectRow::empty();
+            let independent = capture::check_nodes(
+                &core.nodes,
+                &[],
+                &[],
+                |kind| match kind {
+                    EffectExprKind::Operation(operation) => Some(operation),
+                    _ => None,
+                },
+                &mut TypeWorkBudget::with_limit(crate::types::TYPE_WORK_LIMIT),
+            );
+            assert!(
+                matches!(independent, Err(capture::Failure::CleanupRow { .. })),
+                "pass {pass}"
+            );
+            assert_eq!(
+                super::super::validate_effect_modules(core, &borrowed, &relations)
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::EffectRow,
+                "pass {pass}"
+            );
+        }
+    }
+
+    #[test]
+    fn cleanup_abandonment_capture_work_is_exact_one_short_and_retryable() {
+        use super::super::{capture, effect::EffectExprKind};
+        let (core, _, _) = cleanup_linked_abandonment_fixture("1", "Int");
+        let run = |budget: &mut TypeWorkBudget| {
+            capture::check_nodes(
+                &core.nodes,
+                &[],
+                &[],
+                |kind| match kind {
+                    EffectExprKind::Operation(operation) => Some(operation),
+                    _ => None,
+                },
+                budget,
+            )
+        };
+        let mut generous = TypeWorkBudget::with_limit(crate::types::TYPE_WORK_LIMIT);
+        run(&mut generous).unwrap();
+        let exact = generous.used();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(exact - 1)),
+            Err(capture::Failure::Resource)
+        ));
+        for _ in 0..2 {
+            let mut retry = TypeWorkBudget::with_limit(exact);
+            run(&mut retry).unwrap();
+            assert_eq!(retry.used(), exact);
+        }
+        core.discard_iteratively();
+    }
+
+    fn prove_registration_transforms(fixture: HookFixture) {
+        let (mut core, sources, relations) = fixture;
+        let sources = sources.iter().collect::<Vec<_>>();
+        for pass in 0..3 {
+            let mut validator = super::Validator::new_modules(&core, &sources, &relations).unwrap();
+            validator.run_effect().unwrap();
+            let program = registration_proof_program(core, &sources, &relations);
+            crate::eval::evaluate_effect(&program).unwrap();
+            let transformed = super::super::transform::identity_effect_traversal(&program).unwrap();
+            super::super::validate_effect_modules(transformed, &sources, &relations).unwrap();
+            core = if pass == 1 {
+                super::super::transform::fold_effect_literal_primitives(&program)
+            } else {
+                super::super::transform::identity_effect_traversal(&program)
+            }
+            .unwrap();
+        }
+        let program = super::super::validate_effect_modules(core, &sources, &relations).unwrap();
+        crate::eval::evaluate_effect(&program).unwrap();
+    }
+
+    #[test]
+    fn registration_rows_factories_and_live_function_payloads_prove_after_transforms() {
+        for source in [
+            "effect Adjust {\npublish : Int -> Int\n}\neffect Log {\nlog : Int -> Int\n}\ncallback : Int -> Int ! {Log}\ncallback value = perform Log.log value\nmain : Unit -> Bool\nmain () = handle (hook Adjust {\nregister Adjust callback {\ntrue\n}\n}) with Log {\nlog value => resume value\n}\n",
+            "import @builtin.cell as Cell\neffect Adjust {\npublish : (Unit -> Int) -> (Unit -> Int)\n}\nconstant : Unit -> Int\nconstant ignored = 1\nmain : Unit -> Int\nmain () = resource cell<R> c = 42 {\nhook Adjust {\nlet callback : (Unit -> Int) -> (Unit -> Int) = fn(previous) {\nfn(ignored) {\nlet held = c\n42\n}\n}\nlet result = register Adjust callback {\nperform Adjust.publish constant\n}\nresult ()\n}\n}\n",
+            "effect Adjust {\npublish : Int -> Int\n}\nmain : Unit -> Int\nmain () = hook Adjust {\nregister Adjust (fn(value) {\nvalue + 1\n}) {\nperform Adjust.publish 3\n}\n}\n",
+        ] {
+            prove_registration_transforms(hook_source_fixture(source));
+        }
+        prove_registration_transforms(hook_modules_fixture(
+            "import facade (Adjust, make, Box, pack, unpack)\nconstant : Unit -> Int\nconstant ignored = 1\nmain : Unit -> Int\nmain () = hook Adjust {\nlet callback = unpack (pack (make constant))\nlet result = register Adjust callback {\nperform Adjust.publish constant\n}\nresult ()\n}\n",
+            &[
+                (
+                    "api.ash",
+                    "pub effect Adjust {\npublish : (Unit -> Int) -> (Unit -> Int)\n}\npub opaque type Box<A> = Hidden(A)\npub pack<A> : A -> Box<A>\npack value = Hidden value\npub unpack<A> : Box<A> -> A\nunpack (Hidden value) = value\npub make : (Unit -> Int) -> ((Unit -> Int) -> (Unit -> Int))\nmake saved = fn(previous) {\nsaved\n}\n",
+                ),
+                (
+                    "facade.ash",
+                    "pub import api (Adjust, make, Box, pack, unpack)\n",
+                ),
+            ],
+        ));
+        prove_registration_transforms(hook_modules_fixture(
+            "import @builtin.cell as Cell\nimport helper (Adjust, Read, read, Box, make, impl Make)\nconstant : Unit -> Int\nconstant ignored = 1\nmain : Unit -> Int\nmain () = resource cell<R> c = 42 {\nnewtype Token = Token(Unit)\nlet saved = Token(())\nwith Read<Token> {\nread ignored = handle (Cell.read c) with Cell.Ops<R> {\nread value => resume 42\nwrite value => resume ()\n}\n}\nhook Adjust {\nlet callback = make (Box saved)\nlet result = register Adjust callback {\nperform Adjust.publish constant\n}\nresult ()\n}\n}\n",
+            &[(
+                "helper.ash",
+                "pub effect Adjust {\npublish : (Unit -> Int) -> (Unit -> Int)\n}\npub interface Read<A> {\nread : A -> Int\n}\npub type Box<A> = Box(A)\npub interface Make<A> {\nmake : A -> ((Unit -> Int) -> (Unit -> Int))\n}\npub impl<A> Make<Box<A>> where Read<A> {\nmake (Box saved) = fn(previous) {\nfn(ignored) {\nread saved\n}\n}\n}\n",
+            )],
+        ));
+        prove_registration_transforms(hook_source_fixture(
+            "effect Adjust {\npublish : Int -> Int\n}\nidentity : Int -> Int\nidentity value = value\nrelay<R : EffectRow> : (Unit -> Int ! {| R}) -> Int ! {Adjust | R}\nrelay action = register Adjust identity {\naction ()\n}\nconstant : Unit -> Int\nconstant ignored = 42\nmain : Unit -> Int\nmain () = hook Adjust {\nrelay constant\n}\n",
+        ));
+    }
+
+    #[test]
+    fn registration_generic_targets_may_coincide_after_instantiation() {
+        for second in ["()", "true"] {
+            prove_registration_transforms(hook_source_fixture(&format!(
+                "effect Mark<T> {{\npublish : Int -> Int\n}}\nidentity : Int -> Int\nidentity value = value\nprobe<T, U> : (T, U) -> Int ! {{Mark<T>, Mark<U>}}\nprobe ignored = register Mark<U> identity {{\nperform Mark<T>.publish 42\n}}\nmain : Unit -> Int\nmain () = hook Mark<Unit> {{\nhook Mark<Bool> {{\nprobe ((), {second})\n}}\n}}\n"
+            )));
+        }
+    }
+
+    #[test]
+    fn registration_capture_work_is_exact_one_short_and_retryable() {
+        use super::super::{capture, effect::EffectExprKind};
+        let (core, _, _) = hook_source_fixture(
+            "effect Adjust {\npublish : Int -> Int\n}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Int\nmain () = hook Adjust {\nregister Adjust identity {\nperform Adjust.publish 3\n}\n}\n",
+        );
+        let run = |budget: &mut TypeWorkBudget| {
+            capture::check_nodes(
+                &core.nodes,
+                &[],
+                &[],
+                |kind| match kind {
+                    EffectExprKind::Operation(operation) => Some(operation),
+                    _ => None,
+                },
+                budget,
+            )
+        };
+        let mut generous = TypeWorkBudget::with_limit(crate::types::TYPE_WORK_LIMIT);
+        run(&mut generous).unwrap();
+        let exact = generous.used();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(exact - 1)),
+            Err(capture::Failure::Resource)
+        ));
+        for _ in 0..2 {
+            let mut retry = TypeWorkBudget::with_limit(exact);
+            run(&mut retry).unwrap();
+            assert_eq!(retry.used(), exact);
+        }
+        core.discard_iteratively();
+    }
+
+    #[test]
+    fn registration_pipeline_and_disposal_fit_a_small_stack() {
+        const CHILD: &str = "ASH_REGISTRATION_PROOF_STACK_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "core::validate::tests::registration_pipeline_and_disposal_fit_a_small_stack",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .status()
+                .unwrap();
+            assert!(
+                status.success(),
+                "fresh registration proof process: {status}"
+            );
+            return;
+        }
+        std::thread::Builder::new().stack_size(256 * 1024).spawn(|| {
+            let source = format!("effect Adjust {{\npublish : Int -> Int\n}}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Int\nmain () = hook Adjust {{\n{}42{}\n}}\n",
+                "register Adjust identity {\n".repeat(24), "\n}".repeat(24));
+            let path = std::env::temp_dir().join(format!("ash-registration-stack-{}.ash", std::process::id()));
+            std::fs::write(&path, source).unwrap();
+            let graph = crate::module::load_module_graph(&path, &crate::module::ModuleRoots::empty()).unwrap();
+            std::fs::remove_file(path).unwrap();
+            let module = &graph.modules()[0];
+            let checked = crate::elaborate::check_module(crate::resolve::resolve_module(module, &[]).unwrap()).unwrap();
+            let linked = crate::evidence_validation::validate_interface_evidence(crate::elaborate::link_modules(vec![checked], graph.entry()).unwrap()).unwrap();
+            let mut elaborator = crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+            let typed = elaborator.synthesize_effect_module_program(&linked).unwrap();
+            let core = elaborator.finish(typed.node).unwrap();
+            super::Validator::new_modules(&core, &[module.source()], &[(module.id(), module.source().id())]).unwrap().run_effect().unwrap();
+            core.discard_iteratively();
+        }).unwrap().join().unwrap();
+    }
+
+    #[test]
+    fn registration_structure_proves_and_executes_through_public_validators() {
+        let (core, sources, relations) = hook_source_fixture(
+            "effect Adjust {\npublish : Int -> Int\n}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Bool\nmain () = hook Adjust {\nregister Adjust identity {\ntrue\n}\n}\n",
+        );
+        let borrowed = sources.iter().collect::<Vec<_>>();
+        let mut validator = super::Validator::new_modules(&core, &borrowed, &relations).unwrap();
+        validator.run_effect().unwrap();
+        let program = registration_proof_program(core, &borrowed, &relations);
+        for transform in [
+            super::super::transform::identity_effect_traversal,
+            super::super::transform::fold_effect_literal_primitives,
+        ] {
+            let core = transform(&program).unwrap();
+            super::Validator::new(&core, &borrowed)
+                .run_effect()
+                .unwrap();
+            let validated = super::super::effect::validate_effect(core, &borrowed).unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&validated)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "true"
+            );
+        }
+    }
+
+    #[test]
+    fn registration_rejects_forged_target_and_generated_binder_contract() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for pass in 0..3 {
+            for corruption in 0..9 {
+                let (mut core, sources, relations) = hook_source_fixture(
+                    "effect Adjust<T> {\npublish : Int -> Int\n}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Int\nmain () = hook Adjust<Unit> {\nregister Adjust<Unit> identity {\nperform Adjust<Unit>.publish 3\n}\n}\n",
+                );
+                let borrowed = sources.iter().collect::<Vec<_>>();
+                if pass > 0 {
+                    let program = registration_proof_program(core, &borrowed, &relations);
+                    core = if pass == 1 {
+                        super::super::transform::identity_effect_traversal(&program)
+                    } else {
+                        super::super::transform::fold_effect_literal_primitives(&program)
+                    }
+                    .unwrap();
+                }
+                let node = core.nodes.iter_mut().find(|node| matches!(&node.kind, EffectExprKind::Operation(EffectOperation::Handler(handler)) if handler.hook_registration.is_some())).unwrap();
+                let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &mut node.kind
+                else {
+                    unreachable!()
+                };
+                let contract = handler.hook_registration.as_mut().unwrap();
+                match corruption {
+                    0 => {
+                        contract.target = crate::types::EffectInstance::new(
+                            contract.target.effect(),
+                            Box::new([Type::Bool]),
+                        )
+                    }
+                    1 => contract.previous = contract.next,
+                    2 => contract.input = contract.callback,
+                    3 => contract.callback = BinderId::generated(999),
+                    4 => contract.span = contract.target_span,
+                    5 => contract.resume = crate::resolved::ResumeId::new(999),
+                    6 => {
+                        handler.effect = crate::types::EffectInstance::new(
+                            contract.target.effect(),
+                            Box::new([Type::Bool]),
+                        )
+                    }
+                    7 => {
+                        handler.clauses[0].arm = crate::core::CoreMatchArm::new(
+                            handler.clauses[0].pattern().clone(),
+                            handler.body,
+                            handler.clauses[0].origin().clone(),
+                        )
+                    }
+                    _ => node.effects = EffectRow::empty(),
+                }
+                assert!(
+                    super::Validator::new_modules(&core, &borrowed, &relations)
+                        .unwrap()
+                        .run_effect()
+                        .is_err(),
+                    "pass {pass}, forgery {corruption} reached proof success"
+                );
+                core.discard_iteratively();
+            }
+        }
+    }
+
+    #[test]
+    fn registration_contract_rejects_replacing_its_owner_with_an_ordinary_binding() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (mut core, sources, relations) = hook_source_fixture(
+            "effect Adjust {\npublish : Int -> Int\n}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Int\nmain () = hook Adjust {\nregister Adjust identity {\nperform Adjust.publish 3\n}\n}\n",
+        );
+        let literal = core
+            .nodes
+            .iter()
+            .position(|node| {
+                matches!(
+                    node.kind,
+                    EffectExprKind::Pure(PureExprKind::Value(PureValue::Integer(_)))
+                )
+            })
+            .unwrap();
+        let initializer = super::node_id(core.arena, literal).unwrap();
+        let node = core
+            .nodes
+            .iter_mut()
+            .find(|node| {
+                matches!(
+                    node.kind,
+                    EffectExprKind::Operation(EffectOperation::Registration(_))
+                )
+            })
+            .unwrap();
+        let EffectExprKind::Operation(EffectOperation::Registration(scope)) = node.kind else {
+            unreachable!()
+        };
+        let binder = super::super::TypedBinder::new(
+            core.arena,
+            BinderId::generated(999_999),
+            Type::Int,
+            node.origin.clone().unwrap(),
+        );
+        node.kind = EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+            super::super::binding::BindingNode::new(binder, initializer, scope.body),
+        )));
+        let sources = sources.iter().collect::<Vec<_>>();
+        assert!(
+            super::Validator::new_modules(&core, &sources, &relations)
+                .unwrap()
+                .run_effect()
+                .is_err()
+        );
+        core.discard_iteratively();
+    }
+
+    #[test]
+    fn registration_rejects_duplicate_owner_after_transforms() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for pass in 0..3 {
+            let (mut core, sources, relations) = hook_source_fixture(
+                "effect Adjust {\npublish : Int -> Int\n}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Int\nmain () = hook Adjust {\nregister Adjust identity {\nperform Adjust.publish 3\n}\n}\n",
+            );
+            let sources = sources.iter().collect::<Vec<_>>();
+            if pass > 0 {
+                let program = registration_proof_program(core, &sources, &relations);
+                core = if pass == 1 {
+                    super::super::transform::identity_effect_traversal(&program)
+                } else {
+                    super::super::transform::fold_effect_literal_primitives(&program)
+                }
+                .unwrap();
+            }
+            let node = core
+                .nodes
+                .iter()
+                .find(|node| {
+                    matches!(
+                        node.kind,
+                        EffectExprKind::Operation(EffectOperation::Registration(_))
+                    )
+                })
+                .unwrap();
+            let EffectExprKind::Operation(EffectOperation::Registration(scope)) = node.kind else {
+                unreachable!()
+            };
+            let duplicate = super::super::dialect::StoredNode {
+                dialect: node.dialect,
+                ty: node.ty.clone(),
+                effects: node.effects.clone(),
+                origin: node.origin.clone(),
+                kind: EffectExprKind::Operation(EffectOperation::Registration(scope)),
+            };
+            core.nodes.push(duplicate);
+            assert!(
+                super::Validator::new_modules(&core, &sources, &relations)
+                    .unwrap()
+                    .run_effect()
+                    .is_err()
+            );
+            core.discard_iteratively();
+        }
+    }
+
+    #[test]
+    fn registration_subscriber_local_discard_preserves_completion() {
+        let (core, sources, relations) = hook_source_fixture(
+            "effect Adjust {\npublish : Int -> Int\n}\neffect Skip {\nskip : Unit -> Unit\n}\ncallback : Int -> Int\ncallback value = handle {\nlet ignored = perform Skip.skip ()\nvalue\n} with Skip {\nskip ignored => {\nlet done = discard\nvalue\n}\n}\nmain : Unit -> Int\nmain () = hook Adjust {\nregister Adjust callback {\nperform Adjust.publish 3\n}\n}\n",
+        );
+        let borrowed = sources.iter().collect::<Vec<_>>();
+        super::Validator::new_modules(&core, &borrowed, &relations)
+            .unwrap()
+            .run_effect()
+            .unwrap();
+        core.discard_iteratively();
+    }
+
+    #[test]
+    fn registration_recomputes_callback_result_dependencies_after_linked_tampering() {
+        use super::super::{
+            effect::{EffectExprKind, EffectOperation},
+            variable::VariableNode,
+        };
+        let source = "import @builtin.cell as Cell\neffect Adjust {\npublish : (Unit -> Int) -> (Unit -> Int)\n}\nconstant : Unit -> Int\nconstant ignored = 1\nmain : Unit -> (Unit -> Int)\nmain () = resource cell<R> c = 42 {\nlet good : (Unit -> Int) -> (Unit -> Int) = fn(previous) {\nconstant\n}\nlet bad : (Unit -> Int) -> (Unit -> Int) = fn(previous) {\nfn(ignored) {\nlet held = c\n42\n}\n}\nhook Adjust {\nregister Adjust good {\nperform Adjust.publish constant\n}\n}\n}\n";
+        for pass in 0..3 {
+            let (mut core, sources, relations) = hook_source_fixture(source);
+            let borrowed = sources.iter().collect::<Vec<_>>();
+            super::Validator::new_modules(&core, &borrowed, &relations)
+                .unwrap()
+                .run_effect()
+                .unwrap();
+            if pass > 0 {
+                let program = registration_proof_program(core, &borrowed, &relations);
+                core = if pass == 1 {
+                    super::super::transform::identity_effect_traversal(&program)
+                } else {
+                    super::super::transform::fold_effect_literal_primitives(&program)
+                }
+                .unwrap();
+            }
+            let binding = |name| {
+                core.nodes
+                    .iter()
+                    .find_map(|node| {
+                        let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                            binding,
+                        ))) = &node.kind
+                        else {
+                            return None;
+                        };
+                        let span = binding.binder().origin().primary_span();
+                        let file = sources.iter().find(|file| file.id() == span.source())?;
+                        (file
+                            .text()
+                            .get(span.range().start() as usize..span.range().end() as usize)
+                            == Some(name))
+                        .then_some(binding.binder())
+                    })
+                    .unwrap()
+            };
+            let good = binding("good");
+            let bad = binding("bad");
+            assert_eq!(good.ty(), bad.ty());
+            let (good, bad) = (good.id(), bad.id());
+            let mut replacements = 0;
+            for node in &mut core.nodes {
+                if matches!(&node.kind, EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == good)
+                {
+                    node.kind =
+                        EffectExprKind::Pure(PureExprKind::Variable(VariableNode::new(bad)));
+                    replacements += 1;
+                }
+            }
+            assert_eq!(replacements, 1);
+            assert!(core.nodes.iter().any(|node| matches!(
+                node.kind,
+                EffectExprKind::Operation(EffectOperation::Registration(_))
+            )));
+            assert_eq!(
+                super::Validator::new_modules(&core, &borrowed, &relations)
+                    .unwrap()
+                    .run_effect()
+                    .unwrap_err()
+                    .reason(),
+                super::ValidationReason::ResourceEscape
+            );
+            assert_eq!(
+                super::super::validate_effect_modules(core, &borrowed, &relations)
+                    .unwrap_err()
+                    .reason(),
+                super::ValidationReason::ResourceEscape
+            );
+        }
+    }
+
+    #[test]
+    fn registration_context_checks_anonymous_identity_without_losing_latent_effects() {
+        for (callback, outer, clauses) in [
+            ("fn(value) {\nvalue\n}", "", ""),
+            (
+                "fn(value) {\nlet ignored = perform Log.log value\nvalue\n}",
+                "handle (",
+                ") with Log {\nlog value => resume value\n}",
+            ),
+        ] {
+            prove_registration_transforms(hook_source_fixture(&format!(
+                "effect Adjust {{\npublish : Int -> Int\n}}\neffect Log {{\nlog : Int -> Int\n}}\nmain : Unit -> Int\nmain () = {outer}hook Adjust {{\nregister Adjust ({callback}) {{\n42\n}}\n}}{clauses}\n"
+            )));
+        }
+        prove_registration_transforms(hook_source_fixture(
+            "effect Adjust {\npublish : Int -> Int\n}\nmain : Unit -> Int\nmain () = {\nlet identity = fn(value) {\nvalue\n}\nlet number = identity 42\nlet flag = identity true\nhook Adjust {\nregister Adjust identity {\nnumber\n}\n}\n}\n",
+        ));
+    }
+
+    #[test]
+    fn registration_initializer_discard_precedes_its_completion_owner() {
+        prove_registration_transforms(hook_source_fixture(
+            "effect Adjust {\npublish : Int -> Int\n}\neffect Before {\nbefore : Unit -> Unit\n}\nidentity : Int -> Int\nidentity value = value\nmake : Unit -> (Int -> Int) ! {Before}\nmake ignored = {\nlet done = perform Before.before ()\nidentity\n}\nmain : Unit -> Int\nmain () = handle (hook Adjust {\nregister Adjust (make ()) {\n42\n}\n}) with Before {\nbefore ignored => {\nlet done = discard\n42\n}\n}\n",
+        ));
+    }
+
+    #[test]
+    fn registration_subscriber_local_discard_preserves_nested_owners() {
+        prove_registration_transforms(hook_source_fixture(
+            "import @builtin.cell as Cell\neffect Adjust {\npublish : Int -> Int\n}\neffect Skip {\nskip : Unit -> Unit\n}\nidentity : Int -> Int\nidentity value = value\ncallback : Int -> Int\ncallback value = handle {\nlet ignored = perform Skip.skip ()\nvalue\n} with Skip {\nskip ignored => {\nlet done = discard\nvalue\n}\n}\nmain : Unit -> Int\nmain () = resource cell<R> c = 42 {\nhook Adjust {\nregister Adjust identity {\nregister Adjust callback {\nperform Adjust.publish 3\n}\n}\n}\n}\n",
+        ));
+    }
+
+    #[test]
+    fn registration_consumed_clause_owner_does_not_keep_completed_registration_live() {
+        prove_registration_transforms(hook_source_fixture(
+            "effect Adjust {\npublish : Int -> Int\n}\neffect A {\nask : Unit -> Unit\n}\neffect B {\nask : Unit -> Unit\n}\nidentity : Int -> Int\nidentity value = value\nmain : Unit -> Unit\nmain () = hook Adjust {\nhandle (register Adjust identity {\nperform A.ask ()\n}) with A {\nask ignored => {\nlet _ = resume ()\nhandle (perform B.ask ()) with B {\nask ignored => discard\n}\n}\n}\n}\n",
+        ));
+    }
+
+    #[test]
+    fn hook_root_contract_rejects_api_target_clause_and_origin_tampering_after_transforms() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for pass in 0..3 {
+            for corruption in 0..10 {
+                let (mut core, sources, relations) = hook_root_fixture();
+                let borrowed = sources.iter().collect::<Vec<_>>();
+                if pass > 0 {
+                    let valid =
+                        super::super::validate_effect_modules(core, &borrowed, &relations).unwrap();
+                    core = if pass == 1 {
+                        super::super::transform::identity_effect_traversal(&valid)
+                    } else {
+                        super::super::transform::fold_effect_literal_primitives(&valid)
+                    }
+                    .unwrap();
+                }
+                let node = core.nodes.iter_mut().find(|node| matches!(&node.kind, EffectExprKind::Operation(EffectOperation::Handler(handler)) if handler.hook_root.is_some())).unwrap();
+                let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &mut node.kind
+                else {
+                    unreachable!()
+                };
+                let root = handler.hook_root.as_mut().unwrap();
+                match corruption {
+                    0 => root.span = root.target_span,
+                    1 => root.input = BinderId::generated(999),
+                    2 => root.resume = crate::resolved::ResumeId::new(999),
+                    3 => {
+                        handler.effect =
+                            EffectInstance::new(handler.effect.effect(), Box::new([Type::Bool]))
+                    }
+                    4 => handler.clauses[0].operation = OperationId::new(root.operation.owner(), 1),
+                    5 => {
+                        handler.clauses[0].arm = crate::core::CoreMatchArm::new(
+                            handler.clauses[0].pattern().clone(),
+                            handler.body,
+                            handler.clauses[0].origin().clone(),
+                        )
+                    }
+                    6 => node.effects = EffectRow::singleton(root.target.clone()),
+                    7 => {
+                        root.target =
+                            EffectInstance::new(root.target.effect(), Box::new([Type::Bool]))
+                    }
+                    8 => node.origin = Some(Origin::Source(root.target_span)),
+                    9 => {
+                        let wrong = crate::types::EffectId::new(root.operation.owner().module(), 1);
+                        root.target = EffectInstance::new(wrong, Box::new([]));
+                        handler.effect = root.target.clone();
+                        root.operation = OperationId::new(wrong, 0);
+                        handler.clauses[0].operation = root.operation;
+                    }
+                    _ => unreachable!(),
+                }
+                let error =
+                    super::super::validate_effect_modules(core, &borrowed, &relations).unwrap_err();
+                assert!(
+                    matches!(
+                        error.reason(),
+                        ValidationReason::Handler | ValidationReason::EffectRow
+                    ) || corruption == 5 && error.reason() == ValidationReason::Unreachable,
+                    "pass {pass}, corruption {corruption}: {error:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hook_root_rejects_identity_pattern_origin_tampering_after_transforms() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let mut admitted = Vec::new();
+        for pass in 0..3 {
+            let (mut core, sources, relations) = hook_root_fixture();
+            let borrowed = sources.iter().collect::<Vec<_>>();
+            if pass > 0 {
+                let valid =
+                    super::super::validate_effect_modules(core, &borrowed, &relations).unwrap();
+                core = if pass == 1 {
+                    super::super::transform::identity_effect_traversal(&valid)
+                } else {
+                    super::super::transform::fold_effect_literal_primitives(&valid)
+                }
+                .unwrap();
+            }
+            let node = core.nodes.iter_mut().find(|node| matches!(&node.kind,
+                EffectExprKind::Operation(EffectOperation::Handler(handler)) if handler.hook_root.is_some())).unwrap();
+            let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &mut node.kind
+            else {
+                unreachable!()
+            };
+            let root = handler.hook_root.as_ref().unwrap();
+            assert_ne!(root.span, root.target_span);
+            let clause = &mut handler.clauses[0];
+            let mut pattern = clause.pattern().clone();
+            pattern.origin = Origin::Source(root.span);
+            clause.arm =
+                crate::core::CoreMatchArm::new(pattern, clause.body(), clause.origin().clone());
+            match super::super::validate_effect_modules(core, &borrowed, &relations) {
+                Ok(_) => admitted.push(pass),
+                Err(error) => assert_eq!(
+                    error.reason(),
+                    ValidationReason::Handler,
+                    "pass {pass}: {error:?}"
+                ),
+            }
+        }
+        assert!(
+            admitted.is_empty(),
+            "tampered identity pattern origins admitted in passes {admitted:?}"
+        );
+    }
+
+    #[test]
+    fn hook_callable_rows_reject_unproved_lacks_and_known_members_after_transforms() {
+        use super::super::transform::{fold_effect_literal_primitives, identity_effect_traversal};
+        for pass in 0..3 {
+            for add_known in [false, true] {
+                let (core, sources, relations) = hook_source_fixture(
+                    "effect Adjust {\npublish : Int -> Int\n}\neffect Other {\npublish : Int -> Int\n}\nrelay<R : EffectRow> : (Unit -> Int ! {| R}) -> Int ! {Adjust | R}\nrelay action = hook Adjust {\naction ()\n}\nconstant : Unit -> Int\nconstant () = 42\nmain : Unit -> Int\nmain () = hook Adjust {\nrelay constant\n}\n",
+                );
+                let borrowed = sources.iter().collect::<Vec<_>>();
+                let mut core = if pass == 0 {
+                    core
+                } else {
+                    let valid =
+                        super::super::validate_effect_modules(core, &borrowed, &relations).unwrap();
+                    if pass == 1 {
+                        identity_effect_traversal(&valid).unwrap()
+                    } else {
+                        fold_effect_literal_primitives(&valid).unwrap()
+                    }
+                };
+                let node = core
+                    .nodes
+                    .iter_mut()
+                    .find(|node| {
+                        node.effects.tail().is_some()
+                            && matches!(
+                                super::super::effect::EffectOperationFamily::pure(&node.kind),
+                                Some(PureExprKind::Computation(PureComputation::Apply(_)))
+                            )
+                    })
+                    .unwrap();
+                let tail = node.effects.tail().unwrap();
+                let target = &tail.lacks()[0];
+                let other = EffectInstance::new(
+                    crate::types::EffectId::new(target.effect().module(), 1),
+                    Box::new([]),
+                );
+                node.effects = if add_known {
+                    EffectRow::closed(Box::new([other]))
+                } else {
+                    EffectRow::open(tail.variable(), Box::new([target.clone(), other]))
+                };
+                let error =
+                    super::super::validate_effect_modules(core, &borrowed, &relations).unwrap_err();
+                assert_eq!(
+                    error.reason(),
+                    ValidationReason::EffectRow,
+                    "pass {pass}, known {add_known}: {error:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hook_root_validation_is_exact_one_short_and_retryable() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (core, sources, _) = hook_root_fixture();
+        let borrowed = sources.iter().collect::<Vec<_>>();
+        let (index, node) = core.nodes.iter().enumerate().find(|(_, node)| matches!(&node.kind, EffectExprKind::Operation(EffectOperation::Handler(handler)) if handler.hook_root.is_some())).unwrap();
+        let id = node_id(core.arena, index).unwrap();
+        let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &node.kind else {
+            unreachable!()
+        };
+        let run = |validator: &Validator<'_, '_, super::super::effect::EffectOperationFamily>| {
+            validator.validate_effect_handler(
+                id,
+                node,
+                handler,
+                &HashMap::new(),
+                &mut HashSet::new(),
+                &mut HashMap::new(),
+            )
+        };
+        let measured = Validator::new(&core, &borrowed);
+        run(&measured).unwrap();
+        let exact = measured.type_work.get();
+        let short = Validator::new(&core, &borrowed);
+        short
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact + 1)
+            .unwrap();
+        assert_eq!(
+            run(&short).unwrap_err().reason(),
+            ValidationReason::Resource
+        );
+        for _ in 0..2 {
+            let retry = Validator::new(&core, &borrowed);
+            retry
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact)
+                .unwrap();
+            run(&retry).unwrap();
+        }
+    }
+
+    #[test]
+    fn row_subset_recognizes_written_known_member_lacks_without_inventing_others() {
+        use crate::types::{EffectId, EffectRowVariable, TypeVariableId};
+        let file = source();
+        let mut builder =
+            crate::core::EffectCoreBuilder::with_effect_registry(Arc::new(Default::default()));
+        let node = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let program = builder.finish(node).unwrap();
+        let effect = EffectInstance::new(EffectId::new(ModuleId::new(0), 0), Box::new([]));
+        let other = EffectInstance::new(EffectId::new(ModuleId::new(0), 1), Box::new([]));
+        let variable = EffectRowVariable::Rigid(TypeVariableId::generated(0));
+        let written = crate::types::effect_row_from_canonical_source_parts_with_budget(
+            vec![effect.clone()],
+            Some(variable),
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .unwrap();
+        let subset = EffectRow::open(variable, Box::new([effect]));
+        let invalid = EffectRow::open(variable, Box::new([other]));
+        let check = |validator: &Validator<'_, '_, super::super::effect::EffectOperationFamily>| {
+            assert!(validator.effect_row_subset_charged(&subset, &written, node)?);
+            Ok::<(), ValidationError>(())
+        };
+        let measured = Validator::new(&program, &[&file]);
+        check(&measured).unwrap();
+        let exact = measured.type_work.get();
+        assert_eq!(
+            measured
+                .effect_row_subset_charged(&invalid, &written, node)
+                .unwrap_err()
+                .reason(),
+            ValidationReason::EffectRow
+        );
+        let short = Validator::new(&program, &[&file]);
+        short
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact + 1)
+            .unwrap();
+        assert_eq!(
+            check(&short).unwrap_err().reason(),
+            ValidationReason::Resource
+        );
+        for _ in 0..2 {
+            let retry = Validator::new(&program, &[&file]);
+            retry
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact)
+                .unwrap();
+            check(&retry).unwrap();
+        }
+    }
+
+    #[test]
+    fn callable_row_qualification_uses_only_its_owner_and_has_exact_work() {
+        use crate::types::{ComputationType, EffectId, EffectRowVariable, TypeVariableId};
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let file = source();
+                let variable = TypeVariableId::generated(0);
+                let other_variable = TypeVariableId::generated(1);
+                let row_variable = EffectRowVariable::Rigid(variable);
+                let effect = EffectInstance::new(EffectId::new(ModuleId::new(0), 0), Box::new([]));
+                let other = EffectInstance::new(EffectId::new(ModuleId::new(0), 1), Box::new([]));
+                let written = crate::types::effect_row_from_canonical_source_parts_with_budget(
+                    vec![effect.clone()],
+                    Some(row_variable),
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .unwrap();
+                let mut contract = Type::EffectfulFunction(
+                    Box::new(Type::Unit),
+                    Box::new(ComputationType::new(Type::Int, written)),
+                );
+                for _ in 0..64 {
+                    contract = Type::Function(Box::new(Type::Unit), Box::new(contract));
+                }
+                let mut builder = crate::core::EffectCoreBuilder::with_effect_registry(Arc::new(
+                    Default::default(),
+                ));
+                let value = builder.unit(Type::Unit, origin(&file)).unwrap();
+                let owner = builder
+                    .type_abstraction(
+                        vec![(variable, Kind::EffectRow)],
+                        value,
+                        Type::Forall(Box::new([(variable, Kind::EffectRow)]), Box::new(contract)),
+                        origin(&file),
+                    )
+                    .unwrap();
+                let program = builder.finish(owner).unwrap();
+                let row_kind = Kind::EffectRow;
+                let binders = HashMap::from([(variable, (&row_kind, owner))]);
+                let raw = EffectRow::open(row_variable, Box::new([]));
+                let qualified = EffectRow::open(row_variable, Box::new([effect]));
+                let run =
+                    |validator: &Validator<'_, '_, super::super::effect::EffectOperationFamily>| {
+                        let actual =
+                            validator.qualify_callable_row(&raw, &qualified, &binders, value)?;
+                        assert_eq!(*actual, qualified);
+                        Ok::<(), ValidationError>(())
+                    };
+                let measured = Validator::new(&program, &[&file]);
+                run(&measured).unwrap();
+                let exact = measured.type_work.get();
+                let short = Validator::new(&program, &[&file]);
+                short
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact + 1)
+                    .unwrap();
+                assert_eq!(
+                    run(&short).unwrap_err().reason(),
+                    ValidationReason::Resource
+                );
+                for _ in 0..2 {
+                    let retry = Validator::new(&program, &[&file]);
+                    retry
+                        .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact)
+                        .unwrap();
+                    run(&retry).unwrap();
+                }
+                let validator = Validator::new(&program, &[&file]);
+                let unsupported = EffectRow::open(row_variable, Box::new([other]));
+                assert_eq!(
+                    validator
+                        .qualify_callable_row(&raw, &unsupported, &binders, value)
+                        .unwrap_err()
+                        .reason(),
+                    ValidationReason::EffectRow
+                );
+                assert_eq!(
+                    validator
+                        .qualify_callable_row(&raw, &qualified, &HashMap::new(), value)
+                        .unwrap_err()
+                        .reason(),
+                    ValidationReason::EffectRow
+                );
+                let wrong_binders = HashMap::from([(other_variable, (&row_kind, owner))]);
+                assert!(
+                    !validator
+                        .row_owner_proves_lacks(
+                            EffectRowVariable::Rigid(other_variable),
+                            &qualified.tail().unwrap().lacks()[0],
+                            &wrong_binders,
+                            value
+                        )
+                        .unwrap()
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    fn cell_core_fixture() -> (
+        super::super::effect::UnvalidatedEffectProgram,
+        Vec<crate::source::SourceFile>,
+    ) {
+        use super::super::dialect::{
+            MethodEvidenceAnchor, MethodEvidenceAnchorRole, MethodEvidenceCatalog,
+            MethodEvidenceExpectation, MethodEvidenceExpectedRole, MethodEvidenceLexicalOwner,
+            MethodEvidenceMethod,
+        };
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (mut core, module, sources, registry) =
+            crate::elaborate::cell_resource_core_fixture_for_test();
+        core.registry = registry;
+        let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+            &core.nodes[core.root.index().unwrap()].kind
+        else {
+            panic!("resource root")
+        };
+        let authority = resource.acquisition;
+        let interface = module
+            .imported_facts()
+            .interface(authority.api().unwrap().provider())
+            .unwrap();
+        let methods = interface
+            .methods
+            .iter()
+            .map(|method| MethodEvidenceMethod {
+                id: method.id,
+                interface_parameters: interface
+                    .parameters
+                    .iter()
+                    .map(|parameter| parameter.id)
+                    .collect(),
+                parameters: method
+                    .type_parameters
+                    .iter()
+                    .map(|parameter| (parameter.id, parameter.kind.clone()))
+                    .collect(),
+                value_type: method.value_type.clone(),
+            })
+            .collect();
+        let owners: Vec<_> = authority
+            .methods
+            .iter()
+            .enumerate()
+            .map(|(ordinal, binder)| MethodEvidenceLexicalOwner {
+                acquisition: Some(authority),
+                source_parameters: Box::new([]),
+                source: authority.provider,
+                method: crate::interface::MethodId::new(interface.id, ordinal as u32),
+                binder: *binder,
+                application: crate::interface::InterfaceApplication::new(
+                    interface.id,
+                    Box::new([crate::types::Type::Variable(authority.identity)]),
+                ),
+                captures: Box::new([]),
+            })
+            .collect();
+        let expectations = owners
+            .iter()
+            .enumerate()
+            .map(|(owner, row)| MethodEvidenceExpectation {
+                occurrence: None,
+                method: row.method,
+                role: MethodEvidenceExpectedRole::LexicalOwner { owner },
+            })
+            .collect();
+        let anchors = owners.iter().enumerate().map(|(expectation, row)| {
+            let index = core.nodes.iter().position(|node| matches!(super::super::effect::EffectOperationFamily::pure(&node.kind), Some(super::PureExprKind::Computation(super::PureComputation::Bind(binding))) if binding.binder().id() == row.binder)).unwrap();
+            MethodEvidenceAnchor { node: super::node_id(core.arena, index).unwrap(), owner: None, requirement: None, method: row.method,
+                application: row.application.clone_with_budget(&mut crate::types::TypeWorkBudget::default()).unwrap(), role: MethodEvidenceAnchorRole::LexicalOwner { source: row.source, binder: row.binder }, occurrence: None, expectation }
+        }).collect();
+        let mut catalog = MethodEvidenceCatalog::new(
+            methods,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            expectations,
+        );
+        catalog.set_lexical_owners(owners);
+        core.method_evidence = std::sync::Arc::new(catalog);
+        core.method_evidence_anchors = anchors;
+        (core, sources)
+    }
+
+    #[test]
+    fn cell_core_structure_validates_and_executes() {
+        let (core, sources) = cell_core_fixture();
+        let refs = sources.iter().collect::<Vec<_>>();
+        let relation = core
+            .registry
+            .type_variables()
+            .map(|parameter| {
+                (
+                    parameter.id.module().unwrap(),
+                    parameter.origin.primary_span().source(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let mut validator = super::Validator::new_modules(&core, &refs, &relation)
+            .expect("resource module origins");
+        validator.run_effect().expect("resource static proof");
+        let program = super::super::validate_effect_modules(core, &refs, &relation).unwrap();
+        assert_eq!(
+            crate::eval::evaluate_effect(&program)
+                .unwrap()
+                .value
+                .to_string(),
+            "42"
+        );
+    }
+
+    #[test]
+    fn cell_core_reconstructs_hidden_closure_escape_before_the_execution_gate() {
+        use super::super::{
+            binding::BindingNode,
+            effect::{EffectExprKind, EffectOperation},
+            function::FunctionNode,
+            variable::{TypedBinder, VariableNode},
+        };
+        let (mut core, sources) = cell_core_fixture();
+        let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+            &core.nodes[core.root.index().unwrap()].kind
+        else {
+            panic!("resource root")
+        };
+        let handle = resource.handle.clone();
+        let mut leaf = resource.body;
+        let mut bindings = Vec::new();
+        while let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) =
+            &core.nodes[leaf.index().unwrap()].kind
+        {
+            bindings.push(leaf);
+            leaf = binding.body();
+        }
+        assert!(
+            !bindings.is_empty(),
+            "trusted provider bindings remain inside the scope"
+        );
+        let dialect = core.nodes[leaf.index().unwrap()].dialect;
+        let effects = core.nodes[leaf.index().unwrap()].effects.clone();
+        let origin = core.nodes[leaf.index().unwrap()].origin.clone().unwrap();
+        let variable = node_id(core.arena, core.nodes.len()).unwrap();
+        core.nodes.push(StoredNode {
+            ty: handle.ty().clone(),
+            kind: EffectExprKind::Pure(PureExprKind::Variable(VariableNode::new(handle.id()))),
+            dialect,
+            effects: effects.clone(),
+            origin: Some(origin.clone()),
+        });
+        let body = node_id(core.arena, core.nodes.len()).unwrap();
+        core.nodes.push(StoredNode {
+            kind: EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                BindingNode::new(
+                    TypedBinder::new(
+                        core.arena,
+                        BinderId::generated(u32::MAX - 1),
+                        handle.ty().clone(),
+                        origin.clone(),
+                    ),
+                    variable,
+                    leaf,
+                ),
+            ))),
+            ty: Type::Int,
+            dialect,
+            effects: effects.clone(),
+            origin: Some(origin.clone()),
+        });
+        let closure = node_id(core.arena, core.nodes.len()).unwrap();
+        let closure_type = Type::Function(Box::new(Type::Unit), Box::new(Type::Int));
+        core.nodes.push(StoredNode {
+            ty: closure_type.clone(),
+            kind: EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(
+                FunctionNode::new(
+                    TypedBinder::new(
+                        core.arena,
+                        BinderId::generated(u32::MAX),
+                        Type::Unit,
+                        origin.clone(),
+                    ),
+                    body,
+                ),
+            ))),
+            dialect,
+            effects,
+            origin: Some(origin),
+        });
+        for node in bindings {
+            let node = &mut core.nodes[node.index().unwrap()];
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) =
+                &node.kind
+            else {
+                unreachable!()
+            };
+            let replacement = BindingNode::new(
+                binding.binder().clone(),
+                binding.initializer(),
+                if binding.body() == leaf {
+                    closure
+                } else {
+                    binding.body()
+                },
+            );
+            node.kind = EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                replacement,
+            )));
+            node.ty = closure_type.clone();
+        }
+        core.nodes[core.root.index().unwrap()].ty = closure_type;
+        assert_eq!(
+            cell_core_reason(&core, &sources, 0).0,
+            Some(ValidationReason::ResourceEscape)
+        );
+    }
+
+    #[test]
+    fn cell_core_requires_both_provider_owners_even_for_constant_body() {
+        let (mut core, sources) = cell_core_fixture();
+        core.method_evidence = Arc::new(super::super::dialect::MethodEvidenceCatalog::new(
+            core.method_evidence.methods().to_vec(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ));
+        core.method_evidence_anchors = Box::new([]);
+        assert_eq!(
+            cell_core_reason(&core, &sources, 0).0,
+            Some(ValidationReason::NodeType)
+        );
+    }
+
+    fn cell_core_reason(
+        core: &super::super::effect::UnvalidatedEffectProgram,
+        sources: &[SourceFile],
+        used: usize,
+    ) -> (Option<ValidationReason>, usize) {
+        let refs = sources.iter().collect::<Vec<_>>();
+        let relation = core
+            .registry
+            .type_variables()
+            .map(|parameter| {
+                (
+                    parameter.id.module().unwrap(),
+                    parameter.origin.primary_span().source(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let mut validator =
+            super::Validator::new_modules(core, &refs, &relation).expect("module origins");
+        validator.type_work.set(used);
+        let reason = validator.run_effect().err().map(|error| error.reason());
+        (reason, validator.type_work.get())
+    }
+
+    #[test]
+    fn cell_core_rejects_a_well_typed_replacement_provider_computation() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (mut core, sources) = cell_core_fixture();
+        let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+            &core.nodes[core.root.index().unwrap()].kind
+        else {
+            panic!("resource")
+        };
+        let integer = resource.initializer;
+        let function_index = core
+            .nodes
+            .iter()
+            .position(|node| {
+                matches!(
+                    &node.kind,
+                    EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(_)))
+                )
+            })
+            .unwrap();
+        let EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(function))) =
+            &core.nodes[function_index].kind
+        else {
+            unreachable!()
+        };
+        let request = function.body();
+        let parameter = function.parameter().clone();
+        let added = node_id(core.arena, core.nodes.len()).unwrap();
+        core.nodes.push(StoredNode {
+            dialect: core.nodes[request.index().unwrap()].dialect,
+            ty: Type::Int,
+            effects: core.nodes[request.index().unwrap()].effects.clone(),
+            origin: core.nodes[request.index().unwrap()].origin.clone(),
+            kind: EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Primitive(
+                crate::core::primitive::PrimitiveNode::new(
+                    crate::core::Primitive::Add,
+                    request,
+                    integer,
+                ),
+            ))),
+        });
+        core.nodes[function_index].kind = EffectExprKind::Pure(PureExprKind::Value(
+            PureValue::Function(FunctionNode::new(parameter, added)),
+        ));
+        assert_eq!(
+            cell_core_reason(&core, &sources, 0).0,
+            Some(ValidationReason::NodeType)
+        );
+    }
+
+    #[test]
+    fn cell_core_rejects_detached_brand_provider_and_source_authority() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for corruption in 0..5 {
+            let (mut core, sources) = cell_core_fixture();
+            let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+                &mut core.nodes[core.root.index().unwrap()].kind
+            else {
+                panic!("resource")
+            };
+            match corruption {
+                0 => resource.acquisition.identity = crate::types::TypeVariableId::generated(999),
+                1 => {
+                    resource.acquisition.provider = crate::interface::LexicalEvidenceId::new(
+                        resource.acquisition.provider.module(),
+                        u32::MAX,
+                    )
+                }
+                2 => resource.acquisition.builtin = resource.acquisition.handle.module().unwrap(),
+                3 => {
+                    resource.acquisition.span =
+                        sources[0].span(ByteRange::new(0, 1).unwrap()).unwrap()
+                }
+                4 => resource.acquisition.handle = resource.acquisition.methods[0],
+                _ => unreachable!(),
+            }
+            let reason = cell_core_reason(&core, &sources, 0).0;
+            assert_ne!(reason, None, "corruption {corruption}");
+            assert_ne!(
+                reason,
+                Some(ValidationReason::Resource),
+                "corruption {corruption}"
+            );
+        }
+    }
+
+    #[test]
+    fn cell_core_rejects_a_request_with_the_wrong_operation_fact() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (mut core, sources) = cell_core_fixture();
+        let request = core
+            .nodes
+            .iter_mut()
+            .find_map(|node| match &mut node.kind {
+                EffectExprKind::Operation(EffectOperation::Request(request)) => Some(request),
+                _ => None,
+            })
+            .unwrap();
+        request.operation = crate::types::OperationId::new(request.effect.effect(), u32::MAX);
+        assert_ne!(cell_core_reason(&core, &sources, 0).0, None);
+    }
+
+    #[test]
+    fn effect_core_rejects_inference_atoms_in_resource_request_metadata() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let (mut core, sources) = cell_core_fixture();
+        let request = core
+            .nodes
+            .iter_mut()
+            .find_map(|node| match &mut node.kind {
+                EffectExprKind::Operation(EffectOperation::Request(request)) => Some(request),
+                _ => None,
+            })
+            .unwrap();
+        request.effect = crate::types::EffectInstance::new(
+            request.effect.effect(),
+            Box::new([Type::Inference(crate::types::InferenceVariableId::new(0))]),
+        );
+        assert_eq!(
+            cell_core_reason(&core, &sources, 0).0,
+            Some(ValidationReason::TypeScope)
+        );
+    }
+
+    #[test]
+    fn cell_core_validation_work_is_exact_and_retryable() {
+        let (core, sources) = cell_core_fixture();
+        let (reason, work) = cell_core_reason(&core, &sources, 0);
+        assert_eq!(reason, None);
+        assert_eq!(
+            cell_core_reason(&core, &sources, CORE_VALIDATION_TYPE_WORK_LIMIT - work + 1).0,
+            Some(ValidationReason::Resource)
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                cell_core_reason(&core, &sources, CORE_VALIDATION_TYPE_WORK_LIMIT - work).0,
+                None
+            );
+        }
+    }
+
+    fn validated_cell_transform_fixture() -> (
+        super::super::effect::ValidatedEffectProgram,
+        Vec<SourceFile>,
+    ) {
+        let (core, sources) = cell_core_fixture();
+        assert_eq!(cell_core_reason(&core, &sources, 0).0, None);
+        let refs = sources.iter().collect::<Vec<_>>();
+        let relation = core
+            .registry
+            .type_variables()
+            .map(|parameter| {
+                (
+                    parameter.id.module().unwrap(),
+                    parameter.origin.primary_span().source(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let validated = super::super::validate_effect_modules(core, &refs, &relation).unwrap();
+        assert_eq!(
+            crate::eval::evaluate_effect(&validated)
+                .unwrap()
+                .value
+                .to_string(),
+            "42"
+        );
+        (validated, sources)
+    }
+
+    #[test]
+    fn cell_complete_transforms_revalidate_and_execute_the_full_relation() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        type Transform = fn(
+            &super::super::effect::ValidatedEffectProgram,
+        ) -> Result<
+            super::super::effect::UnvalidatedEffectProgram,
+            crate::core::transform::TransformError,
+        >;
+        let (program, sources) = validated_cell_transform_fixture();
+        let EffectExprKind::Operation(EffectOperation::Resource(original)) =
+            &program.node(program.root()).unwrap().kind
+        else {
+            panic!("resource")
+        };
+        for (fold, transform) in [
+            (
+                false,
+                crate::core::transform::identity_effect_traversal as Transform,
+            ),
+            (
+                true,
+                crate::core::transform::fold_effect_literal_primitives as Transform,
+            ),
+        ] {
+            let mut rebuilt: super::super::effect::UnvalidatedEffectProgram =
+                transform(&program).expect("complete resource transform");
+            assert_eq!(cell_core_reason(&rebuilt, &sources, 0).0, None);
+            let refs = sources.iter().collect::<Vec<_>>();
+            let relation = rebuilt
+                .registry
+                .type_variables()
+                .map(|parameter| {
+                    (
+                        parameter.id.module().unwrap(),
+                        parameter.origin.primary_span().source(),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let executable = super::super::validate_effect_modules(
+                transform(&program).unwrap(),
+                &refs,
+                &relation,
+            )
+            .unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&executable)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "42"
+            );
+            if fold {
+                assert!(rebuilt.nodes.len() < program.node_count());
+            }
+            let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+                &mut rebuilt.nodes[rebuilt.root.index().unwrap()].kind
+            else {
+                panic!("resource")
+            };
+            assert_eq!(resource.acquisition, original.acquisition);
+            assert_eq!(resource.handle.ty(), original.handle.ty());
+            resource.acquisition.methods.swap(0, 1);
+            assert_ne!(cell_core_reason(&rebuilt, &sources, 0).0, None);
+        }
+    }
+
     use super::*;
     use crate::{
         core::{
-            CoreBuilder, PureValue,
+            CoreBuilder, NewtypeConversionDirection, PureValue,
             binding::BindingNode,
             function::{ApplicationNode, FunctionNode},
             transform::{fold_literal_primitives, identity_traversal},
             type_ops::{TypeAbstractionNode, TypeApplicationNode},
         },
         elaborate::{Elaborator, check_module, link_modules},
+        integer::Integer,
         module::{ModuleGraph, ModuleRoots, load_module_graph},
         resolve::{DependencyExports, resolve_module},
         resolved::{CheckedModule, CoreGlobalParameterRowMutationForTest},
@@ -5658,6 +11353,649 @@ mod tests {
         program: UnvalidatedProgram,
         module_sources: Vec<(ModuleId, SourceId)>,
         globals: HashMap<String, (BinderId, Box<[crate::types::TypeVariableId]>)>,
+    }
+
+    #[test]
+    fn builtin_cell_core_requires_the_complete_method_catalogue() {
+        for remove_catalogue in [false, true] {
+            let directory = LinkedValidationDirectory::create();
+            let entry = directory.write(
+                "entry.ash",
+                "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = 42\n",
+            );
+            let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+            let linked =
+                link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+            let linked = validate_linked_facts_for_test(linked).unwrap();
+            let mut elaborator =
+                crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+            let typed = elaborator
+                .synthesize_effect_module_program(&linked)
+                .unwrap();
+            let mut program = elaborator.finish(typed.node).unwrap();
+            if remove_catalogue {
+                program.method_evidence = Arc::default();
+            }
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let relation = graph
+                .modules()
+                .iter()
+                .map(|module| (module.id(), module.source().id()))
+                .collect::<Vec<_>>();
+            let result = super::validate_effect_modules_family(program, &sources, &relation);
+            if remove_catalogue {
+                assert_eq!(result.unwrap_err().reason, ValidationReason::Registry);
+            } else {
+                result.unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn native_buffer_core_authenticates_authority_and_result_after_both_transforms() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let directory = LinkedValidationDirectory::create();
+        let entry = directory.write("entry.ash", "import @builtin.native_buffer as Buffer\nmain : Unit -> Buffer.Outcome<Int>\nmain () = resource native_buffer<R> b = 4 {\nBuffer.length b + 1\n}\n");
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+        let linked = validate_linked_facts_for_test(linked).unwrap();
+        let mut elaborator =
+            crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let core = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let mut measured = Validator::new_modules(&core, &sources, &relation).unwrap();
+        measured.run_effect().unwrap();
+        let work = measured.type_work.get();
+        for remaining in [work - 1, work, work] {
+            let mut retry = Validator::new_modules(&core, &sources, &relation).unwrap();
+            retry
+                .type_work
+                .set(CORE_VALIDATION_TYPE_WORK_LIMIT - remaining);
+            assert_eq!(
+                retry.run_effect().err().map(|error| error.reason()),
+                if remaining < work {
+                    Some(ValidationReason::Resource)
+                } else {
+                    None
+                }
+            );
+        }
+        let validated = super::super::validate_effect_modules(core, &sources, &relation).unwrap();
+        for fold in [false, true] {
+            for mutation in 0..13 {
+                crate::eval::reset_native_buffer_counters_for_test();
+                let mut rebuilt = if fold {
+                    crate::core::transform::fold_effect_literal_primitives(&validated).unwrap()
+                } else {
+                    crate::core::transform::identity_effect_traversal(&validated).unwrap()
+                };
+                let resource_index = rebuilt
+                    .nodes
+                    .iter()
+                    .position(|node| {
+                        matches!(
+                            &node.kind,
+                            EffectExprKind::Operation(EffectOperation::Resource(_))
+                        )
+                    })
+                    .unwrap();
+                let resource_node = &mut rebuilt.nodes[resource_index];
+                let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+                    &mut resource_node.kind
+                else {
+                    unreachable!()
+                };
+                match mutation {
+                    0 => {}
+                    1 => {
+                        resource.acquisition.identity =
+                            crate::types::TypeVariableId::generated(u32::MAX)
+                    }
+                    2 => {
+                        resource.acquisition.provider = crate::interface::LexicalEvidenceId::new(
+                            resource.acquisition.provider.module(),
+                            u32::MAX,
+                        )
+                    }
+                    3 => resource.acquisition.builtin = graph.entry(),
+                    4 => {
+                        resource.acquisition.span =
+                            sources[0].span(ByteRange::new(0, 1).unwrap()).unwrap()
+                    }
+                    5 => resource.acquisition.handle = resource.acquisition.methods[0],
+                    6 => resource.acquisition.methods.swap(0, 2),
+                    7 => resource_node.ty = Type::Int,
+                    8 => {
+                        resource_node.ty = Type::Application(
+                            Box::new(Type::Nominal(
+                                resource.acquisition.api().unwrap().error().unwrap(),
+                            )),
+                            Box::new(Type::Int),
+                        )
+                    }
+                    9 => {
+                        resource_node.effects = EffectRow::closed(Box::new([EffectInstance::new(
+                            resource.acquisition.api().unwrap().ops(),
+                            Box::new([Type::Variable(resource.acquisition.identity)]),
+                        )]))
+                    }
+                    10 => {
+                        let request = rebuilt
+                            .nodes
+                            .iter_mut()
+                            .find_map(|node| match &mut node.kind {
+                                EffectExprKind::Operation(EffectOperation::Request(request)) => {
+                                    Some(request)
+                                }
+                                _ => None,
+                            })
+                            .unwrap();
+                        request.operation = OperationId::new(request.effect.effect(), u32::MAX);
+                    }
+                    11 => rebuilt.method_evidence = Arc::default(),
+                    12 => {
+                        resource.acquisition.methods = crate::resolved::ResourceMethods::Cell([
+                            resource.acquisition.methods[0],
+                            resource.acquisition.methods[1],
+                        ])
+                    }
+                    _ => unreachable!(),
+                }
+                let result = super::super::validate_effect_modules(rebuilt, &sources, &relation);
+                if mutation == 0 {
+                    let executable = result.unwrap();
+                    assert_eq!(
+                        crate::eval::evaluate_effect(&executable)
+                            .unwrap()
+                            .value
+                            .to_string(),
+                        "Success(5)"
+                    );
+                    assert_eq!(
+                        crate::eval::native_buffer_counters_for_test(),
+                        [1, 1, 0, 0, 1, 1]
+                    );
+                } else {
+                    assert!(result.is_err(), "fold={fold}, mutation={mutation}");
+                    assert_eq!(
+                        crate::eval::native_buffer_counters_for_test(),
+                        [0; 6],
+                        "fold={fold}, mutation={mutation}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native_buffer_core_registry_authenticates_result_constructors_after_transforms() {
+        for fold in [false, true] {
+            for error_payload in [false, true] {
+                crate::eval::reset_native_buffer_counters_for_test();
+                let directory = LinkedValidationDirectory::create();
+                let entry = directory.write(
+                    "entry.ash",
+                    "import @builtin.native_buffer as Buffer\nmain : Unit -> Int\nmain () = 42\n",
+                );
+                let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+                let linked =
+                    link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+                let linked = validate_linked_facts_for_test(linked).unwrap();
+                let mut elaborator =
+                    crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+                let typed = elaborator
+                    .synthesize_effect_module_program(&linked)
+                    .unwrap();
+                let core = elaborator.finish(typed.node).unwrap();
+                drop(linked);
+                let sources = graph
+                    .modules()
+                    .iter()
+                    .map(|module| module.source())
+                    .collect::<Vec<_>>();
+                let relation = graph
+                    .modules()
+                    .iter()
+                    .map(|module| (module.id(), module.source().id()))
+                    .collect::<Vec<_>>();
+                let validated =
+                    super::super::validate_effect_modules(core, &sources, &relation).unwrap();
+                let mut rebuilt = if fold {
+                    crate::core::transform::fold_effect_literal_primitives(&validated).unwrap()
+                } else {
+                    crate::core::transform::identity_effect_traversal(&validated).unwrap()
+                };
+                drop(validated);
+                Arc::get_mut(&mut rebuilt.registry)
+                    .unwrap()
+                    .corrupt_native_constructor_for_test(error_payload);
+                assert_eq!(
+                    super::super::validate_effect_modules(rebuilt, &sources, &relation)
+                        .unwrap_err()
+                        .reason(),
+                    ValidationReason::Registry
+                );
+                assert_eq!(crate::eval::native_buffer_counters_for_test(), [0; 6]);
+            }
+        }
+    }
+
+    #[test]
+    fn resource_row_relay_reconstructs_exact_contexts_after_both_rebuilds() {
+        let directory = LinkedValidationDirectory::create();
+        directory.write("helper.ash", "import @builtin.cell as Cell\npub reader<R> : Cell.Handle<R> -> (Unit -> Int ! {Cell.Ops<R>}) where Cell.Provider<R>\nreader value = fn(ignored) {\nCell.read value\n}\npub relay<E : EffectRow, A> : ((Unit -> Int ! {| E}), A) -> Int ! {| E}\nrelay (action, ignored) = action ()\n");
+        let entry = directory.write("entry.ash", "import @builtin.cell as Cell\nimport helper (reader, relay)\nmain : Unit -> Int\nmain () = resource cell<R> c = 21 {\nlet get = reader c\nresource cell<S> other = 999 {\nrelay (get, true) + get ()\n}\n}\n");
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+        let linked = crate::evidence_validation::validate_interface_evidence(linked).unwrap();
+        let mut elaborator =
+            crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let program = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let mut measured = Validator::new_modules(&program, &sources, &relation).unwrap();
+        measured.run_effect().unwrap();
+        let work = measured.type_work.get();
+        for remaining in [work - 1, work, work] {
+            let mut retry = Validator::new_modules(&program, &sources, &relation).unwrap();
+            retry
+                .type_work
+                .set(CORE_VALIDATION_TYPE_WORK_LIMIT - remaining);
+            assert_eq!(
+                retry.run_effect().err().map(|error| error.reason()),
+                if remaining < work {
+                    Some(ValidationReason::Resource)
+                } else {
+                    None
+                }
+            );
+        }
+        let validated =
+            super::super::validate_effect_modules(program, &sources, &relation).unwrap();
+        assert_eq!(
+            crate::eval::evaluate_effect(&validated)
+                .unwrap()
+                .value
+                .to_string(),
+            "42"
+        );
+        for fold in [false, true] {
+            let rebuilt = if fold {
+                crate::core::transform::fold_effect_literal_primitives(&validated).unwrap()
+            } else {
+                crate::core::transform::identity_effect_traversal(&validated).unwrap()
+            };
+            let executable =
+                super::super::validate_effect_modules(rebuilt, &sources, &relation).unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&executable)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "42"
+            );
+        }
+    }
+
+    #[test]
+    fn published_resource_core_reconstructs_dependencies_after_every_rebuild() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for payload in [false, true] {
+            let directory = LinkedValidationDirectory::create();
+            let (header, result, entry) = if payload {
+                (
+                    "pub effect Send {\nsend : (Unit -> Int) -> Unit\n}\npub make : Unit -> Int ! {Send}\n",
+                    "let _ = perform Send.send constant\n42",
+                    "import owner (make, Send)\nmain : Unit -> Int\nmain () = handle (make ()) with Send {\nsend ignored => resume ()\n}\n",
+                )
+            } else {
+                (
+                    "pub make : Unit -> (Unit -> Int)\n",
+                    "constant",
+                    "import owner (make)\nmain : Unit -> Int\nmain () = {\nlet later = make ()\nlater ()\n}\n",
+                )
+            };
+            directory.write("owner.ash", &format!("import @builtin.cell as Cell\n{header}make () = resource cell<R> c = 41 {{\nlet hidden : Unit -> Int = fn(ignored) {{\nlet held = c\n40 + 2\n}}\nlet constant : Unit -> Int = fn(ignored) {{\n40 + 2\n}}\n{result}\n}}\n"));
+            let entry = directory.write("entry.ash", entry);
+            let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+            let linked =
+                link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+            let linked = crate::evidence_validation::validate_interface_evidence(linked).unwrap();
+            let mut elaborator =
+                crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+            let typed = elaborator
+                .synthesize_effect_module_program(&linked)
+                .unwrap();
+            let program = elaborator.finish(typed.node).unwrap();
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let relation = graph
+                .modules()
+                .iter()
+                .map(|module| (module.id(), module.source().id()))
+                .collect::<Vec<_>>();
+            let reason = |program: &super::super::effect::UnvalidatedEffectProgram| {
+                Validator::new_modules(program, &sources, &relation)
+                    .unwrap()
+                    .run_effect()
+                    .err()
+                    .map(|error| error.reason())
+            };
+            assert_eq!(reason(&program), None);
+            let mut measured = Validator::new_modules(&program, &sources, &relation).unwrap();
+            measured.run_effect().unwrap();
+            let work = measured.type_work.get();
+            for remaining in [work - 1, work, work] {
+                let mut retry = Validator::new_modules(&program, &sources, &relation).unwrap();
+                retry
+                    .type_work
+                    .set(CORE_VALIDATION_TYPE_WORK_LIMIT - remaining);
+                assert_eq!(
+                    retry.run_effect().err().map(|error| error.reason()),
+                    if remaining < work {
+                        Some(ValidationReason::Resource)
+                    } else {
+                        None
+                    }
+                );
+            }
+            let validated =
+                super::super::validate_effect_modules(program, &sources, &relation).unwrap();
+            assert_eq!(
+                crate::eval::evaluate_effect(&validated)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "42"
+            );
+            for fold in [false, true] {
+                let mut rebuilt = if fold {
+                    crate::core::transform::fold_effect_literal_primitives(&validated).unwrap()
+                } else {
+                    crate::core::transform::identity_effect_traversal(&validated).unwrap()
+                };
+                assert_eq!(reason(&rebuilt), None);
+                let executable = if fold {
+                    crate::core::transform::fold_effect_literal_primitives(&validated).unwrap()
+                } else {
+                    crate::core::transform::identity_effect_traversal(&validated).unwrap()
+                };
+                let executable =
+                    super::super::validate_effect_modules(executable, &sources, &relation).unwrap();
+                assert_eq!(
+                    crate::eval::evaluate_effect(&executable)
+                        .unwrap()
+                        .value
+                        .to_string(),
+                    "42"
+                );
+                let resource_index = rebuilt
+                    .nodes
+                    .iter()
+                    .position(|node| {
+                        matches!(
+                            node.kind,
+                            EffectExprKind::Operation(EffectOperation::Resource(_))
+                        )
+                    })
+                    .unwrap();
+                let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+                    &rebuilt.nodes[resource_index].kind
+                else {
+                    unreachable!()
+                };
+                let acquisition = resource.acquisition;
+                for swapped_methods in [false, true] {
+                    let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+                        &mut rebuilt.nodes[resource_index].kind
+                    else {
+                        unreachable!()
+                    };
+                    if swapped_methods {
+                        resource.acquisition.methods.swap(0, 1);
+                    } else {
+                        resource.acquisition.provider = crate::interface::LexicalEvidenceId::new(
+                            acquisition.provider.module(),
+                            u32::MAX,
+                        );
+                    }
+                    assert_eq!(
+                        reason(&rebuilt),
+                        Some(ValidationReason::NodeType),
+                        "fold={fold}, swapped={swapped_methods}"
+                    );
+                    let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+                        &mut rebuilt.nodes[resource_index].kind
+                    else {
+                        unreachable!()
+                    };
+                    resource.acquisition = acquisition;
+                }
+                let resource = rebuilt
+                    .nodes
+                    .iter()
+                    .find_map(|node| match &node.kind {
+                        EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
+                            Some(resource)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let mut current = resource.body;
+                let mut hidden = None;
+                while let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                    binding,
+                ))) = &rebuilt.nodes[current.index().unwrap()].kind
+                {
+                    let span = binding.binder().origin().primary_span();
+                    let source = sources
+                        .iter()
+                        .find(|source| source.id() == span.source())
+                        .unwrap();
+                    if &source.text()[span.range().start() as usize..span.range().end() as usize]
+                        == "hidden"
+                    {
+                        hidden = Some(binding.binder().id());
+                    }
+                    current = binding.body();
+                }
+                if payload {
+                    current = rebuilt
+                        .nodes
+                        .iter()
+                        .find_map(|node| match &node.kind {
+                            EffectExprKind::Operation(EffectOperation::Request(request))
+                                if rebuilt.nodes[request.operand.index().unwrap()].ty
+                                    == Type::Function(
+                                        Box::new(Type::Unit),
+                                        Box::new(Type::Int),
+                                    ) =>
+                            {
+                                Some(request.operand)
+                            }
+                            _ => None,
+                        })
+                        .expect("outward callable payload");
+                }
+                assert!(matches!(
+                    rebuilt.nodes[current.index().unwrap()].kind,
+                    EffectExprKind::Pure(PureExprKind::Variable(_))
+                ));
+                rebuilt.nodes[current.index().unwrap()].kind =
+                    EffectExprKind::Pure(PureExprKind::Variable(
+                        crate::core::variable::VariableNode::new(hidden.expect("hidden binder")),
+                    ));
+                assert_eq!(
+                    reason(&rebuilt),
+                    Some(ValidationReason::ResourceEscape),
+                    "fold={fold}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_module_effect_ordinals_remain_exact_and_retryable() {
+        let directory = LinkedValidationDirectory::create();
+        let entry = directory.write("entry.ash", "import @builtin.cell as Cell\neffect First {\nfirst : Unit -> Unit\n}\neffect Second {\nsecond : Unit -> Unit\n}\nmain : Unit -> Unit\nmain () = ()\n");
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+        let linked = crate::evidence_validation::validate_interface_evidence(linked).unwrap();
+        let mut elaborator =
+            crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let mut program = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let mapping = relation.iter().copied().collect::<HashMap<_, _>>();
+        let run = |program: &super::super::effect::UnvalidatedEffectProgram, remaining| {
+            let validator = Validator::new_modules(program, &sources, &relation).unwrap();
+            validator
+                .type_work
+                .set(CORE_VALIDATION_TYPE_WORK_LIMIT - remaining);
+            let result = validator.validate_effect_registry(Some(&mapping), &mut HashMap::new());
+            (
+                result,
+                validator.type_work.get() - (CORE_VALIDATION_TYPE_WORK_LIMIT - remaining),
+            )
+        };
+        let (result, work) = run(&program, CORE_VALIDATION_TYPE_WORK_LIMIT);
+        result.unwrap();
+        assert_eq!(
+            run(&program, work - 1).0.unwrap_err().reason(),
+            ValidationReason::Resource
+        );
+        for _ in 0..2 {
+            let (result, used) = run(&program, work);
+            result.unwrap();
+            assert_eq!(used, work);
+        }
+        let registry = program.registry.as_ref().clone();
+        for mutation in 0..3 {
+            let mut effects = registry.effects().to_vec();
+            let first = effects
+                .iter()
+                .position(|effect| effect.spelling == "First")
+                .unwrap();
+            let second = effects
+                .iter()
+                .position(|effect| effect.spelling == "Second")
+                .unwrap();
+            match mutation {
+                0 => effects[second] = effects[first].clone(),
+                1 => {
+                    effects.remove(first);
+                }
+                2 => effects.swap(first, second),
+                _ => unreachable!(),
+            }
+            program.registry = Arc::new(registry.clone().with_effects(effects));
+            assert_eq!(
+                run(&program, CORE_VALIDATION_TYPE_WORK_LIMIT)
+                    .0
+                    .unwrap_err()
+                    .reason(),
+                ValidationReason::Registry,
+                "mutation={mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn builtin_handle_constructor_and_pattern_are_rejected_independently() {
+        let directory = LinkedValidationDirectory::create();
+        let entry = directory.write(
+            "entry.ash",
+            "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = 42\n",
+        );
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let checked = checked_linked_validation_graph(&graph);
+        let registry = Arc::clone(checked[0].registry());
+        let constructor = registry.constructors()[0].id;
+        let parameter = registry.nominal_parameters(constructor.owner()).unwrap()[0].id;
+        let ty = Type::Application(
+            Box::new(Type::Nominal(constructor.owner())),
+            Box::new(Type::Variable(parameter)),
+        );
+        let origin = registry.constructors()[0].origin.clone();
+        let mut builder = CoreBuilder::with_registry(registry);
+        let scheme = Type::Forall(Box::new([(parameter, Kind::Type)]), Box::new(ty.clone()));
+        let root = builder
+            .constructor(constructor, scheme, origin.clone())
+            .unwrap();
+        let program = builder.finish(root).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let validator = Validator::new(&program, &sources);
+        let node = validator.node(root).unwrap();
+        let PureExprKind::Value(value) = &node.kind else {
+            unreachable!()
+        };
+        assert_eq!(
+            validator
+                .validate_value(root, node, value)
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Registry
+        );
+        let pattern = CorePattern::new(
+            ty.clone(),
+            origin,
+            CorePatternKind::Constructor {
+                constructor,
+                payload: None,
+            },
+        );
+        assert_eq!(
+            validator
+                .validate_pattern(&pattern, &ty, root)
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Pattern
+        );
     }
 
     impl LinkedCoreValidationFixture {
@@ -6182,6 +12520,133 @@ mod tests {
     }
 
     #[test]
+    fn catalogued_monomorphic_nested_sources_survive_effect_rebuilds() {
+        let directory = LinkedValidationDirectory::create();
+        let entry = directory.write("entry.ash", concat!(
+            "type Wrap<A> = Wrap(A)\n",
+            "interface Leaf<A> {\nleaf : A -> A\n}\n",
+            "interface Base<A> {\nbase : A -> A\n}\n",
+            "interface Convert<A> {\nconvert<B> : (A, B) -> A\n}\n",
+            "impl Leaf<Int> {\nleaf value = value\n}\n",
+            "impl<A> Base<Wrap<A>> where Leaf<A> {\nbase (Wrap value) = Wrap (leaf value)\n}\n",
+            "impl<A> Convert<Wrap<Wrap<A>>> where Base<Wrap<A>> {\nconvert (Wrap value, ignored) = Wrap (base value)\n}\n",
+            "effect Ask {\nask : Unit -> Int\n}\n",
+            "main : Unit -> Wrap<Wrap<Int>>\nmain () = handle {\nlet _ = perform Ask.ask ()\nconvert (Wrap (Wrap (40 + 2)), true)\n} with Ask {\nask ignored => resume 0\n}\n",
+        ));
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+        let linked = validate_linked_facts_for_test(linked).unwrap();
+        let mut elaborator =
+            crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let program = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let validated =
+            super::validate_effect_modules_family(program, &sources, &relation).unwrap();
+        let identity = crate::core::transform::identity_effect_traversal(&validated).unwrap();
+        let identity =
+            super::validate_effect_modules_family(identity, &sources, &relation).unwrap();
+        let folded = crate::core::transform::fold_effect_literal_primitives(&identity).unwrap();
+        super::validate_effect_modules_family(folded, &sources, &relation).unwrap();
+    }
+
+    #[test]
+    fn catalogued_monomorphic_nested_sources_reject_same_typed_global_leaves() {
+        for rebuild in 0..3 {
+            let fixture = LinkedCoreValidationFixture::compile(
+                "pub seed : Unit -> Unit\nseed value = value\n",
+                concat!(
+                    "type Wrap<A> = Wrap(A)\n",
+                    "interface Leaf<A> {\nleaf : A -> A\n}\n",
+                    "interface Base<A> {\nbase : A -> A\n}\n",
+                    "interface Convert<A> {\nconvert<B> : (A, B) -> A\n}\n",
+                    "impl Leaf<Int> {\nleaf value = value\n}\n",
+                    "impl<A> Base<Wrap<A>> where Leaf<A> {\nbase (Wrap value) = Wrap (leaf value)\n}\n",
+                    "impl<A> Convert<Wrap<Wrap<A>>> where Base<Wrap<A>> {\nconvert (Wrap value, ignored) = Wrap (base value)\n}\n",
+                    "fake : Int -> Int\nfake value = value\n",
+                    "main : Unit -> Wrap<Wrap<Int>>\nmain () = {\nlet _ = fake 0\nconvert (Wrap (Wrap 42), true)\n}\n",
+                ),
+                &[],
+            );
+            let LinkedCoreValidationFixture {
+                directory,
+                graph,
+                mut program,
+                module_sources,
+                globals: _,
+            } = fixture;
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            Validator::new_modules(&program, &sources, &module_sources)
+                .unwrap()
+                .validate_method_evidence_authority()
+                .expect("catalogued monomorphic leaf uses concrete source authentication");
+            if rebuild != 0 {
+                let validated = validate_modules(program, &sources, &module_sources).unwrap();
+                program = if rebuild == 1 {
+                    identity_traversal(&validated).unwrap()
+                } else {
+                    fold_literal_primitives(&validated).unwrap()
+                };
+            }
+            let leaf = program
+                .method_evidence
+                .concrete_sources()
+                .iter()
+                .find(|source| {
+                    source.head_arguments.is_empty()
+                        && source.prerequisites.is_empty()
+                        && program
+                            .method_evidence
+                            .method(source.implementation.method())
+                            .is_some_and(|method| method.parameters.is_empty())
+                })
+                .expect("nested leaf remains catalogued and monomorphic")
+                .binder;
+            let leaf_index = program
+                .nodes
+                .iter()
+                .position(|node| {
+                    matches!(node.kind,
+                PureExprKind::Variable(variable) if variable.binder() == leaf)
+                })
+                .unwrap();
+            let fake_index = program.nodes.iter().position(|node| matches!(node.kind,
+                PureExprKind::Variable(variable) if matches!(variable.binder(), BinderId::Resolved { .. })
+                    && crate::types::same_type(&node.ty, &program.nodes[leaf_index].ty))).unwrap();
+            let leaf_kind = program.nodes[leaf_index].kind.clone();
+            program.nodes[leaf_index].kind = program.nodes[fake_index].kind.clone();
+            program.nodes[fake_index].kind = leaf_kind;
+            let authority = Validator::new_modules(&program, &sources, &module_sources)
+                .unwrap()
+                .validate_method_evidence_authority()
+                .expect_err(
+                    "exact concrete-source authentication rejects the ordinary global leaf",
+                );
+            assert_eq!(authority.reason, ValidationReason::ApplicationType);
+            assert!(
+                validate_modules(program, &sources, &module_sources).is_err(),
+                "rebuild {rebuild} must retain exact leaf identity"
+            );
+            drop(directory);
+        }
+    }
+
+    #[test]
     fn concrete_monomorphic_adapter_edges_reject_same_typed_global_sources_after_every_rebuild() {
         for rebuild in 0..3 {
             let fixture = concrete_monomorphic_adapter_edge_fixture();
@@ -6212,6 +12677,169 @@ mod tests {
                 "same-typed ordinary global source must reject after rebuild {rebuild}",
             );
             drop(directory);
+        }
+    }
+
+    #[test]
+    fn concrete_lexical_prerequisites_charge_owner_and_method_lookup_widths() {
+        for (method_count, unrelated_sources) in [(1, 0), (2, 0), (2, 4)] {
+            let mut source =
+                String::from("type Box<A> = Box(A)\ninterface Read<A> {\nread : A -> Int\n");
+            if method_count == 2 {
+                source.push_str("extra : A -> Int\n");
+            }
+            source.push_str("}\ninterface Convert<I> {\nconvert<X> : (I, X) -> Int\n}\nimpl<A> Read<Box<A>> where Read<A> {\nread (Box(value)) = read(value)\n");
+            if method_count == 2 {
+                source.push_str("extra ignored = 0\n");
+            }
+            source.push_str("}\nimpl<A> Convert<Box<Box<A>>> where Read<Box<A>> {\nconvert (Box(value), ignored) = read(value)\n}\nmain : Unit -> Int\nmain () = {\n");
+            for index in 0..=unrelated_sources {
+                source.push_str(&format!(
+                    "newtype N{index} = N{index}(Int)\nwith Read<N{index}> {{\nread ignored = 42\n"
+                ));
+                if method_count == 2 {
+                    source.push_str("extra ignored = 0\n");
+                }
+                source.push_str("}\n");
+            }
+            source.push_str("convert((Box(Box(N0(0))), true))\n}\n");
+            let fixture = LinkedCoreValidationFixture::compile("", &source, &[]);
+            let sources = fixture
+                .graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let validated = validate_modules(fixture.program, &sources, &fixture.module_sources)
+                .expect("complete lexical prerequisite program validates");
+            let program = identity_traversal(&validated).expect("independent Core program");
+            let row = program
+                .method_evidence
+                .concrete_sources()
+                .iter()
+                .find(|row| !row.prerequisites.is_empty())
+                .expect("concrete source with lexical prerequisites");
+            let occurrence = program
+                .method_evidence
+                .occurrence(row.occurrence)
+                .expect("occurrence");
+            let Some(EvidenceNode::Implementation {
+                methods,
+                substitution,
+                prerequisites,
+                ..
+            }) = occurrence.selection.node(row.selection_node)
+            else {
+                panic!("concrete selection");
+            };
+            assert_eq!(prerequisites.len(), 1);
+            assert_eq!(row.prerequisites.len(), method_count);
+            let Some(EvidenceNode::Lexical {
+                methods: lexical_methods,
+                ..
+            }) = occurrence.selection.node(prerequisites[0])
+            else {
+                panic!("lexical prerequisite");
+            };
+            assert_eq!(lexical_methods.len(), method_count);
+            let owners = program.method_evidence.lexical_owners().len();
+            assert_eq!(owners, method_count * (1 + unrelated_sources));
+            let anchors = program
+                .method_evidence_anchors
+                .iter()
+                .map(|anchor| (anchor.node, anchor))
+                .collect::<HashMap<_, _>>();
+            let anchor = program
+                .method_evidence_anchors
+                .first()
+                .expect("diagnostic anchor");
+            // Locate the actual monomorphic source expression in the already
+            // validated fixture; the measured helper never selects evidence.
+            let source_node = (0..program.nodes.len())
+                .find_map(|index| {
+                    let node = node_id(program.arena, index).expect("node identity");
+                    let validator =
+                        Validator::new_modules(&program, &sources, &fixture.module_sources)
+                            .expect("relation");
+                    matches!(
+                        validator.validate_concrete_adapter_source(
+                            anchor,
+                            &anchors,
+                            row.occurrence,
+                            row.selection_node,
+                            row.implementation,
+                            node
+                        ),
+                        Ok(true)
+                    )
+                    .then_some(node)
+                })
+                .expect("recorded source has a matching Core expression");
+            let mut comparisons = crate::types::TypeWorkBudget::unbounded();
+            for argument in &row.head_arguments {
+                assert!(
+                    crate::types::same_type_with_budget(argument, argument, &mut comparisons)
+                        .expect("head equality")
+                );
+            }
+            // Existing occurrence/source lookup, pending slot, selected method
+            // and head checks, prerequisite sequence and application edges;
+            // each lexical edge additionally reads L owners and M methods.
+            let exact_work = program.method_evidence.occurrence_count()
+                + program.method_evidence.concrete_sources().len()
+                + 1
+                + methods.len()
+                + substitution.len()
+                + 2 * comparisons.used()
+                + prerequisites.len()
+                + row.prerequisites.len()
+                + lexical_methods.len()
+                + row.prerequisites.len() * (1 + owners + lexical_methods.len());
+            let measured = Validator::new_modules(&program, &sources, &fixture.module_sources)
+                .expect("relation");
+            assert!(
+                measured
+                    .validate_concrete_adapter_source(
+                        anchor,
+                        &anchors,
+                        row.occurrence,
+                        row.selection_node,
+                        row.implementation,
+                        source_node
+                    )
+                    .expect("source topology")
+            );
+            assert_eq!(
+                measured.type_work.get(),
+                exact_work,
+                "methods={method_count}, unrelated={unrelated_sources}"
+            );
+            for one_short in [true, false, false] {
+                let validator = Validator::new_modules(&program, &sources, &fixture.module_sources)
+                    .expect("fresh relation");
+                validator
+                    .charge_type_work(
+                        CORE_VALIDATION_TYPE_WORK_LIMIT - exact_work + usize::from(one_short),
+                    )
+                    .expect("prefix");
+                let result = validator.validate_concrete_adapter_source(
+                    anchor,
+                    &anchors,
+                    row.occurrence,
+                    row.selection_node,
+                    row.implementation,
+                    source_node,
+                );
+                if one_short {
+                    assert_eq!(
+                        result.expect_err("one-short source scan").reason(),
+                        ValidationReason::Resource
+                    );
+                } else {
+                    assert!(result.expect("fresh exact retry"));
+                    assert_eq!(validator.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+                }
+            }
         }
     }
 
@@ -6730,6 +13358,9 @@ mod tests {
                     };
                     anchor.role = MethodEvidenceAnchorRole::Application {
                         producer: match producer {
+                            MethodEvidenceProducer::Lexical { .. } => {
+                                unreachable!("fixture uses module evidence")
+                            }
                             MethodEvidenceProducer::Abstract { requirement } => {
                                 MethodEvidenceProducer::Abstract {
                                     requirement: crate::interface::RequirementId::new(
@@ -6771,6 +13402,9 @@ mod tests {
                         unreachable!()
                     };
                     let producer = match producer {
+                        MethodEvidenceProducer::Lexical { .. } => {
+                            unreachable!("fixture uses module evidence")
+                        }
                         MethodEvidenceProducer::Abstract { requirement } => {
                             MethodEvidenceProducer::Abstract {
                                 requirement: crate::interface::RequirementId::new(
@@ -7189,6 +13823,7 @@ mod tests {
                     );
                     fixture.program.nodes.push(StoredNode {
                         dialect: DialectId::PURE,
+                        effects: (),
                         ty: Type::Forall(
                             vec![(fresh, Kind::Type)].into_boxed_slice(),
                             Box::new(domain_type),
@@ -7250,6 +13885,1515 @@ mod tests {
                 "an authenticated method domain must remain in its exact declared owner envelope",
             );
         }
+    }
+
+    #[test]
+    fn unused_local_representation_still_requires_its_lexical_dependencies() {
+        let fixture = LinkedCoreValidationFixture::compile(
+            "",
+            concat!(
+                "main : Unit -> Int\nmain () = {\n",
+                "    newtype Outer = Outer(Int)\n",
+                "    newtype Inner = Inner(Outer)\n    42\n}\n",
+            ),
+            &[],
+        );
+        let sources = fixture
+            .graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let validated = validate_modules(fixture.program, &sources, &fixture.module_sources)
+            .expect("unused nested nominals should validate");
+        let mut tampered = identity_traversal(&validated).expect("scope traversal should rebuild");
+        let scopes = tampered
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| match &node.kind {
+                PureExprKind::Computation(PureComputation::LocalNominalScope(scope)) => {
+                    Some((index, *scope))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [(first_index, first), (second_index, second)] = scopes.as_slice() else {
+            panic!("two local scopes expected")
+        };
+        tampered.nodes[*first_index].kind =
+            PureExprKind::Computation(PureComputation::LocalNominalScope(
+                crate::core::LocalNominalScopeNode::new(second.owner(), first.body()),
+            ));
+        tampered.nodes[*second_index].kind =
+            PureExprKind::Computation(PureComputation::LocalNominalScope(
+                crate::core::LocalNominalScopeNode::new(first.owner(), second.body()),
+            ));
+        assert_eq!(
+            validate_modules(tampered, &sources, &fixture.module_sources)
+                .expect_err("the representation dependency cannot precede its introduction")
+                .reason(),
+            ValidationReason::Scope
+        );
+        drop(fixture.directory);
+    }
+
+    const LEXICAL_AUTHENTICATION_SOURCE: &str = concat!(
+        "interface Relation<A, B> where A -> B {\n",
+        "read : A -> Int\nunused : A -> Int\nchoose<C, D> : (A, C, D) -> C\n}\n",
+        "main : Unit -> Int\nmain () = {\n",
+        "newtype N = N(Unit)\nnewtype M = M(Unit)\n",
+        "with Relation<N, Bool> {\nread ignored = 20\nunused ignored = 0\n",
+        "choose (ignored, value, extra) = value\n}\n",
+        "with Relation<M, Int> {\nread ignored = 22\nunused ignored = 1\n",
+        "choose (ignored, value, extra) = value\n}\n",
+        "let marker = choose((N(()), true, ()))\nread(N(())) + read(M(()))\n}\n",
+    );
+
+    #[test]
+    fn lexical_core_catalog_authenticates_unused_owners_and_contextual_parameters() {
+        let fixture = LinkedCoreValidationFixture::compile("", LEXICAL_AUTHENTICATION_SOURCE, &[]);
+        let sources = fixture
+            .graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let validated = validate_modules(fixture.program, &sources, &fixture.module_sources)
+            .expect("the complete lexical catalog validates before mutation");
+        let mut accepted_mutations = Vec::new();
+        for mutation in [
+            "source",
+            "method",
+            "binder",
+            "dependent",
+            "parameter-count",
+            "parameter",
+            "parameter-swap",
+            "parameter-order",
+        ] {
+            let mut changed = identity_traversal(&validated).expect("independent Core copy");
+            let mut owners = changed.method_evidence.lexical_owners().to_vec();
+            assert_eq!(owners.len(), 6);
+            let unused = owners
+                .iter()
+                .position(|owner| owner.method.declaration() == 1)
+                .expect("an unused same-typed method");
+            let source = owners[unused].source;
+            let other_source = owners
+                .iter()
+                .find(|owner| owner.source != source)
+                .expect("another real source")
+                .source;
+            match mutation {
+                "source" => owners[unused].source = other_source,
+                "method" => {
+                    let read = owners
+                        .iter()
+                        .find(|owner| owner.source == source && owner.method.declaration() == 0)
+                        .expect("same-typed read method")
+                        .method;
+                    owners[unused].method = read;
+                }
+                "binder" => {
+                    let read = owners
+                        .iter()
+                        .find(|owner| owner.source == source && owner.method.declaration() == 0)
+                        .expect("same-typed read binder")
+                        .binder;
+                    owners[unused].binder = read;
+                }
+                "dependent" => {
+                    let owner = &mut owners[unused];
+                    let dependent = if owner.application.arguments()[1] == Type::Bool {
+                        Type::Int
+                    } else {
+                        assert_eq!(owner.application.arguments()[1], Type::Int);
+                        Type::Bool
+                    };
+                    owner.application = InterfaceApplication::new(
+                        owner.application.interface(),
+                        Box::new([owner.application.arguments()[0].clone(), dependent]),
+                    );
+                }
+                "parameter" | "parameter-count" | "parameter-swap" | "parameter-order" => {
+                    let own = owners
+                        .iter()
+                        .position(|owner| {
+                            owner.source == source && !owner.source_parameters.is_empty()
+                        })
+                        .expect("polymorphic supplied method");
+                    if mutation == "parameter-order" {
+                        assert_eq!(owners[own].source_parameters.len(), 2);
+                        owners[own].source_parameters.swap(0, 1);
+                    } else if mutation != "parameter-count" {
+                        let other = owners
+                            .iter()
+                            .position(|owner| {
+                                owner.source == other_source && !owner.source_parameters.is_empty()
+                            })
+                            .expect("independent same-kinded method parameter");
+                        let original = owners[own].source_parameters[0];
+                        assert_ne!(original, owners[other].source_parameters[0]);
+                        owners[own].source_parameters[0] = owners[other].source_parameters[0];
+                        if mutation == "parameter-swap" {
+                            owners[other].source_parameters[0] = original;
+                        }
+                    } else {
+                        owners[own].source_parameters = Box::new([]);
+                    }
+                }
+                _ => unreachable!(),
+            }
+            Arc::make_mut(&mut changed.method_evidence).set_lexical_owners(owners);
+            if validate_modules(changed, &sources, &fixture.module_sources).is_ok() {
+                accepted_mutations.push(mutation);
+            }
+        }
+        assert!(
+            accepted_mutations.is_empty(),
+            "accepted lexical catalog mutations: {accepted_mutations:?}"
+        );
+    }
+
+    #[test]
+    fn lexical_owner_parameter_authentication_has_an_exact_retry_boundary() {
+        let fixture = LinkedCoreValidationFixture::compile("", LEXICAL_AUTHENTICATION_SOURCE, &[]);
+        let sources = linked_fixture_sources(&fixture);
+        let owner = fixture
+            .program
+            .method_evidence
+            .lexical_owners()
+            .iter()
+            .find(|owner| owner.source_parameters.len() == 2)
+            .expect("two contextual parameters");
+        let anchor = fixture
+            .program
+            .method_evidence_anchors
+            .iter()
+            .find(|anchor| {
+                matches!(anchor.role, MethodEvidenceAnchorRole::LexicalOwner { source, binder }
+                if source == owner.source && binder == owner.binder)
+            })
+            .expect("owner anchor");
+        // Three method lookup cells, two retained identities, four spelling
+        // bytes and two kind cells authenticate the complete positional row.
+        const EXACT: usize = 3 + 2 + 4 + 2;
+        for remaining in [EXACT - 1, EXACT, EXACT] {
+            let validator =
+                Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                    .expect("fixture relation");
+            validator
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - remaining)
+                .unwrap();
+            let result =
+                validator.validate_lexical_owner_parameters(anchor, owner, &mut HashSet::new());
+            if remaining < EXACT {
+                assert_eq!(
+                    result
+                        .expect_err("parameter authentication charges before completion")
+                        .reason(),
+                    ValidationReason::Resource
+                );
+            } else {
+                assert!(result.expect("exact parameter authentication"));
+                assert_eq!(validator.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+            }
+        }
+    }
+
+    #[test]
+    fn lexical_core_rejects_a_missing_single_contextual_parameter() {
+        let fixture = LinkedCoreValidationFixture::compile(
+            "",
+            concat!(
+                "interface Choose<A> {\nchoose<T> : (A, T) -> T\n}\n",
+                "main : Unit -> Int\nmain () = {\nnewtype N = N(Unit)\n",
+                "with Choose<N> {\nchoose (ignored, value) = value\n}\n42\n}\n",
+            ),
+            &[],
+        );
+        let sources = fixture
+            .graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let validated = validate_modules(fixture.program, &sources, &fixture.module_sources)
+            .expect("the unused polymorphic method validates before mutation");
+        let mut changed = identity_traversal(&validated).expect("independent Core copy");
+        let mut owners = changed.method_evidence.lexical_owners().to_vec();
+        assert_eq!(owners.len(), 1);
+        assert_eq!(owners[0].source_parameters.len(), 1);
+        owners[0].source_parameters = Box::new([]);
+        Arc::make_mut(&mut changed.method_evidence).set_lexical_owners(owners);
+        assert!(
+            validate_modules(changed, &sources, &fixture.module_sources).is_err(),
+            "an unused single-parameter method must retain its contextual parameter"
+        );
+    }
+
+    #[test]
+    fn lexical_core_owner_and_use_anchors_authenticate_exact_relationships() {
+        let fixture = LinkedCoreValidationFixture::compile("", LEXICAL_AUTHENTICATION_SOURCE, &[]);
+        let sources = fixture
+            .graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let validated = validate_modules(fixture.program, &sources, &fixture.module_sources)
+            .expect("the lexical owner/use relationships validate before mutation");
+        for owner_anchor in [true, false] {
+            for mutation in ["source", "binder", "method", "dependent"] {
+                let mut changed = identity_traversal(&validated).expect("independent Core copy");
+                let index = changed
+                    .method_evidence_anchors
+                    .iter()
+                    .position(|anchor| {
+                        anchor.method.declaration() == 0
+                            && if owner_anchor {
+                                matches!(anchor.role, MethodEvidenceAnchorRole::LexicalOwner { .. })
+                            } else {
+                                matches!(anchor.role, MethodEvidenceAnchorRole::LexicalUse { .. })
+                            }
+                    })
+                    .expect("read method owner or use anchor");
+                let anchor = &changed.method_evidence_anchors[index];
+                let source = match anchor.role {
+                    MethodEvidenceAnchorRole::LexicalOwner { source, .. }
+                    | MethodEvidenceAnchorRole::LexicalUse { source, .. } => source,
+                    _ => unreachable!(),
+                };
+                let other_source = changed
+                    .method_evidence
+                    .lexical_owners()
+                    .iter()
+                    .find(|owner| owner.source != source)
+                    .expect("another real source")
+                    .source;
+                let sibling = changed
+                    .method_evidence
+                    .lexical_owners()
+                    .iter()
+                    .find(|owner| owner.source == source && owner.method.declaration() == 1)
+                    .expect("a same-typed sibling");
+                let sibling_method = sibling.method;
+                let sibling_binder = sibling.binder;
+                let anchor = &mut changed.method_evidence_anchors[index];
+                match mutation {
+                    "source" => match &mut anchor.role {
+                        MethodEvidenceAnchorRole::LexicalOwner { source, .. }
+                        | MethodEvidenceAnchorRole::LexicalUse { source, .. } => {
+                            *source = other_source
+                        }
+                        _ => unreachable!(),
+                    },
+                    "binder" => match &mut anchor.role {
+                        MethodEvidenceAnchorRole::LexicalOwner { binder, .. }
+                        | MethodEvidenceAnchorRole::LexicalUse { binder, .. } => {
+                            *binder = sibling_binder
+                        }
+                        _ => unreachable!(),
+                    },
+                    "method" => anchor.method = sibling_method,
+                    "dependent" => {
+                        let dependent = if anchor.application.arguments()[1] == Type::Bool {
+                            Type::Int
+                        } else {
+                            Type::Bool
+                        };
+                        anchor.application = InterfaceApplication::new(
+                            anchor.application.interface(),
+                            Box::new([anchor.application.arguments()[0].clone(), dependent]),
+                        );
+                    }
+                    _ => unreachable!(),
+                }
+                assert!(
+                    validate_modules(changed, &sources, &fixture.module_sources).is_err(),
+                    "lexical anchor mutation {mutation}, owner={owner_anchor}"
+                );
+            }
+        }
+    }
+
+    const LEXICAL_CAPTURE_SOURCE: &str = concat!(
+        "interface Read<A> {\nread : A -> Int\n}\n",
+        "main : Unit -> Int\nmain () = {\nlet x = 20\nlet y = 22\n",
+        "newtype Token = Token(Unit)\nwith Read<Token> {\nread ignored = x + x + y\n}\nx + x + y\n}\n",
+    );
+
+    #[test]
+    fn lexical_capture_envelope_scans_have_exact_fresh_validator_boundaries() {
+        let fixture = LinkedCoreValidationFixture::compile("", LEXICAL_CAPTURE_SOURCE, &[]);
+        let sources = fixture
+            .graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let validated = validate_modules(fixture.program, &sources, &fixture.module_sources)
+            .expect("the complete capture program authenticates before probing its envelope");
+        let program = identity_traversal(&validated).expect("independent valid Core");
+        for reserve in [0, 64] {
+            let mut anchors = HashMap::with_capacity(reserve);
+            for anchor in &program.method_evidence_anchors {
+                if !matches!(
+                    anchor.role,
+                    MethodEvidenceAnchorRole::LexicalCaptureUse { .. }
+                ) {
+                    anchors.insert(anchor.node, anchor);
+                }
+            }
+            let mut subtree_work = Vec::new();
+            for anchor in &program.method_evidence_anchors {
+                let MethodEvidenceAnchorRole::LexicalCaptureUse { owner, .. } = anchor.role else {
+                    continue;
+                };
+                let row = &program.method_evidence.lexical_owners()[owner];
+                let owner = anchors
+                    .values()
+                    .find(|anchor| {
+                        matches!(anchor.role,
+                    MethodEvidenceAnchorRole::LexicalOwner { source, binder }
+                        if source == row.source && binder == row.binder)
+                    })
+                    .expect("owner");
+                let PureExprKind::Computation(PureComputation::Bind(binding)) =
+                    &program.nodes[owner.node.index().expect("index")].kind
+                else {
+                    unreachable!()
+                };
+                let mut pending = vec![binding.initializer()];
+                let mut popped = 0;
+                let mut edges = 0;
+                while let Some(node) = pending.pop() {
+                    popped += 1;
+                    if node == anchor.node {
+                        break;
+                    }
+                    let kind = &program.nodes[node.index().expect("subtree node")].kind;
+                    let count = PureOperationFamily::child_count(kind);
+                    edges += count;
+                    pending.extend(
+                        (0..count).map(|index| {
+                            PureOperationFamily::child_at(kind, index).expect("child")
+                        }),
+                    );
+                }
+                let expected_scan = 1 + popped + edges;
+                let validator = Validator::new_modules(&program, &sources, &fixture.module_sources)
+                    .expect("validator");
+                assert!(
+                    validator
+                        .method_evidence_subtree_contains(binding.initializer(), anchor.node)
+                        .expect("contained occurrence")
+                );
+                assert_eq!(validator.type_work.get(), expected_scan);
+                subtree_work.push(expected_scan);
+            }
+            assert_eq!(subtree_work.len(), 3);
+            // A all-anchor visits, then one identity, H hash-table slots and
+            // S_i = seed + popped nodes + scheduled edges per capture.
+            let work = program.method_evidence_anchors.len()
+                + subtree_work
+                    .iter()
+                    .map(|scan| 1 + anchors.capacity() + scan)
+                    .sum::<usize>();
+            for one_short in [true, false, false] {
+                let validator = Validator::new_modules(&program, &sources, &fixture.module_sources)
+                    .expect("fresh validator");
+                validator
+                    .type_work
+                    .set(CORE_VALIDATION_TYPE_WORK_LIMIT - work + usize::from(one_short));
+                let result = validator.validate_lexical_capture_uses(&anchors);
+                if one_short {
+                    assert_eq!(
+                        result.expect_err("one-short envelope").reason(),
+                        ValidationReason::Resource
+                    );
+                } else {
+                    result.expect("exact capture envelopes");
+                    assert_eq!(validator.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lexical_capture_envelope_gate_is_free_without_owners() {
+        let fixture =
+            LinkedCoreValidationFixture::compile("", "main : Unit -> Int\nmain () = 42\n", &[]);
+        let sources = linked_fixture_sources(&fixture);
+        let validator = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+            .expect("validator");
+        assert!(fixture.program.method_evidence.lexical_owners().is_empty());
+        validator.type_work.set(CORE_VALIDATION_TYPE_WORK_LIMIT);
+        validator
+            .validate_lexical_capture_uses(&HashMap::new())
+            .expect("empty lexical gate needs no work");
+        assert_eq!(validator.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+    }
+
+    #[test]
+    fn lexical_capture_uses_authenticate_the_exact_binder_not_just_the_capture_set() {
+        LinkedCoreValidationFixture::compile("", LEXICAL_CAPTURE_SOURCE, &[])
+            .validate()
+            .expect("the unmodified capture uses authenticate");
+        let mut fixture = LinkedCoreValidationFixture::compile("", LEXICAL_CAPTURE_SOURCE, &[]);
+        let captures = &fixture.program.method_evidence.lexical_owners()[0].captures;
+        assert_eq!(captures.len(), 3);
+        let first = *captures
+            .iter()
+            .find(|binder| captures.iter().filter(|other| other == binder).count() == 2)
+            .expect("one binder remains captured after its first use is changed");
+        let second = *captures
+            .iter()
+            .find(|binder| **binder != first)
+            .expect("another captured binder");
+        let variable = fixture.program.nodes.iter_mut().find(|node|
+            matches!(&node.kind, PureExprKind::Variable(variable) if variable.binder() == first))
+            .expect("the first captured use remains in Core");
+        variable.kind = PureExprKind::Variable(crate::core::variable::VariableNode::new(second));
+        assert!(
+            fixture.validate().is_err(),
+            "both binders are in scope and same-typed, but the exact capture use changed"
+        );
+    }
+
+    #[test]
+    fn lexical_capture_anchors_survive_transforms_and_nested_shared_occurrences() {
+        for source in [
+            LEXICAL_CAPTURE_SOURCE,
+            concat!(
+                "interface Read<A> {\nread : A -> Int\n}\n",
+                "main : Unit -> Int\nmain () = {\nlet x = 20\nlet y = 22\n",
+                "newtype Outer = Outer(Unit)\nwith Read<Outer> {\nread ignored = {\n",
+                "newtype Inner = Inner(Unit)\nwith Read<Inner> {\nread ignored = x + x + y\n}\n42\n}\n}\n42\n}\n",
+            ),
+        ] {
+            let fixture = LinkedCoreValidationFixture::compile("", source, &[]);
+            let sources = fixture
+                .graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let validated = validate_modules(fixture.program, &sources, &fixture.module_sources)
+                .expect("capture anchors may share one raw variable across nested owners");
+            for rebuilt in [
+                identity_traversal(&validated),
+                fold_literal_primitives(&validated),
+            ] {
+                validate_modules(
+                    rebuilt.expect("the transform preserves anchors"),
+                    &sources,
+                    &fixture.module_sources,
+                )
+                .expect("rebuilt exact capture anchors authenticate independently");
+            }
+        }
+    }
+
+    #[test]
+    fn lexical_capture_anchor_identity_and_initializer_envelope_are_required() {
+        for mutation in 0..6 {
+            let fixture = LinkedCoreValidationFixture::compile("", LEXICAL_CAPTURE_SOURCE, &[]);
+            let sources = fixture
+                .graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let validated = validate_modules(fixture.program, &sources, &fixture.module_sources)
+                .expect("valid original");
+            let mut changed =
+                identity_traversal(&validated).expect("fresh independently validated transform");
+            let capture_index = changed
+                .method_evidence_anchors
+                .iter()
+                .position(|anchor| {
+                    matches!(
+                        anchor.role,
+                        MethodEvidenceAnchorRole::LexicalCaptureUse { .. }
+                    )
+                })
+                .expect("capture anchor");
+            let MethodEvidenceAnchorRole::LexicalCaptureUse { owner, ordinal } =
+                changed.method_evidence_anchors[capture_index].role
+            else {
+                unreachable!();
+            };
+            match mutation {
+                0 => {
+                    let mut anchors =
+                        std::mem::take(&mut changed.method_evidence_anchors).into_vec();
+                    anchors.remove(capture_index);
+                    changed.method_evidence_anchors = anchors.into_boxed_slice();
+                }
+                1 => {
+                    changed.method_evidence_anchors[capture_index].role =
+                        MethodEvidenceAnchorRole::LexicalCaptureUse {
+                            owner: usize::MAX,
+                            ordinal,
+                        }
+                }
+                2 => {
+                    changed.method_evidence_anchors[capture_index].role =
+                        MethodEvidenceAnchorRole::LexicalCaptureUse {
+                            owner,
+                            ordinal: usize::MAX,
+                        }
+                }
+                3 => {
+                    let row = &changed.method_evidence.lexical_owners()[owner];
+                    let owner_anchor = changed.method_evidence_anchors.iter().find(|anchor|
+                        matches!(anchor.role, MethodEvidenceAnchorRole::LexicalOwner { binder, .. } if binder == row.binder)).expect("owner anchor");
+                    let PureExprKind::Computation(PureComputation::Bind(binding)) =
+                        &changed.nodes[owner_anchor.node.index().expect("owner index")].kind
+                    else {
+                        unreachable!();
+                    };
+                    let body = lexical_subtree(&changed, binding.initializer());
+                    let outside = changed.nodes.iter().enumerate().find_map(|(index, node)| {
+                        let id = node_id(changed.arena, index).expect("node identity");
+                        (!body.contains(&id) && matches!(&node.kind, PureExprKind::Variable(variable) if variable.binder() == row.captures[ordinal])).then_some(id)
+                    }).expect("same binder used outside the method initializer");
+                    changed.method_evidence_anchors[capture_index].node = outside;
+                }
+                4 => {
+                    let anchor = &changed.method_evidence_anchors[capture_index];
+                    let duplicate = MethodEvidenceAnchor {
+                        node: anchor.node,
+                        owner: anchor.owner,
+                        requirement: anchor.requirement,
+                        method: anchor.method,
+                        application: anchor.application.clone(),
+                        role: anchor.role,
+                        occurrence: anchor.occurrence,
+                        expectation: anchor.expectation,
+                    };
+                    let mut anchors =
+                        std::mem::take(&mut changed.method_evidence_anchors).into_vec();
+                    anchors.push(duplicate);
+                    changed.method_evidence_anchors = anchors.into_boxed_slice();
+                }
+                5 => {
+                    let captures = &changed.method_evidence.lexical_owners()[owner].captures;
+                    let binder = captures[ordinal];
+                    let replacement = *captures
+                        .iter()
+                        .find(|capture| **capture != binder)
+                        .expect("another same-typed captured binder");
+                    let other_node = changed
+                        .method_evidence_anchors
+                        .iter()
+                        .find_map(|anchor| match anchor.role {
+                            MethodEvidenceAnchorRole::LexicalCaptureUse {
+                                owner: other_owner,
+                                ordinal: other_ordinal,
+                            } if other_owner == owner
+                                && other_ordinal != ordinal
+                                && captures[other_ordinal] == binder =>
+                            {
+                                Some(anchor.node)
+                            }
+                            _ => None,
+                        })
+                        .expect("a distinct recorded use of the same binder");
+                    let original = changed.method_evidence_anchors[capture_index].node;
+                    assert_ne!(original, other_node);
+                    changed.method_evidence_anchors[capture_index].node = other_node;
+                    changed.nodes[original.index().expect("captured variable index")].kind =
+                        PureExprKind::Variable(crate::core::variable::VariableNode::new(
+                            replacement,
+                        ));
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                validate_modules(changed, &sources, &fixture.module_sources).is_err(),
+                "capture mutation {mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn unused_lexical_core_header_requires_its_dependent_nominal_scope() {
+        let mut fixture = LinkedCoreValidationFixture::compile(
+            "",
+            concat!(
+                "interface R<A, B> where A -> B {\nread : A -> Int\n}\n",
+                "main : Unit -> Int\nmain () = {\nnewtype N = N(Unit)\nnewtype M = M(Unit)\n",
+                "with R<N, M> {\nread ignored = 42\n}\n42\n}\n",
+            ),
+            &[],
+        );
+        let owner_id = fixture
+            .program
+            .method_evidence_anchors
+            .iter()
+            .find(|anchor| matches!(anchor.role, MethodEvidenceAnchorRole::LexicalOwner { .. }))
+            .expect("lexical owner")
+            .node;
+        let PureExprKind::Computation(PureComputation::Bind(binding)) =
+            &fixture.program.nodes[owner_id.index().expect("owner index")].kind
+        else {
+            panic!("ordinary binding");
+        };
+        let binding = binding.clone();
+        let (scope_index, scope) = fixture
+            .program
+            .nodes
+            .iter()
+            .enumerate()
+            .find_map(|(index, node)| match &node.kind {
+                PureExprKind::Computation(PureComputation::LocalNominalScope(scope))
+                    if scope.body() == owner_id =>
+                {
+                    Some((index, *scope))
+                }
+                _ => None,
+            })
+            .expect("M scope surrounds the evidence binding");
+        let scope_id = node_id(fixture.program.arena, scope_index).expect("scope identity");
+        for node in &mut fixture.program.nodes {
+            if let PureExprKind::Computation(PureComputation::LocalNominalScope(parent)) =
+                &node.kind
+                && parent.body() == scope_id
+            {
+                node.kind = PureExprKind::Computation(PureComputation::LocalNominalScope(
+                    crate::core::LocalNominalScopeNode::new(parent.owner(), owner_id),
+                ));
+            }
+        }
+        fixture.program.nodes[scope_index].kind =
+            PureExprKind::Computation(PureComputation::LocalNominalScope(
+                crate::core::LocalNominalScopeNode::new(scope.owner(), binding.body()),
+            ));
+        fixture.program.nodes[owner_id.index().expect("owner index")].kind =
+            PureExprKind::Computation(PureComputation::Bind(
+                crate::core::binding::BindingNode::new(
+                    binding.binder().clone(),
+                    binding.initializer(),
+                    scope_id,
+                ),
+            ));
+        assert!(
+            fixture.validate().is_err(),
+            "method type and key still see N, but the full application no longer sees M"
+        );
+    }
+
+    #[test]
+    fn unused_lexical_core_header_requires_well_kinded_dependent_arguments() {
+        let fixture = LinkedCoreValidationFixture::compile(
+            "",
+            concat!(
+                "type Box<A> = Box(A)\n",
+                "interface R<N, A> where N -> A {\nread : N -> Int\n}\n",
+                "main : Unit -> Int\nmain () = {\nnewtype N = N(Unit)\n",
+                "with R<N, Int> {\nread ignored = 42\n}\n42\n}\n",
+            ),
+            &[],
+        );
+        let sources = fixture
+            .graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let validated = validate_modules(fixture.program, &sources, &fixture.module_sources)
+            .expect("the unused complete header validates before mutation");
+        let mut changed = identity_traversal(&validated).expect("independent Core copy");
+        // Five existing method-parameter checks, one owner, one method
+        // lookup cell, and synthesis/comparison for each of two arguments.
+        const EXACT: usize = 5 + 1 + 1 + 2 * (1 + 1);
+        assert_eq!(changed.method_evidence.methods().len(), 1);
+        for remaining in [EXACT - 1, EXACT, EXACT] {
+            let validator =
+                Validator::new_modules(&changed, &sources, &fixture.module_sources).unwrap();
+            validator
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - remaining)
+                .unwrap();
+            let result = validator.validate_method_evidence_catalog_applications();
+            if remaining < EXACT {
+                assert_eq!(result.unwrap_err().reason(), ValidationReason::Resource);
+            } else {
+                result.expect("exact complete-header check and fresh retry");
+                assert_eq!(validator.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+            }
+        }
+        let constructor = changed.registry.nominals()[0].id;
+        let mut owners = changed.method_evidence.lexical_owners().to_vec();
+        assert_eq!(owners.len(), 1);
+        let mut arguments = owners[0].application.arguments().to_vec();
+        assert_eq!(arguments[1], Type::Int);
+        arguments[1] = Type::Nominal(constructor);
+        let application = InterfaceApplication::new(
+            owners[0].application.interface(),
+            arguments.into_boxed_slice(),
+        );
+        owners[0].application = application.clone();
+        let mut anchors = 0;
+        for anchor in &mut changed.method_evidence_anchors {
+            if matches!(anchor.role, MethodEvidenceAnchorRole::LexicalOwner { .. }) {
+                anchor.application = application.clone();
+                anchors += 1;
+            }
+        }
+        assert_eq!(anchors, 1);
+        Arc::make_mut(&mut changed.method_evidence).set_lexical_owners(owners);
+        assert_eq!(
+            validate_modules(changed, &sources, &fixture.module_sources)
+                .map(|_| ())
+                .expect_err("an unused dependent still requires Type, not Type -> Type")
+                .reason(),
+            ValidationReason::NodeType
+        );
+    }
+
+    #[test]
+    fn unused_lexical_core_header_requires_its_dependent_rigid_scope() {
+        let fixture = LinkedCoreValidationFixture::compile(
+            "",
+            concat!(
+                "interface R<N, A> where N -> A {\nread : N -> Int\n}\n",
+                "run<A> : A -> Int\nrun ignored = {\nnewtype N = N(Unit)\n",
+                "with R<N, A> {\nread ignored = 42\n}\n42\n}\n",
+                "main : Unit -> Int\nmain () = run(())\n",
+            ),
+            &[],
+        );
+        let sources = fixture
+            .graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let validated = validate_modules(fixture.program, &sources, &fixture.module_sources)
+            .expect("the dependent rigid is in scope before relocation");
+        let mut moved = identity_traversal(&validated).expect("independent Core copy");
+        let (scope_id, scope) = moved
+            .nodes
+            .iter()
+            .enumerate()
+            .find_map(|(index, node)| match &node.kind {
+                PureExprKind::Computation(PureComputation::LocalNominalScope(scope)) => {
+                    Some((node_id(moved.arena, index).expect("scope identity"), *scope))
+                }
+                _ => None,
+            })
+            .expect("one local nominal scope");
+        let binding_id = scope.body();
+        let PureExprKind::Computation(PureComputation::Bind(binding)) =
+            &moved.nodes[binding_id.index().expect("binding index")].kind
+        else {
+            panic!("unused evidence lowers to an ordinary binding");
+        };
+        let binding = binding.clone();
+        let mut replaced = 0;
+        for node in &mut moved.nodes {
+            match &node.kind {
+                PureExprKind::Value(PureValue::Function(function))
+                    if function.body() == scope_id =>
+                {
+                    node.kind = PureExprKind::Value(PureValue::Function(FunctionNode::new(
+                        function.parameter().clone(),
+                        binding.body(),
+                    )));
+                    replaced += 1;
+                }
+                PureExprKind::Computation(PureComputation::Match(matched))
+                    if matched.arms().iter().any(|arm| arm.body() == scope_id) =>
+                {
+                    let arms = matched
+                        .arms()
+                        .iter()
+                        .map(|arm| {
+                            crate::core::CoreMatchArm::new(
+                                arm.pattern().clone(),
+                                if arm.body() == scope_id {
+                                    binding.body()
+                                } else {
+                                    arm.body()
+                                },
+                                arm.origin().clone(),
+                            )
+                        })
+                        .collect();
+                    node.kind = PureExprKind::Computation(PureComputation::Match(
+                        crate::core::MatchNode::new(matched.scrutinee(), arms),
+                    ));
+                    replaced += 1;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(replaced, 1);
+        // Move the nominal and unused method together. N stays in scope, and
+        // neither its representation nor the method type mentions run's A.
+        let old_root = moved.root;
+        moved.nodes[binding_id.index().expect("binding index")].kind =
+            PureExprKind::Computation(PureComputation::Bind(BindingNode::new(
+                binding.binder().clone(),
+                binding.initializer(),
+                old_root,
+            )));
+        moved.root = scope_id;
+        assert_eq!(
+            validate_modules(moved, &sources, &fixture.module_sources)
+                .map(|_| ())
+                .expect_err("the complete unused header must remain inside its rigid scope")
+                .reason(),
+            ValidationReason::TypeScope
+        );
+    }
+
+    #[test]
+    fn unused_local_representation_cannot_move_outside_its_type_abstraction() {
+        for source in [
+            "keep<A> : A -> A\nkeep value = {\nnewtype Local = Local(A)\nvalue\n}\nmain : Unit -> Int\nmain () = 42\n",
+            "type Box<A> = Box(A)\ninterface Keep<A> {\nkeep : A -> A\n}\nimpl<A> Keep<Box<A>> {\nkeep value = {\nnewtype Local = Local(A)\nvalue\n}\n}\nmain : Unit -> Int\nmain () = 42\n",
+        ] {
+            let fixture = LinkedCoreValidationFixture::compile("", source, &[]);
+            let sources = fixture
+                .graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let validated = validate_modules(fixture.program, &sources, &fixture.module_sources)
+                .expect("the unused captured representation should validate");
+            let mut moved = identity_traversal(&validated).expect("the fixture should rebuild");
+            let (scope_id, scope) = moved
+                .nodes
+                .iter()
+                .enumerate()
+                .find_map(|(index, node)| match &node.kind {
+                    PureExprKind::Computation(PureComputation::LocalNominalScope(scope)) => {
+                        Some((node_id(moved.arena, index).expect("scope id"), *scope))
+                    }
+                    _ => None,
+                })
+                .expect("one local scope");
+            let mut replaced = 0;
+            for node in &mut moved.nodes {
+                match &node.kind {
+                    PureExprKind::Computation(PureComputation::Match(matched))
+                        if matched.arms().iter().any(|arm| arm.body() == scope_id) =>
+                    {
+                        let arms = matched
+                            .arms()
+                            .iter()
+                            .map(|arm| {
+                                crate::core::CoreMatchArm::new(
+                                    arm.pattern().clone(),
+                                    if arm.body() == scope_id {
+                                        scope.body()
+                                    } else {
+                                        arm.body()
+                                    },
+                                    arm.origin().clone(),
+                                )
+                            })
+                            .collect();
+                        node.kind = PureExprKind::Computation(PureComputation::Match(
+                            crate::core::MatchNode::new(matched.scrutinee(), arms),
+                        ));
+                        replaced += 1;
+                    }
+                    PureExprKind::Value(PureValue::Function(function))
+                        if function.body() == scope_id =>
+                    {
+                        node.kind = PureExprKind::Value(PureValue::Function(FunctionNode::new(
+                            function.parameter().clone(),
+                            scope.body(),
+                        )));
+                        replaced += 1;
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!(replaced, 1);
+            let root = moved.root;
+            let ty = moved.nodes[root.index().expect("root index")].ty.clone();
+            let scope_node = &mut moved.nodes[scope_id.index().expect("scope index")];
+            crate::types::replace_type_iteratively(&mut scope_node.ty, ty);
+            scope_node.kind = PureExprKind::Computation(PureComputation::LocalNominalScope(
+                crate::core::LocalNominalScopeNode::new(scope.owner(), root),
+            ));
+            moved.root = scope_id;
+            assert_eq!(
+                validate_modules(moved, &sources, &fixture.module_sources)
+                    .expect_err("a captured type variable requires its enclosing abstraction")
+                    .reason(),
+                ValidationReason::TypeScope
+            );
+        }
+    }
+
+    #[test]
+    fn lexical_parameter_scan_charges_monomorphic_owners_and_preserves_empty_catalog() {
+        for (source, expected) in [
+            ("main : Unit -> Unit\nmain () = ()\n", 0),
+            (
+                "interface Read<I> {\nread : I -> Int\n}\nmain : Unit -> Int\nmain () = {\nnewtype Token = Token(Unit)\nwith Read<Token> {\nread ignored = 42\n}\nread(Token(()))\n}\n",
+                1,
+            ),
+        ] {
+            let fixture = LinkedCoreValidationFixture::compile("", source, &[]);
+            let sources = linked_fixture_sources(&fixture);
+            let make = || {
+                Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                    .expect("fixture relation")
+            };
+            for _ in 0..2 {
+                let exact = make();
+                exact
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - expected)
+                    .expect("prefix");
+                assert!(
+                    !exact
+                        .is_lexical_source_parameter(crate::types::TypeVariableId::generated(0))
+                        .expect("exact scan")
+                );
+                assert_eq!(exact.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+            }
+            if expected != 0 {
+                let short = make();
+                short
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT)
+                    .expect("prefix");
+                assert_eq!(
+                    short
+                        .is_lexical_source_parameter(crate::types::TypeVariableId::generated(0))
+                        .expect_err("owner scan must charge")
+                        .reason(),
+                    ValidationReason::Resource
+                );
+            } else {
+                let empty = make();
+                empty
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT)
+                    .expect("prefix");
+                empty
+                    .extend_lexical_method_replacements(
+                        fixture.program.root,
+                        &mut TypeReplacementMap::new(),
+                    )
+                    .expect("no-owner mapping needs no work");
+            }
+        }
+    }
+
+    #[test]
+    fn lexical_parameter_scan_charges_the_owner_lookup_width() {
+        let fixture = LinkedCoreValidationFixture::compile(
+            "",
+            "interface Read<I> {\nread : I -> Int\n}\nmain : Unit -> Int\nmain () = {\nnewtype Token = Token(Unit)\nwith Read<Token> {\nread ignored = 42\n}\nread(Token(()))\n}\n",
+            &[],
+        );
+        let sources = linked_fixture_sources(&fixture);
+        let make = || {
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                .expect("fixture relation")
+        };
+        let owners = fixture
+            .program
+            .method_evidence_anchors
+            .iter()
+            .filter(|anchor| matches!(anchor.role, MethodEvidenceAnchorRole::LexicalOwner { .. }))
+            .count();
+        let expected = fixture.program.method_evidence_anchors.len()
+            + owners * fixture.program.method_evidence.lexical_owners().len();
+        for _ in 0..2 {
+            let exact = make();
+            exact
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - expected)
+                .expect("prefix");
+            exact
+                .extend_lexical_method_replacements(
+                    fixture.program.root,
+                    &mut TypeReplacementMap::new(),
+                )
+                .expect("exact owner lookup");
+            assert_eq!(exact.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+        }
+        let short = make();
+        short
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - expected + 1)
+            .expect("prefix");
+        assert_eq!(
+            short
+                .extend_lexical_method_replacements(
+                    fixture.program.root,
+                    &mut TypeReplacementMap::new()
+                )
+                .expect_err("lookup width must charge")
+                .reason(),
+            ValidationReason::Resource
+        );
+    }
+
+    #[test]
+    fn lexical_representation_and_ancestry_walks_have_exact_retry_boundaries() {
+        let fixture = LinkedCoreValidationFixture::compile(
+            "",
+            "main : Unit -> Unit\nmain () = {\nnewtype First = First(Int)\nnewtype Second<A> = Second(A)\n()\n}\n",
+            &[],
+        );
+        let sources = linked_fixture_sources(&fixture);
+        let make = || {
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                .expect("fixture relation")
+        };
+        for (nominal, exact) in fixture
+            .program
+            .registry
+            .lexical_nominals()
+            .iter()
+            .zip([2, 4])
+        {
+            let short = make();
+            short
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact + 1)
+                .expect("short prefix");
+            assert_eq!(
+                short
+                    .scoped_lexical_representation(nominal.id, fixture.program.root)
+                    .err()
+                    .expect("one missing representation unit should reject")
+                    .reason(),
+                ValidationReason::Resource
+            );
+            for _ in 0..2 {
+                let retry = make();
+                retry
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact)
+                    .expect("exact prefix");
+                drop(
+                    retry
+                        .scoped_lexical_representation(nominal.id, fixture.program.root)
+                        .expect("exact representation should fit"),
+                );
+                assert_eq!(retry.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+            }
+        }
+        let scopes = fixture
+            .program
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| match &node.kind {
+                PureExprKind::Computation(PureComputation::LocalNominalScope(scope)) => Some((
+                    node_id(fixture.program.arena, index).expect("scope id"),
+                    *scope,
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let [(inner_id, inner), (outer_id, _)] = scopes.as_slice() else {
+            panic!("two scopes")
+        };
+        for (root, target, exact) in [(*inner_id, *inner_id, 1), (*outer_id, inner.body(), 3)] {
+            let short = make();
+            short
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact + 1)
+                .expect("short prefix");
+            assert_eq!(
+                short
+                    .node_reaches(root, target)
+                    .expect_err("one missing ancestry unit should reject")
+                    .reason(),
+                ValidationReason::Resource
+            );
+            for _ in 0..2 {
+                let retry = make();
+                retry
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact)
+                    .expect("exact prefix");
+                assert!(
+                    retry
+                        .node_reaches(root, target)
+                        .expect("the exact ancestry walk should fit")
+                );
+                assert_eq!(retry.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+            }
+        }
+    }
+
+    #[test]
+    fn linked_core_rejects_tampered_local_nominal_scope_relations() {
+        #[derive(Clone, Copy, Debug)]
+        enum Mutation {
+            DuplicateAndMissing,
+            Unmatched,
+            WrongOwner,
+            EscapingResult,
+        }
+
+        let fixture = LinkedCoreValidationFixture::compile(
+            "",
+            concat!(
+                "main : Unit -> Int\n",
+                "main () = {\n",
+                "    newtype Outer = Outer(Int)\n",
+                "    let outer = Outer(40)\n",
+                "    newtype Inner = Inner(Outer)\n",
+                "    match Inner(outer) {\n",
+                "        Inner(Outer(value)) => value + 2\n",
+                "    }\n",
+                "}\n",
+            ),
+            &[],
+        );
+        let LinkedCoreValidationFixture {
+            directory,
+            graph,
+            program,
+            module_sources,
+            globals: _,
+        } = fixture;
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let validated = validate_modules(program, &sources, &module_sources)
+            .expect("the untampered nested local scopes should validate");
+
+        for mutation in [
+            Mutation::DuplicateAndMissing,
+            Mutation::Unmatched,
+            Mutation::WrongOwner,
+            Mutation::EscapingResult,
+        ] {
+            let mut tampered = identity_traversal(&validated)
+                .expect("the valid local scopes should rebuild for tampering");
+            let scopes = tampered
+                .nodes
+                .iter()
+                .enumerate()
+                .filter_map(|(index, node)| match &node.kind {
+                    PureExprKind::Computation(PureComputation::LocalNominalScope(scope)) => {
+                        Some((index, *scope))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let [(first_index, first), (second_index, second)] = scopes.as_slice() else {
+                panic!("the fixture should retain exactly two local scopes")
+            };
+            match mutation {
+                Mutation::DuplicateAndMissing => {
+                    tampered.nodes[*second_index].kind =
+                        PureExprKind::Computation(PureComputation::LocalNominalScope(
+                            crate::core::LocalNominalScopeNode::new(first.owner(), second.body()),
+                        ));
+                }
+                Mutation::Unmatched => {
+                    tampered.nodes[*first_index].kind =
+                        PureExprKind::Computation(PureComputation::LocalNominalScope(
+                            crate::core::LocalNominalScopeNode::new(
+                                crate::types::NominalTypeId::lexical(
+                                    first.owner().module(),
+                                    u32::MAX,
+                                ),
+                                first.body(),
+                            ),
+                        ));
+                }
+                Mutation::WrongOwner => {
+                    tampered.nodes[*first_index].kind =
+                        PureExprKind::Computation(PureComputation::LocalNominalScope(
+                            crate::core::LocalNominalScopeNode::new(second.owner(), first.body()),
+                        ));
+                    tampered.nodes[*second_index].kind =
+                        PureExprKind::Computation(PureComputation::LocalNominalScope(
+                            crate::core::LocalNominalScopeNode::new(first.owner(), second.body()),
+                        ));
+                }
+                Mutation::EscapingResult => {
+                    let escaped = Type::Nominal(first.owner());
+                    crate::types::replace_type_iteratively(
+                        &mut tampered.nodes[*first_index].ty,
+                        escaped.clone(),
+                    );
+                    let body = first.body().index().expect("scope body index should fit");
+                    crate::types::replace_type_iteratively(&mut tampered.nodes[body].ty, escaped);
+                }
+            }
+            assert!(
+                validate_modules(tampered, &sources, &module_sources).is_err(),
+                "independent Core accepted {mutation:?} local-scope tampering",
+            );
+        }
+        drop(directory);
+    }
+
+    #[test]
+    fn linked_core_rejects_wrong_kind_and_duplicate_local_facts_during_registry_validation() {
+        for duplicate in [false, true] {
+            let mut fixture = LinkedCoreValidationFixture::compile(
+                "",
+                concat!(
+                    "main : Unit -> Int\n",
+                    "main () = {\n",
+                    "    newtype Hidden = Hidden(Int)\n",
+                    "    newtype Other = Other(Int)\n",
+                    "    match Hidden(42) {\n",
+                    "        Hidden(value) => value\n",
+                    "    }\n",
+                    "}\n",
+                ),
+                &[],
+            );
+            let registry = Arc::get_mut(&mut fixture.program.registry)
+                .expect("the unchecked fixture owns its registry");
+            assert!(if duplicate {
+                registry.duplicate_second_lexical_identity_for_core_test()
+            } else {
+                registry.corrupt_first_lexical_nominal_as_data_for_core_test()
+            });
+
+            let error = fixture
+                .validate()
+                .expect_err("forged local facts must fail registry validation");
+            assert_eq!(error.reason(), ValidationReason::Registry);
+            assert_eq!(error.node(), None);
+        }
+    }
+
+    #[test]
+    fn lexical_registry_indices_charge_before_retention_and_retry_exactly() {
+        let mut fixture = LinkedCoreValidationFixture::compile(
+            "",
+            concat!(
+                "main : Unit -> Unit\n",
+                "main () = {\n",
+                "    newtype First = First(Int)\n",
+                "    newtype Second = Second(Int)\n",
+                "    ()\n",
+                "}\n",
+            ),
+            &[],
+        );
+        let registry = Arc::get_mut(&mut fixture.program.registry)
+            .expect("the unchecked fixture owns its registry");
+        let first = &registry.lexical_nominals()[0];
+        let owner = first.id;
+        let parameter = crate::resolved::ResolvedTypeVariable {
+            id: crate::types::TypeVariableId::resolved(owner.module(), 99),
+            spelling: "A".to_owned(),
+            kind: Kind::Type,
+            origin: first.origin.clone(),
+        };
+        *registry = std::mem::take(registry).with_type_parameters(vec![(owner, vec![parameter])]);
+        let sources = linked_fixture_sources(&fixture);
+        let validator = || {
+            Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
+                .expect("the lexical registry relation should initialize")
+        };
+        // Two identity-index entries precede both indices for the first parameter.
+        for available in [1, 3] {
+            let early = validator();
+            let prefix = CORE_VALIDATION_TYPE_WORK_LIMIT - available;
+            early
+                .charge_type_work(prefix)
+                .expect("the prefix should fit");
+            let mut owners = HashMap::new();
+            assert_eq!(
+                early
+                    .validate_lexical_registry(&mut owners, None)
+                    .expect_err("incomplete index storage must reject")
+                    .reason(),
+                ValidationReason::Resource,
+            );
+            assert!(owners.is_empty(), "no parameter owner may be retained yet");
+            assert_eq!(
+                early.type_work.get(),
+                prefix + if available == 1 { 0 } else { 2 }
+            );
+        }
+
+        let measured = validator();
+        let mut owners = HashMap::new();
+        measured
+            .validate_lexical_registry(&mut owners, None)
+            .expect("the canonical lexical registry should validate");
+        assert_eq!(owners.len(), 1);
+        let exact = measured.type_work.get();
+        const EXACT_WORK: usize = 18;
+        assert_eq!(exact, EXACT_WORK);
+        let short = validator();
+        short
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (exact - 1))
+            .expect("the one-short prefix should fit");
+        assert_eq!(
+            short
+                .validate_lexical_registry(&mut HashMap::new(), None)
+                .expect_err("one missing registry unit must reject")
+                .reason(),
+            ValidationReason::Resource,
+        );
+        for _ in 0..2 {
+            let retry = validator();
+            retry
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact)
+                .expect("the exact prefix should fit");
+            let mut owners = HashMap::new();
+            retry
+                .validate_lexical_registry(&mut owners, None)
+                .expect("a fresh exact retry should validate");
+            assert_eq!(retry.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+            assert_eq!(owners.len(), 1);
+        }
+    }
+
+    #[test]
+    fn local_nominal_scope_validation_is_exact_atomic_and_retryable() {
+        const ROW_WIDTH: usize = 16;
+
+        fn fixture() -> LinkedCoreValidationFixture {
+            LinkedCoreValidationFixture::compile(
+                "",
+                concat!(
+                    "main : Unit -> Int\n",
+                    "main () = {\n",
+                    "    newtype Left = Left(Int)\n",
+                    "    newtype Right = Right(Int)\n",
+                    "    match (Left(40), Right(2)) {\n",
+                    "        (Left(left), Right(right)) => left + right\n",
+                    "    }\n",
+                    "}\n",
+                ),
+                &[],
+            )
+        }
+
+        fn exercise_wide_local_row(validator: &Validator<'_, '_>) -> Result<(), ValidationError> {
+            let owners = validator.program.registry.lexical_nominals();
+            let [left, right] = owners else {
+                panic!("the exact fixture should retain two local identities")
+            };
+            let row = EffectRow::open(
+                crate::types::EffectRowVariable::rigid(crate::types::TypeVariableId::generated(99)),
+                (0..ROW_WIDTH)
+                    .map(|index| {
+                        EffectInstance::new(
+                            crate::types::EffectId::new(
+                                ModuleId::new(99),
+                                u32::try_from(index).expect("row ordinal"),
+                            ),
+                            Box::new([Type::Nominal(if index % 2 == 0 {
+                                left.id
+                            } else {
+                                right.id
+                            })]),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            );
+            let occurrence = validator.program.root;
+            let mut requirements = HashMap::new();
+            validator.collect_row_local_nominals(&row, occurrence, &mut requirements)?;
+            let mut cached = vec![None; validator.program.nodes.len()];
+            cached[occurrence.index().expect("root index")] = Some(requirements);
+            let propagated = validator.requirements_for(&cached, occurrence)?;
+            assert_eq!(
+                propagated
+                    .keys()
+                    .filter(|key| matches!(key, ScopeRequirementKey::LocalNominal(_)))
+                    .count(),
+                2,
+            );
+            Ok(())
+        }
+
+        fn attempt(initial_type_work: usize) -> ConsumingModuleValidationAttempt {
+            let LinkedCoreValidationFixture {
+                directory,
+                graph,
+                program,
+                module_sources,
+                globals: _,
+            } = fixture();
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let attempt = validate_modules_with_initial_type_work_for_test(
+                program,
+                &sources,
+                &module_sources,
+                initial_type_work,
+            );
+            drop(graph);
+            drop(directory);
+            attempt
+        }
+
+        let measured = fixture();
+        let sources = linked_fixture_sources(&measured);
+        let row_validator =
+            Validator::new_modules(&measured.program, &sources, &measured.module_sources)
+                .expect("the row fixture module/source relation should initialize");
+        exercise_wide_local_row(&row_validator).expect("the measured local row should fit");
+        // One row and one tail header + W instance headers + W nominal argument cells and
+        // W identity-index insertions, then two first and propagated entries.
+        const EXACT_ROW_WORK: usize = 2 + ROW_WIDTH + 2 * ROW_WIDTH + 2 + 2;
+        assert_eq!(row_validator.type_work.get(), EXACT_ROW_WORK);
+
+        let short = Validator::new_modules(&measured.program, &sources, &measured.module_sources)
+            .expect("the one-short row relation should initialize");
+        short
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (EXACT_ROW_WORK - 1))
+            .expect("the one-short row prefix should fit");
+        assert_eq!(
+            exercise_wide_local_row(&short)
+                .expect_err("one missing row unit must reject")
+                .reason(),
+            ValidationReason::Resource,
+        );
+        for _ in 0..2 {
+            let retry =
+                Validator::new_modules(&measured.program, &sources, &measured.module_sources)
+                    .expect("the retry row relation should initialize");
+            retry
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_ROW_WORK)
+                .expect("the exact row prefix should fit");
+            exercise_wide_local_row(&retry).expect("a fresh exact row retry should fit");
+            assert_eq!(retry.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+        }
+
+        let mut validator =
+            Validator::new_modules(&measured.program, &sources, &measured.module_sources)
+                .expect("the canonical module/source relation should initialize");
+        run_module_validation_phases_for_test(&mut validator)
+            .expect("the canonical local scope should validate");
+        let exact_work = validator.type_work.get();
+        assert!(exact_work < CORE_VALIDATION_TYPE_WORK_LIMIT);
+        drop(validator);
+        drop(measured);
+
+        let exact = attempt(CORE_VALIDATION_TYPE_WORK_LIMIT - exact_work);
+        assert!(exact.result.is_ok());
+        assert_eq!(exact.type_work, CORE_VALIDATION_TYPE_WORK_LIMIT);
+
+        let one_short = attempt(CORE_VALIDATION_TYPE_WORK_LIMIT - (exact_work - 1));
+        let error = one_short
+            .result
+            .expect_err("one missing unit must reject before publication");
+        assert_eq!(error.reason(), ValidationReason::Resource);
+        assert_eq!(one_short.type_work, CORE_VALIDATION_TYPE_WORK_LIMIT);
+
+        let retry = attempt(CORE_VALIDATION_TYPE_WORK_LIMIT - exact_work);
+        assert!(retry.result.is_ok());
+        assert_eq!(retry.type_work, CORE_VALIDATION_TYPE_WORK_LIMIT);
     }
 
     fn zero_parameter_implementation_owner_fixture() -> LinkedCoreValidationFixture {
@@ -7372,6 +15516,7 @@ mod tests {
         };
         program.nodes.push(StoredNode {
             dialect: DialectId::PURE,
+            effects: (),
             ty,
             origin: root_origin,
             kind,
@@ -7482,6 +15627,7 @@ mod tests {
             Visit(&'a Type),
             Application,
             Function,
+            EffectfulFunction(crate::types::EffectRow),
             Tuple(usize),
             Forall(Box<[(crate::types::TypeVariableId, Kind)]>),
         }
@@ -7505,6 +15651,11 @@ mod tests {
                     pending.push(Task::Visit(codomain));
                     pending.push(Task::Visit(domain));
                 }
+                Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
+                    pending.push(Task::EffectfulFunction(codomain.effects().clone()));
+                    pending.push(Task::Visit(codomain.value()));
+                    pending.push(Task::Visit(domain));
+                }
                 Task::Visit(Type::Tuple(elements)) => {
                     pending.push(Task::Tuple(elements.len()));
                     pending.extend(elements.iter().rev().map(Task::Visit));
@@ -7521,6 +15672,14 @@ mod tests {
                     } else {
                         Type::Function(Box::new(function), Box::new(argument))
                     });
+                }
+                Task::EffectfulFunction(effects) => {
+                    let value = output.pop().expect("effectful function value");
+                    let domain = output.pop().expect("effectful function domain");
+                    output.push(Type::function_computation(
+                        domain,
+                        crate::types::ComputationType::new(value, effects),
+                    ));
                 }
                 Task::Tuple(len) => {
                     let start = output.len().checked_sub(len).expect("tuple children");
@@ -7623,6 +15782,8 @@ mod tests {
                     PureComputation::Apply(_)
                     | PureComputation::Primitive(_)
                     | PureComputation::Tuple(_)
+                    | PureComputation::NewtypeConversion(_)
+                    | PureComputation::LocalNominalScope(_)
                     | PureComputation::TypeAbstraction(_),
                 ) => {}
             }
@@ -7995,6 +16156,7 @@ mod tests {
                     work.push(argument);
                     work.push(function);
                 }
+                Type::EffectfulFunction(_, _) => {}
                 Type::Forall(parameters, body) => {
                     for (parameter, _) in parameters {
                         swap_type_variable_identity(parameter, left, right);
@@ -8079,7 +16241,9 @@ mod tests {
                 | PureExprKind::Computation(
                     PureComputation::Apply(_)
                     | PureComputation::Primitive(_)
-                    | PureComputation::Tuple(_),
+                    | PureComputation::Tuple(_)
+                    | PureComputation::NewtypeConversion(_)
+                    | PureComputation::LocalNominalScope(_),
                 ) => {}
             }
         }
@@ -8314,6 +16478,7 @@ mod tests {
         );
         fixture.program.nodes.push(StoredNode {
             dialect: DialectId::PURE,
+            effects: (),
             ty: root_node.ty.clone(),
             origin: root_node.origin.clone(),
             kind: PureExprKind::Computation(PureComputation::Bind(
@@ -8607,7 +16772,7 @@ mod tests {
 
     fn nominal_parameter_owner_fixture(
         fixture: &LinkedCoreValidationFixture,
-    ) -> HashMap<crate::types::TypeVariableId, crate::types::NominalTypeId> {
+    ) -> RegistryParameterOwners {
         fixture
             .program
             .registry
@@ -8615,7 +16780,7 @@ mod tests {
             .flat_map(|(owner, parameters)| {
                 parameters
                     .iter()
-                    .map(move |parameter| (parameter.id, owner))
+                    .map(move |parameter| (parameter.id, RegistryParameterOwner::Nominal(owner)))
             })
             .collect()
     }
@@ -8713,6 +16878,7 @@ mod tests {
                 };
             };
             nodes.push(TypedExpr {
+                effects: (),
                 ty: stored.ty,
                 origin,
                 kind: stored.kind,
@@ -9706,6 +17872,7 @@ mod tests {
             .expect("the linked group has provenance");
         fixture.program.nodes.push(StoredNode {
             dialect: DialectId::PURE,
+            effects: (),
             ty: Type::Tuple(Box::new([Type::Unit, Type::Unit])),
             origin: Some(connector_origin),
             kind: PureExprKind::Computation(PureComputation::Tuple(
@@ -10166,6 +18333,7 @@ mod tests {
                     work.push(argument);
                     work.push(function);
                 }
+                Type::EffectfulFunction(_, _) => {}
                 Type::Forall(parameters, body) => {
                     if rewrite_forall_parameter {
                         for (parameter, _) in parameters {
@@ -10190,6 +18358,7 @@ mod tests {
                     work.push(argument);
                     work.push(function);
                 }
+                Type::EffectfulFunction(_, _) => {}
                 Type::Forall(parameters, body) => {
                     if parameters.iter().any(|(parameter, _)| *parameter == sought) {
                         return true;
@@ -10217,6 +18386,7 @@ mod tests {
                     work.push(argument);
                     work.push(function);
                 }
+                Type::EffectfulFunction(_, _) => {}
                 Type::Forall(parameters, body) => {
                     if parameters.iter().any(|(parameter, _)| *parameter == sought) {
                         return true;
@@ -10259,7 +18429,10 @@ mod tests {
         false
     }
 
-    fn node_type_carriers_mention(node: &StoredNode, sought: crate::types::TypeVariableId) -> bool {
+    fn node_type_carriers_mention(
+        node: &StoredNode<PureOperationFamily>,
+        sought: crate::types::TypeVariableId,
+    ) -> bool {
         if type_mentions(&node.ty, sought) {
             return true;
         }
@@ -10296,7 +18469,9 @@ mod tests {
             | PureExprKind::Computation(
                 PureComputation::Apply(_)
                 | PureComputation::Primitive(_)
-                | PureComputation::Tuple(_),
+                | PureComputation::Tuple(_)
+                | PureComputation::NewtypeConversion(_)
+                | PureComputation::LocalNominalScope(_),
             ) => false,
         }
     }
@@ -10381,7 +18556,7 @@ mod tests {
     }
 
     fn rewrite_node_type_carriers(
-        node: &mut StoredNode,
+        node: &mut StoredNode<PureOperationFamily>,
         old: crate::types::TypeVariableId,
         new: crate::types::TypeVariableId,
         rewrite_forall_parameter: bool,
@@ -10448,6 +18623,8 @@ mod tests {
                 PureComputation::Apply(_)
                 | PureComputation::Primitive(_)
                 | PureComputation::Tuple(_)
+                | PureComputation::NewtypeConversion(_)
+                | PureComputation::LocalNominalScope(_)
                 | PureComputation::TypeAbstraction(_),
             ) => {}
         }
@@ -10519,6 +18696,8 @@ mod tests {
                     | PureComputation::Primitive(_)
                     | PureComputation::Tuple(_)
                     | PureComputation::Match(_)
+                    | PureComputation::NewtypeConversion(_)
+                    | PureComputation::LocalNominalScope(_)
                     | PureComputation::TypeAbstraction(_)
                     | PureComputation::TypeApplication(_),
                 ) => {}
@@ -10601,6 +18780,8 @@ mod tests {
                     | PureComputation::Primitive(_)
                     | PureComputation::Tuple(_)
                     | PureComputation::Match(_)
+                    | PureComputation::NewtypeConversion(_)
+                    | PureComputation::LocalNominalScope(_)
                     | PureComputation::TypeAbstraction(_)
                     | PureComputation::TypeApplication(_),
                 ) => {}
@@ -11272,9 +19453,831 @@ mod tests {
         SourceFile::new("test.ash", "()").expect("test source")
     }
 
+    #[test]
+    fn effectful_authority_walks_retain_nested_row_variables_without_forall() {
+        let file = source();
+        let mut builder = crate::core::EffectCoreBuilder::with_effect_registry(Arc::new(
+            crate::resolved::ResolvedRegistry::default(),
+        ));
+        let root = builder
+            .unit(Type::Unit, origin(&file))
+            .expect("effect authority root");
+        let program = builder.finish(root).expect("effect authority program");
+        let validator = Validator::new(&program, &[&file]);
+        let argument = crate::types::TypeVariableId::generated(70);
+        let tail = crate::types::TypeVariableId::generated(71);
+        let effect = crate::types::EffectInstance::new(
+            crate::types::EffectId::new(file.id().into(), 0),
+            Box::new([Type::Variable(argument)]),
+        );
+        let ty = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Unit,
+                EffectRow::with_tail(
+                    Box::new([effect]),
+                    crate::types::EffectRowVariable::rigid(tail),
+                    Box::new([]),
+                ),
+            ),
+        );
+
+        assert_eq!(validator.type_contains_forall_charged(&ty), Ok(false));
+        assert_eq!(
+            validator.type_contains_variable_charged(&ty, argument),
+            Ok(true)
+        );
+        assert_eq!(
+            validator.type_contains_variable_charged(&ty, tail),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn effect_type_application_authenticates_complete_row_arguments() {
+        let file = source();
+        let node_origin = origin(&file);
+        let fixture = || {
+            let mut builder = crate::core::EffectCoreBuilder::with_effect_registry(Arc::new(
+                crate::resolved::ResolvedRegistry::default(),
+            ));
+            let outer = crate::types::TypeVariableId::generated(70);
+            let inner = crate::types::TypeVariableId::generated(71);
+            let dependent = |variable| {
+                Type::function_computation(
+                    Type::Unit,
+                    crate::types::ComputationType::new(
+                        Type::Unit,
+                        EffectRow::open(
+                            crate::types::EffectRowVariable::rigid(variable),
+                            Box::new([]),
+                        ),
+                    ),
+                )
+            };
+            let identity = |variable| {
+                Type::Function(Box::new(dependent(variable)), Box::new(dependent(variable)))
+            };
+            let parameter = builder
+                .binder(dependent(inner), node_origin.clone())
+                .unwrap();
+            let body = builder
+                .variable(parameter.id(), dependent(inner), node_origin.clone())
+                .unwrap();
+            let function = builder
+                .function(parameter, body, identity(inner), node_origin.clone())
+                .unwrap();
+            let inner_abstraction = builder
+                .type_abstraction(
+                    vec![(inner, Kind::EffectRow)],
+                    function,
+                    Type::Forall(
+                        Box::new([(inner, Kind::EffectRow)]),
+                        Box::new(identity(inner)),
+                    ),
+                    node_origin.clone(),
+                )
+                .unwrap();
+            let application = builder
+                .type_application_with_row_arguments(
+                    inner_abstraction,
+                    Vec::new(),
+                    vec![EffectRow::open(
+                        crate::types::EffectRowVariable::rigid(outer),
+                        Box::new([]),
+                    )],
+                    identity(outer),
+                    node_origin.clone(),
+                )
+                .unwrap();
+            let root = builder
+                .type_abstraction(
+                    vec![(outer, Kind::EffectRow)],
+                    application,
+                    Type::Forall(
+                        Box::new([(outer, Kind::EffectRow)]),
+                        Box::new(identity(outer)),
+                    ),
+                    node_origin.clone(),
+                )
+                .unwrap();
+            (
+                builder.finish(root).unwrap(),
+                application,
+                inner_abstraction,
+            )
+        };
+
+        let (program, _, _) = fixture();
+        Validator::new(&program, &[&file])
+            .run_effect()
+            .expect("the complete open row argument should authenticate");
+
+        let (mut forged, application, function) = fixture();
+        forged.nodes[application.index().unwrap()].kind =
+            super::super::effect::EffectOperationFamily::from_pure(PureExprKind::Computation(
+                PureComputation::TypeApplication(TypeApplicationNode::new_with_row_arguments(
+                    function,
+                    Vec::new(),
+                    vec![EffectRow::empty()],
+                )),
+            ));
+        let error = Validator::new(&forged, &[&file])
+            .run_effect()
+            .expect_err("a forged complete row argument must be rejected");
+        assert_eq!(error.reason(), ValidationReason::TypeOperation);
+        assert_eq!(error.node(), Some(application));
+    }
+
+    #[test]
+    fn effect_abstraction_shape_scan_caches_shared_suffixes_with_exact_work() {
+        const DEPTH: usize = 4096;
+        const ROOTS: usize = 32;
+        let file = source();
+        let node_origin = origin(&file);
+        let mut builder = crate::core::EffectCoreBuilder::with_effect_registry(Arc::new(
+            crate::resolved::ResolvedRegistry::default(),
+        ));
+        let unit = builder.unit(Type::Unit, node_origin.clone()).unwrap();
+        let parameter = builder.binder(Type::Unit, node_origin.clone()).unwrap();
+        let ty = Type::Function(Box::new(Type::Unit), Box::new(Type::Unit));
+        let mut body = builder
+            .function(parameter, unit, ty.clone(), node_origin.clone())
+            .unwrap();
+        for _ in 0..DEPTH {
+            body = builder
+                .type_application(body, vec![Type::Unit], ty.clone(), node_origin.clone())
+                .unwrap();
+        }
+        let mut root = body;
+        for index in 0..ROOTS {
+            let parameter = crate::types::TypeVariableId::generated(index as u32);
+            root = builder
+                .type_abstraction(
+                    vec![(parameter, Kind::Type)],
+                    body,
+                    Type::Forall(Box::new([(parameter, Kind::Type)]), Box::new(ty.clone())),
+                    node_origin.clone(),
+                )
+                .unwrap();
+        }
+        let program = builder.finish(root).unwrap();
+        let measured = Validator::new(&program, &[&file]);
+        measured
+            .validate_effect_abstraction_shapes(&HashSet::new())
+            .unwrap();
+        let required = measured.type_work.get();
+        assert_eq!(required, 4 * DEPTH + 2 * ROOTS + 4);
+        let short = Validator::new(&program, &[&file]);
+        short
+            .type_work
+            .set(CORE_VALIDATION_TYPE_WORK_LIMIT - required + 1);
+        assert_eq!(
+            short
+                .validate_effect_abstraction_shapes(&HashSet::new())
+                .unwrap_err()
+                .reason(),
+            ValidationReason::Resource
+        );
+        for _ in 0..2 {
+            let exact = Validator::new(&program, &[&file]);
+            exact
+                .type_work
+                .set(CORE_VALIDATION_TYPE_WORK_LIMIT - required);
+            exact
+                .validate_effect_abstraction_shapes(&HashSet::new())
+                .unwrap();
+            assert_eq!(exact.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+        }
+    }
+
+    #[test]
+    fn type_application_row_argument_scope_work_is_exact_atomic_and_retryable() {
+        const WIDTH: usize = 8;
+        const DEPTH: usize = 32;
+        let file = source();
+        let node_origin = origin(&file);
+        let closed_argument = || {
+            Type::Tuple(
+                (0..WIDTH)
+                    .map(|_| {
+                        (0..DEPTH).fold(Type::Unit, |ty, _| {
+                            Type::Application(Box::new(ty), Box::new(Type::Unit))
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            )
+        };
+        let fixture = |argument: Type| {
+            let mut builder = crate::core::EffectCoreBuilder::with_effect_registry(Arc::new(
+                crate::resolved::ResolvedRegistry::default(),
+            ));
+            let outer = crate::types::TypeVariableId::generated(72);
+            let inner = crate::types::TypeVariableId::generated(73);
+            let body = builder.unit(Type::Unit, node_origin.clone()).unwrap();
+            let function = builder
+                .type_abstraction(
+                    vec![(inner, Kind::EffectRow)],
+                    body,
+                    Type::Forall(Box::new([(inner, Kind::EffectRow)]), Box::new(Type::Unit)),
+                    node_origin.clone(),
+                )
+                .unwrap();
+            let row = EffectRow::with_tail(
+                Box::new([crate::types::EffectInstance::new(
+                    crate::types::EffectId::new(file.id().into(), 0),
+                    Box::new([argument.clone()]),
+                )]),
+                crate::types::EffectRowVariable::rigid(outer),
+                Box::new([crate::types::EffectInstance::new(
+                    crate::types::EffectId::new(file.id().into(), 1),
+                    Box::new([argument]),
+                )]),
+            );
+            let application = builder
+                .type_application_with_row_arguments(
+                    function,
+                    Vec::new(),
+                    vec![row],
+                    Type::Unit,
+                    node_origin.clone(),
+                )
+                .unwrap();
+            let root = builder
+                .type_abstraction(
+                    vec![(outer, Kind::EffectRow)],
+                    application,
+                    Type::Forall(Box::new([(outer, Kind::EffectRow)]), Box::new(Type::Unit)),
+                    node_origin.clone(),
+                )
+                .unwrap();
+            builder.finish(root).unwrap()
+        };
+
+        let shallow = fixture(Type::Unit);
+        let shallow_validator = Validator::new(&shallow, &[&file]);
+        shallow_validator.validate_type_scopes().unwrap();
+        let shallow_work = shallow_validator.type_work.get();
+
+        let argument = closed_argument();
+        let mut structural = crate::types::TypeWorkBudget::unbounded();
+        crate::types::charge_type_cells(&argument, &mut structural).unwrap();
+        let program = fixture(argument);
+        let measured = Validator::new(&program, &[&file]);
+        measured.validate_type_scopes().unwrap();
+        let exact = measured.type_work.get();
+        // Canonical open rows retain their known member in the tail's lacks set.
+        assert_eq!(exact - shallow_work, 3 * (structural.used() - 1));
+
+        let retained = program.nodes.len();
+        let short = Validator::new(&program, &[&file]);
+        short
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (exact - 1))
+            .unwrap();
+        assert_eq!(
+            short.validate_type_scopes().unwrap_err().reason(),
+            ValidationReason::Resource
+        );
+        assert_eq!(program.nodes.len(), retained);
+        for _ in 0..2 {
+            let retry = Validator::new(&program, &[&file]);
+            retry
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact)
+                .unwrap();
+            retry.validate_type_scopes().unwrap();
+            assert_eq!(retry.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+        }
+    }
+
+    #[test]
+    fn least_handler_output_is_iterative_for_deep_nesting() {
+        std::thread::Builder::new()
+            .name("effect-least-row-deep".to_owned())
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                const DEPTH: u32 = 4_096;
+                let file = source();
+                let node_origin = origin(&file);
+                let mut builder = crate::core::EffectCoreBuilder::with_effect_registry(Arc::new(
+                    crate::resolved::ResolvedRegistry::default(),
+                ));
+                let mut body = builder
+                    .unit(Type::Unit, node_origin.clone())
+                    .expect("deep handler seed");
+                for ordinal in 0..DEPTH {
+                    let effect_id = crate::types::EffectId::new(file.id().into(), ordinal);
+                    let effect = crate::types::EffectInstance::new(effect_id, Box::new([]));
+                    let request = builder
+                        .request(
+                            crate::types::EffectInstance::new(effect_id, Box::new([])),
+                            crate::types::OperationId::new(effect_id, 0),
+                            body,
+                            Type::Unit,
+                            EffectRow::singleton(crate::types::EffectInstance::new(
+                                effect_id,
+                                Box::new([]),
+                            )),
+                            node_origin.clone(),
+                        )
+                        .expect("deep request layer");
+                    body = builder
+                        .handler(
+                            super::super::effect::HandlerId::new(ordinal),
+                            request,
+                            effect,
+                            Vec::new(),
+                            Type::Unit,
+                            EffectRow::empty(),
+                            node_origin.clone(),
+                        )
+                        .expect("deep handler layer");
+                }
+                let program = builder.finish(body).expect("deep effect program");
+                let validator = Validator::new(&program, &[&file]);
+                assert_eq!(
+                    validator.least_handler_output(body, &HashMap::new()),
+                    Ok(EffectRow::empty())
+                );
+            })
+            .expect("deep least-row worker")
+            .join()
+            .expect("least-row analysis must stay iterative");
+    }
+
+    #[test]
+    fn wide_effect_handler_validation_is_exact_and_retryable() {
+        use crate::{core::UnvalidatedEffectProgram, elaborate::EffectElaborator};
+
+        const WIDTH: usize = 32;
+        fn fixture() -> (UnvalidatedEffectProgram, SourceFile) {
+            let operations = (0..WIDTH)
+                .map(|ordinal| format!("op{ordinal} : Unit -> Unit"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let clauses = (0..WIDTH)
+                .map(|ordinal| format!("op{ordinal} ignored => resume ()"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let directory = LinkedValidationDirectory::create();
+            let path = directory.write(
+                "wide-effect.ash",
+                &format!(
+                    "effect Wide {{\n{operations}\n}}\n\nmain : Unit -> Unit\n\
+                     main () = handle (perform Wide.op0 ()) with Wide {{\n{clauses}\n}}\n"
+                ),
+            );
+            let graph = load_module_graph(&path, &ModuleRoots::empty()).expect("wide graph");
+            let source = graph.module(graph.entry()).unwrap().source().clone();
+            let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry())
+                .expect("wide linked program");
+            let linked = validate_linked_facts_for_test(linked).expect("wide checked program");
+            let mut elaborator =
+                EffectElaborator::for_module_program(&linked).expect("effect elaborator");
+            let typed = elaborator
+                .synthesize_effect_module_program(&linked)
+                .expect("wide effect lowering");
+            (elaborator.finish(typed.node).expect("effect Core"), source)
+        }
+
+        let (program, source) = fixture();
+        let mut measured = Validator::new(&program, &[&source]);
+        measured.run_effect().expect("wide effect Core validates");
+        let exact_work = measured.type_work.get();
+        assert!(exact_work < CORE_VALIDATION_TYPE_WORK_LIMIT);
+
+        let (program, source) = fixture();
+        let mut short = Validator::new(&program, &[&source]);
+        short
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (exact_work - 1))
+            .expect("one-short precharge");
+        assert_eq!(
+            short
+                .run_effect()
+                .expect_err("one-short must reject")
+                .reason(),
+            ValidationReason::Resource,
+        );
+        assert_eq!(short.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+
+        for _ in 0..2 {
+            let (program, source) = fixture();
+            let mut retry = Validator::new(&program, &[&source]);
+            retry
+                .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - exact_work)
+                .expect("exact precharge");
+            retry.run_effect().expect("fresh exact retry");
+            assert_eq!(retry.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+        }
+    }
+
+    #[test]
+    fn effect_core_rejects_forged_local_representation_effect_metadata() {
+        use crate::elaborate::EffectElaborator;
+
+        let directory = LinkedValidationDirectory::create();
+        let path = directory.write(
+            "local-representation-effect.ash",
+            concat!(
+                "effect Ask<A> {\nask : Unit -> Unit\n}\n\n",
+                "main : Unit -> Int\n",
+                "main () = {\n",
+                "    newtype Hidden = Hidden(Unit -> Unit ! {Ask<Int>})\n",
+                "    42\n",
+                "}\n",
+            ),
+        );
+        let graph = load_module_graph(&path, &ModuleRoots::empty()).expect("effect graph");
+        let source = graph.module(graph.entry()).unwrap().source().clone();
+        let module_sources = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry())
+            .expect("effect linked program");
+        let linked = validate_linked_facts_for_test(linked).expect("effect checked program");
+        let mut elaborator =
+            EffectElaborator::for_module_program(&linked).expect("effect elaborator");
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .expect("effect lowering");
+        let mut program = elaborator.finish(typed.node).expect("effect Core");
+        drop(linked);
+        Validator::new_modules(&program, &[&source], &module_sources)
+            .expect("the canonical module relation should initialize")
+            .run_effect()
+            .expect("untampered effectful local representation should authenticate");
+        let effect = program.registry.effects()[0].id;
+        assert!(
+            Arc::get_mut(&mut program.registry)
+                .expect("the unchecked effect Core owns its registry")
+                .replace_first_lexical_representation_effect_for_core_test(
+                    crate::types::EffectId::new(effect.module(), u32::MAX),
+                )
+        );
+
+        let error = Validator::new_modules(&program, &[&source], &module_sources)
+            .expect("the canonical module relation should initialize")
+            .run_effect()
+            .expect_err("forged local representation effect metadata must reject");
+        assert_eq!(error.reason(), ValidationReason::EffectIdentity);
+        assert_eq!(error.node(), Some(program.root));
+    }
+
+    #[test]
+    fn effect_registry_rejects_each_forged_authority_class() {
+        use crate::{
+            core::effect::EffectCoreBuilder,
+            resolved::{
+                ResolvedConstructor, ResolvedEffectDeclaration, ResolvedEffectOperation,
+                ResolvedNominalType, ResolvedType, ResolvedTypeProvenance,
+                ResolvedTypeProvenanceNode,
+            },
+            types::{ConstructorId, EffectId, NominalTypeId, TypeVariableId},
+        };
+
+        #[derive(Clone, Copy)]
+        enum Mutation {
+            Canonical,
+            ParameterIdentity,
+            ParameterKind,
+            OperationIdentity,
+            OperationSpelling,
+            SignatureScope,
+            ForeignSource,
+            DuplicateEffectOwner,
+            NominalCrossOwner,
+        }
+
+        let source = SourceFile::new("effect-registry.ash", "effect Build").unwrap();
+        let foreign = SourceFile::new("foreign.ash", "effect Build").unwrap();
+        let span = source.span(ByteRange::new(0, 12).unwrap()).unwrap();
+        let foreign_span = foreign.span(ByteRange::new(0, 12).unwrap()).unwrap();
+        let module = ModuleId::from(source.id());
+        let effect = EffectId::new(module, 0);
+        let f = TypeVariableId::resolved(module, 0);
+        for mutation in [
+            Mutation::Canonical,
+            Mutation::ParameterIdentity,
+            Mutation::ParameterKind,
+            Mutation::OperationIdentity,
+            Mutation::OperationSpelling,
+            Mutation::SignatureScope,
+            Mutation::ForeignSource,
+            Mutation::DuplicateEffectOwner,
+            Mutation::NominalCrossOwner,
+        ] {
+            let mut parameters = vec![ResolvedTypeVariable {
+                id: f,
+                spelling: "F".into(),
+                kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                origin: Origin::Source(span),
+            }];
+            let mut operation = ResolvedEffectOperation {
+                id: OperationId::new(effect, 0),
+                spelling: "build".into(),
+                annotation: ResolvedType {
+                    ty: Type::Function(
+                        Box::new(Type::Unit),
+                        Box::new(Type::Application(
+                            Box::new(Type::Variable(f)),
+                            Box::new(Type::Unit),
+                        )),
+                    ),
+                    provenance: ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                },
+                origin: Origin::Source(span),
+                span,
+            };
+            match mutation {
+                Mutation::Canonical => {}
+                Mutation::ParameterIdentity => {
+                    parameters[0].id = TypeVariableId::resolved(ModuleId::new(91), 0);
+                }
+                Mutation::ParameterKind => parameters[0].kind = Kind::EffectRow,
+                Mutation::OperationIdentity => operation.id = OperationId::new(effect, 1),
+                Mutation::OperationSpelling => operation.spelling = "Build".into(),
+                Mutation::SignatureScope => {
+                    operation.annotation.ty = Type::Function(
+                        Box::new(Type::Unit),
+                        Box::new(Type::Variable(TypeVariableId::resolved(module, 9))),
+                    );
+                }
+                Mutation::ForeignSource => operation.origin = Origin::Source(foreign_span),
+                Mutation::DuplicateEffectOwner | Mutation::NominalCrossOwner => {}
+            }
+            let mut effects = vec![ResolvedEffectDeclaration {
+                id: effect,
+                public: false,
+                spelling: "Build".into(),
+                parameters: parameters.clone().into_boxed_slice(),
+                operations: vec![operation.clone()].into_boxed_slice(),
+                origin: Origin::Source(span),
+                span,
+            }];
+            if matches!(mutation, Mutation::DuplicateEffectOwner) {
+                let second = EffectId::new(module, 1);
+                operation.id = OperationId::new(second, 0);
+                operation.spelling = "more".into();
+                effects.push(ResolvedEffectDeclaration {
+                    id: second,
+                    public: false,
+                    spelling: "More".into(),
+                    parameters: parameters.clone().into_boxed_slice(),
+                    operations: vec![operation].into_boxed_slice(),
+                    origin: Origin::Source(span),
+                    span,
+                });
+            }
+            let registry = if matches!(mutation, Mutation::NominalCrossOwner) {
+                let nominal = NominalTypeId::new(module, 0);
+                let constructor = ConstructorId::new(nominal, 0);
+                crate::resolved::ResolvedRegistry::new(
+                    vec![ResolvedNominalType {
+                        id: nominal,
+                        spelling: "Box".into(),
+                        constructors: vec![constructor].into_boxed_slice(),
+                        declaration_kind: ResolvedNominalDeclarationKind::Data,
+                        representation: None,
+                        representation_provenance: None,
+                        origin: Origin::Source(span),
+                    }],
+                    vec![ResolvedConstructor {
+                        id: constructor,
+                        owner: nominal,
+                        spelling: "Box".into(),
+                        payload: Some(Type::Variable(f)),
+                        origin: Origin::Source(span),
+                    }],
+                )
+                .with_type_parameters(vec![(nominal, parameters.clone())])
+            } else {
+                crate::resolved::ResolvedRegistry::default()
+                    .with_additional_type_variables(parameters.iter().cloned())
+            }
+            .with_effects(effects);
+            let mut builder = EffectCoreBuilder::with_effect_registry(Arc::new(registry));
+            let root = builder.unit(Type::Unit, Origin::Source(span)).unwrap();
+            let program = builder.finish(root).unwrap();
+            let validator = Validator::new(&program, &[&source]);
+            let result = validator
+                .validate_registry()
+                .and_then(|mut owners| validator.validate_effect_registry(None, &mut owners));
+            if matches!(mutation, Mutation::Canonical) {
+                result.expect("canonical effect facts authenticate");
+            } else {
+                assert_eq!(result.unwrap_err().reason(), ValidationReason::Registry);
+            }
+        }
+    }
+
     fn origin(source: &SourceFile) -> Origin {
         let range = ByteRange::new(0, 2).expect("ordered range");
         Origin::Source(source.span(range).expect("source span"))
+    }
+
+    fn newtype_registry(
+        source: &SourceFile,
+    ) -> (
+        Arc<crate::resolved::ResolvedRegistry>,
+        crate::types::NominalTypeId,
+        ConstructorId,
+    ) {
+        let owner = crate::types::NominalTypeId::new(source.id(), 0);
+        let constructor = ConstructorId::new(owner, 0);
+        let node_origin = origin(source);
+        let representation_span = node_origin.primary_span();
+        let registry = crate::resolved::ResolvedRegistry::new(
+            vec![ResolvedNominalType {
+                representation_provenance: Some(ResolvedTypeProvenance::new(
+                    vec![ResolvedTypeProvenanceNode::Fact(representation_span)],
+                    0,
+                )),
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Newtype,
+                representation: Some(Type::Int),
+                id: owner,
+                spelling: "UserId".to_owned(),
+                constructors: Box::new([constructor]),
+                origin: node_origin.clone(),
+            }],
+            vec![ResolvedConstructor {
+                id: constructor,
+                owner,
+                spelling: "UserId".to_owned(),
+                payload: None,
+                origin: node_origin,
+            }],
+        )
+        .with_type_parameters(vec![(owner, Vec::new())]);
+        (Arc::new(registry), owner, constructor)
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum NewtypeRegistryTamper {
+        OrdinaryKind,
+        NominalGeneratedOrigin,
+        ConstructorGeneratedOrigin,
+        WrongShape,
+        WrongSource,
+        EmptyRange,
+        OutsideConstructor,
+        SharedNode,
+        OrphanNode,
+    }
+
+    fn tampered_newtype_registry(
+        source: &SourceFile,
+        foreign: &SourceFile,
+        tamper: NewtypeRegistryTamper,
+    ) -> Arc<crate::resolved::ResolvedRegistry> {
+        let owner = crate::types::NominalTypeId::new(source.id(), 0);
+        let constructor = ConstructorId::new(owner, 0);
+        let declaration_span = source
+            .span(ByteRange::new(0, 30).expect("declaration range"))
+            .expect("declaration span");
+        let constructor_span = source
+            .span(ByteRange::new(18, 30).expect("constructor range"))
+            .expect("constructor span");
+        let representation_span = source
+            .span(ByteRange::new(26, 29).expect("representation range"))
+            .expect("representation span");
+        let outside_constructor = source
+            .span(ByteRange::new(8, 15).expect("name range"))
+            .expect("name span");
+        let empty_span = source
+            .span(ByteRange::new(26, 26).expect("empty range"))
+            .expect("empty span");
+        let foreign_span = foreign
+            .span(ByteRange::new(0, 3).expect("foreign range"))
+            .expect("foreign span");
+        let source_origin = Origin::Source(declaration_span);
+        let generated_origin = Origin::Generated {
+            cause: Box::new(source_origin.clone()),
+            reason: crate::source::GeneratedReason::TypeChecking,
+        };
+        let (representation, provenance) = match tamper {
+            NewtypeRegistryTamper::WrongShape => (
+                Type::Int,
+                ResolvedTypeProvenance::new(
+                    vec![ResolvedTypeProvenanceNode::Tuple {
+                        span: representation_span,
+                        elements: Box::new([]),
+                    }],
+                    0,
+                ),
+            ),
+            NewtypeRegistryTamper::WrongSource => (
+                Type::Int,
+                ResolvedTypeProvenance::new(
+                    vec![ResolvedTypeProvenanceNode::Fact(foreign_span)],
+                    0,
+                ),
+            ),
+            NewtypeRegistryTamper::EmptyRange => (
+                Type::Int,
+                ResolvedTypeProvenance::new(vec![ResolvedTypeProvenanceNode::Fact(empty_span)], 0),
+            ),
+            NewtypeRegistryTamper::OutsideConstructor => (
+                Type::Int,
+                ResolvedTypeProvenance::new(
+                    vec![ResolvedTypeProvenanceNode::Fact(outside_constructor)],
+                    0,
+                ),
+            ),
+            NewtypeRegistryTamper::SharedNode => (
+                Type::Tuple(Box::new([Type::Int, Type::Int])),
+                ResolvedTypeProvenance::new(
+                    vec![
+                        ResolvedTypeProvenanceNode::Fact(representation_span),
+                        ResolvedTypeProvenanceNode::Tuple {
+                            span: representation_span,
+                            elements: Box::new([0, 0]),
+                        },
+                    ],
+                    1,
+                ),
+            ),
+            NewtypeRegistryTamper::OrphanNode => (
+                Type::Int,
+                ResolvedTypeProvenance::new(
+                    vec![
+                        ResolvedTypeProvenanceNode::Fact(representation_span),
+                        ResolvedTypeProvenanceNode::Fact(representation_span),
+                    ],
+                    0,
+                ),
+            ),
+            NewtypeRegistryTamper::OrdinaryKind
+            | NewtypeRegistryTamper::NominalGeneratedOrigin
+            | NewtypeRegistryTamper::ConstructorGeneratedOrigin => (
+                Type::Int,
+                ResolvedTypeProvenance::new(
+                    vec![ResolvedTypeProvenanceNode::Fact(representation_span)],
+                    0,
+                ),
+            ),
+        };
+        let nominal_origin = if matches!(tamper, NewtypeRegistryTamper::NominalGeneratedOrigin) {
+            generated_origin.clone()
+        } else {
+            source_origin.clone()
+        };
+        let constructor_origin =
+            if matches!(tamper, NewtypeRegistryTamper::ConstructorGeneratedOrigin) {
+                generated_origin
+            } else {
+                Origin::Source(constructor_span)
+            };
+        let declaration_kind = if matches!(tamper, NewtypeRegistryTamper::OrdinaryKind) {
+            ResolvedNominalDeclarationKind::Data
+        } else {
+            ResolvedNominalDeclarationKind::Newtype
+        };
+        Arc::new(
+            crate::resolved::ResolvedRegistry::new(
+                vec![ResolvedNominalType {
+                    id: owner,
+                    declaration_kind,
+                    spelling: "Wrapped".to_owned(),
+                    constructors: Box::new([constructor]),
+                    representation: Some(representation),
+                    representation_provenance: Some(provenance),
+                    origin: nominal_origin,
+                }],
+                vec![ResolvedConstructor {
+                    id: constructor,
+                    owner,
+                    spelling: "Wrapped".to_owned(),
+                    payload: None,
+                    origin: constructor_origin,
+                }],
+            )
+            .with_type_parameters(vec![(owner, Vec::new())]),
+        )
+    }
+
+    fn unit_program_with_registry(
+        source: &SourceFile,
+        registry: Arc<crate::resolved::ResolvedRegistry>,
+    ) -> UnvalidatedProgram {
+        let mut builder = CoreBuilder::with_registry(registry);
+        let root = builder
+            .unit(
+                Type::Unit,
+                Origin::Source(
+                    source
+                        .span(ByteRange::new(0, 30).expect("root range"))
+                        .expect("root span"),
+                ),
+            )
+            .expect("unit root should fit");
+        builder.finish(root).expect("unit root should finish")
     }
 
     fn range_origin(source: &SourceFile, start: u32, end: u32) -> Origin {
@@ -11314,12 +20317,18 @@ mod tests {
             crate::resolved::ResolvedRegistry::new(
                 vec![
                     crate::resolved::ResolvedNominalType {
+                        representation_provenance: None,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                        representation: None,
                         id: first_nominal,
                         spelling: "Shared".into(),
                         constructors: vec![first_constructor].into_boxed_slice(),
                         origin: range_origin(first_source, 0, 13),
                     },
                     crate::resolved::ResolvedNominalType {
+                        representation_provenance: None,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                        representation: None,
                         id: second_nominal,
                         spelling: "Shared".into(),
                         constructors: vec![second_constructor].into_boxed_slice(),
@@ -11516,6 +20525,9 @@ mod tests {
     ) {
         (
             crate::resolved::ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: owner,
                 spelling: spelling.into(),
                 constructors: Box::new([]),
@@ -11552,6 +20564,7 @@ mod tests {
             nodes: vec![
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: binder.ty().clone(),
                     origin: Some(origin(source)),
                     kind: PureExprKind::Variable(super::super::variable::VariableNode::new(
@@ -11560,6 +20573,7 @@ mod tests {
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Function(
                         Box::new(binder.ty().clone()),
                         Box::new(binder.ty().clone()),
@@ -11615,6 +20629,7 @@ mod tests {
             nodes: vec![
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: scrutinee_type.clone(),
                     origin: Some(origin(source)),
                     kind: PureExprKind::Variable(super::super::variable::VariableNode::new(
@@ -11623,12 +20638,14 @@ mod tests {
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Unit,
                     origin: Some(origin(source)),
                     kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Unit,
                     origin: Some(origin(source)),
                     kind: PureExprKind::Computation(PureComputation::Match(
@@ -11644,6 +20661,7 @@ mod tests {
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Function(Box::new(scrutinee_type), Box::new(Type::Unit)),
                     origin: Some(origin(source)),
                     kind: PureExprKind::Value(PureValue::Function(
@@ -11685,6 +20703,7 @@ mod tests {
                 arena,
                 nodes: vec![StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Unit,
                     origin: Some(generated_origin(&file, depth)),
                     kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
@@ -11728,6 +20747,7 @@ mod tests {
                     arena,
                     nodes: vec![StoredNode {
                         dialect: DialectId::PURE,
+                        effects: (),
                         ty: function_type(5_000),
                         origin: Some(origin(&file)),
                         kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
@@ -11754,6 +20774,7 @@ mod tests {
             arena,
             nodes: vec![StoredNode {
                 dialect: DialectId::PURE,
+                effects: (),
                 ty: oversized,
                 origin: Some(origin(&file)),
                 kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
@@ -11846,6 +20867,7 @@ mod tests {
             arena,
             nodes: vec![StoredNode {
                 dialect: DialectId::PURE,
+                effects: (),
                 ty: Type::Tuple(
                     vec![Type::Int; CORE_VALIDATION_TYPE_WORK_LIMIT + 1].into_boxed_slice(),
                 ),
@@ -11898,6 +20920,7 @@ mod tests {
             arena,
             nodes: vec![StoredNode {
                 dialect: DialectId::PURE,
+                effects: (),
                 ty: Type::Unit,
                 origin: Some(origin.clone()),
                 kind: PureExprKind::Computation(PureComputation::Match(
@@ -11948,6 +20971,7 @@ mod tests {
             arena,
             nodes: vec![StoredNode {
                 dialect: DialectId::PURE,
+                effects: (),
                 ty: Type::Forall(parameters, Box::new(Type::Unit)),
                 origin: Some(origin(&file)),
                 kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
@@ -11972,12 +20996,14 @@ mod tests {
             nodes: vec![
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Variable(parameter),
                     origin: Some(origin(&file)),
                     kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Forall(
                         vec![type_parameter(parameter)].into_boxed_slice(),
                         Box::new(Type::Variable(parameter)),
@@ -12020,6 +21046,7 @@ mod tests {
             .collect::<Vec<_>>();
         let mut nodes = vec![StoredNode {
             dialect: DialectId::PURE,
+            effects: (),
             ty: Type::Unit,
             origin: Some(origin.clone()),
             kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
@@ -12027,6 +21054,7 @@ mod tests {
         for (index, parameter) in parameter_ids.iter().copied().enumerate() {
             nodes.push(StoredNode {
                 dialect: DialectId::PURE,
+                effects: (),
                 ty: Type::Unit,
                 origin: Some(origin.clone()),
                 kind: PureExprKind::Computation(PureComputation::TypeApplication(
@@ -12041,6 +21069,7 @@ mod tests {
         let root = NodeId::new(arena, u32::try_from(WIDTH + 1).expect("root node identity"));
         nodes.push(StoredNode {
             dialect: DialectId::PURE,
+            effects: (),
             ty: Type::Forall(
                 type_parameters(parameter_ids.iter().copied()).into_boxed_slice(),
                 Box::new(Type::Unit),
@@ -12102,12 +21131,14 @@ mod tests {
             nodes: vec![
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Variable(parameter),
                     origin: Some(origin.clone()),
                     kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: scheme.clone(),
                     origin: Some(origin.clone()),
                     kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
@@ -12119,6 +21150,7 @@ mod tests {
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Forall(
                         vec![type_parameter(outer_parameter)].into_boxed_slice(),
                         Box::new(Type::Unit),
@@ -12133,6 +21165,7 @@ mod tests {
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: scheme,
                     origin: Some(origin.clone()),
                     kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
@@ -12144,6 +21177,7 @@ mod tests {
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Tuple(vec![Type::Unit, Type::Unit].into_boxed_slice()),
                     origin: Some(origin),
                     kind: PureExprKind::Computation(PureComputation::Tuple(
@@ -12175,6 +21209,7 @@ mod tests {
             arena,
             nodes: vec![StoredNode {
                 dialect: DialectId::PURE,
+                effects: (),
                 ty: Type::Unit,
                 origin: Some(origin(&file)),
                 kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
@@ -12214,12 +21249,14 @@ mod tests {
             nodes: vec![
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Unit,
                     origin: Some(origin.clone()),
                     kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Forall(
                         vec![type_parameter(parameter)].into_boxed_slice(),
                         Box::new(Type::Unit),
@@ -12234,6 +21271,7 @@ mod tests {
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Unit,
                     origin: Some(origin),
                     kind: PureExprKind::Computation(PureComputation::TypeApplication(
@@ -12325,12 +21363,14 @@ mod tests {
             nodes: vec![
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Unit,
                     origin: Some(origin.clone()),
                     kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Forall(
                         vec![type_parameter(parameter)].into_boxed_slice(),
                         Box::new(Type::Unit),
@@ -12345,6 +21385,7 @@ mod tests {
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Unit,
                     origin: Some(origin),
                     kind: PureExprKind::Computation(PureComputation::TypeApplication(
@@ -12435,6 +21476,9 @@ mod tests {
             .collect();
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![crate::resolved::ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: owner,
                 spelling: "Wide".into(),
                 constructors: vec![constructor].into_boxed_slice(),
@@ -12469,6 +21513,7 @@ mod tests {
             arena,
             nodes: vec![StoredNode {
                 dialect: DialectId::PURE,
+                effects: (),
                 ty: Type::Unit,
                 origin: Some(node_origin),
                 kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
@@ -12531,18 +21576,21 @@ mod tests {
             nodes: vec![
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Unit,
                     origin: Some(origin.clone()),
                     kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Unit,
                     origin: Some(origin.clone()),
                     kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: scheme.clone(),
                     origin: Some(origin.clone()),
                     kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
@@ -12554,6 +21602,7 @@ mod tests {
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: scheme,
                     origin: Some(origin.clone()),
                     kind: PureExprKind::Computation(PureComputation::TypeAbstraction(
@@ -12565,6 +21614,7 @@ mod tests {
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Unit,
                     origin: Some(origin.clone()),
                     kind: PureExprKind::Computation(PureComputation::TypeApplication(
@@ -12576,6 +21626,7 @@ mod tests {
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Unit,
                     origin: Some(origin.clone()),
                     kind: PureExprKind::Computation(PureComputation::TypeApplication(
@@ -12587,6 +21638,7 @@ mod tests {
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Tuple(vec![Type::Unit, Type::Unit].into_boxed_slice()),
                     origin: Some(origin),
                     kind: PureExprKind::Computation(PureComputation::Tuple(
@@ -12613,6 +21665,9 @@ mod tests {
             .collect::<Vec<_>>()
             .into_boxed_slice();
         let owner = crate::resolved::ResolvedNominalType {
+            representation_provenance: None,
+            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             id: nominal,
             spelling: "Wide".into(),
             constructors,
@@ -12649,6 +21704,9 @@ mod tests {
             .collect::<Vec<_>>();
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![crate::resolved::ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: nominal,
                 spelling: "Wide".into(),
                 constructors: constructors.clone().into_boxed_slice(),
@@ -12745,6 +21803,9 @@ mod tests {
             );
             let registry = crate::resolved::ResolvedRegistry::new(
                 vec![crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: nominal,
                     spelling: "Holder".into(),
                     constructors: Box::new([constructor]),
@@ -12888,6 +21949,9 @@ mod tests {
             let parameter = crate::types::TypeVariableId::new(0);
             let registry = crate::resolved::ResolvedRegistry::new(
                 vec![crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: owner,
                     spelling: "Holder".into(),
                     constructors: Box::new([constructor]),
@@ -12929,7 +21993,8 @@ mod tests {
                     .expect("registry payload fixture source");
 
                 let (exact_program, owner, parameter) = program(&file);
-                let exact_owners = HashMap::from([(parameter, owner)]);
+                let exact_owners =
+                    HashMap::from([(parameter, RegistryParameterOwner::Nominal(owner))]);
                 let exact = Validator::new(&exact_program, &[&file]);
                 exact
                     .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - EXACT_WORK)
@@ -12945,7 +22010,8 @@ mod tests {
                 assert_eq!(exact.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
 
                 let (short_program, owner, parameter) = program(&file);
-                let short_owners = HashMap::from([(parameter, owner)]);
+                let short_owners =
+                    HashMap::from([(parameter, RegistryParameterOwner::Nominal(owner))]);
                 let short = Validator::new(&short_program, &[&file]);
                 short
                     .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - (EXACT_WORK - 1))
@@ -12972,6 +22038,9 @@ mod tests {
         let parameter = crate::types::TypeVariableId::new(0);
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![crate::resolved::ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: owner,
                 spelling: "Holder".into(),
                 constructors: Box::new([]),
@@ -12998,7 +22067,7 @@ mod tests {
             root: NodeId::new(arena, 0),
         };
         let validator = Validator::new(&program, &[&file]);
-        let parameter_owners = HashMap::from([(parameter, owner)]);
+        let parameter_owners = HashMap::from([(parameter, RegistryParameterOwner::Nominal(owner))]);
         let payload = Type::Application(Box::new(Type::Variable(parameter)), Box::new(Type::Int));
 
         assert_eq!(
@@ -13024,18 +22093,27 @@ mod tests {
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![
                 crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: pair,
                     spelling: "Pair".into(),
                     constructors: Box::new([]),
                     origin: origin(&file),
                 },
                 crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: higher,
                     spelling: "Higher".into(),
                     constructors: Box::new([]),
                     origin: origin(&file),
                 },
                 crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: owner,
                     spelling: "Use".into(),
                     constructors: Box::new([]),
@@ -13082,8 +22160,14 @@ mod tests {
             root: NodeId::new(arena, 0),
         };
         let validator = Validator::new(&program, &[&file]);
-        let parameter_owners =
-            HashMap::from([(left, pair), (right, pair), (constructor_parameter, higher)]);
+        let parameter_owners = HashMap::from([
+            (left, RegistryParameterOwner::Nominal(pair)),
+            (right, RegistryParameterOwner::Nominal(pair)),
+            (
+                constructor_parameter,
+                RegistryParameterOwner::Nominal(higher),
+            ),
+        ]);
         let partial_pair = Type::Application(Box::new(Type::Nominal(pair)), Box::new(Type::Int));
         let payload = Type::Application(Box::new(Type::Nominal(higher)), Box::new(partial_pair));
 
@@ -13105,6 +22189,9 @@ mod tests {
         let parameter = crate::types::TypeVariableId::new(0);
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![crate::resolved::ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: owner,
                 spelling: "Holder".into(),
                 constructors: Box::new([]),
@@ -13134,7 +22221,7 @@ mod tests {
             root: NodeId::new(arena, 0),
         };
         let validator = Validator::new(&program, &[&file]);
-        let parameter_owners = HashMap::from([(parameter, owner)]);
+        let parameter_owners = HashMap::from([(parameter, RegistryParameterOwner::Nominal(owner))]);
         let payload = Type::Application(Box::new(Type::Variable(parameter)), Box::new(Type::Int));
 
         assert_eq!(
@@ -13342,6 +22429,9 @@ mod tests {
         let malformed_constructor = NodeId::new(arena, 4);
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![crate::resolved::ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: nominal,
                 spelling: "Wide".into(),
                 constructors: vec![constructor_id].into_boxed_slice(),
@@ -13358,6 +22448,7 @@ mod tests {
             nodes: vec![
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: Type::Bool,
                     origin: Some(node_origin.clone()),
                     kind: PureExprKind::Value(PureValue::Boolean(
@@ -13366,6 +22457,7 @@ mod tests {
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: function_type,
                     origin: Some(node_origin.clone()),
                     kind: PureExprKind::Value(PureValue::Function(
@@ -13374,6 +22466,7 @@ mod tests {
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: constructor_type,
                     origin: Some(node_origin.clone()),
                     kind: PureExprKind::Value(PureValue::Constructor(
@@ -13382,6 +22475,7 @@ mod tests {
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: malformed_function_type,
                     origin: Some(node_origin.clone()),
                     kind: PureExprKind::Value(PureValue::Function(
@@ -13393,6 +22487,7 @@ mod tests {
                 },
                 StoredNode {
                     dialect: DialectId::PURE,
+                    effects: (),
                     ty: malformed_constructor_type,
                     origin: Some(node_origin),
                     kind: PureExprKind::Value(PureValue::Constructor(
@@ -13488,12 +22583,18 @@ mod tests {
         let registry = crate::resolved::ResolvedRegistry::new(
             vec![
                 crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: monomorphic,
                     spelling: "Mono".into(),
                     constructors: vec![mono_nullary, mono_payload].into_boxed_slice(),
                     origin: node_origin.clone(),
                 },
                 crate::resolved::ResolvedNominalType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: parameterized,
                     spelling: "Poly".into(),
                     constructors: vec![poly_nullary, poly_payload].into_boxed_slice(),
@@ -13549,6 +22650,7 @@ mod tests {
             .chain(&malformed)
             .map(|(constructor, ty)| StoredNode {
                 dialect: DialectId::PURE,
+                effects: (),
                 ty: ty.clone(),
                 origin: Some(node_origin.clone()),
                 kind: PureExprKind::Value(PureValue::Constructor(
@@ -13610,6 +22712,9 @@ mod tests {
                 let constructor_node = NodeId::new(arena, 2);
                 let registry = crate::resolved::ResolvedRegistry::new(
                     vec![crate::resolved::ResolvedNominalType {
+                        representation_provenance: None,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                        representation: None,
                         id: nominal,
                         spelling: "Deep".into(),
                         constructors: vec![constructor].into_boxed_slice(),
@@ -13633,6 +22738,7 @@ mod tests {
                     nodes: vec![
                         StoredNode {
                             dialect: DialectId::PURE,
+                            effects: (),
                             ty: function_type(DEPTH),
                             origin: Some(node_origin.clone()),
                             kind: PureExprKind::Value(PureValue::Unit(
@@ -13641,6 +22747,7 @@ mod tests {
                         },
                         StoredNode {
                             dialect: DialectId::PURE,
+                            effects: (),
                             ty: Type::Function(
                                 Box::new(function_type(DEPTH)),
                                 Box::new(function_type(DEPTH)),
@@ -13660,6 +22767,7 @@ mod tests {
                         },
                         StoredNode {
                             dialect: DialectId::PURE,
+                            effects: (),
                             ty: Type::Function(
                                 Box::new(function_type(DEPTH)),
                                 Box::new(Type::Nominal(nominal)),
@@ -13724,6 +22832,7 @@ mod tests {
                     nodes: vec![
                         StoredNode {
                             dialect: DialectId::PURE,
+                            effects: (),
                             ty: Type::Forall(
                                 vec![type_parameter(parameter)].into_boxed_slice(),
                                 Box::new(Type::Variable(parameter)),
@@ -13735,6 +22844,7 @@ mod tests {
                         },
                         StoredNode {
                             dialect: DialectId::PURE,
+                            effects: (),
                             ty: argument.clone(),
                             origin: Some(node_origin),
                             kind: PureExprKind::Computation(PureComputation::TypeApplication(
@@ -13800,6 +22910,7 @@ mod tests {
                     nodes: vec![
                         StoredNode {
                             dialect: DialectId::PURE,
+                            effects: (),
                             ty: deep,
                             origin: Some(node_origin.clone()),
                             kind: PureExprKind::Value(PureValue::Unit(
@@ -13808,6 +22919,7 @@ mod tests {
                         },
                         StoredNode {
                             dialect: DialectId::PURE,
+                            effects: (),
                             ty: Type::Unit,
                             origin: Some(node_origin.clone()),
                             kind: PureExprKind::Value(PureValue::Unit(
@@ -13816,6 +22928,7 @@ mod tests {
                         },
                         StoredNode {
                             dialect: DialectId::PURE,
+                            effects: (),
                             ty: Type::Unit,
                             origin: Some(node_origin.clone()),
                             kind: PureExprKind::Computation(PureComputation::Match(
@@ -13903,6 +23016,7 @@ mod tests {
                     nodes: vec![
                         StoredNode {
                             dialect: DialectId::PURE,
+                            effects: (),
                             ty: deep,
                             origin: Some(node_origin.clone()),
                             kind: PureExprKind::Value(PureValue::Unit(
@@ -13911,6 +23025,7 @@ mod tests {
                         },
                         StoredNode {
                             dialect: DialectId::PURE,
+                            effects: (),
                             ty: Type::Unit,
                             origin: Some(node_origin.clone()),
                             kind: PureExprKind::Value(PureValue::Unit(
@@ -13919,6 +23034,7 @@ mod tests {
                         },
                         StoredNode {
                             dialect: DialectId::PURE,
+                            effects: (),
                             ty: Type::Unit,
                             origin: Some(node_origin.clone()),
                             kind: PureExprKind::Computation(PureComputation::Match(
@@ -13970,6 +23086,9 @@ mod tests {
                 let registry = crate::resolved::ResolvedRegistry::new(
                     vec![
                         crate::resolved::ResolvedNominalType {
+                            representation_provenance: None,
+                            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                            representation: None,
                             id: owner,
                             spelling: "Deep".into(),
                             constructors: vec![constructor].into_boxed_slice(),
@@ -14022,6 +23141,7 @@ mod tests {
                     arena,
                     nodes: vec![StoredNode {
                         dialect: DialectId::PURE,
+                        effects: (),
                         ty: Type::Unit,
                         origin: Some(node_origin),
                         kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
@@ -14062,6 +23182,9 @@ mod tests {
                 let registry = crate::resolved::ResolvedRegistry::new(
                     vec![
                         crate::resolved::ResolvedNominalType {
+                            representation_provenance: None,
+                            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                            representation: None,
                             id: owner,
                             spelling: "Deep".into(),
                             constructors: vec![constructor].into_boxed_slice(),
@@ -14110,6 +23233,7 @@ mod tests {
                     arena,
                     nodes: vec![StoredNode {
                         dialect: DialectId::PURE,
+                        effects: (),
                         ty: Type::Unit,
                         origin: Some(node_origin),
                         kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
@@ -14143,6 +23267,495 @@ mod tests {
 
         let error = validate(program, &[&file]).expect_err("foreign dialect");
         assert_eq!(error.reason(), ValidationReason::DialectMembership);
+    }
+
+    #[test]
+    fn independent_validation_rejects_a_conversion_without_a_canonical_relation() {
+        let file = source();
+        let owner = crate::types::NominalTypeId::new(file.id(), 0);
+        let mut builder = CoreBuilder::new();
+        let child = builder
+            .unit(Type::Unit, origin(&file))
+            .expect("the conversion child should fit");
+        let root = builder
+            .newtype_conversion(
+                owner,
+                NewtypeConversionDirection::Wrap,
+                child,
+                Type::Unit,
+                origin(&file),
+            )
+            .expect("the unchecked conversion carrier should fit");
+
+        let error = validate(
+            builder.finish(root).expect("the conversion should finish"),
+            &[&file],
+        )
+        .expect_err("a conversion without a registry relation must not validate");
+        assert_eq!(error.reason(), ValidationReason::NewtypeConversion);
+        assert_eq!(error.node(), Some(root));
+    }
+
+    #[test]
+    fn both_registry_validators_reject_newtype_provenance_tampering() {
+        for tamper in [
+            NewtypeRegistryTamper::OrdinaryKind,
+            NewtypeRegistryTamper::NominalGeneratedOrigin,
+            NewtypeRegistryTamper::ConstructorGeneratedOrigin,
+            NewtypeRegistryTamper::WrongShape,
+            NewtypeRegistryTamper::WrongSource,
+            NewtypeRegistryTamper::EmptyRange,
+            NewtypeRegistryTamper::OutsideConstructor,
+            NewtypeRegistryTamper::SharedNode,
+            NewtypeRegistryTamper::OrphanNode,
+        ] {
+            let source = SourceFile::new(
+                "newtype-registry-tamper.ash",
+                "newtype Wrapped = Wrapped(Int)",
+            )
+            .expect("test source");
+            let foreign = SourceFile::new("foreign.ash", "Int").expect("foreign source");
+
+            let registry = tampered_newtype_registry(&source, &foreign, tamper);
+            let error = validate(
+                unit_program_with_registry(&source, registry),
+                &[&source, &foreign],
+            )
+            .expect_err("single-source Core must reject the tampered canonical fact");
+            assert_eq!(error.reason(), ValidationReason::Registry, "{tamper:?}");
+            assert_eq!(error.node(), None, "{tamper:?}");
+
+            let registry = tampered_newtype_registry(&source, &foreign, tamper);
+            let owner_module = registry
+                .nominals()
+                .first()
+                .expect("the tampered registry should retain its owner")
+                .id
+                .module();
+            let error = validate_modules(
+                unit_program_with_registry(&source, registry),
+                &[&source, &foreign],
+                &[(owner_module, source.id())],
+            )
+            .expect_err("module Core must reject the tampered canonical fact");
+            assert_eq!(error.reason(), ValidationReason::Registry, "{tamper:?}");
+            assert_eq!(error.node(), None, "{tamper:?}");
+        }
+    }
+
+    #[test]
+    fn linked_newtype_conversion_rejects_each_independent_relation_tamper() {
+        #[derive(Clone, Copy, Debug)]
+        enum Case {
+            Direction,
+            OrdinaryOwner,
+            MissingArgument,
+            OverApplication,
+            WrongArgumentKind,
+            ParameterOrder,
+            FreshBinderSubstitution,
+            ChildType,
+            ResultType,
+            ForeignOrigin,
+        }
+
+        for case in [
+            Case::Direction,
+            Case::OrdinaryOwner,
+            Case::MissingArgument,
+            Case::OverApplication,
+            Case::WrongArgumentKind,
+            Case::ParameterOrder,
+            Case::FreshBinderSubstitution,
+            Case::ChildType,
+            Case::ResultType,
+            Case::ForeignOrigin,
+        ] {
+            let mut fixture = LinkedCoreValidationFixture::compile(
+                "",
+                concat!(
+                    "type Carrier = Carrier(Int)\n",
+                    "type Higher<A> = Higher(A)\n",
+                    "newtype Box<A, B> = Box((A, B))\n",
+                    "main : Unit -> Box<Int, Bool>\n",
+                    "main () = Box((42, true))\n",
+                ),
+                &[],
+            );
+            let conversion_index = fixture
+                .program
+                .nodes
+                .iter()
+                .position(|node| {
+                    matches!(
+                        node.kind,
+                        PureExprKind::Computation(PureComputation::NewtypeConversion(_))
+                    )
+                })
+                .expect("the parameterized constructor should lower one conversion");
+            let PureExprKind::Computation(PureComputation::NewtypeConversion(conversion)) =
+                fixture.program.nodes[conversion_index].kind
+            else {
+                unreachable!("the selected node is a conversion")
+            };
+            let owner = conversion.owner();
+            let child = conversion.child();
+            let ordinary = fixture
+                .program
+                .registry
+                .nominals()
+                .iter()
+                .find(|nominal| nominal.spelling == "Carrier")
+                .expect("the ordinary owner should remain registered")
+                .id;
+            let higher = fixture
+                .program
+                .registry
+                .nominals()
+                .iter()
+                .find(|nominal| nominal.spelling == "Higher")
+                .expect("the higher-kinded owner should remain registered")
+                .id;
+            match case {
+                Case::Direction => {
+                    fixture.program.nodes[conversion_index].kind =
+                        PureExprKind::Computation(PureComputation::NewtypeConversion(
+                            super::super::NewtypeConversionNode::new(
+                                owner,
+                                NewtypeConversionDirection::Unwrap,
+                                child,
+                            ),
+                        ));
+                }
+                Case::OrdinaryOwner => {
+                    fixture.program.nodes[conversion_index].kind =
+                        PureExprKind::Computation(PureComputation::NewtypeConversion(
+                            super::super::NewtypeConversionNode::new(
+                                ordinary,
+                                NewtypeConversionDirection::Wrap,
+                                child,
+                            ),
+                        ));
+                }
+                Case::MissingArgument => {
+                    fixture.program.nodes[conversion_index].ty = Type::Nominal(owner);
+                }
+                Case::OverApplication => {
+                    let original = std::mem::replace(
+                        &mut fixture.program.nodes[conversion_index].ty,
+                        Type::Unit,
+                    );
+                    fixture.program.nodes[conversion_index].ty =
+                        Type::Application(Box::new(original), Box::new(Type::Unit));
+                }
+                Case::WrongArgumentKind => {
+                    fixture.program.nodes[conversion_index].ty = Type::Application(
+                        Box::new(Type::Application(
+                            Box::new(Type::Nominal(owner)),
+                            Box::new(Type::Nominal(higher)),
+                        )),
+                        Box::new(Type::Bool),
+                    );
+                }
+                Case::ParameterOrder => {
+                    let Type::Application(function, second) =
+                        fixture.program.nodes[conversion_index].ty.clone()
+                    else {
+                        panic!("Box should retain its second applied argument");
+                    };
+                    let Type::Application(_, first) = *function else {
+                        panic!("Box should retain its first applied argument");
+                    };
+                    fixture.program.nodes[conversion_index].ty = Type::Application(
+                        Box::new(Type::Application(Box::new(Type::Nominal(owner)), second)),
+                        first,
+                    );
+                }
+                Case::FreshBinderSubstitution => {
+                    fixture.program.nodes[conversion_index].ty = Type::Application(
+                        Box::new(Type::Application(
+                            Box::new(Type::Nominal(owner)),
+                            Box::new(Type::Int),
+                        )),
+                        Box::new(Type::Bool),
+                    );
+                }
+                Case::ChildType => {
+                    fixture.program.nodes[child.index().expect("child index")].ty = Type::Bool;
+                }
+                Case::ResultType => {
+                    fixture.program.nodes[conversion_index].ty = Type::Bool;
+                }
+                Case::ForeignOrigin => {
+                    let foreign = SourceFile::new("foreign-conversion.ash", "Box")
+                        .expect("foreign conversion source");
+                    fixture.program.nodes[conversion_index].origin = Some(Origin::Source(
+                        foreign
+                            .span(ByteRange::new(0, 3).expect("foreign range"))
+                            .expect("foreign span"),
+                    ));
+                }
+            }
+
+            let conversion_id = NodeId::new(
+                fixture.program.arena,
+                u32::try_from(conversion_index).expect("conversion index fits"),
+            );
+            let error = fixture
+                .validate()
+                .expect_err("each relation mutation must reject before evaluation");
+            let (reason, node) = match case {
+                Case::MissingArgument | Case::OverApplication | Case::WrongArgumentKind => {
+                    (ValidationReason::NodeType, conversion_id)
+                }
+                Case::ChildType => (ValidationReason::NodeType, child),
+                Case::ForeignOrigin => (ValidationReason::Provenance, conversion_id),
+                Case::Direction
+                | Case::OrdinaryOwner
+                | Case::ParameterOrder
+                | Case::FreshBinderSubstitution
+                | Case::ResultType => (ValidationReason::NewtypeConversion, conversion_id),
+            };
+            assert_eq!(error.reason(), reason, "{case:?}");
+            assert_eq!(error.node(), Some(node), "{case:?}");
+        }
+    }
+
+    #[test]
+    fn parameterized_newtype_validation_is_exact_atomic_and_retryable() {
+        fn fixture() -> LinkedCoreValidationFixture {
+            LinkedCoreValidationFixture::compile(
+                "",
+                concat!(
+                    "newtype Box<Left, Right> = Box((Left, Right))\n",
+                    "main : Unit -> Box<Int, Bool>\n",
+                    "main () = Box((42, true))\n",
+                ),
+                &[],
+            )
+        }
+
+        fn attempt(initial_type_work: usize) -> ConsumingModuleValidationAttempt {
+            let LinkedCoreValidationFixture {
+                directory,
+                graph,
+                program,
+                module_sources,
+                globals: _,
+            } = fixture();
+            let sources = graph
+                .modules()
+                .iter()
+                .map(|module| module.source())
+                .collect::<Vec<_>>();
+            let attempt = validate_modules_with_initial_type_work_for_test(
+                program,
+                &sources,
+                &module_sources,
+                initial_type_work,
+            );
+            drop(graph);
+            drop(directory);
+            attempt
+        }
+
+        let measured = fixture();
+        let sources = linked_fixture_sources(&measured);
+        let mut validator =
+            Validator::new_modules(&measured.program, &sources, &measured.module_sources)
+                .expect("the canonical module/source relation should initialize");
+        run_module_validation_phases_for_test(&mut validator)
+            .expect("the canonical parameterized conversion should validate");
+        let exact_work = validator.type_work.get();
+        // P argument slots + (P + 1) spine inspections + P replacement slots
+        // + P parameter/argument rows = 4P + 1.
+        const NEWTYPE_PARAMETER_WORK: usize = 4 * 2 + 1;
+        // All fixed registry and node validation for this concrete fixture is
+        // independent of the conversion's parameter-width term.
+        const VALIDATION_ENVELOPE_WORK: usize = 518;
+        const EXACT_WORK: usize = VALIDATION_ENVELOPE_WORK + NEWTYPE_PARAMETER_WORK;
+        assert_eq!(
+            validator.newtype_conversion_parameter_work.get(),
+            NEWTYPE_PARAMETER_WORK,
+            "two arguments require 2P carriers, P row traversal, and P+1 spine inspection",
+        );
+        assert_eq!(exact_work, EXACT_WORK);
+        assert!(exact_work < CORE_VALIDATION_TYPE_WORK_LIMIT);
+        drop(validator);
+        drop(measured);
+
+        let exact = attempt(CORE_VALIDATION_TYPE_WORK_LIMIT - exact_work);
+        assert!(exact.result.is_ok());
+        assert_eq!(exact.type_work, CORE_VALIDATION_TYPE_WORK_LIMIT);
+
+        let one_short = attempt(CORE_VALIDATION_TYPE_WORK_LIMIT - (exact_work - 1));
+        let error = one_short
+            .result
+            .expect_err("one missing unit must reject before publication");
+        assert_eq!(error.reason(), ValidationReason::Resource);
+        assert_eq!(one_short.type_work, CORE_VALIDATION_TYPE_WORK_LIMIT);
+
+        let retry = attempt(CORE_VALIDATION_TYPE_WORK_LIMIT - exact_work);
+        assert!(retry.result.is_ok());
+        assert_eq!(retry.type_work, CORE_VALIDATION_TYPE_WORK_LIMIT);
+    }
+
+    #[test]
+    fn independent_validation_rejects_newtypes_in_the_ordinary_constructor_route() {
+        let file = source();
+        let (registry, owner, constructor) = newtype_registry(&file);
+        let mut builder = CoreBuilder::with_registry(registry);
+        let root = builder
+            .constructor(constructor, Type::Nominal(owner), origin(&file))
+            .expect("the forged ordinary constructor should fit unchecked Core");
+
+        let error = validate(
+            builder.finish(root).expect("the constructor should finish"),
+            &[&file],
+        )
+        .expect_err("a newtype must never validate as an ordinary constructor");
+        assert_eq!(error.reason(), ValidationReason::Registry);
+        assert_eq!(error.node(), Some(root));
+    }
+
+    #[test]
+    fn independent_validation_rejects_newtypes_in_ordinary_constructor_patterns() {
+        let file = source();
+        let (registry, owner, constructor) = newtype_registry(&file);
+        let node_origin = origin(&file);
+        let mut builder = CoreBuilder::with_registry(registry);
+        let parameter = builder
+            .binder(Type::Nominal(owner), node_origin.clone())
+            .expect("the nominal parameter should fit");
+        let scrutinee = builder
+            .variable(parameter.id(), Type::Nominal(owner), node_origin.clone())
+            .expect("the scrutinee should fit");
+        let body = builder
+            .unit(Type::Unit, node_origin.clone())
+            .expect("the arm body should fit");
+        let pattern = CorePattern::new(
+            Type::Nominal(owner),
+            node_origin.clone(),
+            CorePatternKind::Constructor {
+                constructor,
+                payload: None,
+            },
+        );
+        let matched = builder
+            .match_expression(
+                scrutinee,
+                vec![super::super::CoreMatchArm::new(
+                    pattern,
+                    body,
+                    node_origin.clone(),
+                )],
+                Type::Unit,
+                node_origin.clone(),
+            )
+            .expect("the forged constructor pattern should fit unchecked Core");
+        let root = builder
+            .function(
+                parameter,
+                matched,
+                Type::Function(Box::new(Type::Nominal(owner)), Box::new(Type::Unit)),
+                node_origin,
+            )
+            .expect("the enclosing function should fit");
+
+        let error = validate(
+            builder.finish(root).expect("the function should finish"),
+            &[&file],
+        )
+        .expect_err("a newtype must never validate as an ordinary constructor pattern");
+        assert_eq!(error.reason(), ValidationReason::Pattern);
+        assert_eq!(error.node(), Some(matched));
+    }
+
+    #[test]
+    fn canonical_newtype_conversion_chains_validate_and_reject_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("newtype-conversion-validation-deep".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let file = source();
+                let (registry, owner, _) = newtype_registry(&file);
+                let mut builder = CoreBuilder::with_registry(registry);
+                let mut root = builder
+                    .integer(
+                        Integer::parse_decimal("0").expect("zero should parse"),
+                        Type::Int,
+                        origin(&file),
+                    )
+                    .expect("the conversion leaf should fit");
+                for index in 0..DEPTH {
+                    root = builder
+                        .newtype_conversion(
+                            owner,
+                            if index % 2 == 0 {
+                                NewtypeConversionDirection::Wrap
+                            } else {
+                                NewtypeConversionDirection::Unwrap
+                            },
+                            root,
+                            if index % 2 == 0 {
+                                Type::Nominal(owner)
+                            } else {
+                                Type::Int
+                            },
+                            origin(&file),
+                        )
+                        .expect("the unchecked conversion chain should fit");
+                }
+                let accepted = validate(
+                    builder.finish(root).expect("the conversion should finish"),
+                    &[&file],
+                )
+                .expect("the canonical conversion chain should validate");
+                drop(accepted);
+
+                let (registry, owner, _) = newtype_registry(&file);
+                let mut builder = CoreBuilder::with_registry(registry);
+                let mut root = builder
+                    .integer(
+                        Integer::parse_decimal("0").expect("zero should parse"),
+                        Type::Int,
+                        origin(&file),
+                    )
+                    .expect("the conversion leaf should fit");
+                for index in 0..DEPTH {
+                    let direction = if index + 1 == DEPTH || index % 2 == 0 {
+                        NewtypeConversionDirection::Wrap
+                    } else {
+                        NewtypeConversionDirection::Unwrap
+                    };
+                    root = builder
+                        .newtype_conversion(
+                            owner,
+                            direction,
+                            root,
+                            if index % 2 == 0 {
+                                Type::Nominal(owner)
+                            } else {
+                                Type::Int
+                            },
+                            origin(&file),
+                        )
+                        .expect("the rejected conversion chain should fit");
+                }
+                let error = validate(
+                    builder
+                        .finish(root)
+                        .expect("the rejected chain should finish"),
+                    &[&file],
+                )
+                .expect_err("the late wrong direction must reject");
+                assert_eq!(error.reason(), ValidationReason::NewtypeConversion);
+            })
+            .expect("the conversion validation thread should start")
+            .join()
+            .expect("accepted and rejected conversion teardown must fit a small stack");
     }
 
     #[test]
@@ -14184,12 +23797,14 @@ mod tests {
         let foreign_arena = super::super::dialect::ArenaId::new(103);
         let unit = StoredNode {
             dialect: DialectId::PURE,
+            effects: (),
             ty: Type::Unit,
             origin: Some(origin(&file)),
             kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
         };
         let function = StoredNode {
             dialect: DialectId::PURE,
+            effects: (),
             ty: Type::Function(Box::new(Type::Unit), Box::new(Type::Unit)),
             origin: Some(origin(&file)),
             kind: PureExprKind::Value(PureValue::Function(
@@ -14219,6 +23834,7 @@ mod tests {
         let arena = super::super::dialect::ArenaId::new(101);
         let stored = StoredNode {
             dialect: DialectId::PURE,
+            effects: (),
             ty: Type::Function(Box::new(Type::Unit), Box::new(Type::Unit)),
             origin: Some(origin(&file)),
             kind: PureExprKind::Value(PureValue::Function(
@@ -14241,6 +23857,7 @@ mod tests {
 
         let cyclic = StoredNode {
             dialect: DialectId::PURE,
+            effects: (),
             ty: Type::Function(Box::new(Type::Unit), Box::new(Type::Unit)),
             origin: Some(origin(&file)),
             kind: PureExprKind::Value(PureValue::Function(
@@ -14277,6 +23894,7 @@ mod tests {
         let parameter = TypedBinder::new(arena, BinderId::new(1), Type::Unit, node_origin.clone());
         let group = StoredNode {
             dialect: DialectId::PURE,
+            effects: (),
             ty: Type::Unit,
             origin: Some(node_origin.clone()),
             kind: PureExprKind::Computation(PureComputation::RecursiveBind(
@@ -14291,6 +23909,7 @@ mod tests {
         };
         let function = StoredNode {
             dialect: DialectId::PURE,
+            effects: (),
             ty: function_type,
             origin: Some(node_origin.clone()),
             kind: PureExprKind::Value(PureValue::Function(
@@ -14299,6 +23918,7 @@ mod tests {
         };
         let unit = StoredNode {
             dialect: DialectId::PURE,
+            effects: (),
             ty: Type::Unit,
             origin: Some(node_origin),
             kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),

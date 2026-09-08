@@ -14,7 +14,7 @@ use ash::{
         ResolvedDefinitionKind, ResolvedExprKind, ResolvedLocalDeclaration, ResolvedModule,
         ResolvedPattern, ResolvedPatternKind, ResolvedTermName,
     },
-    types::{Kind, Type},
+    types::{Kind, NominalTypeId, Type},
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
@@ -65,6 +65,28 @@ fn occurrence_binder(occurrence: &ash::resolved::ResolvedOccurrence) -> BinderId
     occurrence
         .global_binder()
         .expect("the fixture occurrence should resolve to an ordinary binder")
+}
+
+#[test]
+fn lexical_nominal_owner_class_is_distinct_and_preserves_module_coordinates() {
+    let program = resolve_valid("main : Unit -> Unit\nmain () = ()\n");
+    let module_owned = NominalTypeId::new(program.module(), 0);
+    let lexical = NominalTypeId::lexical(program.module(), 0);
+
+    assert_ne!(module_owned, lexical);
+    assert_ne!(module_owned.cmp(&lexical), std::cmp::Ordering::Equal);
+    assert!(!module_owned.is_lexical());
+    assert!(lexical.is_lexical());
+    assert_eq!(module_owned.module(), lexical.module());
+    assert_eq!(module_owned.declaration(), lexical.declaration());
+    assert_eq!(
+        Type::Nominal(module_owned).to_string(),
+        format!("<type:{}:0>", program.module())
+    );
+    assert_eq!(
+        Type::Nominal(lexical).to_string(),
+        format!("<local-type:{}:0>", program.module())
+    );
 }
 
 #[test]
@@ -1303,6 +1325,37 @@ fn omitted_kinds_and_implicit_lists_preserve_exact_type_kinds_and_order() {
     );
 
     check_module(program).expect("all predecessor-compatible binder forms should check");
+}
+
+#[test]
+fn omitted_global_binder_rejects_mixed_type_and_row_tail_roles() {
+    let error = resolve_error(concat!(
+        "mixed : (Unit -> Unit ! {| R}) -> R\n",
+        "mixed action = ()\n",
+    ));
+
+    assert_eq!(error.reason, ResolveReason::TypeKind);
+}
+
+#[test]
+fn omitted_global_binders_preserve_row_first_shared_encounter_order() {
+    let program = resolve_valid(concat!(
+        "row_first : (Unit -> Unit ! {| R}) -> A\n",
+        "row_first action = action\n",
+    ));
+    let ResolvedDefinitionKind::Equational(row_first) = &program.definitions()[0].kind else {
+        panic!("expected the row-first equational global");
+    };
+
+    assert_eq!(
+        row_first
+            .interface
+            .type_parameters
+            .iter()
+            .map(|parameter| (parameter.spelling.as_str(), &parameter.kind))
+            .collect::<Vec<_>>(),
+        [("R", &Kind::EffectRow), ("A", &Kind::Type)]
+    );
 }
 
 #[test]

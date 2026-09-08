@@ -6,8 +6,13 @@ version = 4
 name = "ash"
 version = "0.0.0"
 dependencies = [
+ "ash-native-buffer",
  "num-bigint",
 ]
+
+[[package]]
+name = "ash-native-buffer"
+version = "0.0.0"
 
 [[package]]
 name = "autocfg"

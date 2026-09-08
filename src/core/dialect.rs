@@ -27,7 +27,10 @@ use super::{
     literal::{BooleanNode, IntegerNode, UnitNode},
     primitive::{Primitive, PrimitiveNode},
     recursion::{RecursiveBindingMember, RecursiveBindingNode},
-    type_ops::{TypeAbstractionNode, TypeApplicationNode},
+    type_ops::{
+        LocalNominalScopeNode, NewtypeConversionDirection, NewtypeConversionNode,
+        TypeAbstractionNode, TypeApplicationNode,
+    },
     variable::{TypedBinder, VariableNode},
 };
 use crate::{
@@ -39,8 +42,9 @@ use crate::{
     resolved::{BinderId, ResolvedRegistry},
     source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
     types::{
-        IterativeTypeOwner, Kind, Type, TypeVariableId, TypeWorkBudget,
-        charge_kinded_type_parameters, clone_kinded_type_parameters_with_budget,
+        EffectRow, EffectRowVariable, IterativeTypeOwner, Kind, Type, TypeVariableId,
+        TypeWorkBudget, charge_effect_row_cells, charge_kinded_type_parameters,
+        clone_effect_row_with_budget, clone_kinded_type_parameters_with_budget,
         clone_type_with_budget, discard_type_iteratively, replace_type_iteratively,
         same_type_with_budget, substitute_type_variables_with,
     },
@@ -64,6 +68,7 @@ impl Drop for MethodEvidenceMethod {
 #[derive(Debug)]
 #[cfg_attr(test, derive(Clone))]
 pub(crate) struct MethodEvidenceCatalog {
+    lexical_owners: Vec<MethodEvidenceLexicalOwner>,
     methods: Vec<MethodEvidenceMethod>,
     implementation_owners: Vec<MethodEvidenceImplementationOwner>,
     domains: Vec<MethodEvidenceDomain>,
@@ -71,6 +76,18 @@ pub(crate) struct MethodEvidenceCatalog {
     adapters: Vec<MethodEvidenceAdapter>,
     concrete_sources: Vec<MethodEvidenceConcreteSource>,
     expectations: Vec<MethodEvidenceExpectation>,
+}
+
+#[derive(Debug)]
+#[cfg_attr(test, derive(Clone))]
+pub(crate) struct MethodEvidenceLexicalOwner {
+    pub(crate) acquisition: Option<crate::resolved::ResourceAcquisition>,
+    pub(crate) source_parameters: Box<[TypeVariableId]>,
+    pub(crate) source: crate::interface::LexicalEvidenceId,
+    pub(crate) method: MethodId,
+    pub(crate) binder: BinderId,
+    pub(crate) application: InterfaceApplication,
+    pub(crate) captures: Box<[BinderId]>,
 }
 
 impl Default for MethodEvidenceCatalog {
@@ -131,12 +148,37 @@ pub(crate) enum MethodEvidenceOwner {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MethodEvidenceExpectedRole {
-    ImplementationOwner { owner: usize },
-    Domain { domain: usize },
-    Application { domain: usize, producer: usize },
-    Instantiation { producer: usize },
-    Adapter { adapter: usize },
-    AdapterEdge { adapter: usize, ordinal: usize },
+    LexicalCaptureUse {
+        owner: usize,
+        ordinal: usize,
+    },
+    LexicalOwner {
+        owner: usize,
+    },
+    LexicalUse {
+        owner: usize,
+        selection_node: EvidenceNodeId,
+    },
+    ImplementationOwner {
+        owner: usize,
+    },
+    Domain {
+        domain: usize,
+    },
+    Application {
+        domain: usize,
+        producer: usize,
+    },
+    Instantiation {
+        producer: usize,
+    },
+    Adapter {
+        adapter: usize,
+    },
+    AdapterEdge {
+        adapter: usize,
+        ordinal: usize,
+    },
 }
 
 #[derive(Debug)]
@@ -212,8 +254,15 @@ impl Drop for MethodEvidenceAdapter {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MethodEvidenceProducer {
-    Abstract { requirement: RequirementId },
-    Adapter { implementation: ImplMethodId },
+    Lexical {
+        source: crate::interface::LexicalEvidenceId,
+    },
+    Abstract {
+        requirement: RequirementId,
+    },
+    Adapter {
+        implementation: ImplMethodId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -284,7 +333,8 @@ impl MethodEvidenceCatalog {
     fn lookup_work(&self) -> Option<usize> {
         self.methods
             .len()
-            .checked_add(self.implementation_owners.len())
+            .checked_add(self.lexical_owners.len())
+            .and_then(|work| work.checked_add(self.implementation_owners.len()))
             .and_then(|work| work.checked_add(self.domains.len()))
             .and_then(|work| work.checked_add(self.occurrences.len()))
             .and_then(|work| work.checked_add(self.adapters.len()))
@@ -314,6 +364,7 @@ impl MethodEvidenceCatalog {
         expectations: Vec<MethodEvidenceExpectation>,
     ) -> Self {
         Self {
+            lexical_owners: Vec::new(),
             methods,
             implementation_owners,
             domains,
@@ -332,6 +383,24 @@ impl MethodEvidenceCatalog {
             .binary_search_by_key(&implementation, |owner| owner.implementation)
             .ok()
             .and_then(|index| self.implementation_owners.get(index))
+    }
+
+    pub(crate) fn set_lexical_owners(&mut self, owners: Vec<MethodEvidenceLexicalOwner>) {
+        self.lexical_owners = owners;
+    }
+
+    pub(crate) fn lexical_owners(&self) -> &[MethodEvidenceLexicalOwner] {
+        &self.lexical_owners
+    }
+
+    pub(crate) fn lexical_owner(
+        &self,
+        source: crate::interface::LexicalEvidenceId,
+        method: MethodId,
+    ) -> Option<&MethodEvidenceLexicalOwner> {
+        self.lexical_owners
+            .iter()
+            .find(|owner| owner.source == source && owner.method == method)
     }
 
     pub(crate) fn implementation_owners(&self) -> &[MethodEvidenceImplementationOwner] {
@@ -576,6 +645,72 @@ pub(super) fn method_evidence_anchor_matches_expectation(
     type_work.charge(1)?;
     match (expected.role, role) {
         (
+            MethodEvidenceExpectedRole::LexicalCaptureUse { owner, ordinal },
+            MethodEvidenceAnchorRole::LexicalCaptureUse {
+                owner: actual_owner,
+                ordinal: actual_ordinal,
+            },
+        ) => {
+            let Some(expected) = catalog.lexical_owners.get(owner) else {
+                return Ok(false);
+            };
+            Ok(owner == actual_owner
+                && ordinal == actual_ordinal
+                && ordinal < expected.captures.len()
+                && requirement.is_none()
+                && same_interface_application_with_budget(
+                    &expected.application,
+                    application,
+                    type_work,
+                )?)
+        }
+        (
+            MethodEvidenceExpectedRole::LexicalOwner { owner: index },
+            MethodEvidenceAnchorRole::LexicalOwner { source, binder },
+        ) => {
+            let Some(expected) = catalog.lexical_owners.get(index) else {
+                return Ok(false);
+            };
+            Ok(expected.source == source
+                && expected.binder == binder
+                && requirement.is_none()
+                && same_interface_application_with_budget(
+                    &expected.application,
+                    application,
+                    type_work,
+                )?)
+        }
+        (
+            MethodEvidenceExpectedRole::LexicalUse {
+                owner: index,
+                selection_node,
+            },
+            MethodEvidenceAnchorRole::LexicalUse {
+                source,
+                binder,
+                selection_node: actual,
+            },
+        ) => {
+            let Some(expected_owner) = catalog.lexical_owners.get(index) else {
+                return Ok(false);
+            };
+            let Some(occurrence) = expected
+                .occurrence
+                .and_then(|slot| catalog.occurrence(slot))
+            else {
+                return Ok(false);
+            };
+            Ok(expected_owner.source == source
+                && expected_owner.binder == binder
+                && selection_node == actual
+                && matches!(occurrence.selection.node(selection_node), Some(EvidenceNode::Lexical { source: selected, methods }) if selected == source && methods.contains(&expected.method))
+                && same_interface_application_with_budget(
+                    &expected_owner.application,
+                    application,
+                    type_work,
+                )?)
+        }
+        (
             MethodEvidenceExpectedRole::ImplementationOwner {
                 owner: expected_owner,
             },
@@ -659,6 +794,13 @@ pub(super) fn method_evidence_anchor_matches_expectation(
                 }
                 Some(MethodEvidenceExpectedRole::Adapter { .. }) => {
                     binder.is_none() && requirement.is_none()
+                }
+                Some(MethodEvidenceExpectedRole::LexicalOwner { owner }) => {
+                    catalog
+                        .lexical_owners
+                        .get(owner)
+                        .is_some_and(|owner| binder == Some(owner.binder))
+                        && requirement.is_none()
                 }
                 _ => false,
             };
@@ -791,6 +933,7 @@ fn method_evidence_adapter_application_matches(
             expected,
             &replacements.0,
             |cells| type_work.charge(cells),
+            || (),
         )?);
         if !same_type_with_budget(&expected, actual, type_work)? {
             return Ok(false);
@@ -847,6 +990,13 @@ pub(super) fn method_evidence_producer_matches(
         actual,
     ) {
         (
+            Some(MethodEvidenceExpectedRole::LexicalOwner { owner }),
+            MethodEvidenceProducer::Lexical { source },
+        ) => catalog
+            .lexical_owners
+            .get(owner)
+            .is_some_and(|owner| owner.source == source),
+        (
             Some(MethodEvidenceExpectedRole::Domain { domain }),
             MethodEvidenceProducer::Abstract { requirement },
         ) => catalog
@@ -870,7 +1020,9 @@ fn selection_contains_method(
     type_work: &mut TypeWorkBudget,
 ) -> Result<bool, ()> {
     selection_contains(selection, type_work, |node| match node {
-        EvidenceNode::Abstract { methods, .. } => methods.contains(&method),
+        EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. } => {
+            methods.contains(&method)
+        }
         EvidenceNode::Implementation { methods, .. } => {
             methods.iter().any(|candidate| candidate.method() == method)
         }
@@ -902,7 +1054,9 @@ fn selection_contains(
             return Ok(false);
         };
         let method_count = match node {
-            EvidenceNode::Abstract { methods, .. } => methods.len(),
+            EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. } => {
+                methods.len()
+            }
             EvidenceNode::Implementation { methods, .. } => methods.len(),
         };
         type_work.charge(method_count)?;
@@ -920,6 +1074,19 @@ fn selection_contains(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MethodEvidenceAnchorRole {
+    LexicalCaptureUse {
+        owner: usize,
+        ordinal: usize,
+    },
+    LexicalOwner {
+        source: crate::interface::LexicalEvidenceId,
+        binder: BinderId,
+    },
+    LexicalUse {
+        source: crate::interface::LexicalEvidenceId,
+        binder: BinderId,
+        selection_node: EvidenceNodeId,
+    },
     ImplementationOwner {
         implementation: ImplMethodId,
         binder: BinderId,
@@ -953,6 +1120,9 @@ const fn method_evidence_anchor_identity_work(role: MethodEvidenceAnchorRole) ->
         MethodEvidenceAnchorRole::Adapter { .. } => 1,
         MethodEvidenceAnchorRole::AdapterEdge { .. } => 4,
         MethodEvidenceAnchorRole::ImplementationOwner { .. }
+        | MethodEvidenceAnchorRole::LexicalCaptureUse { .. }
+        | MethodEvidenceAnchorRole::LexicalOwner { .. }
+        | MethodEvidenceAnchorRole::LexicalUse { .. }
         | MethodEvidenceAnchorRole::Domain { .. }
         | MethodEvidenceAnchorRole::Application { .. }
         | MethodEvidenceAnchorRole::Instantiation { .. } => 0,
@@ -1067,23 +1237,40 @@ const fn checked_add_one(value: u32) -> Option<u32> {
 
 /// A typed expression in the pure Ash dialect.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TypedExpr {
+pub struct CoreTypedExpr<F: CoreOperationFamily> {
     /// The structural result type.
     pub ty: Type,
+    /// The exact effects requested while evaluating this node.
+    pub(super) effects: F::Effects,
     /// Causal source provenance.
     pub origin: Origin,
     /// The selected pure feature payload.
-    pub kind: PureExprKind,
+    pub kind: F::Kind,
 }
 
-impl TypedExpr {
+/// One typed node in the pure Core dialect.
+pub type TypedExpr = CoreTypedExpr<PureOperationFamily>;
+
+impl<F: CoreOperationFamily> CoreTypedExpr<F> {
+    /// Returns this node's authenticated computation row.
+    #[must_use]
+    pub fn effects(&self) -> &EffectRow {
+        F::effect_row(&self.effects)
+    }
+
     /// Consumes a standalone expression and dismantles its structural type
     /// without following the host call stack.
     pub fn discard_iteratively(self) {
-        let Self { ty, origin, kind } = self;
+        let Self {
+            ty,
+            effects,
+            origin,
+            kind,
+        } = self;
         discard_type_iteratively(ty);
+        F::discard_effects(effects);
         discard_origin_iteratively(origin);
-        discard_pure_expr_kind_metadata(kind);
+        F::discard_metadata(kind);
     }
 }
 
@@ -1118,7 +1305,10 @@ impl PureExprKind {
                 PureComputation::Primitive(node) => fixed_child_count(node.children()),
                 PureComputation::Tuple(node) => node.elements().len(),
                 PureComputation::Match(node) => node.arms().len() + 1,
-                PureComputation::TypeAbstraction(_) | PureComputation::TypeApplication(_) => 1,
+                PureComputation::NewtypeConversion(_)
+                | PureComputation::LocalNominalScope(_)
+                | PureComputation::TypeAbstraction(_)
+                | PureComputation::TypeApplication(_) => 1,
             },
         }
     }
@@ -1153,6 +1343,12 @@ impl PureExprKind {
                 }
                 PureComputation::TypeApplication(node) => {
                     fixed_child_at([Some(node.function())], index)
+                }
+                PureComputation::NewtypeConversion(node) => {
+                    fixed_child_at([Some(node.child())], index)
+                }
+                PureComputation::LocalNominalScope(node) => {
+                    fixed_child_at([Some(node.body())], index)
                 }
             },
         }
@@ -1197,56 +1393,200 @@ pub enum PureComputation {
     Tuple(TupleNode),
     /// Structured first-match selection.
     Match(MatchNode),
+    /// An explicit erased module-newtype representation conversion.
+    NewtypeConversion(NewtypeConversionNode),
+    /// A runtime-erased lexical nominal scope.
+    LocalNominalScope(LocalNominalScopeNode),
     /// An explicit erased rank-1 type abstraction.
     TypeAbstraction(TypeAbstractionNode),
     /// An explicit erased rank-1 type application.
     TypeApplication(TypeApplicationNode),
 }
 
+/// The pure dialect's deliberately uninhabited operation family.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PureOperation {}
+
+#[doc(hidden)]
+pub enum OperationTypeMetadata<'a> {
+    Type(&'a Type),
+    Pattern(&'a CorePattern),
+}
+
+/// Selects the operation payload admitted by one Core dialect while reusing
+/// the common arena, program, validation, and transform substrate.
+pub trait CoreOperationFamily: Clone + Copy + fmt::Debug + Eq + PartialEq + 'static {
+    /// The dialect-specific node payload.
+    type Kind: Clone + fmt::Debug + Eq + PartialEq;
+    /// The dialect-specific operation family.
+    type Operation;
+    /// Per-node computation-row storage. Pure Core selects a zero-sized carrier.
+    type Effects: Clone + fmt::Debug + Eq + PartialEq;
+
+    /// Stable dialect membership name.
+    const DIALECT_NAME: &'static str;
+    /// Whether every node in this dialect must have an empty effect row.
+    const REQUIRES_EMPTY_ROWS: bool;
+    /// Whether function types may retain a nonempty computation codomain row.
+    const ALLOWS_EFFECTFUL_TYPES: bool;
+
+    /// Embeds an ordinary Core feature.
+    fn from_pure(kind: PureExprKind) -> Self::Kind;
+    /// Embeds one dialect operation.
+    fn from_operation(operation: Self::Operation) -> Self::Kind;
+    /// Borrows an ordinary Core feature when present.
+    fn pure(kind: &Self::Kind) -> Option<&PureExprKind>;
+    /// Mutably borrows an ordinary Core feature when present.
+    fn pure_mut(kind: &mut Self::Kind) -> Option<&mut PureExprKind>;
+    /// Visits binders owned by dialect operations at their enclosing node.
+    fn visit_operation_binders<'a>(_kind: &'a Self::Kind, _visit: &mut dyn FnMut(&'a TypedBinder)) {
+    }
+    /// Visits type-bearing metadata owned by dialect operations.
+    fn visit_operation_type_metadata<'a>(
+        _kind: &'a Self::Kind,
+        _visit: &mut dyn FnMut(OperationTypeMetadata<'a>),
+    ) {
+    }
+    /// Rewrites operation-owned types through admitted, fallible callbacks.
+    fn rewrite_operation_type_metadata(
+        _kind: &mut Self::Kind,
+        _rewrite: &mut dyn FnMut(&Type) -> Result<Type, BuildError>,
+        _charge: &mut dyn FnMut(usize) -> Result<(), BuildError>,
+    ) -> Result<(), BuildError> {
+        Ok(())
+    }
+    /// Stores an admitted row in this family's per-node carrier.
+    fn store_effects(effects: EffectRow) -> Self::Effects;
+    /// Borrows the semantic row represented by the family carrier.
+    fn effect_row(effects: &Self::Effects) -> &EffectRow;
+    /// Disposes one family row carrier.
+    fn discard_effects(effects: Self::Effects);
+    /// Returns the number of graph edges in this payload.
+    fn child_count(kind: &Self::Kind) -> usize;
+    /// Returns operation-owned edges beyond the one node-priced primary edge.
+    fn operation_extra_edge_count(_kind: &Self::Kind) -> usize {
+        0
+    }
+    /// Returns one graph edge in deterministic order.
+    fn child_at(kind: &Self::Kind, index: usize) -> Option<NodeId>;
+    /// Iteratively disposes owned payload metadata.
+    fn discard_metadata(kind: Self::Kind);
+}
+
+/// Selects the pure dialect's uninhabited operation family.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PureOperationFamily;
+
+impl CoreOperationFamily for PureOperationFamily {
+    type Kind = PureExprKind;
+    type Operation = PureOperation;
+    type Effects = ();
+
+    const DIALECT_NAME: &'static str = AshPureDialect::NAME;
+    const REQUIRES_EMPTY_ROWS: bool = true;
+    const ALLOWS_EFFECTFUL_TYPES: bool = false;
+
+    fn from_pure(kind: PureExprKind) -> Self::Kind {
+        kind
+    }
+
+    fn from_operation(operation: Self::Operation) -> Self::Kind {
+        match operation {}
+    }
+
+    fn pure(kind: &Self::Kind) -> Option<&PureExprKind> {
+        Some(kind)
+    }
+
+    fn pure_mut(kind: &mut Self::Kind) -> Option<&mut PureExprKind> {
+        Some(kind)
+    }
+
+    fn store_effects(effects: EffectRow) -> Self::Effects {
+        debug_assert!(effects.is_empty());
+        drop(effects);
+    }
+
+    fn effect_row(_: &Self::Effects) -> &EffectRow {
+        static EMPTY: OnceLock<EffectRow> = OnceLock::new();
+        EMPTY.get_or_init(EffectRow::empty)
+    }
+
+    fn discard_effects(_: Self::Effects) {}
+
+    fn child_count(kind: &Self::Kind) -> usize {
+        kind.child_count()
+    }
+
+    fn child_at(kind: &Self::Kind, index: usize) -> Option<NodeId> {
+        kind.child_at(index)
+    }
+
+    fn discard_metadata(kind: Self::Kind) {
+        discard_pure_expr_kind_metadata(kind);
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct DialectId(&'static str);
 
 impl DialectId {
+    #[cfg(test)]
     pub(super) const PURE: Self = Self(AshPureDialect::NAME);
+
+    pub(super) const fn named(name: &'static str) -> Self {
+        Self(name)
+    }
 
     #[cfg(test)]
     pub(super) const FOREIGN: Self = Self("test.foreign");
 }
 
 #[derive(Debug)]
-pub(super) struct StoredNode {
+pub(super) struct StoredNode<F: CoreOperationFamily> {
     pub(super) dialect: DialectId,
     pub(super) ty: Type,
+    pub(super) effects: F::Effects,
     pub(super) origin: Option<Origin>,
-    pub(super) kind: PureExprKind,
+    pub(super) kind: F::Kind,
 }
 
 /// An unchecked Core arena which must cross [`super::validate()`] before use.
 #[derive(Debug)]
-pub struct UnvalidatedProgram {
+pub struct UnvalidatedCoreProgram<F: CoreOperationFamily> {
     pub(super) registry: Arc<ResolvedRegistry>,
     pub(super) method_evidence: Arc<MethodEvidenceCatalog>,
     pub(super) method_evidence_anchors: Box<[MethodEvidenceAnchor]>,
     pub(super) arena: ArenaId,
-    pub(super) nodes: Vec<StoredNode>,
+    pub(super) nodes: Vec<StoredNode<F>>,
     pub(super) root: NodeId,
 }
 
-type UnvalidatedParts = (
+type UnvalidatedParts<F> = (
     Arc<ResolvedRegistry>,
     Arc<MethodEvidenceCatalog>,
     Box<[MethodEvidenceAnchor]>,
     ArenaId,
-    Vec<StoredNode>,
+    Vec<StoredNode<F>>,
     NodeId,
 );
 
+/// An unchecked pure Core arena.
+pub type UnvalidatedProgram = UnvalidatedCoreProgram<PureOperationFamily>;
+
 impl UnvalidatedProgram {
+    #[cfg(test)]
+    pub(crate) fn expression_kinds_for_test(&self) -> impl Iterator<Item = &PureExprKind> {
+        self.nodes.iter().map(|node| &node.kind)
+    }
+}
+
+impl<F: CoreOperationFamily> UnvalidatedCoreProgram<F> {
     pub(super) fn discard_iteratively(mut self) {
         self.discard_contents();
     }
 
-    pub(super) fn into_parts(mut self) -> UnvalidatedParts {
+    pub(super) fn into_parts(mut self) -> UnvalidatedParts<F> {
         let registry = std::mem::replace(&mut self.registry, Arc::clone(empty_registry()));
         let method_evidence = std::mem::replace(
             &mut self.method_evidence,
@@ -1267,39 +1607,11 @@ impl UnvalidatedProgram {
     fn discard_contents(&mut self) {
         for stored in std::mem::take(&mut self.nodes) {
             discard_type_iteratively(stored.ty);
+            F::discard_effects(stored.effects);
             if let Some(origin) = stored.origin {
                 discard_origin_iteratively(origin);
             }
-            match stored.kind {
-                PureExprKind::Value(PureValue::Function(function)) => {
-                    function.discard_metadata();
-                }
-                PureExprKind::Computation(PureComputation::Bind(binding)) => {
-                    binding.discard_metadata();
-                }
-                PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
-                    group.discard_metadata();
-                }
-                PureExprKind::Computation(PureComputation::Match(match_node)) => {
-                    match_node.discard_metadata();
-                }
-                PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
-                    operation.discard_metadata();
-                }
-                PureExprKind::Value(
-                    PureValue::Integer(_)
-                    | PureValue::Boolean(_)
-                    | PureValue::Unit(_)
-                    | PureValue::Constructor(_),
-                )
-                | PureExprKind::Variable(_)
-                | PureExprKind::Computation(
-                    PureComputation::Apply(_)
-                    | PureComputation::Primitive(_)
-                    | PureComputation::Tuple(_)
-                    | PureComputation::TypeAbstraction(_),
-                ) => {}
-            }
+            F::discard_metadata(stored.kind);
         }
         let registry = std::mem::replace(&mut self.registry, Arc::clone(empty_registry()));
         if let Ok(registry) = Arc::try_unwrap(registry) {
@@ -1313,7 +1625,7 @@ impl UnvalidatedProgram {
     }
 }
 
-impl Drop for UnvalidatedProgram {
+impl<F: CoreOperationFamily> Drop for UnvalidatedCoreProgram<F> {
     fn drop(&mut self) {
         self.discard_contents();
     }
@@ -1321,22 +1633,25 @@ impl Drop for UnvalidatedProgram {
 
 /// A pure Core arena whose graph, types, scope, dialect, and provenance hold.
 #[derive(Debug)]
-pub struct PureProgram {
+pub struct CoreProgram<F: CoreOperationFamily> {
     registry: Arc<ResolvedRegistry>,
     method_evidence: Arc<MethodEvidenceCatalog>,
     method_evidence_anchors: Box<[MethodEvidenceAnchor]>,
     arena: ArenaId,
-    nodes: Box<[TypedExpr]>,
+    nodes: Box<[CoreTypedExpr<F>]>,
     root: NodeId,
 }
 
-impl PureProgram {
+/// A validated pure Core arena.
+pub type PureProgram = CoreProgram<PureOperationFamily>;
+
+impl<F: CoreOperationFamily> CoreProgram<F> {
     pub(super) fn new(
         registry: Arc<ResolvedRegistry>,
         method_evidence: Arc<MethodEvidenceCatalog>,
         method_evidence_anchors: Box<[MethodEvidenceAnchor]>,
         arena: ArenaId,
-        nodes: Vec<TypedExpr>,
+        nodes: Vec<CoreTypedExpr<F>>,
         root: NodeId,
     ) -> Self {
         Self {
@@ -1357,7 +1672,7 @@ impl PureProgram {
 
     /// Returns a node when the arena-local handle belongs to this program.
     #[must_use]
-    pub fn node(&self, id: NodeId) -> Option<&TypedExpr> {
+    pub fn node(&self, id: NodeId) -> Option<&CoreTypedExpr<F>> {
         if id.arena() != self.arena {
             return None;
         }
@@ -1387,42 +1702,14 @@ impl PureProgram {
     }
 }
 
-impl Drop for PureProgram {
+impl<F: CoreOperationFamily> Drop for CoreProgram<F> {
     fn drop(&mut self) {
         let nodes = std::mem::take(&mut self.nodes);
         for typed in nodes {
             discard_type_iteratively(typed.ty);
+            F::discard_effects(typed.effects);
             discard_origin_iteratively(typed.origin);
-            match typed.kind {
-                PureExprKind::Value(PureValue::Function(function)) => {
-                    function.discard_metadata();
-                }
-                PureExprKind::Computation(PureComputation::Bind(binding)) => {
-                    binding.discard_metadata();
-                }
-                PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
-                    group.discard_metadata();
-                }
-                PureExprKind::Computation(PureComputation::Match(match_node)) => {
-                    match_node.discard_metadata();
-                }
-                PureExprKind::Computation(PureComputation::TypeApplication(operation)) => {
-                    operation.discard_metadata();
-                }
-                PureExprKind::Value(
-                    PureValue::Integer(_)
-                    | PureValue::Boolean(_)
-                    | PureValue::Unit(_)
-                    | PureValue::Constructor(_),
-                )
-                | PureExprKind::Variable(_)
-                | PureExprKind::Computation(
-                    PureComputation::Apply(_)
-                    | PureComputation::Primitive(_)
-                    | PureComputation::Tuple(_)
-                    | PureComputation::TypeAbstraction(_),
-                ) => {}
-            }
+            F::discard_metadata(typed.kind);
         }
         let registry = std::mem::replace(&mut self.registry, Arc::clone(empty_registry()));
         if let Ok(registry) = Arc::try_unwrap(registry) {
@@ -1438,15 +1725,18 @@ impl Drop for PureProgram {
 
 /// The capability required by all later Core consumers.
 #[derive(Debug)]
-pub struct ValidatedProgram(Arc<PureProgram>);
+pub struct ValidatedCoreProgram<F: CoreOperationFamily>(Arc<CoreProgram<F>>);
 
-impl ValidatedProgram {
-    pub(super) fn new(program: PureProgram) -> Self {
+/// The validated pure Core capability.
+pub type ValidatedProgram = ValidatedCoreProgram<PureOperationFamily>;
+
+impl<F: CoreOperationFamily> ValidatedCoreProgram<F> {
+    pub(super) fn new(program: CoreProgram<F>) -> Self {
         Self(Arc::new(program))
     }
 
     #[allow(dead_code, reason = "reserved for the validated evaluator boundary")]
-    pub(crate) fn shared(&self) -> Arc<PureProgram> {
+    pub(crate) fn shared(&self) -> Arc<CoreProgram<F>> {
         Arc::clone(&self.0)
     }
 
@@ -1458,7 +1748,7 @@ impl ValidatedProgram {
 
     /// Returns a validated node when the handle belongs to this program.
     #[must_use]
-    pub fn node(&self, id: NodeId) -> Option<&TypedExpr> {
+    pub fn node(&self, id: NodeId) -> Option<&CoreTypedExpr<F>> {
         self.0.node(id)
     }
 
@@ -1481,6 +1771,31 @@ impl ValidatedProgram {
     pub(crate) fn method_evidence_anchors(&self) -> &[MethodEvidenceAnchor] {
         self.0.method_evidence_anchors()
     }
+}
+
+#[cfg(test)]
+pub(crate) fn forge_validated_for_test(program: UnvalidatedProgram) -> ValidatedProgram {
+    let (registry, method_evidence, method_evidence_anchors, arena, stored_nodes, root) =
+        program.into_parts();
+    let nodes = stored_nodes
+        .into_iter()
+        .map(|stored| TypedExpr {
+            ty: stored.ty,
+            effects: stored.effects,
+            origin: stored
+                .origin
+                .expect("a forged validated test node must retain provenance"),
+            kind: stored.kind,
+        })
+        .collect();
+    ValidatedProgram::new(PureProgram::new(
+        registry,
+        method_evidence,
+        method_evidence_anchors,
+        arena,
+        nodes,
+        root,
+    ))
 }
 
 /// Why unchecked Core construction could not be represented.
@@ -1550,27 +1865,49 @@ impl Error for BuildError {}
 /// Builds an unchecked pure Core arena with checked identity allocation.
 #[derive(Debug)]
 #[must_use]
-pub struct CoreBuilder {
+pub struct CoreBuilder<F: CoreOperationFamily = PureOperationFamily> {
     registry: Arc<ResolvedRegistry>,
     method_evidence: Arc<MethodEvidenceCatalog>,
     method_evidence_anchors: Vec<MethodEvidenceAnchor>,
     consumed_method_evidence: Vec<bool>,
     arena: Option<ArenaId>,
-    nodes: Vec<StoredNode>,
+    pub(super) nodes: Vec<StoredNode<F>>,
     next_binder: u32,
     reserved_resolved: HashSet<BinderId>,
     materialized_resolved: HashSet<BinderId>,
     generated_binders: HashSet<BinderId>,
     inference_binders: HashSet<BinderId>,
     binder_phase_started: bool,
-    type_work: TypeWorkBudget,
+    pub(super) type_work: TypeWorkBudget,
     rewrite_type_work: TypeWorkBudget,
     requires_type_rewrite: bool,
+    deferred_cleanup_rows: HashSet<crate::types::InferenceVariableId>,
 }
 
-impl Default for CoreBuilder {
+impl Default for CoreBuilder<PureOperationFamily> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl CoreBuilder<PureOperationFamily> {
+    /// Starts an empty pure Core arena.
+    pub fn new() -> Self {
+        Self::new_for_family()
+    }
+
+    /// Starts a pure arena carrying an immutable resolved data registry.
+    pub fn with_registry(registry: Arc<ResolvedRegistry>) -> Self {
+        Self::with_registry_for_family(registry)
+    }
+
+    #[cfg(test)]
+    fn with_registry_method_evidence_and_type_work(
+        registry: Arc<ResolvedRegistry>,
+        method_evidence: Arc<MethodEvidenceCatalog>,
+        type_work: TypeWorkBudget,
+    ) -> Result<Self, BuildError> {
+        Self::with_catalogs_and_type_work(registry, method_evidence, type_work)
     }
 }
 
@@ -1578,7 +1915,16 @@ impl Default for CoreBuilder {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TypeRewriteCheckpoint(usize);
 
-impl CoreBuilder {
+/// Captures the builder-owned state that constructor lowering may append.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CoreBuilderCheckpoint {
+    nodes: usize,
+    next_binder: u32,
+    binder_phase_started: bool,
+    requires_type_rewrite: bool,
+}
+
+impl<F: CoreOperationFamily> CoreBuilder<F> {
     fn from_catalogs(
         registry: Arc<ResolvedRegistry>,
         method_evidence: Arc<MethodEvidenceCatalog>,
@@ -1602,11 +1948,12 @@ impl CoreBuilder {
             type_work,
             rewrite_type_work: TypeWorkBudget::default(),
             requires_type_rewrite: false,
+            deferred_cleanup_rows: HashSet::new(),
         }
     }
 
     /// Starts an empty Core arena.
-    pub fn new() -> Self {
+    fn new_for_family() -> Self {
         Self::from_catalogs(
             Arc::clone(empty_registry()),
             Arc::clone(empty_method_evidence()),
@@ -1617,7 +1964,7 @@ impl CoreBuilder {
     }
 
     /// Starts an empty arena carrying an immutable resolved data registry.
-    pub fn with_registry(registry: Arc<ResolvedRegistry>) -> Self {
+    pub(crate) fn with_registry_for_family(registry: Arc<ResolvedRegistry>) -> Self {
         Self::from_catalogs(
             registry,
             Arc::clone(empty_method_evidence()),
@@ -1631,14 +1978,10 @@ impl CoreBuilder {
         registry: Arc<ResolvedRegistry>,
         method_evidence: Arc<MethodEvidenceCatalog>,
     ) -> Result<Self, BuildError> {
-        Self::with_registry_method_evidence_and_type_work(
-            registry,
-            method_evidence,
-            TypeWorkBudget::default(),
-        )
+        Self::with_catalogs_and_type_work(registry, method_evidence, TypeWorkBudget::default())
     }
 
-    fn with_registry_method_evidence_and_type_work(
+    fn with_catalogs_and_type_work(
         registry: Arc<ResolvedRegistry>,
         method_evidence: Arc<MethodEvidenceCatalog>,
         mut type_work: TypeWorkBudget,
@@ -1708,7 +2051,8 @@ impl CoreBuilder {
         let owner = match (role, occurrence) {
             (
                 MethodEvidenceAnchorRole::Instantiation { .. }
-                | MethodEvidenceAnchorRole::Adapter { .. },
+                | MethodEvidenceAnchorRole::Adapter { .. }
+                | MethodEvidenceAnchorRole::LexicalUse { .. },
                 Some(slot),
             ) => self
                 .method_evidence
@@ -1778,9 +2122,12 @@ impl CoreBuilder {
             && matches!(
                 (role, occurrence),
                 (MethodEvidenceAnchorRole::ImplementationOwner { .. }, None)
+                    | (MethodEvidenceAnchorRole::LexicalOwner { .. }, None)
+                    | (MethodEvidenceAnchorRole::LexicalCaptureUse { .. }, None)
                     | (MethodEvidenceAnchorRole::Domain { .. }, None)
                     | (
                         MethodEvidenceAnchorRole::Instantiation { .. }
+                            | MethodEvidenceAnchorRole::LexicalUse { .. }
                             | MethodEvidenceAnchorRole::Application { .. }
                             | MethodEvidenceAnchorRole::Adapter { .. }
                             | MethodEvidenceAnchorRole::AdapterEdge { .. },
@@ -1801,22 +2148,22 @@ impl CoreBuilder {
                     .index()
                     .ok()
                     .and_then(|index| self.nodes.get(index))
-                    .and_then(|stored| match &stored.kind {
-                        PureExprKind::Computation(PureComputation::Apply(application)) => {
+                    .and_then(|stored| match F::pure(&stored.kind) {
+                        Some(PureExprKind::Computation(PureComputation::Apply(application))) => {
                             Some(application.argument())
                         }
                         _ => None,
                     });
                 application_argument == Some(producer_node)
                     && match (producer, producer_binder) {
-                        (MethodEvidenceProducer::Abstract { .. }, Some(binder)) => producer_node
+                        (MethodEvidenceProducer::Abstract { .. } | MethodEvidenceProducer::Lexical { .. }, Some(binder)) => producer_node
                             .index()
                             .ok()
                             .and_then(|index| self.nodes.get(index))
                             .is_some_and(|stored| {
                                 matches!(
-                                    stored.kind,
-                                    PureExprKind::Variable(variable) if variable.binder() == binder
+                                    F::pure(&stored.kind),
+                                    Some(PureExprKind::Variable(variable)) if variable.binder() == binder
                                 )
                             }),
                         (MethodEvidenceProducer::Adapter { .. }, None) => true,
@@ -1889,7 +2236,12 @@ impl CoreBuilder {
             .try_reserve(pending.len())
             .map_err(|_| BuildError::TypeWorkExceeded)?;
         while let Some(argument) = pending.next() {
-            let (argument, _) = admit_type_with_status(argument, &mut self.type_work, true)?;
+            let (argument, _) = admit_type_with_status(
+                argument,
+                &mut self.type_work,
+                true,
+                F::ALLOWS_EFFECTFUL_TYPES,
+            )?;
             admitted.0.push(argument);
         }
         self.method_evidence_anchors.push(MethodEvidenceAnchor {
@@ -1904,6 +2256,59 @@ impl CoreBuilder {
         });
         self.consumed_method_evidence[expectation] = true;
         Ok(())
+    }
+
+    pub(crate) fn lexical_capture_owner(
+        &mut self,
+        source: crate::interface::LexicalEvidenceId,
+        method: MethodId,
+    ) -> Result<usize, BuildError> {
+        self.type_work
+            .charge(self.method_evidence.lexical_owners.len())
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        self.method_evidence
+            .lexical_owners
+            .iter()
+            .position(|owner| owner.source == source && owner.method == method)
+            .ok_or(BuildError::InvalidPayload)
+    }
+
+    pub(crate) fn authenticate_lexical_capture_use(
+        &mut self,
+        node: NodeId,
+        owner: usize,
+        ordinal: usize,
+    ) -> Result<(), BuildError> {
+        self.type_work
+            .charge(1)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        let row = self
+            .method_evidence
+            .lexical_owners
+            .get(owner)
+            .ok_or(BuildError::InvalidPayload)?;
+        let binder = row
+            .captures
+            .get(ordinal)
+            .ok_or(BuildError::InvalidPayload)?;
+        if !self.nodes.get(node.index()?).and_then(|node| F::pure(&node.kind))
+            .is_some_and(|kind| matches!(kind, PureExprKind::Variable(variable) if variable.binder() == *binder)) {
+            return Err(BuildError::InvalidPayload);
+        }
+        let method = row.method;
+        let application = row
+            .application
+            .clone_with_budget(&mut self.type_work)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        self.authenticate_method_evidence(
+            node,
+            None,
+            None,
+            method,
+            application,
+            MethodEvidenceAnchorRole::LexicalCaptureUse { owner, ordinal },
+            None,
+        )
     }
 
     /// Reserves the complete resolver-assigned binder namespace.
@@ -1945,7 +2350,8 @@ impl CoreBuilder {
     /// [`BuildError::ArenaIdExhausted`] without consuming the computed binder
     /// identity when no arena identity remains.
     pub fn binder(&mut self, ty: Type, origin: Origin) -> Result<TypedBinder, BuildError> {
-        let (ty, origin, requires_type_rewrite) = admit_payloads(ty, origin, &mut self.type_work)?;
+        let (ty, origin, requires_type_rewrite) =
+            admit_payloads(ty, origin, &mut self.type_work, F::ALLOWS_EFFECTFUL_TYPES)?;
         let (id, next) = match self.next_binder_candidate() {
             Ok(candidate) => candidate,
             Err(error) => {
@@ -1989,7 +2395,8 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<TypedBinder, BuildError> {
-        let (ty, origin, requires_type_rewrite) = admit_payloads(ty, origin, &mut self.type_work)?;
+        let (ty, origin, requires_type_rewrite) =
+            admit_payloads(ty, origin, &mut self.type_work, F::ALLOWS_EFFECTFUL_TYPES)?;
         if !self.reserved_resolved.contains(&id) {
             discard_admitted_payload(ty, origin);
             return Err(BuildError::UnreservedResolvedBinder);
@@ -2056,6 +2463,41 @@ impl CoreBuilder {
         )
     }
 
+    /// Adds an unchecked explicit module-newtype representation conversion.
+    pub fn newtype_conversion(
+        &mut self,
+        owner: crate::types::NominalTypeId,
+        direction: NewtypeConversionDirection,
+        child: NodeId,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        self.push(
+            ty,
+            origin,
+            PureExprKind::Computation(PureComputation::NewtypeConversion(
+                NewtypeConversionNode::new(owner, direction, child),
+            )),
+        )
+    }
+
+    /// Adds an unchecked runtime-erased lexical nominal scope.
+    pub fn local_nominal_scope(
+        &mut self,
+        owner: crate::types::NominalTypeId,
+        body: NodeId,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        self.push(
+            ty,
+            origin,
+            PureExprKind::Computation(PureComputation::LocalNominalScope(
+                LocalNominalScopeNode::new(owner, body),
+            )),
+        )
+    }
+
     /// Adds strict tuple construction with an unchecked result annotation.
     pub fn tuple(
         &mut self,
@@ -2078,8 +2520,14 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        let admitted_arms = admit_match_arms(arms, &mut self.type_work, &self.inference_binders);
-        let admitted_result = admit_payloads(ty, origin, &mut self.type_work);
+        let admitted_arms = admit_match_arms(
+            arms,
+            &mut self.type_work,
+            &self.inference_binders,
+            F::ALLOWS_EFFECTFUL_TYPES,
+        );
+        let admitted_result =
+            admit_payloads(ty, origin, &mut self.type_work, F::ALLOWS_EFFECTFUL_TYPES);
         match (admitted_arms, admitted_result) {
             (Ok((arms, arm_rewrite)), Ok((ty, origin, result_rewrite))) => self
                 .push_admitted_tracking(
@@ -2133,13 +2581,14 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        let (ty, origin, result_rewrite) = match admit_payloads(ty, origin, &mut self.type_work) {
-            Ok(payloads) => payloads,
-            Err(error) => {
-                parameter.discard_metadata();
-                return Err(error);
-            }
-        };
+        let (ty, origin, result_rewrite) =
+            match admit_payloads(ty, origin, &mut self.type_work, F::ALLOWS_EFFECTFUL_TYPES) {
+                Ok(payloads) => payloads,
+                Err(error) => {
+                    parameter.discard_metadata();
+                    return Err(error);
+                }
+            };
         if self.arena != Some(parameter.arena()) {
             parameter.discard_metadata();
             discard_admitted_payload(ty, origin);
@@ -2171,13 +2620,14 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        let (ty, origin, result_rewrite) = match admit_payloads(ty, origin, &mut self.type_work) {
-            Ok(payloads) => payloads,
-            Err(error) => {
-                binder.discard_metadata();
-                return Err(error);
-            }
-        };
+        let (ty, origin, result_rewrite) =
+            match admit_payloads(ty, origin, &mut self.type_work, F::ALLOWS_EFFECTFUL_TYPES) {
+                Ok(payloads) => payloads,
+                Err(error) => {
+                    binder.discard_metadata();
+                    return Err(error);
+                }
+            };
         if self.arena != Some(binder.arena()) {
             binder.discard_metadata();
             discard_admitted_payload(ty, origin);
@@ -2214,13 +2664,14 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        let (ty, origin, result_rewrite) = match admit_payloads(ty, origin, &mut self.type_work) {
-            Ok(payloads) => payloads,
-            Err(error) => {
-                discard_recursive_binding_inputs(members);
-                return Err(error);
-            }
-        };
+        let (ty, origin, result_rewrite) =
+            match admit_payloads(ty, origin, &mut self.type_work, F::ALLOWS_EFFECTFUL_TYPES) {
+                Ok(payloads) => payloads,
+                Err(error) => {
+                    discard_recursive_binding_inputs(members);
+                    return Err(error);
+                }
+            };
         if members
             .iter()
             .any(|(binder, _)| self.arena != Some(binder.arena()))
@@ -2263,6 +2714,21 @@ impl CoreBuilder {
         )
     }
 
+    pub(crate) fn application_with_effects(
+        &mut self,
+        application: ApplicationNode,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        if F::REQUIRES_EMPTY_ROWS {
+            assert!(effects.is_empty(), "pure application row");
+            return self.application(application.function(), application.argument(), ty, origin);
+        }
+        let kind = PureExprKind::Computation(PureComputation::Apply(application));
+        self.push_explicit_kind(ty, effects, origin, || F::from_pure(kind))
+    }
+
     /// Adds an unchecked explicit type abstraction.
     pub fn type_abstraction(
         &mut self,
@@ -2297,7 +2763,7 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
-        let payloads = admit_payloads(ty, origin, &mut self.type_work);
+        let payloads = admit_payloads(ty, origin, &mut self.type_work, F::ALLOWS_EFFECTFUL_TYPES);
         let (parameters, ty, origin, requires_type_rewrite) = match (parameter_admission, payloads)
         {
             (Err(error), Ok((ty, origin, _))) => {
@@ -2321,6 +2787,82 @@ impl CoreBuilder {
 
     pub(super) fn clone_type_for_rebuild(&mut self, ty: &Type) -> Result<Type, BuildError> {
         clone_type_with_budget(ty, &mut self.type_work).map_err(|()| BuildError::TypeWorkExceeded)
+    }
+
+    pub(super) fn clone_effect_row_for_rebuild(
+        &mut self,
+        row: &EffectRow,
+    ) -> Result<EffectRow, BuildError> {
+        clone_effect_row_with_budget(row, &mut self.type_work)
+            .map_err(|()| BuildError::TypeWorkExceeded)
+    }
+
+    pub(super) fn admit_effect_instance(
+        &mut self,
+        instance: crate::types::EffectInstance,
+    ) -> Result<crate::types::EffectInstance, BuildError> {
+        let argument_count = instance.arguments().len();
+        self.type_work
+            .charge(argument_count)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        let (effect, arguments) = instance.into_parts();
+        let mut admitted = Vec::new();
+        if admitted.try_reserve_exact(argument_count).is_err() {
+            for argument in arguments.into_vec() {
+                discard_type_iteratively(argument);
+            }
+            return Err(BuildError::TypeWorkExceeded);
+        }
+        let mut remaining = arguments.into_vec().into_iter();
+        while let Some(argument) = remaining.next() {
+            match admit_type_with_status(
+                argument,
+                &mut self.type_work,
+                false,
+                F::ALLOWS_EFFECTFUL_TYPES,
+            ) {
+                Ok((argument, false)) => admitted.push(argument),
+                Ok((argument, true)) => {
+                    discard_type_iteratively(argument);
+                    discard_type_vector_iteratively(&mut admitted);
+                    for argument in remaining {
+                        discard_type_iteratively(argument);
+                    }
+                    return Err(BuildError::InvalidPayload);
+                }
+                Err(error) => {
+                    discard_type_vector_iteratively(&mut admitted);
+                    for argument in remaining {
+                        discard_type_iteratively(argument);
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        Ok(crate::types::EffectInstance::new(
+            effect,
+            admitted.into_boxed_slice(),
+        ))
+    }
+
+    pub(super) fn admit_effect_clause_arm(
+        &mut self,
+        arm: CoreMatchArm,
+    ) -> Result<CoreMatchArm, BuildError> {
+        let (arm, requires_type_rewrite) = admit_match_arm(
+            arm,
+            &mut self.type_work,
+            &self.inference_binders,
+            F::ALLOWS_EFFECTFUL_TYPES,
+        )?;
+        self.requires_type_rewrite |= requires_type_rewrite;
+        Ok(arm)
+    }
+
+    pub(super) fn charge_effect_metadata(&mut self, cells: usize) -> Result<(), BuildError> {
+        self.type_work
+            .charge(cells)
+            .map_err(|()| BuildError::TypeWorkExceeded)
     }
 
     pub(super) fn clone_interface_application_for_rebuild(
@@ -2347,11 +2889,34 @@ impl CoreBuilder {
         ty: Type,
         origin: Origin,
     ) -> Result<NodeId, BuildError> {
+        self.type_application_with_row_arguments(function, arguments, Vec::new(), ty, origin)
+    }
+
+    pub(crate) fn type_application_with_row_arguments(
+        &mut self,
+        function: NodeId,
+        arguments: Vec<Type>,
+        row_arguments: Vec<EffectRow>,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        if !F::ALLOWS_EFFECTFUL_TYPES && !row_arguments.is_empty() {
+            let mut arguments = arguments;
+            discard_type_vector_iteratively(&mut arguments);
+            discard_type_iteratively(ty);
+            discard_origin_iteratively(origin);
+            return Err(BuildError::InvalidPayload);
+        }
         let mut admitted_arguments = Vec::new();
         let mut first_error = None;
-        let mut argument_rewrite = false;
+        let mut argument_rewrite = !row_arguments.is_empty();
         for argument in arguments {
-            match admit_type_with_status(argument, &mut self.type_work, true) {
+            match admit_type_with_status(
+                argument,
+                &mut self.type_work,
+                true,
+                F::ALLOWS_EFFECTFUL_TYPES,
+            ) {
                 Ok((argument, contains_inference)) if first_error.is_none() => {
                     argument_rewrite |= contains_inference;
                     admitted_arguments.push(argument);
@@ -2362,7 +2927,12 @@ impl CoreBuilder {
                 }
             }
         }
-        let payloads = admit_payloads(ty, origin, &mut self.type_work);
+        for row in &row_arguments {
+            if charge_effect_row_cells(row, &mut self.type_work).is_err() {
+                first_error.get_or_insert(BuildError::TypeWorkExceeded);
+            }
+        }
+        let payloads = admit_payloads(ty, origin, &mut self.type_work, F::ALLOWS_EFFECTFUL_TYPES);
         let (ty, origin, result_rewrite) = match (first_error, payloads) {
             (Some(error), Ok((ty, origin, _))) => {
                 discard_type_vector_iteratively(&mut admitted_arguments);
@@ -2382,10 +2952,13 @@ impl CoreBuilder {
         self.push_admitted_tracking(
             ty,
             origin,
-            PureExprKind::Computation(PureComputation::TypeApplication(TypeApplicationNode::new(
-                function,
-                admitted_arguments,
-            ))),
+            PureExprKind::Computation(PureComputation::TypeApplication(
+                TypeApplicationNode::new_with_row_arguments(
+                    function,
+                    admitted_arguments,
+                    row_arguments,
+                ),
+            )),
             argument_rewrite || result_rewrite,
         )
     }
@@ -2451,12 +3024,20 @@ impl CoreBuilder {
     /// The rewrite callback owns cumulative structural construction work. Core
     /// rechecks depth and cumulatively charges the quantifier identities added
     /// to rewritten storage.
-    pub(crate) fn rewrite_types<F>(&mut self, mut rewrite: F) -> Result<(), BuildError>
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "the complete-arena rewrite seam is retained for its focused Core tests"
+        )
+    )]
+    pub(crate) fn rewrite_types<R>(&mut self, mut rewrite: R) -> Result<(), BuildError>
     where
-        F: FnMut(&Type) -> Result<Type, BuildError>,
+        R: FnMut(&Type) -> Result<Type, BuildError>,
     {
         let checkpoint = TypeRewriteCheckpoint(0);
-        let rewritten_requires_type_rewrite = self.rewrite_types_from(checkpoint, &mut rewrite)?;
+        let rewritten_requires_type_rewrite =
+            self.rewrite_types_from(checkpoint, &mut rewrite, None)?;
         self.requires_type_rewrite = rewritten_requires_type_rewrite;
         Ok(())
     }
@@ -2466,27 +3047,74 @@ impl CoreBuilder {
         TypeRewriteCheckpoint(self.nodes.len())
     }
 
-    /// Rewrites type payloads only on nodes emitted after `checkpoint`.
-    pub(crate) fn rewrite_types_since<F>(
+    /// Captures an elaboration-local construction boundary.
+    pub(crate) fn checkpoint(&self) -> CoreBuilderCheckpoint {
+        CoreBuilderCheckpoint {
+            nodes: self.nodes.len(),
+            next_binder: self.next_binder,
+            binder_phase_started: self.binder_phase_started,
+            requires_type_rewrite: self.requires_type_rewrite,
+        }
+    }
+
+    /// Discards every node and generated binder appended after `checkpoint`.
+    pub(crate) fn rollback(&mut self, checkpoint: CoreBuilderCheckpoint) {
+        debug_assert!(checkpoint.nodes <= self.nodes.len());
+        while self.nodes.len() > checkpoint.nodes {
+            let stored = self
+                .nodes
+                .pop()
+                .expect("the checkpoint suffix is non-empty");
+            discard_type_iteratively(stored.ty);
+            F::discard_effects(stored.effects);
+            if let Some(origin) = stored.origin {
+                discard_origin_iteratively(origin);
+            }
+            F::discard_metadata(stored.kind);
+        }
+        self.generated_binders.retain(|identity| {
+            !matches!(identity, BinderId::Generated(local) if *local >= checkpoint.next_binder)
+        });
+        self.inference_binders.retain(|identity| {
+            !matches!(identity, BinderId::Generated(local) if *local >= checkpoint.next_binder)
+        });
+        self.next_binder = checkpoint.next_binder;
+        self.binder_phase_started = checkpoint.binder_phase_started;
+        self.requires_type_rewrite = checkpoint.requires_type_rewrite;
+    }
+
+    pub(crate) fn rewrite_types_and_rows<R, Q>(
         &mut self,
-        checkpoint: TypeRewriteCheckpoint,
-        mut rewrite: F,
+        checkpoint: Option<TypeRewriteCheckpoint>,
+        mut rewrite: R,
+        mut rewrite_row: Q,
     ) -> Result<(), BuildError>
     where
-        F: FnMut(&Type) -> Result<Type, BuildError>,
+        R: FnMut(&Type) -> Result<Type, BuildError>,
+        Q: FnMut(&EffectRow) -> Result<EffectRow, BuildError>,
     {
-        let rewritten_requires_type_rewrite = self.rewrite_types_from(checkpoint, &mut rewrite)?;
-        self.requires_type_rewrite |= rewritten_requires_type_rewrite;
+        let rewritten_requires_type_rewrite = self.rewrite_types_from(
+            checkpoint.unwrap_or(TypeRewriteCheckpoint(0)),
+            &mut rewrite,
+            Some(&mut rewrite_row),
+        )?;
+        self.requires_type_rewrite =
+            checkpoint.is_some() && self.requires_type_rewrite || rewritten_requires_type_rewrite;
         Ok(())
     }
 
-    fn rewrite_types_from<F>(
+    #[allow(
+        clippy::type_complexity,
+        reason = "the optional row callback keeps the shared rewrite traversal local"
+    )]
+    fn rewrite_types_from<R>(
         &mut self,
         checkpoint: TypeRewriteCheckpoint,
-        rewrite: &mut F,
+        rewrite: &mut R,
+        mut rewrite_row: Option<&mut dyn FnMut(&EffectRow) -> Result<EffectRow, BuildError>>,
     ) -> Result<bool, BuildError>
     where
-        F: FnMut(&Type) -> Result<Type, BuildError>,
+        R: FnMut(&Type) -> Result<Type, BuildError>,
     {
         let nodes = self
             .nodes
@@ -2494,37 +3122,84 @@ impl CoreBuilder {
             .ok_or(BuildError::InvalidNodeId)?;
         let rewrite_type_work = &mut self.rewrite_type_work;
         let mut rewritten_requires_type_rewrite = false;
-        let mut rewrite_admitted = |ty: &Type| {
-            let rewritten = rewrite(ty)?;
-            let (rewritten, contains_inference) =
-                admit_rewritten_type(rewritten, rewrite_type_work)?;
-            rewritten_requires_type_rewrite |= contains_inference;
-            Ok(rewritten)
-        };
+        macro_rules! rewrite_admitted {
+            ($ty:expr) => {{
+                let rewritten = rewrite($ty)?;
+                let (rewritten, contains_inference) =
+                    admit_rewritten_type(rewritten, rewrite_type_work, F::ALLOWS_EFFECTFUL_TYPES)?;
+                rewritten_requires_type_rewrite |= contains_inference;
+                Ok::<Type, BuildError>(rewritten)
+            }};
+        }
         for node in nodes {
-            let rewritten = rewrite_admitted(&node.ty)?;
+            let rewritten = rewrite_admitted!(&node.ty)?;
             replace_type_iteratively(&mut node.ty, rewritten);
-            match &mut node.kind {
+            if let Some(rewrite_row) = rewrite_row.as_deref_mut()
+                && !F::effect_row(&node.effects).is_empty()
+            {
+                let effects = rewrite_row(F::effect_row(&node.effects))?;
+                charge_effect_row_cells(&effects, rewrite_type_work)
+                    .map_err(|()| BuildError::TypeWorkExceeded)?;
+                node.effects = F::store_effects(effects);
+            }
+            {
+                let work = std::cell::RefCell::new(&mut *rewrite_type_work);
+                F::rewrite_operation_type_metadata(
+                    &mut node.kind,
+                    &mut |ty| {
+                        let rewritten = rewrite(ty)?;
+                        let (rewritten, contains_inference) = admit_rewritten_type(
+                            rewritten,
+                            &mut work.borrow_mut(),
+                            F::ALLOWS_EFFECTFUL_TYPES,
+                        )?;
+                        rewritten_requires_type_rewrite |= contains_inference;
+                        Ok(rewritten)
+                    },
+                    &mut |cells| {
+                        work.borrow_mut()
+                            .charge(cells)
+                            .map_err(|()| BuildError::TypeWorkExceeded)
+                    },
+                )?;
+            }
+            let Some(kind) = F::pure_mut(&mut node.kind) else {
+                continue;
+            };
+            match kind {
                 PureExprKind::Value(PureValue::Function(function)) => {
                     function
                         .parameter_mut()
-                        .rewrite_type(&mut rewrite_admitted)?;
+                        .rewrite_type(&mut |ty| rewrite_admitted!(ty))?;
                 }
                 PureExprKind::Computation(PureComputation::Bind(binding)) => {
-                    binding.binder_mut().rewrite_type(&mut rewrite_admitted)?;
+                    binding
+                        .binder_mut()
+                        .rewrite_type(&mut |ty| rewrite_admitted!(ty))?;
                 }
                 PureExprKind::Computation(PureComputation::RecursiveBind(group)) => {
                     for member in group.members_mut() {
-                        member.binder_mut().rewrite_type(&mut rewrite_admitted)?;
+                        member
+                            .binder_mut()
+                            .rewrite_type(&mut |ty| rewrite_admitted!(ty))?;
                     }
                 }
                 PureExprKind::Computation(PureComputation::Match(match_expression)) => {
                     for arm in match_expression.arms_mut() {
-                        arm.pattern_mut().rewrite_types(&mut rewrite_admitted)?;
+                        arm.pattern_mut()
+                            .rewrite_types(&mut |ty| rewrite_admitted!(ty))?;
                     }
                 }
                 PureExprKind::Computation(PureComputation::TypeApplication(application)) => {
-                    application.rewrite_types(&mut rewrite_admitted)?;
+                    application.rewrite_types(&mut |ty| rewrite_admitted!(ty))?;
+                    if let Some(rewrite_row) = rewrite_row.as_deref_mut() {
+                        application.rewrite_row_arguments(&mut |row| {
+                            let rewritten = rewrite_row(row)?;
+                            charge_effect_row_cells(&rewritten, rewrite_type_work)
+                                .map_err(|()| BuildError::TypeWorkExceeded)?;
+                            Ok(rewritten)
+                        })?;
+                    }
                 }
                 PureExprKind::Value(
                     PureValue::Integer(_)
@@ -2537,6 +3212,8 @@ impl CoreBuilder {
                     PureComputation::Apply(_)
                     | PureComputation::Primitive(_)
                     | PureComputation::Tuple(_)
+                    | PureComputation::NewtypeConversion(_)
+                    | PureComputation::LocalNominalScope(_)
                     | PureComputation::TypeAbstraction(_),
                 ) => {}
             }
@@ -2544,9 +3221,9 @@ impl CoreBuilder {
         Ok(rewritten_requires_type_rewrite)
     }
 
-    /// Reports whether an admitted Core type still contains inference state.
-    pub(crate) const fn requires_type_rewrite(&self) -> bool {
-        self.requires_type_rewrite
+    /// Reports whether admitted types or pending cleanup-derived rows need rewriting.
+    pub(crate) fn requires_type_rewrite(&self) -> bool {
+        self.requires_type_rewrite || !self.deferred_cleanup_rows.is_empty()
     }
 
     /// Finishes unchecked construction at `root`.
@@ -2554,7 +3231,12 @@ impl CoreBuilder {
     /// # Errors
     ///
     /// Returns [`BuildError::InvalidNodeId`] unless `root` belongs to this arena.
-    pub fn finish(mut self, root: NodeId) -> Result<UnvalidatedProgram, BuildError> {
+    /// Returns [`BuildError::InvalidPayload`] while source cleanup row equations
+    /// remain unfinished.
+    pub fn finish(mut self, root: NodeId) -> Result<UnvalidatedCoreProgram<F>, BuildError> {
+        if !self.deferred_cleanup_rows.is_empty() {
+            return Err(BuildError::InvalidPayload);
+        }
         let Some(arena) = self.arena else {
             return Err(BuildError::InvalidNodeId);
         };
@@ -2575,7 +3257,7 @@ impl CoreBuilder {
         {
             return Err(BuildError::InvalidPayload);
         }
-        Ok(UnvalidatedProgram {
+        Ok(UnvalidatedCoreProgram {
             registry: std::mem::replace(&mut self.registry, Arc::clone(empty_registry())),
             method_evidence: std::mem::replace(
                 &mut self.method_evidence,
@@ -2596,7 +3278,8 @@ impl CoreBuilder {
     }
 
     fn push(&mut self, ty: Type, origin: Origin, kind: PureExprKind) -> Result<NodeId, BuildError> {
-        let (ty, origin, requires_type_rewrite) = admit_payloads(ty, origin, &mut self.type_work)?;
+        let (ty, origin, requires_type_rewrite) =
+            admit_payloads(ty, origin, &mut self.type_work, F::ALLOWS_EFFECTFUL_TYPES)?;
         self.push_admitted_tracking(ty, origin, kind, requires_type_rewrite)
     }
 
@@ -2618,6 +3301,13 @@ impl CoreBuilder {
         origin: Origin,
         kind: PureExprKind,
     ) -> Result<NodeId, BuildError> {
+        let effects = match self.infer_pure_effects(&kind) {
+            Ok(effects) => effects,
+            Err(error) => {
+                discard_pending_node_payload(ty, origin, kind);
+                return Err(error);
+            }
+        };
         let index = match u32::try_from(self.nodes.len()) {
             Ok(index) => index,
             Err(_) => {
@@ -2633,12 +3323,218 @@ impl CoreBuilder {
             }
         };
         self.nodes.push(StoredNode {
-            dialect: DialectId::PURE,
+            dialect: DialectId(F::DIALECT_NAME),
             ty,
+            effects: F::store_effects(effects),
             origin: Some(origin),
-            kind,
+            kind: F::from_pure(kind),
         });
         Ok(NodeId::new(arena, index))
+    }
+
+    fn infer_pure_effects(&mut self, kind: &PureExprKind) -> Result<EffectRow, BuildError> {
+        if F::REQUIRES_EMPTY_ROWS || !matches!(kind, PureExprKind::Computation(_)) {
+            return Ok(EffectRow::empty());
+        }
+        let mut effects = EffectRow::empty();
+        for child_index in 0..kind.child_count() {
+            let child = kind
+                .child_at(child_index)
+                .ok_or(BuildError::InvalidPayload)?;
+            if self.arena != Some(child.arena()) {
+                return Err(BuildError::InvalidNodeId);
+            }
+            let child = child.index()?;
+            let row = F::effect_row(
+                &self
+                    .nodes
+                    .get(child)
+                    .ok_or(BuildError::InvalidNodeId)?
+                    .effects,
+            );
+            if self.is_deferred_cleanup_row(&effects) || self.is_deferred_cleanup_row(row) {
+                if self.is_deferred_cleanup_row(row) {
+                    effects = clone_effect_row_with_budget(row, &mut self.type_work)
+                        .map_err(|_| BuildError::TypeWorkExceeded)?;
+                }
+                continue;
+            }
+            effects = effects
+                .union_with_budget(row, &mut self.type_work)
+                .map_err(|()| BuildError::TypeWorkExceeded)?
+                .map_err(|_| BuildError::InvalidPayload)?;
+        }
+        if let PureExprKind::Computation(PureComputation::Apply(application)) = kind {
+            if self.arena != Some(application.function().arena()) {
+                return Err(BuildError::InvalidNodeId);
+            }
+            let function = application.function().index()?;
+            let function = self.nodes.get(function).ok_or(BuildError::InvalidNodeId)?;
+            if let Type::EffectfulFunction(_, codomain) = &function.ty {
+                if self.is_deferred_cleanup_row(&effects)
+                    || self.is_deferred_cleanup_row(codomain.effects())
+                {
+                    return clone_effect_row_with_budget(codomain.effects(), &mut self.type_work)
+                        .map_err(|_| BuildError::TypeWorkExceeded);
+                }
+                effects = effects
+                    .union_with_budget(codomain.effects(), &mut self.type_work)
+                    .map_err(|()| BuildError::TypeWorkExceeded)?
+                    .map_err(|_| BuildError::InvalidPayload)?;
+            }
+        }
+        Ok(effects)
+    }
+
+    fn is_deferred_cleanup_row(&self, row: &EffectRow) -> bool {
+        row.tail().is_some_and(|tail| match tail.variable() {
+            EffectRowVariable::Inference(id) => self.deferred_cleanup_rows.contains(&id),
+            _ => false,
+        })
+    }
+
+    pub(crate) fn defer_cleanup_row(
+        &mut self,
+        id: crate::types::InferenceVariableId,
+    ) -> Result<(), BuildError> {
+        self.type_work
+            .charge(1)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        self.deferred_cleanup_rows
+            .try_reserve(1)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        self.deferred_cleanup_rows.insert(id);
+        Ok(())
+    }
+
+    pub(crate) fn finish_cleanup_rows(&mut self) {
+        self.deferred_cleanup_rows.clear();
+    }
+
+    pub(crate) fn forget_cleanup_row(&mut self, id: crate::types::InferenceVariableId) {
+        self.deferred_cleanup_rows.remove(&id);
+    }
+
+    pub(crate) fn push_operation(
+        &mut self,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+        operation: F::Operation,
+    ) -> Result<NodeId, BuildError> {
+        self.push_explicit_kind(ty, effects, origin, || F::from_operation(operation))
+    }
+
+    fn push_explicit_kind(
+        &mut self,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+        kind: impl FnOnce() -> F::Kind,
+    ) -> Result<NodeId, BuildError> {
+        let (ty, origin, requires_type_rewrite) =
+            admit_payloads(ty, origin, &mut self.type_work, F::ALLOWS_EFFECTFUL_TYPES)?;
+        if charge_effect_row_cells(&effects, &mut self.type_work).is_err() {
+            discard_admitted_payload(ty, origin);
+            drop(effects);
+            return Err(BuildError::TypeWorkExceeded);
+        }
+        let index = match u32::try_from(self.nodes.len()) {
+            Ok(index) => index,
+            Err(_) => {
+                discard_admitted_payload(ty, origin);
+                drop(effects);
+                return Err(BuildError::NodeIdExhausted);
+            }
+        };
+        let arena = match self.ensure_arena() {
+            Ok(arena) => arena,
+            Err(error) => {
+                discard_admitted_payload(ty, origin);
+                drop(effects);
+                return Err(error);
+            }
+        };
+        self.nodes.push(StoredNode {
+            dialect: DialectId(F::DIALECT_NAME),
+            ty,
+            effects: F::store_effects(effects),
+            origin: Some(origin),
+            kind: kind(),
+        });
+        self.requires_type_rewrite |= requires_type_rewrite;
+        Ok(NodeId::new(arena, index))
+    }
+
+    pub(crate) const fn node_checkpoint(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub(super) fn infer_pure_effects_at(&mut self, index: usize) -> Result<EffectRow, BuildError> {
+        let kind = F::pure(&self.nodes.get(index).ok_or(BuildError::InvalidNodeId)?.kind)
+            .ok_or(BuildError::InvalidPayload)?;
+        if F::REQUIRES_EMPTY_ROWS || !matches!(kind, PureExprKind::Computation(_)) {
+            return Ok(EffectRow::empty());
+        }
+        let child_count = kind.child_count();
+        let application_function = match kind {
+            PureExprKind::Computation(PureComputation::Apply(application)) => {
+                Some(application.function())
+            }
+            _ => None,
+        };
+        let mut effects = EffectRow::empty();
+        for child_index in 0..child_count {
+            let child = F::pure(&self.nodes[index].kind)
+                .and_then(|kind| kind.child_at(child_index))
+                .ok_or(BuildError::InvalidPayload)?;
+            let child = child.index()?;
+            effects = effects
+                .union_with_budget(
+                    F::effect_row(
+                        &self
+                            .nodes
+                            .get(child)
+                            .ok_or(BuildError::InvalidNodeId)?
+                            .effects,
+                    ),
+                    &mut self.type_work,
+                )
+                .map_err(|()| BuildError::TypeWorkExceeded)?
+                .map_err(|_| BuildError::InvalidPayload)?;
+        }
+        if let Some(function) = application_function {
+            let function = self
+                .nodes
+                .get(function.index()?)
+                .ok_or(BuildError::InvalidNodeId)?;
+            if let Type::EffectfulFunction(_, codomain) = &function.ty {
+                // Recomputing cleanup-dependent ancestors must not erase the
+                // lexical lacks attached when this application was elaborated.
+                // They are provisional builder facts: independent validation
+                // authenticates them against the enclosing forall contract.
+                let reported = F::effect_row(&self.nodes[index].effects);
+                let callable = match (codomain.effects().tail(), reported.tail()) {
+                    (Some(tail), Some(previous)) if tail.variable() == previous.variable() => {
+                        crate::types::rebuild_effect_row_with_budget(
+                            codomain.effects().known(),
+                            Some(tail.variable()),
+                            tail.lacks().iter().chain(previous.lacks()),
+                            crate::types::clone_type_with_budget,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| BuildError::TypeWorkExceeded)?
+                    }
+                    _ => clone_effect_row_with_budget(codomain.effects(), &mut self.type_work)
+                        .map_err(|()| BuildError::TypeWorkExceeded)?,
+                };
+                effects = effects
+                    .union_with_budget(&callable, &mut self.type_work)
+                    .map_err(|()| BuildError::TypeWorkExceeded)?
+                    .map_err(|_| BuildError::InvalidPayload)?;
+            }
+        }
+        Ok(effects)
     }
 
     fn ensure_arena(&mut self) -> Result<ArenaId, BuildError> {
@@ -2665,14 +3561,15 @@ impl CoreBuilder {
     }
 }
 
-impl Drop for CoreBuilder {
+impl<F: CoreOperationFamily> Drop for CoreBuilder<F> {
     fn drop(&mut self) {
         for stored in self.nodes.drain(..) {
             discard_type_iteratively(stored.ty);
+            F::discard_effects(stored.effects);
             if let Some(origin) = stored.origin {
                 discard_origin_iteratively(origin);
             }
-            discard_pure_expr_kind_metadata(stored.kind);
+            F::discard_metadata(stored.kind);
         }
     }
 }
@@ -2705,7 +3602,7 @@ fn discard_pending_node_payload(ty: Type, origin: Origin, kind: PureExprKind) {
     discard_pure_expr_kind_metadata(kind);
 }
 
-fn discard_pure_expr_kind_metadata(kind: PureExprKind) {
+pub(super) fn discard_pure_expr_kind_metadata(kind: PureExprKind) {
     match kind {
         PureExprKind::Value(PureValue::Function(function)) => function.discard_metadata(),
         PureExprKind::Computation(PureComputation::Bind(binding)) => binding.discard_metadata(),
@@ -2729,6 +3626,8 @@ fn discard_pure_expr_kind_metadata(kind: PureExprKind) {
             PureComputation::Apply(_)
             | PureComputation::Primitive(_)
             | PureComputation::Tuple(_)
+            | PureComputation::NewtypeConversion(_)
+            | PureComputation::LocalNominalScope(_)
             | PureComputation::TypeAbstraction(_),
         ) => {}
     }
@@ -2779,47 +3678,59 @@ fn admit_match_arms(
     arms: Vec<CoreMatchArm>,
     type_work: &mut TypeWorkBudget,
     inference_binders: &HashSet<BinderId>,
+    allow_effectful: bool,
 ) -> Result<(Vec<CoreMatchArm>, bool), BuildError> {
     let mut admitted = Vec::new();
     let mut requires_type_rewrite = false;
     let mut remaining = arms.into_iter();
     while let Some(arm) = remaining.next() {
-        let (pattern, body, origin) = arm.into_parts();
-        let pattern = admit_pattern(pattern, type_work, inference_binders);
-        let origin = admit_origin(origin);
-        match (pattern, origin) {
-            (Ok((pattern, pattern_rewrite)), Ok(origin)) => {
+        match admit_match_arm(arm, type_work, inference_binders, allow_effectful) {
+            Ok((arm, pattern_rewrite)) => {
                 requires_type_rewrite |= pattern_rewrite;
-                admitted.push(CoreMatchArm::new(pattern, body, origin));
+                admitted.push(arm);
                 #[cfg(test)]
                 record_match_arm_retained_capacity(admitted.capacity());
             }
-            (Err(error), Ok(origin)) => {
-                discard_origin_iteratively(origin);
+            Err(error) => {
                 discard_match_arms(admitted);
                 discard_match_arm_remainder(remaining);
                 return Err(error);
-            }
-            (Ok((pattern, _)), Err(error)) => {
-                pattern.discard_iteratively();
-                discard_match_arms(admitted);
-                discard_match_arm_remainder(remaining);
-                return Err(error);
-            }
-            (Err(pattern_error), Err(_)) => {
-                discard_match_arms(admitted);
-                discard_match_arm_remainder(remaining);
-                return Err(pattern_error);
             }
         }
     }
     Ok((admitted, requires_type_rewrite))
 }
 
+fn admit_match_arm(
+    arm: CoreMatchArm,
+    type_work: &mut TypeWorkBudget,
+    inference_binders: &HashSet<BinderId>,
+    allow_effectful: bool,
+) -> Result<(CoreMatchArm, bool), BuildError> {
+    let (pattern, body, origin) = arm.into_parts();
+    let pattern = admit_pattern(pattern, type_work, inference_binders, allow_effectful);
+    let origin = admit_origin(origin);
+    match (pattern, origin) {
+        (Ok((pattern, pattern_rewrite)), Ok(origin)) => {
+            Ok((CoreMatchArm::new(pattern, body, origin), pattern_rewrite))
+        }
+        (Err(error), Ok(origin)) => {
+            discard_origin_iteratively(origin);
+            Err(error)
+        }
+        (Ok((pattern, _)), Err(error)) => {
+            pattern.discard_iteratively();
+            Err(error)
+        }
+        (Err(pattern_error), Err(_)) => Err(pattern_error),
+    }
+}
+
 fn admit_pattern(
     pattern: CorePattern,
     type_work: &mut TypeWorkBudget,
     inference_binders: &HashSet<BinderId>,
+    allow_effectful: bool,
 ) -> Result<(CorePattern, bool), BuildError> {
     let mut work = vec![PatternAdmissionTask::Visit(pattern, 0)];
     let mut tokens = Vec::new();
@@ -2836,15 +3747,16 @@ fn admit_pattern(
                     return Err(BuildError::PatternDepthExceeded);
                 }
                 let CorePattern { ty, origin, kind } = pattern;
-                let (ty, origin, pattern_rewrite) = match admit_payloads(ty, origin, type_work) {
-                    Ok(payloads) => payloads,
-                    Err(error) => {
-                        discard_pattern_kind(kind);
-                        discard_pattern_admission_work(work);
-                        discard_pattern_tokens(tokens);
-                        return Err(error);
-                    }
-                };
+                let (ty, origin, pattern_rewrite) =
+                    match admit_payloads(ty, origin, type_work, allow_effectful) {
+                        Ok(payloads) => payloads,
+                        Err(error) => {
+                            discard_pattern_kind(kind);
+                            discard_pattern_admission_work(work);
+                            discard_pattern_tokens(tokens);
+                            return Err(error);
+                        }
+                    };
                 requires_type_rewrite |= pattern_rewrite;
                 match kind {
                     CorePatternKind::Binder(binder) => {
@@ -3056,8 +3968,9 @@ fn admit_payloads(
     ty: Type,
     origin: Origin,
     type_work: &mut TypeWorkBudget,
+    allow_effectful: bool,
 ) -> Result<(Type, Origin, bool), BuildError> {
-    let admitted_type = admit_type_with_status(ty, type_work, true);
+    let admitted_type = admit_type_with_status(ty, type_work, true, allow_effectful);
     let admitted_origin = admit_origin(origin);
     match (admitted_type, admitted_origin) {
         (Ok((ty, contains_inference)), Ok(origin)) => Ok((ty, origin, contains_inference)),
@@ -3077,6 +3990,7 @@ enum TypeAdmissionTask {
     Visit(Type, usize),
     VisitSequence(std::vec::IntoIter<Type>, usize),
     FinishFunction,
+    FinishEffectfulFunction(EffectRow),
     FinishTuple(usize),
     FinishApplication,
     FinishForall(Box<[(TypeVariableId, Kind)]>),
@@ -3092,6 +4006,7 @@ enum TypeToken {
     Application,
     Tuple(usize),
     Function,
+    EffectfulFunction(EffectRow),
     Forall(Box<[(TypeVariableId, Kind)]>),
 }
 
@@ -3107,20 +4022,45 @@ fn record_type_admission_pending(pending: usize) {
 
 #[cfg(test)]
 fn admit_type(ty: Type, type_work: &mut TypeWorkBudget) -> Result<Type, BuildError> {
-    admit_type_with_status(ty, type_work, true).map(|(ty, _)| ty)
+    admit_type_with_status(ty, type_work, true, false).map(|(ty, _)| ty)
 }
 
 fn admit_rewritten_type(
     ty: Type,
     type_work: &mut TypeWorkBudget,
+    allow_effectful: bool,
 ) -> Result<(Type, bool), BuildError> {
-    admit_type_with_status(ty, type_work, false)
+    admit_type_with_status(ty, type_work, false, allow_effectful)
 }
 
 fn admit_type_with_status(
     ty: Type,
     type_work: &mut TypeWorkBudget,
     charge_structure: bool,
+    allow_effectful: bool,
+) -> Result<(Type, bool), BuildError> {
+    match ty {
+        ty @ (Type::Int
+        | Type::Bool
+        | Type::Unit
+        | Type::Nominal(_)
+        | Type::Variable(_)
+        | Type::Inference(_)) => {
+            if charge_structure && type_work.charge(1).is_err() {
+                return Err(BuildError::TypeWorkExceeded);
+            }
+            let contains_inference = matches!(ty, Type::Inference(_));
+            Ok((ty, contains_inference))
+        }
+        ty => admit_structured_type_with_status(ty, type_work, charge_structure, allow_effectful),
+    }
+}
+
+fn admit_structured_type_with_status(
+    ty: Type,
+    type_work: &mut TypeWorkBudget,
+    charge_structure: bool,
+    allow_effectful: bool,
 ) -> Result<(Type, bool), BuildError> {
     let mut work = vec![TypeAdmissionTask::Visit(ty, 0)];
     let mut tokens = Vec::new();
@@ -3195,7 +4135,34 @@ fn admit_type_with_status(
                 work.push(TypeAdmissionTask::Visit(*codomain, child_depth));
                 work.push(TypeAdmissionTask::Visit(*domain, child_depth));
             }
+            TypeAdmissionTask::Visit(Type::EffectfulFunction(domain, codomain), depth) => {
+                if !allow_effectful {
+                    discard_type_iteratively(Type::EffectfulFunction(domain, codomain));
+                    discard_type_admission_work(work);
+                    return Err(BuildError::InvalidPayload);
+                }
+                let crate::types::ComputationType { value, effects } = *codomain;
+                if charge_effect_row_cells(&effects, type_work).is_err() {
+                    discard_type_iteratively(*domain);
+                    discard_type_iteratively(value);
+                    drop(effects);
+                    discard_type_admission_work(work);
+                    return Err(BuildError::TypeWorkExceeded);
+                }
+                contains_inference |= matches!(
+                    effects.tail().map(|tail| tail.variable()),
+                    Some(EffectRowVariable::Inference(_))
+                );
+                let child_depth = depth.saturating_add(1);
+                exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
+                work.push(TypeAdmissionTask::FinishEffectfulFunction(effects));
+                work.push(TypeAdmissionTask::Visit(value, child_depth));
+                work.push(TypeAdmissionTask::Visit(*domain, child_depth));
+            }
             TypeAdmissionTask::FinishFunction => tokens.push(TypeToken::Function),
+            TypeAdmissionTask::FinishEffectfulFunction(effects) => {
+                tokens.push(TypeToken::EffectfulFunction(effects));
+            }
             TypeAdmissionTask::FinishTuple(count) => tokens.push(TypeToken::Tuple(count)),
             TypeAdmissionTask::FinishApplication => tokens.push(TypeToken::Application),
             TypeAdmissionTask::FinishForall(parameters) => {
@@ -3239,6 +4206,18 @@ fn admit_type_with_status(
                 };
                 rebuilt.push(Type::Function(Box::new(domain), Box::new(codomain)));
             }
+            TypeToken::EffectfulFunction(effects) => {
+                let Some(codomain) = rebuilt.pop() else {
+                    return Err(BuildError::InvalidPayload);
+                };
+                let Some(domain) = rebuilt.pop() else {
+                    return Err(BuildError::InvalidPayload);
+                };
+                rebuilt.push(Type::function_computation(
+                    domain,
+                    crate::types::ComputationType::new(codomain, effects),
+                ));
+            }
             TypeToken::Forall(parameters) => {
                 let body = rebuilt.pop().ok_or(BuildError::InvalidPayload)?;
                 rebuilt.push(Type::Forall(parameters, Box::new(body)));
@@ -3272,6 +4251,12 @@ fn discard_type_admission_work(mut work: Vec<TypeAdmissionTask>) {
                     work.push(TypeAdmissionTask::Visit(*codomain, depth));
                     work.push(TypeAdmissionTask::Visit(*domain, depth));
                 }
+                Type::EffectfulFunction(domain, codomain) => {
+                    let crate::types::ComputationType { value, effects } = *codomain;
+                    drop(effects);
+                    work.push(TypeAdmissionTask::Visit(value, depth));
+                    work.push(TypeAdmissionTask::Visit(*domain, depth));
+                }
                 Type::Forall(_, body) => {
                     work.push(TypeAdmissionTask::Visit(*body, depth));
                 }
@@ -3292,6 +4277,7 @@ fn discard_type_admission_work(mut work: Vec<TypeAdmissionTask>) {
             | TypeAdmissionTask::FinishTuple(_)
             | TypeAdmissionTask::FinishApplication
             | TypeAdmissionTask::FinishForall(_) => {}
+            TypeAdmissionTask::FinishEffectfulFunction(effects) => drop(effects),
         }
     }
 }
@@ -3509,6 +4495,155 @@ mod tests {
         }
     }
 
+    fn lexical_capture_catalog() -> MethodEvidenceCatalog {
+        let interface = InterfaceId::new(ModuleId::new(0), 0);
+        let method = MethodId::new(interface, 0);
+        let parameter = TypeVariableId::Resolved {
+            module: ModuleId::new(0),
+            local: 0,
+        };
+        let mut catalog = MethodEvidenceCatalog::new(
+            vec![MethodEvidenceMethod {
+                id: method,
+                interface_parameters: Box::new([parameter]),
+                parameters: Box::new([]),
+                value_type: Type::Function(
+                    Box::new(Type::Variable(parameter)),
+                    Box::new(Type::Int),
+                ),
+            }],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            std::iter::once(MethodEvidenceExpectation {
+                occurrence: None,
+                method,
+                role: MethodEvidenceExpectedRole::LexicalOwner { owner: 0 },
+            })
+            .chain((0..3).map(|ordinal| MethodEvidenceExpectation {
+                occurrence: None,
+                method,
+                role: MethodEvidenceExpectedRole::LexicalCaptureUse { owner: 0, ordinal },
+            }))
+            .collect(),
+        );
+        catalog.set_lexical_owners(vec![MethodEvidenceLexicalOwner {
+            acquisition: None,
+            source_parameters: Box::new([]),
+            source: crate::interface::LexicalEvidenceId::new(ModuleId::new(0), 0),
+            method,
+            binder: resolved_id(0),
+            application: InterfaceApplication::new(
+                interface,
+                Box::new([Type::Nominal(NominalTypeId::new(ModuleId::new(0), 0))]),
+            ),
+            captures: Box::new([resolved_id(1), resolved_id(2), resolved_id(2)]),
+        }]);
+        catalog
+    }
+
+    #[test]
+    fn lexical_capture_owner_lookup_charges_the_full_owner_table() {
+        for width in [1, 64] {
+            let mut catalog = lexical_capture_catalog();
+            let first = catalog.lexical_owners[0].clone();
+            for index in 1..width {
+                let mut owner = first.clone();
+                owner.source =
+                    crate::interface::LexicalEvidenceId::new(ModuleId::new(0), index as u32);
+                catalog.lexical_owners.push(owner);
+            }
+            let mut builder: CoreBuilder = CoreBuilder::with_registry_and_method_evidence(
+                Arc::new(ResolvedRegistry::default()),
+                Arc::new(catalog),
+            )
+            .expect("capture catalog");
+            builder.type_work = TypeWorkBudget::with_limit(width - 1);
+            assert_eq!(
+                builder.lexical_capture_owner(first.source, first.method),
+                Err(BuildError::TypeWorkExceeded)
+            );
+            assert_eq!(builder.type_work.used(), 0);
+            for _ in 0..2 {
+                builder.type_work = TypeWorkBudget::with_limit(width);
+                assert_eq!(
+                    builder.lexical_capture_owner(first.source, first.method),
+                    Ok(0)
+                );
+                assert_eq!(builder.type_work.used(), width);
+            }
+        }
+    }
+
+    #[test]
+    fn lexical_capture_authentication_is_exact_atomic_and_retryable() {
+        let source = SourceFile::new("capture-anchor.ash", "()").expect("source");
+        let catalog = Arc::new(lexical_capture_catalog());
+        // Four expectations retain two builder carriers each, including 2C
+        // for the three capture expectations.
+        assert_eq!(
+            CoreBuilder::with_registry_method_evidence_and_type_work(
+                Arc::new(ResolvedRegistry::default()),
+                Arc::clone(&catalog),
+                TypeWorkBudget::with_limit(7),
+            )
+            .expect_err("one missing carrier unit"),
+            BuildError::TypeWorkExceeded
+        );
+        let prepare = || {
+            let mut builder = CoreBuilder::with_registry_method_evidence_and_type_work(
+                Arc::new(ResolvedRegistry::default()),
+                Arc::clone(&catalog),
+                TypeWorkBudget::with_limit(8),
+            )
+            .expect("exact carriers");
+            assert_eq!(builder.type_work.used(), 8);
+            builder.type_work = TypeWorkBudget::unbounded();
+            let nodes = catalog.lexical_owners[0]
+                .captures
+                .iter()
+                .map(|binder| {
+                    builder
+                        .variable(*binder, Type::Int, generated_origin(&source, 0))
+                        .expect("exact captured variable")
+                })
+                .collect::<Vec<_>>();
+            (builder, nodes)
+        };
+        for fresh in 0..2 {
+            let (mut builder, nodes) = prepare();
+            // Binder 1 + clone 2 + method lookup 1 + expectation scan 4
+            // + matching application 2 + retained anchor 8 + admission 1;
+            // each reached expectation adds lookup 6 + dispatch 1.
+            for ordinal in [2, 0, 1] {
+                let reached = match ordinal {
+                    2 => 4,
+                    _ => 2,
+                };
+                let work = 19 + builder.method_evidence_anchors.len() + 7 * reached;
+                let prior = builder.method_evidence_anchors.len();
+                let consumed = builder.consumed_method_evidence.clone();
+                builder.type_work = TypeWorkBudget::with_limit(work - 1);
+                assert_eq!(
+                    builder.authenticate_lexical_capture_use(nodes[ordinal], 0, ordinal),
+                    Err(BuildError::TypeWorkExceeded),
+                    "fresh {fresh}, ordinal {ordinal}"
+                );
+                assert_eq!(builder.method_evidence_anchors.len(), prior);
+                assert_eq!(builder.consumed_method_evidence, consumed);
+                builder.type_work = TypeWorkBudget::with_limit(work);
+                builder
+                    .authenticate_lexical_capture_use(nodes[ordinal], 0, ordinal)
+                    .expect("exact capture authentication");
+                assert_eq!(builder.type_work.used(), work);
+                assert_eq!(builder.method_evidence_anchors.len(), prior + 1);
+                assert!(builder.consumed_method_evidence[ordinal + 1]);
+            }
+        }
+    }
+
     #[test]
     fn method_evidence_anchor_authenticates_a_complete_ordered_application() {
         let source = SourceFile::new("vector-method-anchor.ash", "()").expect("test source");
@@ -3637,11 +4772,12 @@ mod tests {
                         role: MethodEvidenceExpectedRole::ImplementationOwner { owner: 0 },
                     }],
                 ));
-                let mut builder = CoreBuilder::with_registry_and_method_evidence(
-                    Arc::new(ResolvedRegistry::default()),
-                    catalog,
-                )
-                .expect("one expectation bitmap");
+                let mut builder =
+                    CoreBuilder::<PureOperationFamily>::with_registry_and_method_evidence(
+                        Arc::new(ResolvedRegistry::default()),
+                        catalog,
+                    )
+                    .expect("one expectation bitmap");
                 let node = builder
                     .unit(Type::Unit, origin)
                     .expect("the anchor node should fit");
@@ -3666,6 +4802,40 @@ mod tests {
             .expect("the small-stack Core application worker should start")
             .join()
             .expect("rejected complete applications should dismantle iteratively");
+    }
+
+    #[test]
+    fn lexical_capture_late_application_admission_failure_is_atomic_on_a_small_stack() {
+        std::thread::Builder::new()
+            .name("deep-lexical-capture-application".to_owned())
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("deep-capture.ash", "()").expect("source");
+                let mut catalog = lexical_capture_catalog();
+                let interface = catalog.lexical_owners[0].method.interface();
+                catalog.lexical_owners[0].application = InterfaceApplication::new(
+                    interface,
+                    Box::new([function_type(CORE_PAYLOAD_DEPTH_LIMIT + 1)]),
+                );
+                let mut builder: CoreBuilder = CoreBuilder::with_registry_and_method_evidence(
+                    Arc::new(ResolvedRegistry::default()),
+                    Arc::new(catalog),
+                )
+                .expect("catalog carriers");
+                let node = builder
+                    .variable(resolved_id(1), Type::Int, generated_origin(&source, 0))
+                    .expect("capture node");
+                builder.type_work = TypeWorkBudget::unbounded();
+                assert_eq!(
+                    builder.authenticate_lexical_capture_use(node, 0, 0),
+                    Err(BuildError::TypeDepthExceeded)
+                );
+                assert!(builder.method_evidence_anchors.is_empty());
+                assert_eq!(builder.consumed_method_evidence, [false; 4]);
+            })
+            .expect("small-stack worker")
+            .join()
+            .expect("late cloned-application failure and catalog disposal are iterative");
     }
 
     #[test]
@@ -3864,6 +5034,217 @@ mod tests {
     }
 
     #[test]
+    fn newtype_conversion_admission_has_an_exact_atomic_retry_boundary() {
+        let source = SourceFile::new("newtype-conversion.ash", "1").expect("test source");
+        let origin = Origin::Source(
+            source
+                .span(ByteRange::new(0, 1).expect("ordered range"))
+                .expect("source span"),
+        );
+        let owner = NominalTypeId::new(ModuleId::new(0), 0);
+        let prepare = || {
+            let mut builder = CoreBuilder::new();
+            let child = builder
+                .integer(
+                    Integer::parse_decimal("1").expect("valid integer"),
+                    Type::Int,
+                    origin.clone(),
+                )
+                .expect("the conversion child should fit");
+            (builder, child)
+        };
+
+        let (mut measured, measured_child) = prepare();
+        let before = measured.type_work.used();
+        measured
+            .newtype_conversion(
+                owner,
+                NewtypeConversionDirection::Wrap,
+                measured_child,
+                Type::Nominal(owner),
+                origin.clone(),
+            )
+            .expect("the measured conversion should fit");
+        const RESULT_TYPE_WORK: usize = 1; // one nominal result-type cell
+        const EXACT_CONVERSION_WORK: usize = RESULT_TYPE_WORK;
+        let conversion_work = measured.type_work.used() - before;
+        assert_eq!(conversion_work, EXACT_CONVERSION_WORK);
+
+        let (mut short, short_child) = prepare();
+        let short_node_count = short.nodes.len();
+        short
+            .charge_type_work_for_test(
+                TYPE_WORK_LIMIT - short.type_work.used() - (conversion_work - 1),
+            )
+            .expect("the one-short prefix should fit");
+        assert_eq!(
+            short.newtype_conversion(
+                owner,
+                NewtypeConversionDirection::Wrap,
+                short_child,
+                Type::Nominal(owner),
+                origin.clone(),
+            ),
+            Err(BuildError::TypeWorkExceeded),
+        );
+        assert_eq!(short.nodes.len(), short_node_count);
+
+        for _ in 0..2 {
+            let (mut exact, exact_child) = prepare();
+            exact
+                .charge_type_work_for_test(
+                    TYPE_WORK_LIMIT - exact.type_work.used() - conversion_work,
+                )
+                .expect("the exact prefix should fit");
+            let root = exact
+                .newtype_conversion(
+                    owner,
+                    NewtypeConversionDirection::Wrap,
+                    exact_child,
+                    Type::Nominal(owner),
+                    origin.clone(),
+                )
+                .expect("a fresh exact builder should retry the conversion");
+            assert_eq!(exact.type_work.used(), TYPE_WORK_LIMIT);
+            assert_eq!(exact.nodes.len(), 2);
+            let program = exact
+                .finish(root)
+                .expect("the exact conversion should finish");
+            drop(program);
+        }
+    }
+
+    #[test]
+    fn local_nominal_scope_admission_has_an_exact_atomic_retry_boundary() {
+        let source = SourceFile::new("local-nominal-scope.ash", "()").expect("test source");
+        let origin = Origin::Source(
+            source
+                .span(ByteRange::new(0, 2).expect("ordered range"))
+                .expect("source span"),
+        );
+        let owner = NominalTypeId::lexical(ModuleId::new(0), 0);
+        let prepare = || {
+            let mut builder = CoreBuilder::new();
+            let body = builder
+                .unit(Type::Unit, origin.clone())
+                .expect("the scope body should fit");
+            (builder, body)
+        };
+
+        let (mut measured, measured_body) = prepare();
+        let before = measured.type_work.used();
+        measured
+            .local_nominal_scope(owner, measured_body, Type::Unit, origin.clone())
+            .expect("the measured scope should fit");
+        let scope_work = measured.type_work.used() - before;
+        assert_eq!(
+            scope_work, 1,
+            "the carrier admits only its unit result type"
+        );
+
+        let (mut short, short_body) = prepare();
+        let short_node_count = short.nodes.len();
+        short
+            .charge_type_work_for_test(TYPE_WORK_LIMIT - short.type_work.used())
+            .expect("the one-short prefix should fit");
+        assert_eq!(
+            short.local_nominal_scope(owner, short_body, Type::Unit, origin.clone()),
+            Err(BuildError::TypeWorkExceeded),
+        );
+        assert_eq!(short.nodes.len(), short_node_count);
+
+        for _ in 0..2 {
+            let (mut exact, exact_body) = prepare();
+            exact
+                .charge_type_work_for_test(TYPE_WORK_LIMIT - exact.type_work.used() - scope_work)
+                .expect("the exact prefix should fit");
+            let root = exact
+                .local_nominal_scope(owner, exact_body, Type::Unit, origin.clone())
+                .expect("a fresh exact builder should retry the scope");
+            assert_eq!(exact.type_work.used(), TYPE_WORK_LIMIT);
+            assert_eq!(exact.nodes.len(), 2);
+            drop(exact.finish(root).expect("the exact scope should finish"));
+        }
+    }
+
+    #[test]
+    fn unvalidated_local_nominal_scope_chain_discards_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("local-nominal-scope-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("local-scope-chain.ash", "()").expect("test source");
+                let origin = Origin::Source(
+                    source
+                        .span(ByteRange::new(0, 2).expect("ordered range"))
+                        .expect("source span"),
+                );
+                let owner = NominalTypeId::lexical(ModuleId::new(0), 0);
+                let mut builder = CoreBuilder::new();
+                let mut root = builder
+                    .unit(Type::Unit, origin.clone())
+                    .expect("the scope leaf should fit");
+                for _ in 0..DEPTH {
+                    root = builder
+                        .local_nominal_scope(owner, root, Type::Unit, origin.clone())
+                        .expect("the scope chain should fit");
+                }
+                assert_eq!(builder.nodes.len(), DEPTH + 1);
+                drop(builder.finish(root).expect("the scope chain should finish"));
+            })
+            .expect("the local-scope disposal thread should start")
+            .join()
+            .expect("local scope teardown must remain iterative");
+    }
+
+    #[test]
+    fn unvalidated_newtype_conversion_chain_discards_on_a_small_stack() {
+        const DEPTH: usize = 32_768;
+
+        std::thread::Builder::new()
+            .name("newtype-conversion-disposal".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("conversion-chain.ash", "()").expect("test source");
+                let origin = Origin::Source(
+                    source
+                        .span(ByteRange::new(0, 2).expect("ordered range"))
+                        .expect("source span"),
+                );
+                let owner = NominalTypeId::new(ModuleId::new(0), 0);
+                let mut builder = CoreBuilder::new();
+                let mut root = builder
+                    .unit(Type::Unit, origin.clone())
+                    .expect("the conversion leaf should fit");
+                for index in 0..DEPTH {
+                    root = builder
+                        .newtype_conversion(
+                            owner,
+                            if index % 2 == 0 {
+                                NewtypeConversionDirection::Wrap
+                            } else {
+                                NewtypeConversionDirection::Unwrap
+                            },
+                            root,
+                            Type::Unit,
+                            origin.clone(),
+                        )
+                        .expect("the conversion chain should fit");
+                }
+                assert_eq!(builder.nodes.len(), DEPTH + 1);
+                let program = builder
+                    .finish(root)
+                    .expect("the conversion chain should finish");
+                drop(program);
+            })
+            .expect("the conversion disposal thread should start")
+            .join()
+            .expect("conversion carriers must dismantle iteratively");
+    }
+
+    #[test]
     fn successful_public_binder_owners_drop_deep_types_on_a_small_stack() {
         const DEPTH: usize = 32_768;
 
@@ -3956,12 +5337,17 @@ mod tests {
                 let source = SourceFile::new("typed-expression-owner.ash", "()")
                     .expect("the fixture should fit");
                 TypedExpr {
+                    effects: (),
                     ty: Type::Unit,
                     origin: generated_origin(&source, 0),
                     kind: PureExprKind::Computation(PureComputation::TypeApplication(
-                        TypeApplicationNode::new(
+                        TypeApplicationNode::new_with_row_arguments(
                             NodeId::new(ArenaId::new(0), 0),
                             vec![application_type(DEPTH)],
+                            vec![EffectRow::singleton(crate::types::EffectInstance::new(
+                                crate::types::EffectId::new(ModuleId::new(0), 0),
+                                Box::new([application_type(DEPTH)]),
+                            ))],
                         ),
                     )),
                 }
@@ -3987,13 +5373,13 @@ mod tests {
         let mut exact = TypeWorkBudget::with_limit(5);
         let mut short = TypeWorkBudget::with_limit(4);
 
-        let (admitted, exceeded) = admit_type_with_status(application(), &mut exact, true)
+        let (admitted, exceeded) = admit_type_with_status(application(), &mut exact, true, false)
             .expect("the five canonical cells should fit exactly");
         assert!(!exceeded);
         assert_eq!(exact.used(), 5);
         discard_type_iteratively(admitted);
         assert_eq!(
-            admit_type_with_status(application(), &mut short, true),
+            admit_type_with_status(application(), &mut short, true, false),
             Err(BuildError::TypeWorkExceeded),
         );
         assert_eq!(short.used(), 4);
@@ -4053,7 +5439,10 @@ mod tests {
                     .collect::<Vec<_>>();
                 let registry = ResolvedRegistry::new(
                     vec![ResolvedNominalType {
+                        representation_provenance: None,
                         id: owner,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                        representation: None,
                         spelling: "Wide".to_owned(),
                         constructors: vec![constructor].into_boxed_slice(),
                         origin: origin.clone(),
@@ -4241,10 +5630,50 @@ mod tests {
         reset_pattern_admission_peaks();
 
         assert_eq!(
-            admit_pattern(pattern, &mut budget, &HashSet::new()),
+            admit_pattern(pattern, &mut budget, &HashSet::new(), false),
             Err(BuildError::TypeWorkExceeded)
         );
         assert!(pattern_admission_pending_peak() <= 3);
+    }
+
+    #[test]
+    fn pattern_effect_allowance_preserves_pure_rejection_and_exact_work() {
+        let source = SourceFile::new("callback-pattern.ash", "()").unwrap();
+        let origin = generated_origin(&source, 0);
+        let callback = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(
+                Type::Int,
+                EffectRow::singleton(crate::types::EffectInstance::new(
+                    crate::types::EffectId::new(crate::module::ModuleId::new(0), 0),
+                    Box::new([]),
+                )),
+            ),
+        );
+        let pattern = CorePattern::new(callback, origin, CorePatternKind::Wildcard);
+        assert!(matches!(
+            admit_pattern(
+                pattern.clone(),
+                &mut TypeWorkBudget::default(),
+                &HashSet::new(),
+                false
+            ),
+            Err(BuildError::InvalidPayload)
+        ));
+        let mut measured = TypeWorkBudget::unbounded();
+        admit_pattern(pattern.clone(), &mut measured, &HashSet::new(), true).unwrap();
+        assert!(matches!(
+            admit_pattern(
+                pattern.clone(),
+                &mut TypeWorkBudget::with_limit(measured.used() - 1),
+                &HashSet::new(),
+                true
+            ),
+            Err(BuildError::TypeWorkExceeded)
+        ));
+        let mut retry = TypeWorkBudget::with_limit(measured.used());
+        admit_pattern(pattern, &mut retry, &HashSet::new(), true).unwrap();
+        assert_eq!(retry.used(), measured.used());
     }
 
     #[test]
@@ -4267,7 +5696,7 @@ mod tests {
         reset_pattern_admission_peaks();
 
         assert_eq!(
-            admit_match_arms(vec![arm; WIDTH], &mut budget, &HashSet::new()),
+            admit_match_arms(vec![arm; WIDTH], &mut budget, &HashSet::new(), false),
             Err(BuildError::TypeWorkExceeded)
         );
         assert!(match_arm_retained_capacity_peak() <= ALLOWANCE);
@@ -4684,6 +6113,36 @@ mod tests {
     }
 
     #[test]
+    fn pending_cleanup_equations_cannot_escape_source_builder() {
+        let source = SourceFile::new("pending-cleanup.ash", "()").unwrap();
+        let mut builder = CoreBuilder::new();
+        let root = builder
+            .unit(Type::Unit, generated_origin(&source, 0))
+            .unwrap();
+        builder
+            .defer_cleanup_row(crate::types::InferenceVariableId::new(0))
+            .unwrap();
+        assert!(matches!(
+            builder.finish(root),
+            Err(BuildError::InvalidPayload)
+        ));
+    }
+
+    #[test]
+    fn pending_cleanup_row_requires_rewrite_without_type_inference() {
+        let mut builder = CoreBuilder::new();
+        assert!(!builder.requires_type_rewrite());
+        builder
+            .defer_cleanup_row(crate::types::InferenceVariableId::new(0))
+            .unwrap();
+        assert!(builder.requires_type_rewrite());
+        builder.rewrite_types(|ty| Ok(ty.clone())).unwrap();
+        assert!(builder.requires_type_rewrite());
+        builder.finish_cleanup_rows();
+        assert!(!builder.requires_type_rewrite());
+    }
+
+    #[test]
     fn builder_tracks_inference_in_patterns_and_type_arguments_during_admission() {
         let source = SourceFile::new("rewrite-status.ash", "()").expect("test source");
         let origin = generated_origin(&source, 0);
@@ -5048,5 +6507,138 @@ mod tests {
             .resolved_binder(id, Type::Unit, origin)
             .expect("retry materializes the reserved identity");
         assert_eq!(binder.id(), id);
+    }
+
+    #[test]
+    fn effect_clause_admission_is_exact_atomic_and_retryable() {
+        use crate::{
+            core::effect::{EffectClause, EffectOperationFamily, HandlerId},
+            resolved::ResumeId,
+            types::{EffectId, EffectInstance, EffectRow, OperationId},
+        };
+
+        let source = SourceFile::new("effect-clause-budget.ash", "()").expect("test source");
+        let origin = generated_origin(&source, 0);
+        let effect = EffectId::new(ModuleId::new(0), 0);
+        let prepare = || {
+            let mut builder = CoreBuilder::<EffectOperationFamily>::with_effect_registry(Arc::new(
+                ResolvedRegistry::default(),
+            ));
+            let body = builder
+                .unit(Type::Unit, origin.clone())
+                .expect("handler body should fit");
+            let clause = EffectClause::new(
+                OperationId::new(effect, 0),
+                ResumeId::new(0),
+                CoreMatchArm::new(
+                    CorePattern::new(Type::Unit, origin.clone(), CorePatternKind::Wildcard),
+                    body,
+                    origin.clone(),
+                ),
+            );
+            (builder, body, clause)
+        };
+        let admit = |builder: &mut CoreBuilder<EffectOperationFamily>, body, clause| {
+            builder.handler(
+                HandlerId::new(0),
+                body,
+                EffectInstance::new(effect, Box::new([])),
+                vec![clause],
+                Type::Unit,
+                EffectRow::empty(),
+                origin.clone(),
+            )
+        };
+
+        let (mut measured, body, clause) = prepare();
+        let before = measured.type_work.used();
+        admit(&mut measured, body, clause).expect("measured clause admission should fit");
+        let admission_work = measured.type_work.used() - before;
+        assert_eq!(
+            admission_work, 4,
+            "one clause carrier plus pattern, result-type, and result-row admission"
+        );
+
+        let (mut short, body, clause) = prepare();
+        let retained_before = short.nodes.len();
+        short
+            .charge_type_work_for_test(
+                TYPE_WORK_LIMIT - short.type_work.used() - (admission_work - 1),
+            )
+            .expect("one-short prefix should fit");
+        assert_eq!(
+            admit(&mut short, body, clause),
+            Err(BuildError::TypeWorkExceeded)
+        );
+        assert_eq!(
+            short.nodes.len(),
+            retained_before,
+            "failure publishes no node"
+        );
+
+        for _ in 0..2 {
+            let (mut exact, body, clause) = prepare();
+            exact
+                .charge_type_work_for_test(
+                    TYPE_WORK_LIMIT - exact.type_work.used() - admission_work,
+                )
+                .expect("exact prefix should fit");
+            admit(&mut exact, body, clause).expect("a fresh exact admission should retry");
+            assert_eq!(exact.type_work.used(), TYPE_WORK_LIMIT);
+        }
+    }
+
+    #[test]
+    fn effect_row_type_application_admission_is_exact_atomic_and_retryable() {
+        use crate::core::effect::EffectOperationFamily;
+
+        let source = SourceFile::new("row-application-budget.ash", "()").expect("test source");
+        let origin = generated_origin(&source, 0);
+        let prepare = || {
+            let mut builder = CoreBuilder::<EffectOperationFamily>::with_effect_registry(Arc::new(
+                ResolvedRegistry::default(),
+            ));
+            let function = builder
+                .unit(Type::Unit, origin.clone())
+                .expect("function placeholder");
+            (builder, function)
+        };
+        let admit = |builder: &mut CoreBuilder<EffectOperationFamily>, function| {
+            builder.type_application_with_row_arguments(
+                function,
+                Vec::new(),
+                vec![EffectRow::open(
+                    EffectRowVariable::rigid(TypeVariableId::new(0)),
+                    Box::new([]),
+                )],
+                Type::Unit,
+                origin.clone(),
+            )
+        };
+
+        let (mut measured, function) = prepare();
+        let before = measured.type_work.used();
+        admit(&mut measured, function).expect("measured row admission");
+        let work = measured.type_work.used() - before;
+
+        let (mut short, function) = prepare();
+        let retained = short.nodes.len();
+        short
+            .charge_type_work_for_test(TYPE_WORK_LIMIT - short.type_work.used() - (work - 1))
+            .expect("one-short prefix");
+        assert_eq!(
+            admit(&mut short, function),
+            Err(BuildError::TypeWorkExceeded)
+        );
+        assert_eq!(short.nodes.len(), retained);
+
+        for _ in 0..2 {
+            let (mut exact, function) = prepare();
+            exact
+                .charge_type_work_for_test(TYPE_WORK_LIMIT - exact.type_work.used() - work)
+                .expect("exact prefix");
+            admit(&mut exact, function).expect("fresh exact retry");
+            assert_eq!(exact.type_work.used(), TYPE_WORK_LIMIT);
+        }
     }
 }

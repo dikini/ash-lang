@@ -18,8 +18,8 @@ asynchrony, or concurrency initial dependencies?
 
 ## Current boundary
 
-The [current specification](../../spec/README.md) defines a pure, rank-1
-language with passive, statically linked modules. Nominal declarations,
+At this outline's post-`lib-ash` baseline, the specification defined a pure,
+rank-1 language with passive, statically linked modules. Nominal declarations,
 imports, re-exports, interface constraints, and selected implementation
 evidence preserve checked identities. Static module and interface machinery
 erases: evaluation has no runtime module value, interface registry, or dynamic
@@ -38,15 +38,22 @@ provides explicit first-order evaluator state while leaving surface and Core
 continuations unchosen. These boundaries make later effect work localizable,
 but they do not supply effect semantics.
 
-After `lib-ash`, the following capabilities would still be absent:
+At the post-`lib-ash` baseline from which this outline was written, the
+following capabilities were absent. The product checkpoints now implement
+module and local `newtype`, scoped exact evidence, and the resume-required
+effect kernel, as described
+by the [branch specification](../../spec/README.md). Local declarations have
+stable lexical identities and permit identity-free closure escape; they do
+not establish identities per execution. The wider milestone remains separate
+from integration into `main`. The completed safe-cell product checkpoint adds
+acquisition-local runtime activation, sealed provider relationships, reusable
+handles and stored-dependency checking, with scope-owned release on admitted
+exits. Its [evidence](effect-ash/resource-scope-evidence.md) retains full
+verification, reviews and verified local integration. The remaining gaps are:
 
-- effect API declarations, effect rows, handlers, and typed continuation
-  contracts;
-- representation-preserving `newtype` declarations, local type declarations,
-  or runtime-established fresh identities;
-- resource acquisition scopes, identity-indexed resource values, ownership or
-  usage checking, and deterministic cleanup;
-- runtime provider relationships and a checked foreign-provider boundary;
+- general resource/provider declarations and ownership-transfer mechanisms;
+- reliable cleanup across the later admitted failure and abandonment paths;
+- a checked foreign-provider boundary;
 - runtime hook registration, publication, and registration lifetimes;
 - suspension, asynchronous hook execution, concurrency, cancellation, and
   replay-safe multi-shot continuations; and
@@ -55,6 +62,12 @@ After `lib-ash`, the following capabilities would still be absent:
 The last item does not become an `effect-ash` dependency merely because future
 dynamic composition may reuse identities, provider relationships, or
 continuations.
+
+The pure scoped-evidence checkpoint is implemented, independently reviewed,
+and verified. Its [implementation evidence](effect-ash/scoped-evidence-evidence.md)
+records complete-header and capture authentication, resource bounds, and the
+full gate. Local milestone integration remains separate from integration into
+`main`.
 
 ## Leading boundary
 
@@ -149,9 +162,10 @@ declaration reuses current visibility and summary machinery:
 - public transparent `newtype` exposes the identity and representation
   constructor.
 
-The exact grammar remains proposal work. It should follow the existing nominal
-declaration shape and existing sequential or recursive binding structure
-rather than introduce a separate `scope` syntax solely for types.
+The module and local checkpoints now settle this grammar in the
+[specification](../../spec/syntax.md). Local `newtype` follows sequential scope
+and is excluded from recursive declaration groups. It reuses the nominal
+declaration shape without a separate source `scope` form.
 
 With static modules, one module-level declaration introduces one identity in
 the linked program. Imports and re-exports preserve it instead of regenerating
@@ -235,14 +249,15 @@ The initial boundary therefore has these rules:
 - evidence may escape only through an independently valid abstraction. The
   initial boundary adds no existential package merely to permit escape.
 
-A later proposal must make two placements explicit: whether scoped evidence can
-supply relational improvement for an eligible known determinant key, and where
-it enters complete-goal selection relative to abstract requirements and exact
-current-implementation evidence. It must preserve the fixed root snapshot,
-single forward pass, mandatory consistency check, and separate complete-
-application selection of recursive prerequisites. Scoped evidence cannot refine
-a key, unlock a root outside the snapshot, or become a competing global
-candidate. It uses identity equality and is validated before Core construction.
+The scoped-evidence checkpoint settles these placements: it follows abstract
+requirements and exact-current evidence, precedes concrete matching, and
+participates in the existing improvement pass for identity-equal eligible keys.
+It preserves the fixed root snapshot, single forward pass, mandatory consistency
+check, and separate complete-application selection of recursive prerequisites.
+Scoped evidence cannot refine a key, unlock a root outside the snapshot, or
+become a competing global candidate. The implementation uses identity
+equality and independent linked and Core validation; it supplies no acquisition,
+provider, or proof authority.
 
 ### Keep effect requirements separate
 
@@ -412,20 +427,21 @@ closed it nor authorizes a later language increment.
 
 ## Open questions
 
-- What exact `newtype` grammar and constructor rules best reuse nominal type
-  declarations?
-- Does a local recursive declaration group admit `newtype`, and if so, what
-  recursion is meaningful for representation checking and erasure?
-- At what point does a local pure identity instantiate, and how does that
-  relate to an identity freshly established on each resource acquisition?
-- What Core form or validated metadata must retain a `newtype` representation
-  boundary until its last checked use?
-- Does scoped exact evidence participate in fixed-snapshot improvement for an
-  eligible known determinant key, and where does it enter the abstract, exact-
-  current, and concrete complete-goal selection order?
-- Which first pure relation best tests scoped exact evidence without effects?
-- Which row representation and inference boundary is sufficient for the first
-  closed and open effect cases?
+The module and local `newtype` checkpoints settle declaration grammar,
+sequential lexical scope, stable compile-time identity, escape, and erased
+conversion and scope carriers. The resume-required kernel settles its initial
+row and handler rules. Their retained evidence is linked from the
+[trajectory](../trajectory.md); these results do not settle runtime acquisition
+or resource lifetime.
+
+The implemented scoped-evidence checkpoint also settles pure introduction,
+selection precedence, and improvement participation. Its first executable
+relation is `Read<Token, Int>`, tested through direct selection and constrained
+forwarding. Its retained report records authentication, verification, and the
+separate local integration boundary.
+
+- How should a fresh identity at resource acquisition relate to the existing
+  stable compile-time lexical identity?
 - What minimum usage or lifetime rule prevents a resource-bearing closure or
   continuation from escaping its scope?
 - Which cleanup rule applies to checked discard, handler abort, subscriber

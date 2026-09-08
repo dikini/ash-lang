@@ -8,6 +8,7 @@ use std::{
 use ash::{
     driver::{FileFailure, PipelineFailure, RunConfiguration, run_path},
     elaborate::{TypeError, TypeReason},
+    kind::{KindFailure, KindReason},
     lexer::LexReason,
     module::{LoadGraphError, ModuleRoots},
     parser::ParseReason,
@@ -61,6 +62,7 @@ enum Stage {
     Lexical,
     Parser,
     Resolution,
+    Kinding,
     Typing,
 }
 
@@ -75,6 +77,7 @@ enum ExpectedReason {
         lexical: &'static [LexReason],
     },
     Resolution(ResolveReason),
+    Kinding(KindReason),
     Typing(TypeReason),
 }
 
@@ -217,6 +220,34 @@ const VALID_CASES: &[ValidCase] = &[
         expected_value: "Type",
         expected_type: "Type",
         expected_stdout: "Type : Type\n",
+    },
+    ValidCase {
+        id: "module-newtype-private-hidden-carrier",
+        path: "tests/fixtures/module-newtypes/private-hidden/entry.ash",
+        expected_value: "42",
+        expected_type: "Int",
+        expected_stdout: "42 : Int\n",
+    },
+    ValidCase {
+        id: "module-newtype-transparent-facade",
+        path: "tests/fixtures/module-newtypes/transparent-facade/entry.ash",
+        expected_value: "42",
+        expected_type: "Int",
+        expected_stdout: "42 : Int\n",
+    },
+    ValidCase {
+        id: "module-newtype-nominal-observation",
+        path: "tests/fixtures/module-newtypes/nominal-observation.ash",
+        expected_value: "42",
+        expected_type: "UserId",
+        expected_stdout: "42 : UserId\n",
+    },
+    ValidCase {
+        id: "effect-kernel-combined",
+        path: "tests/fixtures/effects/valid/effect-kernel-combined.ash",
+        expected_value: "42",
+        expected_type: "Int",
+        expected_stdout: "42 : Int\n",
     },
 ];
 
@@ -371,6 +402,33 @@ const INVALID_CASES: &[InvalidCase] = &[
         stage: Stage::Typing,
         reason: ExpectedReason::Typing(TypeReason::UnsafeRecursiveRoot),
     },
+    InvalidCase {
+        id: "module-newtype-reserved-identifier",
+        path: "tests/fixtures/module-newtypes/invalid/reserved-identifier.ash",
+        stage: Stage::Parser,
+        reason: ExpectedReason::Parser {
+            parser: &[ParseReason::ExpectedForm],
+            lexical: &[],
+        },
+    },
+    InvalidCase {
+        id: "module-newtype-constructor-name",
+        path: "tests/fixtures/module-newtypes/invalid/constructor-name.ash",
+        stage: Stage::Resolution,
+        reason: ExpectedReason::Resolution(ResolveReason::NewtypeConstructorName),
+    },
+    InvalidCase {
+        id: "module-newtype-recursive-representation",
+        path: "tests/fixtures/module-newtypes/invalid/recursive-representation.ash",
+        stage: Stage::Typing,
+        reason: ExpectedReason::Typing(TypeReason::NewtypeRecursiveRepresentation),
+    },
+    InvalidCase {
+        id: "module-newtype-mixed-first-owner",
+        path: "tests/fixtures/module-newtypes/invalid/mixed-first-owner.ash",
+        stage: Stage::Kinding,
+        reason: ExpectedReason::Kinding(KindReason::NotApplicable),
+    },
 ];
 
 fn ash(path: &Path) -> std::process::Output {
@@ -433,6 +491,47 @@ fn every_invalid_corpus_case_stops_at_its_owning_stage_and_cli_boundary() {
         assert!(output.stdout.is_empty(), "{}: {output:?}", case.id);
         assert!(!output.stderr.is_empty(), "{}: {output:?}", case.id);
     }
+}
+
+#[test]
+fn module_newtype_mixed_failures_report_the_earlier_ordinary_payload_kind_owner() {
+    const PATH: &str = "tests/fixtures/module-newtypes/invalid/mixed-first-owner.ash";
+    let source = fs::read_to_string(PATH).expect("the mixed-error fixture should exist");
+    for required in [
+        "type Ordinary = Ordinary(Ordinary<Int>)",
+        "newtype BadRepresentation = BadRepresentation(BadRepresentation<Int>)",
+        "newtype Left = Left(Right)",
+        "newtype Right = Right(Left)",
+        "main () = true",
+    ] {
+        assert!(
+            source.contains(required),
+            "missing mixed-error axis: {required}"
+        );
+    }
+
+    let failure = run(PATH).expect_err("the first ordinary payload kind error must reject");
+    let FileFailure::Pipeline(PipelineFailure::Kind(KindFailure::Source(error))) = failure else {
+        panic!("the earlier ordinary payload must own the mixed failure");
+    };
+    assert_eq!(error.reason, KindReason::NotApplicable);
+    assert_eq!(error.primary.span().range().start(), 25);
+    assert_eq!(error.primary.span().range().end(), 38);
+
+    let output = ash(Path::new(PATH));
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        output.stderr,
+        concat!(
+            "kind.not-applicable\n",
+            "primary: source 0 25..38: this type does not have a function kind\n",
+            "related: source 0 0..39: the applied type's kind is fixed by this declaration\n",
+            "expected Type -> _\n",
+            "found Type\n",
+        )
+        .as_bytes(),
+    );
 }
 
 #[test]
@@ -719,6 +818,11 @@ fn assert_source_reason(case: &InvalidCase, failure: &FileFailure) {
             Stage::Resolution,
             ExpectedReason::Resolution(expected),
             FileFailure::Pipeline(PipelineFailure::Resolution(actual)),
+        ) => assert_eq!(actual.reason, expected, "{}", case.id),
+        (
+            Stage::Kinding,
+            ExpectedReason::Kinding(expected),
+            FileFailure::Pipeline(PipelineFailure::Kind(KindFailure::Source(actual))),
         ) => assert_eq!(actual.reason, expected, "{}", case.id),
         (
             Stage::Typing,

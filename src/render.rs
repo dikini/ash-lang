@@ -6,11 +6,94 @@ use crate::{
     diagnostic::{Diagnostic, compare_source_spans},
     driver::{FileFailure, Observation, PipelineFailure, SyntaxFailure},
     elaborate::TypeError,
+    eval::{ResourceFailure as RuntimeResourceFailure, RuntimeFailureReport},
     lexer::LexReason,
     module::{LoadGraphError, ModuleFailure, ModuleReason, ModuleResource},
     parser::{InternalReason, ParseDiagnostic, ProjectionError, ResourceFailure},
     source::Span,
 };
+
+/// Writes a bounded runtime report without constructing a rich message.
+///
+/// The supplied writer owns its own storage policy. The reporter uses only
+/// static fragments and a stack decimal buffer, and stops on any writer error.
+///
+/// # Errors
+/// Returns the first write or flush failure without retrying it.
+pub fn write_runtime_report(
+    writer: &mut impl std::io::Write,
+    report: &RuntimeFailureReport,
+) -> std::io::Result<()> {
+    fragment(writer, report.primary.reason_code().as_bytes())?;
+    fragment(writer, b"\n")?;
+    if let Some(failure) = report.primary.resource() {
+        if report.primary.reason_code() != failure.cause.reason_code() {
+            fragment(writer, b"cause: ")?;
+            fragment(writer, failure.cause.reason_code().as_bytes())?;
+            fragment(writer, b"\n")?;
+        }
+        resource_details(writer, failure)?;
+    }
+    if let Some(failure) = report.teardown {
+        fragment(writer, b"teardown: ")?;
+        fragment(writer, failure.cause.reason_code().as_bytes())?;
+        fragment(writer, b"\n")?;
+        resource_details(writer, failure)?;
+    }
+    fragment(writer, b"cleanup: ")?;
+    fragment(writer, report.cleanup.label().as_bytes())?;
+    fragment(writer, b"\n")?;
+    writer.flush()
+}
+
+fn resource_details(
+    writer: &mut impl std::io::Write,
+    failure: RuntimeResourceFailure,
+) -> std::io::Result<()> {
+    fragment(writer, b"phase: ")?;
+    fragment(writer, failure.phase.label().as_bytes())?;
+    fragment(writer, b"\n")?;
+    fragment(writer, b"resource: ")?;
+    fragment(writer, failure.resource.label().as_bytes())?;
+    fragment(writer, b"\n")?;
+    if failure.cause == crate::eval::ResourceFailureCause::StorageReservationFailed {
+        fragment(writer, b"underlying cause: undetermined\n")?;
+    }
+    for (label, amount) in [
+        (b"requested: ".as_slice(), failure.requested),
+        (b"available: ".as_slice(), failure.available),
+    ] {
+        if let Some(mut amount) = amount {
+            fragment(writer, label)?;
+            let mut digits = [0; usize::BITS as usize];
+            let mut start = digits.len();
+            loop {
+                start -= 1;
+                digits[start] = b'0' + (amount % 10) as u8;
+                amount /= 10;
+                if amount == 0 {
+                    break;
+                }
+            }
+            fragment(writer, &digits[start..])?;
+            fragment(writer, b"\n")?;
+        }
+    }
+    Ok(())
+}
+
+fn fragment(writer: &mut impl std::io::Write, mut bytes: &[u8]) -> std::io::Result<()> {
+    // Unlike write_all, this does not retry Interrupted. Every successful
+    // iteration consumes at least one byte of the fixed-size report.
+    while !bytes.is_empty() {
+        let count = writer.write(bytes)?;
+        if count == 0 || count > bytes.len() {
+            return Err(std::io::ErrorKind::WriteZero.into());
+        }
+        bytes = &bytes[count..];
+    }
+    Ok(())
+}
 
 /// Renders one successful observation with its required trailing newline.
 #[must_use]
@@ -152,6 +235,8 @@ fn module_failure(failure: &ModuleFailure) -> String {
 
 const fn module_primary_message(reason: ModuleReason) -> &'static str {
     match reason {
+        ModuleReason::UnknownBuiltin => "this import names no compiler-owned module",
+        ModuleReason::ReservedRoot => "the builtin module root is reserved",
         ModuleReason::UnknownRoot => "this import names an unknown module root",
         ModuleReason::NotFound => "this import target does not exist",
         ModuleReason::PathEscape => "this import target escapes its module root",

@@ -12,16 +12,40 @@ inventory, simplification audit, retained budgets, ownership boundaries, and
 intentional exclusions. Historical comparisons build that tag separately;
 current source contains no Mini-Ash dialect selector or compatibility grammar.
 
-The [current specification](../spec/README.md) defines four implemented bounded
-`lib-ash` increments on the completed Modular Ash base. It retains
+The [specification in this integration branch](../spec/README.md) combines four
+implemented bounded `lib-ash` increments, module and local `newtype`, scoped
+evidence, and the effect kernel on the completed Modular Ash base. The completed
+capture/discard checkpoint extends the kernel with consuming abandonment.
+This combined result is not current on `main`. It retains
 passive source modules and method-only type-class-like interfaces; adds explicit
 implementation selection and targeted name and implementation re-exports; and
 adds explicit kinds, higher-kinded declaration parameters, explicit fixed-
 kinded method-local parameters with authenticated generated evidence, and
 complete relational interface applications with one optional total forward
-determination edge. The
+determination edge. Module `newtype` adds an allocation-free nominal
+abstraction with authenticated Core conversions. Local `newtype` adds stable
+lexical identity and an erased scope while permitting identity-free closure
+escape. The effect kernel adds
+identity-bearing computation rows, requests, exhaustive ordered lexical
+handlers, and non-escaping exactly-once completion. Checked discard now has
+inferred capture safety and runtime implementation, with reviews and full
+verification retained.
+
+Safe non-foreign resource scope is complete and locally integrated with full
+verification, independent reviews and transition cleanup. Its
+[evidence record](design/effect-ash/resource-scope-evidence.md) records the
+scope-owned cell, stored dependencies, runtime activation boundary and verified
+unsigned local merge. The integration branch's specification includes that
+transition; it is not current on `main`.
+The synchronous-hook product checkpoint `ad2b0d4` now retains its complete
+implementation, specification, tests, reviews and full verification. Its
+[evidence](design/effect-ash/synchronous-hooks-evidence.md) records ordered
+transformations, lexical registration ownership and dependency/completion
+checking. Unsigned local merge `7dacce7`, full merged-checkout verification
+and clean feature removal close its local lifecycle.
+The
 [`ash` tool guide](tools/ash.md) documents entry-module execution, named module
-roots, and interface-related source failures. The
+roots, and interface- and effect-related source failures. The
 [passive-module evidence](design/modular-ash/evidence.md) and
 [interface implementation evidence](design/modular-ash/interfaces-evidence.md)
 retain the completed passive-module and method-only interface increments across
@@ -56,16 +80,35 @@ The fourth bounded increment is complete; its reviewed
 product evidence is retained by the
 [relational-interface evidence report](design/lib-ash/relational-interfaces-evidence.md).
 Together, the four integrated increments close the revised `lib-ash` milestone.
-The retained product boundary omits associated projections, general
-determination graphs, defaults, effects, proofs, and existentials. `effect-ash`,
-`proof-ash`, and `pack-ash` are named future milestones. `effect-ash` and
-`pack-ash` have no ordering between them. `effect-ash` and `proof-ash` remain
-separate, but their work may interleave through explicitly named synchronization
-checkpoints.
+The retained `lib-ash` boundary omits associated projections, general
+determination graphs, defaults, proofs, and existentials. The module-`newtype`
+and local-`newtype` and resume-required effect-kernel product checkpoints are
+complete and combined on `integration/effect-ash-foundations`. Scoped exact
+evidence is now also locally integrated there, with its
+[implementation evidence](design/effect-ash/scoped-evidence-evidence.md)
+recording behavioral coverage, authentication, resource bounds, and reviews.
+Capture and checked discard are complete in the retained checkpoint; its
+[evidence](design/effect-ash/capture-discard-evidence.md) records the reviewed
+inference and runtime boundary, full verification and transition cleanup.
+Safe resource scope and synchronous hooks now have complete product checkpoints.
+Reliable cleanup, foreign providers and suspension remain future work.
+`effect-ash` has no total ordering with `proof-ash` or `pack-ash`;
+work may interleave only through
+explicitly named synchronization checkpoints.
 [DN-0026](design/DN-0026-effect-ash-resource-first-milestones.md) outlines a
 resource-first partial order for `effect-ash`: common pure and resource
 generativity and the effect kernel meet at resource scope, synchronous hooks
 follow early, and suspension and concurrency remain later work.
+The retained [module-`newtype` evidence](design/effect-ash/module-newtype-evidence.md)
+and [effect-kernel evidence](design/effect-ash/resume-required-effect-kernel-evidence.md)
+cover the two combined inputs. The
+[local-newtype evidence](design/effect-ash/local-newtype-evidence.md) covers the
+lexical checkpoint. The [scoped-evidence report](design/effect-ash/scoped-evidence-evidence.md)
+records the completed pure evidence checkpoint and local merge;
+capture and checked discard have passed their full gate, and safe resource scope
+is verified and locally integrated. Neither
+the branch combination nor those plans make the wider Effects Ash milestone
+current on `main`.
 
 | Work | Maturity | Dependencies | Next evidence |
 | --- | --- | --- | --- |
@@ -78,18 +121,26 @@ follow early, and suspension and concurrency remain later work.
 | [Explicit kinds and higher-kinded parameters](design/lib-ash/kinds-evidence.md) | complete / implementation | integrated [explicit-import increment](design/lib-ash/imports-evidence.md), current [specification](../spec/README.md), accepted [ordered resolved-global authority](decisions/AD-0009-ordered-resolved-global-binder-authority.md), stable identities, body-free summaries, and independent Core validation | Preserve the phase-dependent inference boundary, authenticated ordered ownership, exact resource formulas, and runtime erasure during separately authorized later work. |
 | [Method-local type parameters](design/lib-ash/method-parameters-evidence.md) | complete / implementation | integrated [explicit-kind increment](design/lib-ash/kinds-evidence.md), current [specification](../spec/README.md), stable method identities, body-free summaries, linked evidence validation, authenticated generated adapters, and independent typed Core validation | Preserve exact method-scheme authority, occurrence-local instantiation, bounded adapter authentication, ordinary rank-1 source values, resource limits, and runtime erasure during separately authorized later work. |
 | [Multi-parameter relational interfaces](design/lib-ash/relational-interfaces-evidence.md) | complete / implementation | integrated [method-parameter increment](design/lib-ash/method-parameters-evidence.md), current relational [specification](../spec/README.md), stable identities, body-free summaries, occurrence-owned evidence, linked validation, typed Core erasure, and completed transition cleanup | Preserve forward-only improvement, full-application selection, and the effects, proofs, and existentials exclusions during separately authorized future work. |
-| [`effect-ash`: resource-first effects, handlers, and providers](design/DN-0026-effect-ash-resource-first-milestones.md) | outlined | current pure [specification](../spec/README.md), accepted [typed Core](decisions/AD-0007-typed-core-dialects.md) and [evaluator](decisions/AD-0008-explicit-evaluator-machine.md) boundaries, the exploratory [effect](design/DN-0009-effects-handlers-and-continuations.md), [identity and lifetime](design/DN-0010-identities-and-resource-lifetimes.md), [provider resolution](design/DN-0011-modules-providers-and-resolution.md), [hook](design/DN-0012-coeffects-and-hooks.md), and [protocol stress](design/DN-0013-session-and-resource-protocol-stress-tests.md) models, and the current checked [interface evidence flow](../spec/elaboration.md#interface-evidence-lowering); no ordering dependency on `pack-ash` | Compare module and local `newtype`, pure scoped exact evidence, and a minimal one-shot effect kernel as independently bounded inputs to the first resource-scope proposal. Keep dynamic loading, existentials, async execution, and concurrency outside that first proposal. |
-| [`proof-ash`: propositions, laws, program proofs, and law-derived testing](design/DN-0001-reboot-foundations.md#14-propositions-laws-and-proofs) | idea | current pure [specification](../spec/README.md), accepted [small-step semantic method](decisions/AD-0004-small-step-semantic-method.md) and [front-end](decisions/AD-0006-front-end-semantic-boundaries.md) and [typed Core](decisions/AD-0007-typed-core-dialects.md) boundaries, implemented [checked interface-evidence flow](../spec/elaboration.md#interface-evidence-lowering), and exploratory [runtime-established static evidence](design/DN-0018-runtime-established-static-evidence.md) | Define a bounded pure proposition-and-law corpus and compare proof-evidence and program-logic models before selecting a calculus. Any work that requires effect semantics must name a synchronization checkpoint with `effect-ash` and state its required inputs and retained outputs. |
-| [Core representation](decisions/AD-0007-typed-core-dialects.md) | implementation | accepted typed-dialect and pure-computation boundaries | Exercise the retained closed pure dialect and operation-family seam against the next proposed feature pressure. |
+| [`effect-ash`: resource-first effects, handlers, and providers](design/DN-0026-effect-ash-resource-first-milestones.md) | checkpoints through the narrow checked foreign provider locally integrated and verified; 95/100 planning units closed | retained [module-newtype](design/effect-ash/module-newtype-evidence.md), [local-newtype](design/effect-ash/local-newtype-evidence.md), [effect-kernel](design/effect-ash/resume-required-effect-kernel-evidence.md), [scoped-evidence](design/effect-ash/scoped-evidence-evidence.md), [capture/discard](design/effect-ash/capture-discard-evidence.md), [resource-scope](design/effect-ash/resource-scope-evidence.md), [hook](design/effect-ash/synchronous-hooks-evidence.md), [cleanup](design/effect-ash/reliable-cleanup-evidence.md) and [foreign-provider](design/effect-ash/narrow-foreign-provider-evidence.md) evidence; branch [specification](../spec/README.md); accepted typed Core and evaluator boundaries; no ordering dependency on `proof-ash` or `pack-ash` | Prepare the separate final milestone closure and seek explicit main-integration, tag and push approval. Preserve lexical identity, erasure, rows, handler order, one-shot non-escape, validation and resource accounting. Library-defined acquisition and a general FFI remain later work. |
+| [`proof-ash`: propositions, laws, program proofs, and law-derived testing](design/DN-0001-reboot-foundations.md#14-propositions-laws-and-proofs) | idea | current integration-branch [specification](../spec/README.md), accepted [small-step semantic method](decisions/AD-0004-small-step-semantic-method.md) and [front-end](decisions/AD-0006-front-end-semantic-boundaries.md) and [typed Core](decisions/AD-0007-typed-core-dialects.md) boundaries, implemented [checked interface evidence flow](../spec/elaboration.md#interface-evidence-lowering), and exploratory [runtime-established static evidence](design/DN-0018-runtime-established-static-evidence.md) | Define a bounded pure proposition-and-law corpus and compare proof-evidence and program-logic models before selecting a calculus. Any work that requires effect semantics must name a synchronization checkpoint with `effect-ash` and state its required inputs and retained outputs. |
+| [Core representation](decisions/AD-0007-typed-core-dialects.md) | implementation | accepted typed-dialect and pure-computation boundaries | Preserve the closed Pure dialect and shared operation-family seam under later feature pressure. |
 | [Parser architecture](decisions/AD-0005-parser-architecture.md) | implementation | accepted event-producing recursive-descent boundary and current grammar | Measure locality, recovery, and source coverage when a later proposal adds syntax. |
 | [Front-end semantic boundaries](decisions/AD-0006-front-end-semantic-boundaries.md) | implementation | accepted resolved-surface and bidirectional typed-elaboration boundaries | Extend stage interfaces and structured diagnostics only with an authorized semantic increment. |
-| [Evaluator architecture](decisions/AD-0008-explicit-evaluator-machine.md) | implementation | accepted first-order machine boundary and current dynamics | Test future effect and continuation pressure without changing current pure semantics implicitly. |
+| [Evaluator architecture](decisions/AD-0008-explicit-evaluator-machine.md) | implementation | accepted first-order machine boundary and current dynamics | Preserve explicit first-order control under later resource, discard, and suspension pressure. |
 | [Specification methodology](decisions/AD-0004-small-step-semantic-method.md) | implementation | accepted small-step primary method and current dynamics | Keep future operational behavior derived from one normative small-step account. |
 
-Planning detail must decrease with distance. `effect-ash` names effects,
-handlers, and providers as a future milestone toward typed interaction with
-external systems. It is unordered with respect to `pack-ash`, so exploration
-and later separately authorized increments may proceed concurrently.
+Planning detail must decrease with distance. This integration branch combines
+module and local `newtype`, scoped exact evidence, and the implemented
+resume-required kernel; the result
+is not current on `main` until separately approved integration.
+The completed capture/discard checkpoint extends that kernel. Safe resource
+scope and its fixed provider are verified and locally integrated; synchronous
+hooks, reliable cleanup and the narrow native-buffer provider are also verified
+and locally integrated. General foreign acquisition, files and suspension
+remain future work toward typed interaction
+with external systems. `effect-ash` remains unordered with respect to
+`pack-ash`, so exploration and later separately authorized increments may
+proceed concurrently.
 `proof-ash` names propositions, laws, statically checked proof evidence,
 program logic, and law-derived test generation as a separate future milestone.
 `effect-ash` and `proof-ash` have no total ordering: work may interleave, but

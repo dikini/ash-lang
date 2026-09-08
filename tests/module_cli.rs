@@ -203,6 +203,39 @@ fn accepts_repeated_root_options_with_distinct_names() {
 }
 
 #[test]
+fn same_spelled_imported_effects_are_handled_independently() {
+    let tree = TempTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "import left as Left\n",
+            "import right as Right\n\n",
+            "main : Unit -> Int\n",
+            "main () = handle (\n",
+            "handle ({\n",
+            "let left = perform Left.Signal.read ()\n",
+            "let right = perform Right.Signal.read ()\n",
+            "left + right\n",
+            "}) with Right.Signal {\n",
+            "read ignored => resume 22\n",
+            "}\n",
+            ") with Left.Signal {\n",
+            "read ignored => resume 20\n",
+            "}\n",
+        ),
+    );
+    let effect = "pub effect Signal {\nread : Unit -> Int\n}\n";
+    tree.write("left.ash", effect);
+    tree.write("right.ash", effect);
+
+    let output = ash([entry.into_os_string()]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"42 : Int\n");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn malformed_root_options_are_usage_failures() {
     let tree = TempTree::create();
     let entry = tree.write("entry.ash", "main : Unit -> Unit\nmain value = value\n");

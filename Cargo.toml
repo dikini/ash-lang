@@ -7,10 +7,11 @@ rust-version = "1.97.1"
 publish = false
 
 [dependencies]
+ash-native-buffer = { path = "native-buffer" }
 num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] }
 
 [workspace]
-members = ["xtask"]
+members = ["native-buffer", "xtask"]
 resolver = "3"
 
 [lints]

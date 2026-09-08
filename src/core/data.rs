@@ -268,7 +268,7 @@ impl CoreMatchArm {
             .expect("a live Core match arm retains its origin")
     }
 
-    pub(super) fn into_parts(mut self) -> (CorePattern, NodeId, Origin) {
+    pub(crate) fn into_parts(mut self) -> (CorePattern, NodeId, Origin) {
         (
             self.pattern
                 .take()

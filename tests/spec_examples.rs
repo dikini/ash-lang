@@ -46,6 +46,84 @@ const TREE_PRESENTATIONS_MODULE: &str = "type Tree =\n    Tip(Int)\n    | Fork(T
 const HIGHER_ORDER_CONSTRUCTOR_MODULE: &str = "type Wrapped =\n    Wrap(Int)\n\nfn build(make : Int -> Wrapped) -> Wrapped {\n    make 42\n}\n\nmain : Unit -> Int\nmain () = match build Wrap {\n    Wrap(value) => value\n}\n";
 const CYCLIC_STREAM_MODULE: &str = "type Stream =\n    Next(Int, Stream)\n\nmain : Unit -> Stream\nmain () = {\n    let rec ones : Stream = Next(1, ones)\n    ones\n}\n";
 const RANK_ONE_POLYMORPHISM_MODULE: &str = "type Option<A> =\n    None\n    | Some(A)\n\nid : A -> A\nid value = value\n\nmain : Unit -> (Option<Int>, Bool)\nmain () = {\n    let local = fn(value) {\n        value\n    }\n    (id(Some(42)), local(false))\n}\n";
+const MODULE_NEWTYPE_MODULE: &str = concat!(
+    "newtype UserId = UserId(Int)\n\n",
+    "increment : UserId -> UserId\n",
+    "increment (UserId value) = UserId(value + 1)\n\n",
+    "main : Unit -> UserId\n",
+    "main () = increment(UserId(41))\n",
+);
+
+const LOCAL_NEWTYPE_CLOSURE_MODULE: &str = concat!(
+    "make : Unit -> (Unit -> Int)\n",
+    "make () = {\n",
+    "    newtype Offset = Offset(Int)\n",
+    "    let offset = Offset(41)\n",
+    "    fn(ignored) {\n",
+    "        match offset {\n",
+    "            Offset(value) => value + 1\n",
+    "        }\n",
+    "    }\n",
+    "}\n\n",
+    "main : Unit -> Int\n",
+    "main () = make()()\n",
+);
+
+const LOCAL_NEWTYPE_ESCAPE_MODULE: &str = concat!(
+    "main : Unit -> Int\n",
+    "main () = {\n",
+    "    let escaped = {\n",
+    "        newtype Hidden = Hidden(Int)\n",
+    "        Hidden(1)\n",
+    "    }\n",
+    "    0\n",
+    "}\n",
+);
+
+const SCOPED_EVIDENCE_MODULE: &str = concat!(
+    "interface Read<A, B> where A -> B {\n",
+    "    read : A -> B\n",
+    "}\n\n",
+    "forward<A, B> : A -> B where Read<A, B>\n",
+    "forward value = read(value)\n\n",
+    "main : Unit -> Int\n",
+    "main () = {\n",
+    "    newtype Token = Token(Int)\n",
+    "    let saved = Token(41)\n",
+    "    with Read<Token, Int> {\n",
+    "        read ignored = match saved {\n",
+    "            Token(value) => value + 1\n",
+    "        }\n",
+    "    }\n",
+    "    forward(saved)\n",
+    "}\n",
+);
+
+const SCOPED_EVIDENCE_MISSING_KEY_MODULE: &str = concat!(
+    "interface Read<A> {\n",
+    "    read : A -> Int\n",
+    "}\n\n",
+    "newtype Token = Token(Int)\n\n",
+    "main : Unit -> Int\n",
+    "main () = {\n",
+    "    with Read<Token> {\n",
+    "        read ignored = 42\n",
+    "    }\n",
+    "    read(Token(0))\n",
+    "}\n",
+);
+
+const EFFECT_MODULE: &str = concat!(
+    "effect Cell {\n",
+    "    read : Unit -> Int\n",
+    "    write : Int -> Unit\n",
+    "}\n\n",
+    "main : Unit -> Int\n",
+    "main () = handle (perform Cell.read ()) with Cell {\n",
+    "    read ignored => resume 42\n",
+    "    write value => resume ()\n",
+    "}\n",
+);
 
 const MAIN_MODULE: &str = "main : Unit -> Int\nmain () = 42\n";
 const SIBLING_ENTRY_MODULE: &str =
@@ -330,7 +408,16 @@ const CORE_KIND_MODULE: &str = concat!(
     "main () = keep(Some(42))\n",
 );
 
-const PHASE_DEPENDENT_NO_KIND_INFERENCE: &str = "Every omitted declaration kind annotation, and every binder introduced by an omitted global or implementation binder list, is fixed to `Type`. Ash does not infer a kind for those binders. This is the current phase-dependent language constraint, not a commitment against a later bounded declaration-local inference rule.";
+const PHASE_DEPENDENT_NO_KIND_INFERENCE: &str = concat!(
+    "Every omitted declaration kind annotation and every binder introduced by an\n",
+    "omitted implementation binder list is fixed to `Type`. An omitted global list\n",
+    "discovers ordinary free type variables and effect-row-tail variables in their\n",
+    "shared first-occurrence order. A name occurring only in ordinary type positions\n",
+    "has kind `Type`; one occurring only as an effect-row tail has kind `EffectRow`;\n",
+    "using the same name in both roles is invalid. Ash does not infer a function\n",
+    "kind from use. This is the current phase-dependent language constraint, not a\n",
+    "commitment against a later bounded declaration-local inference rule.",
+);
 
 const EXPLICIT_KIND_RULE_FRAGMENTS: &[(&str, &str)] = &[
     (
@@ -450,6 +537,112 @@ const RELATIONAL_INTERFACE_RULE_FRAGMENTS: &[(&str, &str)] = &[
     (
         "spec/README.md",
         "An interface declares one or more ordered, fixed-kinded type parameters",
+    ),
+];
+
+const NEWTYPE_RULE_FRAGMENTS: &[(&str, &str)] = &[
+    (
+        "spec/README.md",
+        "A module `newtype` introduces a nominal type over one representation",
+    ),
+    (
+        "spec/lexical-structure.md",
+        "The reserved words `fn`, `let`, `rec`, `and`, `type`, `newtype`",
+    ),
+    (
+        "spec/syntax.md",
+        "newtype_declaration ::=\n  [ \"pub\" [ \"opaque\" ] ]",
+    ),
+    (
+        "spec/name-resolution.md",
+        "A module-level `newtype` receives the same module-owned nominal and constructor identity forms",
+    ),
+    (
+        "spec/static-semantics.md",
+        "The directed graph containing only `newtype` representation edges must be acyclic.",
+    ),
+    (
+        "spec/elaboration.md",
+        "A newtype constructor occurrence lowers to an ordinary unary function whose body is a wrap conversion.",
+    ),
+    ("spec/dynamic-semantics.md", "E-Newtype-Conversion :="),
+];
+
+const LOCAL_NEWTYPE_RULE_FRAGMENTS: &[(&str, &str)] = &[
+    (
+        "spec/README.md",
+        "A local `newtype` introduces one compile-time lexical identity",
+    ),
+    ("spec/syntax.md", "local_newtype_declaration ::="),
+    (
+        "spec/name-resolution.md",
+        "one stable, module-qualified lexical nominal identity per source declaration",
+    ),
+    (
+        "spec/name-resolution.md",
+        "The representation sees the preceding lexical type scope and its own parameters.",
+    ),
+    (
+        "spec/name-resolution.md",
+        "Both preceding name bindings are restored when the block ends.",
+    ),
+    (
+        "spec/name-resolution.md",
+        "A local `newtype` cannot be a member of a `let rec` group.",
+    ),
+    ("spec/static-semantics.md", "T-Block-Newtype-Inferred :="),
+    ("spec/static-semantics.md", "T-Block-Newtype-Checked :="),
+    (
+        "spec/static-semantics.md",
+        "Local nominal identities are rigid constants and are never generalized.",
+    ),
+    ("spec/static-semantics.md", "type.local-nominal-escape"),
+    ("spec/elaboration.md", "LocalNominalScope(owner, remainder)"),
+    (
+        "spec/elaboration.md",
+        "Local canonical facts never enter dependency summaries, imports, or exports.",
+    ),
+    (
+        "spec/elaboration.md",
+        "Every retained local nominal fact has exactly one matching scope introduction.",
+    ),
+    ("spec/dynamic-semantics.md", "E-Local-Nominal-Scope :="),
+];
+
+const SCOPED_EVIDENCE_RULE_FRAGMENTS: &[(&str, &str)] = &[
+    ("spec/syntax.md", "local_evidence_declaration ::="),
+    ("spec/name-resolution.md", "a `LexicalEvidenceId` combines"),
+    (
+        "spec/name-resolution.md",
+        "supplied method receives independent contextual rigid parameters",
+    ),
+    ("spec/static-semantics.md", "## Scoped exact evidence"),
+    ("spec/static-semantics.md", "Select-Lexical :="),
+    ("spec/static-semantics.md", "| Lexical(source, methods)"),
+    ("spec/static-semantics.md", "evidence.missing-local-key"),
+    ("spec/static-semantics.md", "evidence.duplicate"),
+    (
+        "spec/static-semantics.md",
+        "evidence.determination-conflict",
+    ),
+    ("spec/static-semantics.md", "evidence.missing-method"),
+    ("spec/static-semantics.md", "evidence.duplicate-method"),
+    ("spec/static-semantics.md", "evidence.extra-method"),
+    (
+        "spec/static-semantics.md",
+        "during mandatory improvement. A recursively generated complete prerequisite",
+    ),
+    (
+        "spec/elaboration.md",
+        "A lexical selection lowers to the ordinary local binder",
+    ),
+    (
+        "spec/elaboration.md",
+        "recorded capture binders, and actual binding and nominal",
+    ),
+    (
+        "spec/dynamic-semantics.md",
+        "A supplied lexical method uses ordinary nonrecursive binding",
     ),
 ];
 
@@ -628,6 +821,33 @@ fn overview_main_application_example_is_executable() {
 }
 
 #[test]
+fn effect_examples_have_exact_observations_and_reasons() {
+    assert_observation("effect-positive.ash", EFFECT_MODULE, "42", "Int");
+    assert_documented("spec/static-semantics.md", EFFECT_MODULE);
+
+    let nonempty_entry = concat!(
+        "effect Choice {\nchoose : Unit -> Int\n}\n",
+        "main : Unit -> Int ! {Choice}\n",
+        "main () = perform Choice.choose ()\n",
+    );
+    assert_eq!(
+        run("effect-entry-row.ash", nonempty_entry)
+            .expect_err("an entry effect must be handled")
+            .reason_code(),
+        "entry.main-effects",
+    );
+
+    let unconsumed_resume =
+        EFFECT_MODULE.replace("read ignored => resume 42", "read ignored => 42");
+    assert_eq!(
+        run("effect-resume-required.ash", &unconsumed_resume)
+            .expect_err("a handler clause must consume its resume capability")
+            .reason_code(),
+        "effect.resume-not-consumed",
+    );
+}
+
+#[test]
 fn overview_sibling_import_example_is_executable() {
     let observation = assert_module_tree(
         SIBLING_ENTRY_MODULE,
@@ -638,6 +858,68 @@ fn overview_sibling_import_example_is_executable() {
     assert_eq!(observation.type_display(), "Int");
     assert_documented("spec/README.md", SIBLING_ENTRY_MODULE);
     assert_documented("spec/README.md", SIBLING_ARITHMETIC_MODULE);
+}
+
+#[test]
+fn overview_module_newtype_example_is_executable() {
+    assert_observation("module-newtype.ash", MODULE_NEWTYPE_MODULE, "42", "UserId");
+    assert_documented("spec/README.md", MODULE_NEWTYPE_MODULE);
+}
+
+#[test]
+fn overview_local_newtype_closure_example_is_executable() {
+    assert_observation(
+        "local-newtype-closure.ash",
+        LOCAL_NEWTYPE_CLOSURE_MODULE,
+        "42",
+        "Int",
+    );
+    assert_documented("spec/README.md", LOCAL_NEWTYPE_CLOSURE_MODULE);
+}
+
+#[test]
+fn local_newtype_escape_example_has_owned_diagnostic() {
+    let failure = run("local-newtype-escape.ash", LOCAL_NEWTYPE_ESCAPE_MODULE)
+        .expect_err("a local identity must not escape its block");
+    assert_eq!(failure.reason_code(), "type.local-nominal-escape");
+    let PipelineFailure::Typing(TypeError::Source(error)) = failure else {
+        panic!("local identity escape belongs to source typing")
+    };
+    let (start, end) = exact_range(LOCAL_NEWTYPE_ESCAPE_MODULE, "Hidden(1)");
+    assert_eq!(error.primary.span().range().start(), start);
+    assert_eq!(error.primary.span().range().end(), end);
+    assert_eq!(error.related.len(), 1);
+    assert_eq!(
+        error.related[0].span().range().start(),
+        exact_range(LOCAL_NEWTYPE_ESCAPE_MODULE, "newtype Hidden").0
+    );
+    assert_documented("spec/static-semantics.md", LOCAL_NEWTYPE_ESCAPE_MODULE);
+}
+
+#[test]
+fn overview_scoped_evidence_example_is_executable() {
+    assert_observation("scoped-evidence.ash", SCOPED_EVIDENCE_MODULE, "42", "Int");
+    assert_documented("spec/README.md", SCOPED_EVIDENCE_MODULE);
+    assert_observation(
+        "scoped-evidence-direct.ash",
+        &SCOPED_EVIDENCE_MODULE.replace("forward(saved)", "read(saved)"),
+        "42",
+        "Int",
+    );
+}
+
+#[test]
+fn scoped_evidence_missing_key_example_has_owned_diagnostic() {
+    let failure = run(
+        "scoped-evidence-missing-key.ash",
+        SCOPED_EVIDENCE_MISSING_KEY_MODULE,
+    )
+    .expect_err("a module nominal is not a local evidence key");
+    assert_eq!(failure.reason_code(), "evidence.missing-local-key");
+    assert_documented(
+        "spec/static-semantics.md",
+        SCOPED_EVIDENCE_MISSING_KEY_MODULE,
+    );
 }
 
 #[test]
@@ -1498,6 +1780,8 @@ fn elaboration_distinguishes_structural_application_from_simultaneous_instantiat
                 | PureComputation::Primitive(_)
                 | PureComputation::Tuple(_)
                 | PureComputation::Match(_)
+                | PureComputation::NewtypeConversion(_)
+                | PureComputation::LocalNominalScope(_)
                 | PureComputation::TypeAbstraction(_),
             ) => {}
         }
@@ -1590,6 +1874,93 @@ fn tool_success_example_has_exact_cli_observation() {
     assert_eq!(output.stdout, b"42 : Int\n");
     assert!(output.stderr.is_empty());
     assert_documented("docs/tools/ash.md", V008);
+}
+
+#[test]
+fn resource_cell_documentation_example_has_exact_cli_output() {
+    let text = "import @builtin.cell as Cell\n\nmain : Unit -> Int\nmain () = resource cell<R> c = 41 {\n    let _ = Cell.write (c, 42)\n    Cell.read c\n}\n";
+    let source = TempFile::write(text);
+    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .arg(source.path())
+        .output()
+        .expect("the documented resource executable should start");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"42 : Int\n");
+    assert!(output.stderr.is_empty());
+    assert_documented("docs/tools/ash.md", text);
+}
+
+#[test]
+fn native_buffer_documentation_example_has_exact_cli_output() {
+    let text = "import @builtin.native_buffer as Buffer\n\nmain : Unit -> Buffer.Outcome<Buffer.Outcome<Int>>\nmain () = resource native_buffer<R> b = 4 {\nmatch Buffer.write (b, 0, 42) {\nBuffer.Success(()) => Buffer.read (b, 0)\nBuffer.Failure(error) => Buffer.Failure error\n}\n}\n";
+    let source = TempFile::write(text);
+    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .arg(source.path())
+        .output()
+        .expect("the documented native-buffer executable should start");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        output.stdout,
+        b"Success(Success(42)) : Outcome<Outcome<Int>>\n"
+    );
+    assert!(output.stderr.is_empty());
+    assert_documented("docs/tools/ash.md", text);
+}
+
+#[test]
+fn synchronous_hooks_documentation_example_has_exact_cli_output() {
+    let text = "effect Adjust {\n    publish : Int -> Int\n}\n\nincrement : Int -> Int\nincrement value = value + 1\n\ndouble : Int -> Int\ndouble value = value * 2\n\nmain : Unit -> Int\nmain () = hook Adjust {\n    register Adjust increment {\n        register Adjust double {\n            perform Adjust.publish 3\n        }\n    }\n}\n";
+    let source = TempFile::write(text);
+    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .arg(source.path())
+        .output()
+        .expect("the documented hook executable should start");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"8 : Int\n");
+    assert!(output.stderr.is_empty());
+    assert_documented("docs/tools/ash.md", text);
+}
+
+#[test]
+fn reliable_cleanup_documentation_example_has_exact_cli_output() {
+    let document = include_str!("../docs/tools/ash.md");
+    let example = document
+        .split_once("Save it as `cleanup.ash` and run `ash cleanup.ash`:")
+        .expect("the cleanup example must retain its documented invocation")
+        .1
+        .split_once("```ash\n")
+        .expect("the cleanup example must contain an Ash block")
+        .1
+        .split_once("```")
+        .expect("the cleanup source block must be closed")
+        .0;
+    let source = TempFile::write(example);
+    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .arg(source.path())
+        .output()
+        .expect("the documented cleanup executable should start");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"72211 : Int\n");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn tool_module_newtype_observation_has_exact_cli_output() {
+    let source = TempFile::write(MODULE_NEWTYPE_MODULE);
+    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .arg(source.path())
+        .output()
+        .expect("the documented module-newtype executable should start");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"42 : UserId\n");
+    assert!(output.stderr.is_empty());
+    assert_documented("docs/tools/ash.md", MODULE_NEWTYPE_MODULE);
 }
 
 #[test]
@@ -1789,6 +2160,27 @@ fn relational_interface_overview_example_is_executable() {
 #[test]
 fn relational_interface_normative_rule_manifest_is_complete() {
     for &(path, fragment) in RELATIONAL_INTERFACE_RULE_FRAGMENTS {
+        assert_normative_fragment(path, fragment);
+    }
+}
+
+#[test]
+fn module_newtype_normative_rule_manifest_is_complete() {
+    for &(path, fragment) in NEWTYPE_RULE_FRAGMENTS {
+        assert_normative_fragment(path, fragment);
+    }
+}
+
+#[test]
+fn local_newtype_normative_rule_manifest_is_complete() {
+    for &(path, fragment) in LOCAL_NEWTYPE_RULE_FRAGMENTS {
+        assert_normative_fragment(path, fragment);
+    }
+}
+
+#[test]
+fn scoped_evidence_normative_rule_manifest_is_complete() {
+    for &(path, fragment) in SCOPED_EVIDENCE_RULE_FRAGMENTS {
         assert_normative_fragment(path, fragment);
     }
 }

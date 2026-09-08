@@ -616,6 +616,13 @@ fn charge_types(types: &[Type], budget: &mut UsefulnessBudget) -> Result<(), Use
                         work.push(Task::Type(codomain));
                         work.push(Task::Type(domain));
                     }
+                    Type::EffectfulFunction(domain, codomain) => {
+                        for argument in codomain.effect_arguments() {
+                            work.push(Task::Type(argument));
+                        }
+                        work.push(Task::Type(&codomain.value));
+                        work.push(Task::Type(domain));
+                    }
                     Type::Application(function, argument) => {
                         work.push(Task::Type(argument));
                         work.push(Task::Type(function));
@@ -695,6 +702,7 @@ fn heads_for_type<'a>(ty: &Type, registry: &'a ResolvedRegistry) -> Option<Heads
         )),
         Type::Int
         | Type::Function(_, _)
+        | Type::EffectfulFunction(_, _)
         | Type::Variable(_)
         | Type::Inference(_)
         | Type::Forall(_, _) => None,
@@ -717,7 +725,17 @@ fn head_types(
             let Some(constructor) = registry.constructor(id) else {
                 return Ok(Vec::new());
             };
-            let Some(payload) = constructor.payload.as_ref() else {
+            let Some(owner) = registry.nominal(constructor.owner) else {
+                return Ok(Vec::new());
+            };
+            let payload = if owner.declaration_kind
+                == crate::resolved::ResolvedNominalDeclarationKind::Newtype
+            {
+                owner.representation.as_ref()
+            } else {
+                constructor.payload.as_ref()
+            };
+            let Some(payload) = payload else {
                 return Ok(Vec::new());
             };
             let instantiated = match ty {
@@ -752,9 +770,12 @@ fn head_types(
                         replacements.insert_replacing(parameter.id, argument.as_ref().clone());
                         current = function;
                     }
-                    substitute_type_variables_with(payload, replacements.as_map(), |cells| {
-                        budget.charge(cells)
-                    })?
+                    substitute_type_variables_with(
+                        payload,
+                        replacements.as_map(),
+                        |cells| budget.charge(cells),
+                        || UsefulnessError::WorkLimit,
+                    )?
                 }
                 Type::Nominal(owner) if *owner == constructor.owner => {
                     charge_types(std::slice::from_ref(payload), budget)?;
@@ -889,6 +910,9 @@ mod tests {
             .collect();
         let registry = ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: owner,
                 spelling: "Wide".to_owned(),
                 constructors: vec![constructor].into_boxed_slice(),

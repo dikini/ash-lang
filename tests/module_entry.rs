@@ -86,6 +86,68 @@ fn accepts_a_private_main_declared_in_the_entry_module() {
 }
 
 #[test]
+fn evaluates_a_handled_effect_through_effect_core() {
+    let tree = TempTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "effect Tick {\nping : Unit -> Unit\n}\n\n",
+            "main : Unit -> Unit\n",
+            "main () = handle (perform Tick.ping ()) with Tick {\n",
+            "ping ignored => resume ()\n",
+            "}\n",
+        ),
+    );
+
+    let observation = run(&entry).expect("a fully handled effect should run through Effect Core");
+
+    assert_eq!(observation.value_display(), "()");
+    assert_eq!(observation.ty(), &Type::Unit);
+}
+
+#[test]
+fn effectful_nominal_representation_selects_effect_core() {
+    let tree = TempTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "effect Ask<A> {\nask : Unit -> Unit\n}\n\n",
+            "newtype Hidden = Hidden(Unit -> Unit ! {Ask<Int>})\n\n",
+            "main : Unit -> Int\n",
+            "main () = 42\n",
+        ),
+    );
+
+    let observation = run(&entry)
+        .expect("an effectful retained nominal representation should select Effect Core");
+
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.ty(), &Type::Int);
+}
+
+#[test]
+fn effectful_local_nominal_representation_selects_effect_core() {
+    let tree = TempTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "effect Ask<A> {\nask : Unit -> Unit\n}\n\n",
+            "main : Unit -> Int\n",
+            "main () = {\n",
+            "newtype Hidden = Hidden(Unit -> Unit ! {Ask<Int>})\n",
+            "42\n",
+            "}\n",
+        ),
+    );
+
+    let observation =
+        run(&entry).expect("an effectful retained local representation should select Effect Core");
+
+    assert_eq!(observation.value_display(), "42");
+    assert_eq!(observation.ty(), &Type::Int);
+}
+
+#[test]
 fn rejects_an_entry_module_without_a_local_main() {
     let tree = TempTree::create();
     let entry = tree.write("entry.ash", "helper : Unit -> Unit\nhelper value = value\n");
@@ -116,6 +178,24 @@ fn rejects_a_main_whose_domain_is_not_unit() {
     let failure = run(&entry).expect_err("main must accept Unit");
 
     assert_eq!(failure.reason_code(), "entry.main-domain");
+    assert!(failure.is_source_rejection());
+}
+
+#[test]
+fn rejects_a_nonempty_entry_effect_row_before_core_lowering() {
+    let tree = TempTree::create();
+    let entry = tree.write(
+        "entry.ash",
+        concat!(
+            "effect Choice {\nchoose : Unit -> Int\n}\n",
+            "main : Unit -> Int ! {Choice}\n",
+            "main () = perform Choice.choose ()\n",
+        ),
+    );
+
+    let failure = run(&entry).expect_err("the linked entry row must be empty");
+
+    assert_eq!(failure.reason_code(), "entry.main-effects");
     assert!(failure.is_source_rejection());
 }
 

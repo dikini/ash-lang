@@ -47,7 +47,7 @@ pub struct ApplicationNode {
 }
 
 impl ApplicationNode {
-    pub(super) const fn new(function: NodeId, argument: NodeId) -> Self {
+    pub(crate) const fn new(function: NodeId, argument: NodeId) -> Self {
         Self { function, argument }
     }
 

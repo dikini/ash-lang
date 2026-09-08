@@ -90,6 +90,30 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 ### Effects and dynamic composition
 
+- [Milestone closure evidence](effect-ash/milestone-closure-evidence.md) —
+  combined conformance, downstream-pressure and simplification audit; final
+  verification and main integration remain gated.
+- [Narrow checked foreign-provider evidence](effect-ash/narrow-foreign-provider-evidence.md)
+  — native allocation, checked access, scoped ownership, fail-stop resource
+  reports, independent validation and verified local integration.
+- [Reliable cleanup evidence](effect-ash/reliable-cleanup-evidence.md) —
+  verified normal completion, owned abandonment, typed reporting and local
+  integration of the complete cleanup contract.
+- [Synchronous hook evidence](effect-ash/synchronous-hooks-evidence.md) —
+  verified hook roots, registration, runtime composition and local integration
+  of the complete hook contract.
+- [Safe resource scope evidence](effect-ash/resource-scope-evidence.md) —
+  cell ownership, dependency, activation, runtime and full verification
+  evidence; the product checkpoint is complete and locally integrated with
+  merged-checkout verification.
+- [Scoped exact evidence](effect-ash/scoped-evidence-evidence.md) — verified
+  pure relation, method/selection interactions, authentication and local merge.
+- [Local `newtype` evidence](effect-ash/local-newtype-evidence.md) — lexical
+  identity, escape, scope authentication, erasure, and exact resources for the
+  local nominal checkpoint.
+- [Resume-required effect kernel evidence](effect-ash/resume-required-effect-kernel-evidence.md)
+  — retained source, Core, runtime, diagnostic, resource, and predecessor
+  observations for the first effect kernel.
 - [DN-0026: Effect Ash Resource-First Milestones](DN-0026-effect-ash-resource-first-milestones.md)
   — a partial-order decomposition through shared generative identity, scoped
   evidence, resources, synchronous hooks, foreign providers, suspension, and
@@ -97,6 +121,14 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 - [DN-0029: Human Diagnostic Presentation](DN-0029-human-diagnostic-presentation.md)
   — human-first source rendering, machine output, structured internal causes,
   and localized message catalogues.
+- [DN-0027: Effect Ash Program Design](DN-0027-effect-ash-program-design.md) —
+  the current informative closure boundary, causal checkpoint program,
+  authority gates, implementation seams, and downstream extension pressures.
+- [DN-0028: Effect Ash Milestone Plan](DN-0028-effect-ash-milestone-plan.md) —
+  proposal-gated execution protocol, relative budget forecast, exact first
+  proposal work, post-acceptance TDD skeleton, and later checkpoint gates.
+- [Module `newtype` evidence](effect-ash/module-newtype-evidence.md) — retained
+  cross-stage product evidence for the first bounded `effect-ash` input.
 - [DN-0009: Effects, Handlers, and Continuations](DN-0009-effects-handlers-and-continuations.md) — effect APIs and rows, handler composition, and continuation contracts.
 - [DN-0010: Identities and Resource Lifetimes](DN-0010-identities-and-resource-lifetimes.md) — static/runtime identity, ownership, withdrawal, and captured resources.
 - [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md) — passive modules and typed composition at static-link and runtime-load stages.

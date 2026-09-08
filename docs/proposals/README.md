@@ -7,7 +7,8 @@ is integrated into `main`.
 Status has two current-tree values:
 
 - `proposed` — under consideration and cannot authorize implementation;
-- `accepted` — semantically agreed and may authorize tasks, but is still not current Ash.
+- `accepted` — semantically agreed and may authorize tasks, but is still not
+  current Ash.
 
 Remove the proposal from its product branch after one checkpoint retains the
 implementation, tests, specification update, review, and verification. Git
@@ -18,8 +19,8 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-No proposed change is currently awaiting a decision.
+No proposed semantic transition is awaiting acceptance.
 
 ## Accepted changes
 
-No accepted change is currently awaiting implementation.
+No accepted semantic transition awaits its product checkpoint.

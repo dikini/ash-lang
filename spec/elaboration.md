@@ -16,6 +16,15 @@ constructor occurrences, typed patterns, and matches remain structured semantic
 terms. Their nominal and constructor references use registry identities rather
 than source spellings.
 
+An accessible `newtype` constructor occurrence becomes an ordinary unary
+function whose body contains an explicit typed representation conversion.
+Applying that function wraps the substituted representation as the applied
+nominal; matching introduces the reverse conversion before lowering the
+representation subpattern. The conversion records the nominal identity,
+direction, one child, and causal source origin. It is neither an ordinary
+allocating constructor nor an unchecked cast, and it authenticates no
+interface, proof, provider, handler, or hook authority.
+
 Module paths, imports, aliases, targeted bindings, public re-export spellings,
 declaration visibility, and opacity are source-only forms and do not become
 Core terms. Resolution has already authenticated each cross-module name
@@ -32,6 +41,30 @@ validation authenticates their ordered parameter records, optional determinant
 positions, and complete applications. Determination metadata erases during Core
 synthesis as described below.
 
+Effect declarations also produce no runtime declaration node. A checked module
+summary retains each body-free effect identity, ordered fixed-kinded
+parameters, visibility, and ordered operation identities and types. `perform`,
+`handle`, handler clauses, `resume`, and `discard` remain typed semantic
+operations with their exact effect, operation, handler, and resume-owner
+identities. A row tail
+or effect argument is zonked before a checked summary or Core node is retained.
+
+A resource expression lowers to one Effect `Resource` carrier with an
+initializer and body. It retains the acquisition's identity binder, handle
+binder, exact builtin API relation, generated provider methods and causal
+origin. The initializer remains outside the acquired scope. The body receives
+the authenticated lexical provider, whose ordinary method functions request
+the corresponding `Ops<R>` operations. This is not a generic provider registry
+or an ordinary source `with` declaration. Pure Core admits no resource carrier.
+
+The carrier selects the closed cell or native-buffer API. Cell acquisition
+retains the body's result type; native acquisition has the exact builtin
+`Outcome<body_type>` while its body remains unwrapped. Independent linked and
+Core validation authenticate the builtin kind, ordinary Outcome/Error
+constructors, sealed provider, generated methods, ownership, origins and exact
+result/row relation. Both transforms re-establish those checks. Core contains
+neither a native address nor an allocated owner.
+
 Resolution has already replaced source type spellings with stable nominal and
 type-parameter identities. Elaboration may introduce inference variables while
 checking, but it solves and removes every inference variable before constructing
@@ -44,6 +77,13 @@ validation. Those facts are compiler authority, not source types.
 An ordinary local binding becomes a nonrecursive Core binding around the
 remainder of its block. Its initializer remains outside its new binder's
 scope.
+
+A local `newtype` lowers to `LocalNominalScope(owner, remainder)` around the
+following declarations and result of its block. It uses the shared pure Core
+family in both Pure and Effect dialects. The unary carrier records its lexical
+owner and child; its value type and effect row equal the child's. It has no
+initializer or runtime value. Local construction and matching reuse the same
+representation conversions as module `newtype`.
 
 All globals in one module elaborate together through one recursive binding.
 One explicit local recursive group elaborates through the same form around the
@@ -61,7 +101,8 @@ match it with the source pattern in the function body.
 ## Module linking and entry generation
 
 After every module checks, linking combines the complete defining nominal,
-constructor, interface, and implementation registries of all admitted modules.
+constructor, interface, effect, operation, and implementation registries of all
+admitted modules.
 Each checked module contributes a definition group containing its source
 definitions, global schemes, implementation-method bodies, and filled
 structural evidence slots. Linking preserves that ownership rather than
@@ -82,6 +123,21 @@ owner, payload, and origin needed by Core, but it does not retain another copy
 of the physical constructor scheme. The scheme therefore has the lifecycle
 summary to imported fact to disposal before linked Core, rather than a
 redundant linked carrier.
+
+For a `newtype`, the combined nominal registry instead retains one canonical
+hidden fact containing the declaration kind and identity, owner, ordered
+parameter records, sole same-spelled constructor, representation template,
+access, origin, and representation provenance. Linking authenticates these
+facts across direct, aliased, opaque, re-exported, and diamond routes. Hidden
+facts authorize later Core validation but create no source name, constructor
+access, coercion, or interface evidence.
+
+Local canonical facts never enter dependency summaries, imports, or exports.
+Each checked module retains its lexical nominals and constructors separately
+from module declaration arrays. Linking preserves their module-qualified
+lexical owners and canonical representation facts for independent Core checking;
+it creates no source access or implementation-search entry. Shared nominal
+lookup and conversion validation serve both ownership classes.
 
 Each checked module also contributes its local implementation inventory, its
 effective imported implementation inventory, and a lightweight public
@@ -139,6 +195,10 @@ The complete validation authenticates:
   spelling, identity, and provenance;
 - abstract requirement ownership, declaration order, lexical scope, and
   provenance;
+- each lexical evidence source's canonical identity, complete application,
+  ordered method identities and binders, independent contextual parameters,
+  captured binders, and actual preceding lexical scope, including unused
+  sources;
 - checked global and implementation-method schemes, their ordered kinded
   head-versus-method binder partitions, selected method types, and binder
   mappings;
@@ -171,9 +231,87 @@ phase.
 
 Elaboration generates an occurrence of the entry module's local `main` and
 applies it to unit. This application is the innermost body of the linked module
-groups. It has the closed result type established by the entry contract.
-Module linking introduces no initialization, lookup, or runtime module value;
-the result is one pure Core expression.
+groups. It has the closed result type and empty effect row established by the
+entry contract. Module linking introduces no initialization, lookup, runtime
+module value, handler registry, or provider selection.
+
+## Effect Core lowering
+
+Ash has two production Core dialects over one arena, program, validation, and
+transform substrate. Pure Core retains the uninhabited operation family and an
+empty row at every node. A linked program lowers to Effect Core when any
+retained scheme, nominal representation, constructor payload, or expression
+requires an effectful function type, an `EffectRow` binder or argument, or an
+effect operation. Importing or declaring an effect whose identity does not
+occur in any such retained fact or expression does not by itself select Effect
+Core.
+
+Every Effect Core node retains its structural value type, exact computation
+row, and causal origin. Ordinary value and computation nodes reuse the shared
+Pure Core families. Effect Core adds only these operation-family nodes:
+
+- `Request(effect_instance, operation, operand)` evaluates the operand and has
+  the operand row union the requested exact instance;
+- `Handler(handler, body, effect_instance, clauses)` removes that instance from
+  the body row and retains the shared output row; authenticated hook scopes
+  additionally retain their distinct scope-discharge contract;
+- each clause retains its operation identity, checked irrefutable pattern,
+  body, handler identity, and one resume-owner identity;
+- `Resume(handler, owner, value)` remains a clause-scoped Core operation rather
+  than a value or function;
+- `Discard(handler, owner)` is a clause-scoped, childless operation with value
+  type `Unit` and empty immediate row;
+- `Resource(acquisition, handle, initializer, body)` retains the authenticated
+  builtin relation, evaluates the initializer outside the acquired scope, and
+  removes exactly its `Ops<R>` instance from the body row before union with
+  the initializer row;
+- `Registration(handler, callback, body)` retains the non-interpreting
+  registration owner and its relation to the evaluated callback and generated
+  handler; and
+- `Cleanup(callback, action, body)` retains the preceding `Unit -> Unit`
+  callback binding and its authenticated ordinary invocation. The scope owns
+  completion, preserves the body's result, and carries the least outward row
+  for body execution and required invocation.
+
+Effect and operation declarations remain authenticated registry facts. Core
+contains no provider choice or machine-global registration registry. Lowering does not
+encode continuations as Rust closures or expose evaluator frames as Core data.
+The generated entry application is retained only with an empty row.
+
+A hook root lowers to an authenticated identity clause, `publish input =>
+resume input`. A registration first binds its transformer in the preceding
+context. Its explicit owner surrounds a generated handler whose clause binds
+the result of forwarding the original payload, applies the already evaluated
+callback to that result, then resumes with the transformed value. These are
+ordinary request, binding, application and resume nodes; there is no callback
+evaluator or source-visible registration value.
+
+The root and registration contracts retain the exact target, source relation
+and generated structure needed to authenticate scope discharge. Lowering does
+not fabricate a request, inflate a literal's least row or wrap the body in a
+function that would change its enclosing resume scope. Callback applications
+retain ordinary least-row qualification from the enclosing lexical authority.
+The owner and generated handler remain through generic specialization, even
+when target parameters may later coincide. Pure Core gains no inhabited hook
+carrier.
+
+Module checking infers private control summaries from typed semantic control
+and publishes them only after capture checking succeeds. A function summary
+retains possible calls, requests, handlers and completion control, rather than
+only a preselected outward-request list. Imported calls specialize retained
+type and effect identities before selecting handlers. Summary admission
+authenticates the defining function and those hidden identities. No source
+capture annotation, dependency source body, or runtime capture registry is
+introduced.
+
+When a polymorphic occurrence instantiates an `EffectRow` binder, the shared
+`TypeApplication` node retains one complete row argument alongside the ordinary
+type arguments. Their two ordered slices follow the abstraction's one ordered
+parameter vector by kind. Pure Core type applications retain no row arguments.
+Effect Core validation checks argument cardinality, kind, scope, and complete
+result substitution; transforms preserve or rebuild the same arguments before
+revalidation. Effect execution retains the complete row instantiation in the
+function's lexical context for exact operation matching.
 
 ## Interface-evidence lowering
 
@@ -191,7 +329,8 @@ forall parameters.
 ```
 
 Authenticated nested schemes are valid only in generated method-evidence
-domains. If `s_j` has method parameters, its `type(s_j)` is the corresponding
+positions, including the ordinary local binding of a supplied polymorphic
+method. If `s_j` has method parameters, its `type(s_j)` is the corresponding
 declared method scheme after substituting the requirement's complete argument
 vector for the interface parameter vector:
 
@@ -235,6 +374,21 @@ source term arguments apply. An authenticated evidence variable may remain
 uninstantiated only when it is forwarded to the exact matching generated
 evidence domain of another constrained definition.
 
+A lexical selection lowers to the ordinary local binder of the supplied
+method. The declaration lowers its checked methods to nonrecursive function
+bindings around the following block remainder. Each initializer sees only the
+preceding scope and captures ordinary values there. A polymorphic method adds
+the existing ordered type abstraction; a direct occurrence applies its retained
+method arguments, and constrained forwarding uses the matching method scheme.
+Distinct declarations have distinct source and method-binder identities even
+when their complete applications or method types coincide in disjoint scopes.
+
+The source method's contextual parameters map positionally to generated Core
+parameters without capturing an enclosing method's parameters. Ordinary closed
+effect-row substitution canonicalizes the result, including reordering and
+coalescing instances made equal by substitution. These operations add no
+first-class source polymorphism or new solver pass.
+
 A concrete selection maps every ordered `ImplMethodId` through the defining
 module's checked `ImplMethodId`-to-`BinderId` mapping. A monomorphic method uses
 the existing binder occurrence and applications. A polymorphic concrete or
@@ -270,16 +424,17 @@ recursion consequently use the existing recursive binding rather than a cross-
 module group.
 
 After linked interface-evidence validation, source-only interface,
-implementation, requirement, determination, and authorization-route carriers
+implementation, lexical selection scope, requirement, determination, and authorization-route carriers
 can erase.
 Minimal immutable method-evidence authentication facts survive Core synthesis
 so independent validation can derive and check every generated evidence
-domain, occurrence, forwarding use, and adapter. Their term structure uses only
+domain, occurrence, forwarding use, adapter, and supplied local method. Their term structure uses only
 ordinary Core type abstractions, function binders, binder occurrences, type
-applications, and term applications. Method authentication facts and schemes
+applications, local bindings, and term applications. Method authentication facts and schemes
 may remain as inert validation and transformation authority in the validated
-program; the evaluator does not inspect them. Core type operations erase
-through the existing dynamic rules.
+program; the evaluator does not inspect them. Pure Core type operations erase;
+Effect execution retains their lexical instantiation for exact effect matching,
+without inspecting method authentication records.
 Determination adds no Core node, type binder, evidence method, evaluator value,
 or interface-specific operation. Complete substituted types and the existing
 method-evidence relationships are sufficient after the determinant-position
@@ -299,20 +454,50 @@ Elaboration records both operations explicitly in Core. A generalized
 definition becomes `TypeAbstraction(parameters, body)` with type
 `forall parameters. body_type`; both lists retain the same ordered
 identity-kind pairs. Each polymorphic occurrence becomes
-`TypeApplication(function, arguments)`. It supplies one monotype argument per
-outer binder in order, checks each argument against that binder's kind, and
-obtains its result by simultaneous substitution into the scheme body. The Core
-operation is not a curried sequence of unary expression operations.
+`TypeApplication(function, arguments)`. It supplies one argument of the
+corresponding binder kind in abstraction order. Ordinary monotypes and complete
+`EffectRow` arguments remain in the two ordered slices defined above. It checks
+each argument against its binder's kind and obtains the result by simultaneous
+substitution into the scheme body. The Core operation is not a curried sequence
+of unary expression operations.
 Parameterized constructors use the same Core instantiation form as
 polymorphic value names.
 
+Effect Core independently checks that every type-abstraction body is an inert
+function/constructor value or variable, a transparent type-operation wrapper,
+or an authenticated generated method adapter whose checked applications only
+construct evidence functions. Each nested abstraction satisfies the same
+check. Arbitrary applications, bindings, aggregates, handlers and requests do
+not qualify merely because their immediate row is empty. This invariant
+matches source generalization and generated evidence; it permits execution to
+retain the lexical abstraction until instantiation without delaying source
+effects. Pure Core keeps its existing erasure and validation boundary.
+
+A newtype constructor occurrence lowers to an ordinary unary function whose body is a wrap conversion.
+For a parameterized declaration, the function uses fresh generated type
+binders in declared order, applies the nominal to those binders, and derives
+the function domain by substituting them into the canonical representation.
+Validation matches generated binders with canonical parameters by position and
+kind; it does not bind or replace the canonical parameter identities. A
+newtype pattern lowers through an unwrap conversion before ordinary pattern
+structure. Neither path emits an ordinary constructor Core node for the
+`newtype`.
+
+For a local representation, enclosing type parameters remain free relative to
+its own constructor scheme. Generated Core binder renaming must preserve their
+authenticated enclosing scope. Neither constructor instantiation nor local
+generalization replaces the lexical nominal identity with a type variable.
+
 An explicit global binder list establishes abstraction order. A global that
-omits the list preserves implicit first-occurrence order, with every such
-binder fixed to kind `Type`. An eligible unannotated local anonymous-function
-binding abstracts only fixed-kinded inference variables that are not free in
-the incoming environment. Other local bindings remain monomorphic. A recursive
-global body checks its self-occurrences against the same rigid parameters;
-elaboration does not instantiate recursion at a different type.
+omits the list preserves the shared first-occurrence order of ordinary type and
+effect-row-tail variables. A name occurring only in ordinary type positions
+has kind `Type`; one occurring only as an effect-row tail has kind `EffectRow`;
+using the same name in both roles is invalid. An eligible unannotated local
+anonymous-function binding abstracts only fixed-kinded inference variables that
+are not free in the incoming environment. Other local bindings remain
+monomorphic. A recursive global body checks its self-occurrences against the
+same rigid parameters; elaboration does not instantiate recursion at a
+different type.
 
 Resolved global abstraction parameters retain their resolved identities.
 Implementation-method abstractions and eligible local generalization instead
@@ -354,8 +539,9 @@ Core transformations preserve or rebuild type abstractions, type applications,
 binder kinds, ordered identities and arguments, structural types, origins, and
 every method-evidence authentication relationship. The transformed program
 passes fresh independent validation before use. The dynamic semantics erase
-the type operations. They produce no runtime kind or type value and change
-neither evaluation order nor heap contents.
+Pure type operations and retain Effect instantiation in lexical execution
+context. Neither produces a source-inspectable kind or type value, changes
+strict source evaluation order, or allocates an ordinary heap cell.
 
 ## Function presentations
 
@@ -453,15 +639,89 @@ group; it cannot silently treat the members as sequential bindings.
 ## Validation boundary
 
 Every semantic binder, pattern, and expression carries its type and causal
-source origin. After linked interface-evidence validation, the existing Core
-validator receives the produced program, its combined immutable nominal,
-constructor, canonical type-binder, and method-evidence authentication facts,
-the admitted source set, and each module's source identity. It independently
-synthesizes monotype kinds, checks schemes, and checks registry closure and
-identities, module and source provenance, binder scope, node and branch types,
-constructor ownership and payloads, pattern bindings, coverage, recursive
-groups, type-variable scope, type-operation substitution, origins, child
-handles, and reachability.
+source origin. After linked interface-evidence validation, the validator for
+the selected Core dialect receives the produced program, its combined immutable
+nominal, constructor, effect, operation, canonical type-binder, and method-
+evidence authentication facts, the admitted source set, and each module's
+source identity. Both dialects independently synthesize monotype kinds, check
+schemes, and check registry closure and identities, module and source
+provenance, binder scope, node and branch types, constructor ownership and
+payloads, pattern bindings, coverage, recursive groups, type-variable scope,
+type-operation substitution, origins, child handles, and reachability.
+
+Pure Core validation additionally requires an empty row at every node and
+rejects every effect operation. Effect Core validation independently checks:
+
+- every node's value type and exact row equation;
+- effect and operation ownership, type arguments, positional kinds, and
+  substituted operation types;
+- exhaustive handler clauses, exact-instance removal, pattern scope and type,
+  and one shared handler result and output row;
+- each resume's handler and owner, input and result types, and output row;
+- each discard's handler and owner, `Unit` type, least residual close row after
+  action-local and retained builtin resource interpretation,
+  owned-capture closure and inferred safety;
+- each resource's builtin origin, unique acquisition identity and handle,
+  sealed provider and operation relation, initializer scope and `Int` type,
+  body scope, exact row discharge and result contract;
+- each hook API's declaration-level endomorphic shape, exact target and
+  authenticated scope-discharge relation;
+- each registration's unique owner, preceding callback binding, callback
+  type/row, generated handler, forward–callback–resume order, result relation
+  and source origins;
+- each cleanup scope's unique owner, preceding action binding, `Unit -> Unit`
+  callback contract, ordinary invocation, preserved body result, least outward
+  row and source origins;
+- each abandoned action's structural closing position and actual transitive
+  interpreter requirements, preserving exact-instance precedence and lexical
+  type/row authority without restoring removed handlers;
+- exactly-once structural completion through resume or discard, and barriers
+  against escape into functions, recursive members, supplied methods, or nested
+  clauses;
+- handler nesting, dialect membership, provenance, child handles, and
+  reachability; and
+- an empty row at the linked entry application.
+
+A construction API does not authenticate these relations. Identity and folding
+transforms traverse the effect operation family, preserve or rebuild its
+authentication data, and return the result to the same independent validator.
+Effect nodes presented to Pure Core, or forged rows, identities, owners, or
+scope relations presented to Effect Core, fail before evaluation.
+Capture validation independently derives request obligations from the actual
+linked Core control after ordinary validation. It does not trust an elaborator
+permission or imported summary in place of that derivation. A transformed
+program must re-establish the same safety property.
+Cleanup row validation also reconstructs invoked actions from those actual
+relationships. A same-typed callback substitution cannot retain a stale
+discard row, dependency, completion or interpreter permission.
+
+Resource and registration validation also reconstruct stored value and callable
+dependencies and completion obligations from actual linked Core, even when
+there is no discard. Registration requires this proof even without cells or
+publication. It checks closing results, operation payloads crossing each
+owner and skipped completion, including restored control. Retained imported
+facts and elaborator results do not replace this independent derivation.
+Identity and folding transforms rebuild resource children and authentication
+facts and return to the same full check before execution. Forged builtin
+origins, identity/handle/provider relations, lexical owners, dependencies or
+rows cannot authorize evaluation.
+
+Registration proof includes dependencies newly introduced by callback results
+and completion reached through actual linked callback targets. A source
+summary or a same-typed callback substitution does not establish that proof.
+Detached or duplicated owners and altered forwarding relationships reject;
+both transforms must re-establish the complete contract before execution.
+
+Static acquisition identities remain distinct from runtime activation keys.
+Core carries the former and contains no preallocated activation or mutable
+cell or native buffer. Dynamic lexical instantiation binds each executed
+acquisition to a fresh activation; it cannot introduce an inference variable
+into validated Core or
+feed execution metadata back into source typing.
+
+The lexical registration owner is likewise distinct from each runtime
+activation of that scope. Core contains no pre-acquired callback entry or
+runtime activation key.
 
 For every resolved global with a nonempty outer binder list, validation
 requires its `TypeAbstraction` to be the immediate initializer of exactly one
@@ -486,14 +746,49 @@ method position, occurrence `MethodId` and arguments, adapter
 exclusive incoming uses.
 Independent Core validation consumes every method-evidence authentication fact exactly once.
 
-A nested scheme is valid only at its authenticated generated evidence domain,
-an occurrence type application of the matching evidence binder, exact
-forwarding to that domain, or the matching generated adapter. It remains
-invalid in ordinary parameters or results, globals, local bindings, patterns,
-tuples, constructors, structural type applications, storage, and returns. A
+For supplied local methods, validation authenticates the source identity,
+complete application, declaration-ordered method slot and binder, contextual
+parameter mapping, recorded capture binders, and actual binding and nominal
+scope. It checks unused owners as well as selected uses. An occurrence must
+refer to its recorded source and cannot replace higher-priority evidence with
+an otherwise well-typed producer. Validation checks these retained relationships
+without selecting another candidate. Both Core transforms preserve them.
+
+A nested scheme is valid only at an authenticated generated evidence domain,
+a matching occurrence type application or exact forwarding use, a matching
+generated adapter, or an authenticated supplied-method binding and its permitted
+uses. It is invalid in ordinary parameters or results, globals, other local
+bindings, patterns, tuples, constructors, structural type applications, storage,
+and returns. A
 missing, duplicate, unconsumed, wrong-owner, wrong-position, wrong-order,
-wrong-kind, wrong-method, capture-producing, or mismatched authentication
+wrong-kind, wrong-method, type-variable-capturing, or mismatched authentication
 relation fails Core validation before evaluation.
+
+For every newtype conversion, independent validation derives the expected
+relation from the linked canonical fact and the child and enclosing expression
+types. It checks a newtype owner, complete nominal application, positional
+argument kinds, declared-order representation substitution, direction,
+child/result agreement, and declaration and source provenance. It rejects an
+ordinary constructor used as a conversion and a newtype constructor or pattern
+lowered through ordinary allocating Core. Resolution and linked-summary
+validation remain the exclusive authorities for source access and import
+routes.
+
+Every retained local nominal fact has exactly one matching scope introduction.
+The introduction must have its canonical lexical owner and declaration origin.
+Every use of a local identity in a type, row, effect argument, constructor,
+pattern, conversion, or operation metadata must lie beneath its introduction.
+The scope node's own result type and row must not contain its owner. Dependencies
+of the canonical representation must already be in scope at that declaration,
+including preceding local nominals and enclosing type parameters, even when
+the constructor is unused. Its own declared parameters remain bound only by
+the representation template.
+
+Validation rejects missing, duplicate, unmatched, wrong-owner, out-of-scope,
+and escaping scope relations before evaluation. Identity traversal and folding
+preserve or rebuild the unary scope, conversions, and their metadata and return
+the program to independent validation. A scope node contributes no effect-row
+member and does not change effect-row algebra.
 
 Validation distinguishes unary structural monotype applications from Core
 type applications. A Core type application supplies one argument per quantified
@@ -506,8 +801,16 @@ One cumulative validator resource ledger covers the registry, envelope, graph,
 binder, node, term-scope, and type-scope passes. It is neither reset between
 passes nor supplemented by a separate kind allowance. Core validation applies
 once to the whole linked Core program, including every module group and the
-generated entry application. Failure of this boundary is an internal compiler
-failure, not a source-language typing result.
+generated entry application. Effect instances, rows, operations, clauses,
+resume owners, handler scopes, resource relations, stored dependencies,
+capture metadata and capture queries charge
+that same ledger before retention or
+traversal. Failure of this boundary is an internal compiler failure, not a
+source-language typing result.
 
 This requirement does not prescribe a Rust representation, storage strategy,
 or evaluator mechanism.
+
+Identity traversal and primitive folding preserve or rebuild conversions,
+their types, identities, direction, child, and origin. A transformed program
+returns to this independent validation boundary before evaluation.

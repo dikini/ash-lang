@@ -229,6 +229,10 @@ fn occurrences_in_expressions(
     let mut occurrences = Vec::new();
     while let Some(expression) = expressions.pop() {
         match &expression.kind {
+            ResolvedExprKind::Cleanup(cleanup) => {
+                expressions.push(&cleanup.action);
+                expressions.push(&cleanup.body);
+            }
             ResolvedExprKind::Occurrence(occurrence) => {
                 if occurrence.term == term {
                     occurrences.push(occurrence);
@@ -265,6 +269,17 @@ fn occurrences_in_expressions(
                 expressions.push(matched.scrutinee.as_ref());
                 expressions.extend(matched.arms.iter().map(|arm| &arm.body));
             }
+            ResolvedExprKind::Perform(request) => expressions.push(&request.operand),
+            ResolvedExprKind::Resource(resource) => {
+                expressions.push(&resource.initializer);
+                expressions.push(&resource.body);
+            }
+            ResolvedExprKind::Handle(handler) => {
+                expressions.push(&handler.body);
+                expressions.extend(handler.clauses.iter().map(|clause| &clause.body));
+            }
+            ResolvedExprKind::Resume(resume) => expressions.push(&resume.value),
+            ResolvedExprKind::Discard(_) => {}
         }
     }
     occurrences
@@ -275,10 +290,19 @@ fn schedule_local_declaration<'a>(
     expressions: &mut Vec<&'a ResolvedExpr>,
 ) {
     match declaration {
+        ResolvedLocalDeclaration::Evidence(source) => {
+            expressions.extend(
+                source
+                    .method_groups
+                    .iter()
+                    .flat_map(|group| group.equations.iter().map(|equation| &equation.body)),
+            );
+        }
         ResolvedLocalDeclaration::Binding(binding) => expressions.push(&binding.initializer),
         ResolvedLocalDeclaration::Recursive(group) => {
             expressions.extend(group.members.iter().map(|member| &member.initializer));
         }
+        ResolvedLocalDeclaration::Newtype(_) => {}
     }
 }
 

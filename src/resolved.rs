@@ -21,12 +21,350 @@ use crate::{
     module::ModuleId,
     source::{Origin, Span, discard_origin_iteratively},
     types::{
-        ConstructorId, IterativeTypeOwner, Kind, NominalTypeId, Type, TypeVariableId,
-        TypeWorkBudget, charge_kind_with_charge, charge_type_cells, clone_arrows_with_budget,
-        clone_kind_with_budget, clone_type_with_budget, discard_type_iteratively,
-        same_kind_with_charge,
+        ConstructorId, EffectId, EffectRow, EffectRowVariable, IterativeTypeOwner, Kind,
+        NominalTypeId, OperationId, Type, TypeVariableId, TypeWorkBudget, charge_kind_with_charge,
+        charge_type_cells, clone_arrows_with_budget, clone_kind_with_budget,
+        clone_type_with_budget, discard_type_iteratively, same_kind_with_charge,
     },
 };
+
+/// The fixed relation admitted by the loader's private resource origins.
+/// This descriptor contains identities only; ordinary registries own its facts.
+#[derive(Clone, Copy)]
+pub(crate) struct ResourceApi {
+    module: ModuleId,
+}
+
+impl ResourceApi {
+    pub(crate) fn for_module(module: ModuleId) -> Option<Self> {
+        module.is_builtin_resource().then_some(Self { module })
+    }
+
+    pub(crate) fn is_native_buffer(self) -> bool {
+        self.module.is_builtin_native_buffer()
+    }
+
+    pub(crate) fn method_names(self) -> &'static [&'static str] {
+        if self.is_native_buffer() {
+            &["length", "read", "write"]
+        } else {
+            &["read", "write"]
+        }
+    }
+
+    pub(crate) fn nominal_count(self) -> usize {
+        if self.is_native_buffer() { 3 } else { 1 }
+    }
+
+    pub(crate) fn constructor_count(self) -> usize {
+        if self.is_native_buffer() { 7 } else { 1 }
+    }
+
+    pub(crate) fn outcome(self) -> Option<NominalTypeId> {
+        self.is_native_buffer()
+            .then(|| NominalTypeId::new(self.module, 1))
+    }
+
+    pub(crate) fn error(self) -> Option<NominalTypeId> {
+        self.is_native_buffer()
+            .then(|| NominalTypeId::new(self.module, 2))
+    }
+
+    pub(crate) fn hides_constructor(self, id: ConstructorId) -> bool {
+        id.owner() == self.handle()
+    }
+
+    fn nominal_shape(
+        self,
+        id: NominalTypeId,
+        parameters: &[ResolvedTypeVariable],
+    ) -> Option<(&'static str, &'static [u32])> {
+        if id == self.handle() && self.parameter(parameters, 0) {
+            Some(("Handle", &[0]))
+        } else if Some(id) == self.outcome()
+            && matches!(parameters, [parameter] if parameter.id == TypeVariableId::resolved(self.module, 1)
+                && parameter.kind == Kind::Type && parameter.spelling == "T")
+        {
+            Some(("Outcome", &[0, 1]))
+        } else if Some(id) == self.error() && parameters.is_empty() {
+            Some(("Error", &[0, 1, 2, 3]))
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn handle(self) -> NominalTypeId {
+        NominalTypeId::new(self.module, 0)
+    }
+
+    pub(crate) fn provider(self) -> InterfaceId {
+        InterfaceId::new(self.module, 0)
+    }
+
+    pub(crate) fn ops(self) -> EffectId {
+        EffectId::new(self.module, 0)
+    }
+
+    fn parameter(self, parameters: &[ResolvedTypeVariable], ordinal: u32) -> bool {
+        matches!(parameters, [parameter] if parameter.id == TypeVariableId::resolved(self.module, ordinal)
+            && parameter.kind == Kind::Type && parameter.spelling == "R")
+    }
+
+    pub(crate) fn nominal(
+        self,
+        nominal: &ResolvedNominalType,
+        parameters: &[ResolvedTypeVariable],
+    ) -> bool {
+        let Some((name, family)) = self.nominal_shape(nominal.id, parameters) else {
+            return false;
+        };
+        nominal.declaration_kind == ResolvedNominalDeclarationKind::Data
+            && nominal.spelling == name
+            && nominal.constructors.len() == family.len()
+            && nominal
+                .constructors
+                .iter()
+                .zip(family)
+                .all(|(id, ordinal)| *id == ConstructorId::new(nominal.id, *ordinal))
+            && nominal.representation.is_none()
+            && nominal.representation_provenance.is_none()
+    }
+
+    pub(crate) fn constructor(self, constructor: &ResolvedConstructor) -> bool {
+        constructor.id.owner() == constructor.owner
+            && self.constructor_parts(
+                constructor.id,
+                &constructor.spelling,
+                constructor.payload.as_ref(),
+            )
+    }
+
+    fn constructor_parts(self, id: ConstructorId, spelling: &str, payload: Option<&Type>) -> bool {
+        if id == ConstructorId::new(self.handle(), 0) {
+            spelling == "Hidden" && payload.is_none()
+        } else if Some(id.owner()) == self.outcome() {
+            if id == ConstructorId::new(id.owner(), 0) {
+                spelling == "Success"
+                    && matches!(payload, Some(Type::Variable(parameter)) if *parameter == TypeVariableId::resolved(self.module, 1))
+            } else {
+                id == ConstructorId::new(id.owner(), 1)
+                    && spelling == "Failure"
+                    && matches!(payload, Some(Type::Nominal(owner)) if Some(*owner) == self.error())
+            }
+        } else if Some(id.owner()) == self.error() {
+            [
+                "InvalidLength",
+                "AllocationFailed",
+                "InvalidIndex",
+                "InvalidByte",
+            ]
+            .iter()
+            .enumerate()
+            .any(|(ordinal, name)| {
+                id == ConstructorId::new(id.owner(), ordinal as u32)
+                    && spelling == *name
+                    && payload.is_none()
+            })
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn registry(self, registry: &ResolvedRegistry) -> bool {
+        let Some(nominal) = registry.nominal(self.handle()) else {
+            return false;
+        };
+        let Some(parameters) = registry.nominal_parameters(self.handle()) else {
+            return false;
+        };
+        let Some(constructor) = registry.constructor(ConstructorId::new(self.handle(), 0)) else {
+            return false;
+        };
+        let Some(effect) = registry.effect(self.ops()) else {
+            return false;
+        };
+        if !self.nominal(nominal, parameters)
+            || !self.constructor(constructor)
+            || !self.effect(effect)
+        {
+            return false;
+        }
+        [self.outcome(), self.error()]
+            .into_iter()
+            .flatten()
+            .all(|id| {
+                let Some(nominal) = registry.nominal(id) else {
+                    return false;
+                };
+                let Some(parameters) = registry.nominal_parameters(id) else {
+                    return false;
+                };
+                self.nominal(nominal, parameters)
+                    && nominal.constructors.iter().all(|id| {
+                        registry
+                            .constructor(*id)
+                            .is_some_and(|constructor| self.constructor(constructor))
+                    })
+            })
+    }
+
+    fn exported_nominal(self, nominal: &ExportedType) -> bool {
+        let Some((_, family)) = self.nominal_shape(nominal.id, &nominal.parameters) else {
+            return false;
+        };
+        nominal.declaration_kind == ResolvedNominalDeclarationKind::Data
+            && nominal.constructor_count == family.len()
+            && nominal.parameter_count == nominal.parameters.len()
+            && if nominal.id == self.handle() {
+                nominal.access == ExportedTypeAccess::Opaque && nominal.constructors.is_empty()
+            } else {
+                nominal.access == ExportedTypeAccess::Transparent
+                    && nominal.constructors.len() == family.len()
+                    && nominal
+                        .constructors
+                        .iter()
+                        .zip(family)
+                        .all(|(id, ordinal)| *id == ConstructorId::new(nominal.id, *ordinal))
+            }
+            && nominal.representation.is_none()
+            && nominal.representation_provenance.is_none()
+    }
+
+    fn hidden_nominal(self, nominal: &ExportedHiddenType) -> bool {
+        let Some((_, family)) = self.nominal_shape(nominal.id, &nominal.parameters) else {
+            return false;
+        };
+        nominal.declaration_kind == ResolvedNominalDeclarationKind::Data
+            && nominal.constructor_count == family.len()
+            && nominal.parameter_count == nominal.parameters.len()
+            && if nominal.id == self.handle() {
+                nominal.access != ImportedTypeAccess::Transparent && nominal.constructors.is_empty()
+            } else {
+                match nominal.access {
+                    ImportedTypeAccess::Transparent => {
+                        nominal.constructors.len() == family.len()
+                            && nominal
+                                .constructors
+                                .iter()
+                                .zip(family)
+                                .all(|(id, ordinal)| {
+                                    *id == ConstructorId::new(nominal.id, *ordinal)
+                                })
+                    }
+                    ImportedTypeAccess::Hidden | ImportedTypeAccess::Opaque => {
+                        nominal.constructors.is_empty()
+                    }
+                }
+            }
+            && nominal.representation.is_none()
+            && nominal.representation_provenance.is_none()
+    }
+
+    fn handle_type(self, ty: &Type, parameter: TypeVariableId) -> bool {
+        matches!(ty, Type::Application(head, argument)
+            if matches!(head.as_ref(), Type::Nominal(id) if *id == self.handle())
+                && matches!(argument.as_ref(), Type::Variable(id) if *id == parameter))
+    }
+
+    fn signature(self, ty: &Type, parameter: TypeVariableId, ordinal: usize, method: bool) -> bool {
+        let Some(function) = ty.function_view() else {
+            return false;
+        };
+        if method {
+            let Some(row) = function.effects() else {
+                return false;
+            };
+            if row.tail().is_some()
+                || !matches!(row.known(), [instance]
+                if instance.effect() == self.ops()
+                    && matches!(instance.arguments(), [Type::Variable(id)] if *id == parameter))
+            {
+                return false;
+            }
+        } else if function.effects().is_some() {
+            return false;
+        }
+        if self.is_native_buffer() && ordinal > 0 {
+            let domain = match function.domain() {
+                Type::Tuple(fields) if ordinal == 1 => {
+                    matches!(fields.as_ref(), [handle, Type::Int] if self.handle_type(handle, parameter))
+                }
+                Type::Tuple(fields) if ordinal == 2 => {
+                    matches!(fields.as_ref(), [handle, Type::Int, Type::Int] if self.handle_type(handle, parameter))
+                }
+                _ => false,
+            };
+            domain
+                && matches!(function.value(), Type::Application(head, argument)
+                if matches!(head.as_ref(), Type::Nominal(id) if Some(*id) == self.outcome())
+                    && if ordinal == 1 { matches!(argument.as_ref(), Type::Int) } else { matches!(argument.as_ref(), Type::Unit) })
+        } else if ordinal == 1 {
+            matches!(function.domain(), Type::Tuple(fields) if matches!(fields.as_ref(), [handle, Type::Int] if self.handle_type(handle, parameter)))
+                && matches!(function.value(), Type::Unit)
+        } else {
+            self.handle_type(function.domain(), parameter) && matches!(function.value(), Type::Int)
+        }
+    }
+
+    pub(crate) fn effect(self, effect: &ResolvedEffectDeclaration) -> bool {
+        effect.id == self.ops()
+            && effect.public
+            && effect.spelling == "Ops"
+            && self.parameter(
+                &effect.parameters,
+                if self.is_native_buffer() { 2 } else { 1 },
+            )
+            && effect.operations.len() == self.method_names().len()
+            && effect
+                .operations
+                .iter()
+                .enumerate()
+                .all(|(index, operation)| {
+                    operation.id == OperationId::new(self.ops(), index as u32)
+                        && operation.spelling == self.method_names()[index]
+                        && self.signature(
+                            &operation.annotation.ty,
+                            effect.parameters[0].id,
+                            index,
+                            false,
+                        )
+                })
+    }
+
+    pub(crate) fn interface(self, interface: &CheckedInterfaceFact) -> bool {
+        interface.id == self.provider()
+            && interface.spelling == "Provider"
+            && self.parameter(
+                &interface.parameters,
+                if self.is_native_buffer() { 3 } else { 2 },
+            )
+            && interface.determination().is_none()
+            && interface.methods.len() == self.method_names().len()
+            && interface.methods.iter().enumerate().all(|(index, method)| {
+                method.id == MethodId::new(self.provider(), index as u32)
+                    && method.spelling == self.method_names()[index]
+                    && method.type_parameters().is_empty()
+                    && self.signature(&method.value_type, interface.parameters[0].id, index, true)
+            })
+    }
+
+    pub(crate) fn method(
+        self,
+        id: MethodId,
+        interface_parameters: &[TypeVariableId],
+        parameters: &[(TypeVariableId, Kind)],
+        value_type: &Type,
+    ) -> bool {
+        let parameter =
+            TypeVariableId::resolved(self.module, if self.is_native_buffer() { 3 } else { 2 });
+        interface_parameters == [parameter]
+            && parameters.is_empty()
+            && self.method_names().iter().enumerate().any(|(ordinal, _)| {
+                id == MethodId::new(self.provider(), ordinal as u32)
+                    && self.signature(value_type, parameter, ordinal, true)
+            })
+    }
+}
 
 #[cfg(test)]
 use crate::interface::EvidenceSelection;
@@ -180,6 +518,8 @@ pub enum ResolvedDeclarationIndex {
     Type(usize),
     /// An interface declaration.
     Interface(usize),
+    /// An effect declaration.
+    Effect(usize),
     /// An ordinary global definition.
     Global(usize),
     /// An implementation declaration.
@@ -223,6 +563,7 @@ pub struct ResolvedModule {
     direct_dependencies: Box<[DirectDependencyRoute]>,
     declaration_order: Box<[ResolvedDeclarationIndex]>,
     interfaces: Box<[ResolvedInterfaceDeclaration]>,
+    effects: Box<[ResolvedEffectDeclaration]>,
     implementations: Box<[ResolvedImplementation]>,
     definitions: Box<[ResolvedDefinition]>,
     export_candidate: ResolvedExportCandidate,
@@ -236,6 +577,7 @@ pub(crate) struct ResolvedModuleParts {
     pub direct_dependencies: Vec<DirectDependencyRoute>,
     pub declaration_order: Vec<ResolvedDeclarationIndex>,
     pub interfaces: Vec<ResolvedInterfaceDeclaration>,
+    pub effects: Vec<ResolvedEffectDeclaration>,
     pub implementations: Vec<ResolvedImplementation>,
     pub definitions: Vec<ResolvedDefinition>,
     pub export_candidate: ResolvedExportCandidate,
@@ -251,6 +593,7 @@ impl ResolvedModule {
             direct_dependencies: std::mem::take(&mut parts.direct_dependencies).into_boxed_slice(),
             declaration_order: std::mem::take(&mut parts.declaration_order).into_boxed_slice(),
             interfaces: std::mem::take(&mut parts.interfaces).into_boxed_slice(),
+            effects: std::mem::take(&mut parts.effects).into_boxed_slice(),
             implementations: std::mem::take(&mut parts.implementations).into_boxed_slice(),
             definitions: std::mem::take(&mut parts.definitions).into_boxed_slice(),
             export_candidate: std::mem::take(&mut parts.export_candidate),
@@ -293,6 +636,12 @@ impl ResolvedModule {
         &self.interfaces
     }
 
+    /// Returns local effect declarations in category-local source order.
+    #[must_use]
+    pub const fn effects(&self) -> &[ResolvedEffectDeclaration] {
+        &self.effects
+    }
+
     /// Returns local implementation declarations in category-local source order.
     #[must_use]
     pub const fn implementations(&self) -> &[ResolvedImplementation] {
@@ -307,6 +656,10 @@ impl ResolvedModule {
 
     fn take_interfaces(&mut self) -> Box<[ResolvedInterfaceDeclaration]> {
         std::mem::take(&mut self.interfaces)
+    }
+
+    fn take_effects(&mut self) -> Box<[ResolvedEffectDeclaration]> {
+        std::mem::take(&mut self.effects)
     }
 
     /// Moves resolved globals across a successful checker-owned transition.
@@ -360,6 +713,9 @@ impl Drop for ResolvedModuleParts {
         for interface in self.interfaces.drain(..) {
             discard_resolved_interface_iteratively(interface);
         }
+        for effect in self.effects.drain(..) {
+            discard_resolved_effect_iteratively(effect);
+        }
         for definition in self.definitions.drain(..) {
             discard_resolved_definition_iteratively(definition);
         }
@@ -374,6 +730,9 @@ impl Drop for ResolvedModule {
         for interface in self.take_interfaces().into_vec() {
             discard_resolved_interface_iteratively(interface);
         }
+        for effect in self.take_effects().into_vec() {
+            discard_resolved_effect_iteratively(effect);
+        }
         for definition in self.take_definitions().into_vec() {
             discard_resolved_definition_iteratively(definition);
         }
@@ -386,6 +745,7 @@ impl Drop for ResolvedModule {
 /// One fully checked local global scheme retained for linking and exports.
 #[derive(Debug, Eq, PartialEq)]
 pub struct CheckedGlobalScheme {
+    pub(crate) capture: crate::core::capture::CaptureValueSummary,
     /// Stable binder identity.
     pub binder: BinderId,
     /// Source declaration spelling.
@@ -784,6 +1144,8 @@ pub struct CheckedModule {
     direct_dependencies: Box<[DirectDependencyRoute]>,
     declaration_order: Box<[ResolvedDeclarationIndex]>,
     interfaces: Box<[ResolvedInterfaceDeclaration]>,
+    effects: Box<[ResolvedEffectDeclaration]>,
+    imported_effects: Box<[ResolvedEffectDeclaration]>,
     implementations: Box<[CheckedImplementationBody]>,
     definitions: Box<[CheckedDefinition]>,
     available_implementations: Box<[AvailableImplementation]>,
@@ -820,6 +1182,8 @@ impl CheckedModule {
             direct_dependencies: std::mem::take(&mut resolved.direct_dependencies),
             declaration_order: std::mem::take(&mut resolved.declaration_order),
             interfaces: std::mem::take(&mut resolved.interfaces),
+            effects: std::mem::take(&mut resolved.effects),
+            imported_effects: std::mem::take(&mut resolved.imported).into_effects(),
             implementations: parts.implementations,
             definitions: parts.definitions,
             available_implementations: parts.available_implementations,
@@ -861,6 +1225,21 @@ impl CheckedModule {
     #[must_use]
     pub const fn interfaces(&self) -> &[ResolvedInterfaceDeclaration] {
         &self.interfaces
+    }
+
+    /// Returns checked local effect declarations in source order.
+    #[must_use]
+    pub const fn effects(&self) -> &[ResolvedEffectDeclaration] {
+        &self.effects
+    }
+
+    /// Looks up one local or selected imported canonical effect fact.
+    #[must_use]
+    pub fn effect(&self, id: EffectId) -> Option<&ResolvedEffectDeclaration> {
+        self.effects
+            .iter()
+            .chain(self.imported_effects.iter())
+            .find(|effect| effect.id == id)
     }
 
     /// Returns local implementations retained for interface checking.
@@ -954,6 +1333,12 @@ impl Drop for CheckedModule {
     fn drop(&mut self) {
         for interface in std::mem::take(&mut self.interfaces).into_vec() {
             discard_resolved_interface_iteratively(interface);
+        }
+        for effect in std::mem::take(&mut self.effects).into_vec() {
+            discard_resolved_effect_iteratively(effect);
+        }
+        for effect in std::mem::take(&mut self.imported_effects).into_vec() {
+            discard_resolved_effect_iteratively(effect);
         }
         for checked in self.schemes.drain(..) {
             drop(checked.scheme);
@@ -1093,6 +1478,15 @@ pub struct ResolvedModuleProgram {
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum LinkedCarrierMutationForTest {
+    LexicalSourceIdentity,
+    LexicalApplicationArgument,
+    LexicalMethodIdentity,
+    LexicalMethodBinder,
+    LexicalEquationBinder,
+    LexicalEmptyEquations,
+    LexicalMethodOrder,
+    LexicalContextualParameter,
+    LexicalBeforeNominal,
     NominalParameterKind(usize),
     ConstructorIdentity,
     ConstructorOrdinal,
@@ -1182,6 +1576,20 @@ pub(crate) enum LinkedDeterminationMutationForTest {
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
+pub(crate) enum LinkedResourceMutationForTest {
+    Provider,
+    DetachedOwner,
+    Builtin,
+    MethodOrder,
+    MethodKind,
+    Handle,
+    Brand,
+    Origin,
+    Operation,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum LinkedGlobalParameterRowMutationForTest {
     Owner,
     ParameterIdentity,
@@ -1249,6 +1657,104 @@ impl ResolvedModuleProgram {
                 },
             )
             .is_none()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn corrupt_native_constructor_for_test(&mut self, error_payload: bool) {
+        Arc::get_mut(&mut self.registry)
+            .unwrap()
+            .corrupt_native_constructor_for_test(error_payload);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn corrupt_first_direct_resource_owner_for_test(&mut self, detach: bool) -> bool {
+        self.corrupt_first_direct_resource_for_test(if detach {
+            LinkedResourceMutationForTest::DetachedOwner
+        } else {
+            LinkedResourceMutationForTest::Provider
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn corrupt_first_direct_resource_for_test(
+        &mut self,
+        mutation: LinkedResourceMutationForTest,
+    ) -> bool {
+        use LinkedResourceMutationForTest as Mutation;
+        for group in &mut self.groups {
+            for checked in &mut group.definitions {
+                let Some(definition) = checked.source.as_mut() else {
+                    continue;
+                };
+                let ResolvedDefinitionKind::Equational(global) = &mut definition.kind else {
+                    continue;
+                };
+                for equation in &mut global.equations {
+                    let ResolvedExprKind::Resource(resource) = &mut equation.body.kind else {
+                        continue;
+                    };
+                    if matches!(mutation, Mutation::DetachedOwner) {
+                        let replacement = std::mem::replace(
+                            &mut *resource.body,
+                            ResolvedExpr {
+                                kind: ResolvedExprKind::Unit,
+                                span: equation.body.span,
+                            },
+                        );
+                        discard_resolved_expression_iteratively(std::mem::replace(
+                            &mut equation.body,
+                            replacement,
+                        ));
+                    } else {
+                        match mutation {
+                            Mutation::Provider => {
+                                resource.acquisition.provider =
+                                    crate::interface::LexicalEvidenceId::new(group.module, u32::MAX)
+                            }
+                            Mutation::Builtin => resource.acquisition.builtin = self.entry,
+                            Mutation::MethodOrder => resource.acquisition.methods.swap(0, 2),
+                            Mutation::MethodKind => {
+                                resource.acquisition.methods = ResourceMethods::Cell([
+                                    resource.acquisition.methods[0],
+                                    resource.acquisition.methods[1],
+                                ])
+                            }
+                            Mutation::Handle => {
+                                resource.acquisition.handle = resource.acquisition.methods[0]
+                            }
+                            Mutation::Brand => {
+                                resource.acquisition.identity = TypeVariableId::generated(u32::MAX)
+                            }
+                            Mutation::Origin => {
+                                resource.acquisition.span = resource.initializer.span
+                            }
+                            Mutation::Operation => {
+                                let ResolvedExprKind::Block(body) = &mut resource.body.kind else {
+                                    return false;
+                                };
+                                let [ResolvedLocalDeclaration::Evidence(source)] =
+                                    body.declarations.as_mut_slice()
+                                else {
+                                    return false;
+                                };
+                                let ResolvedExprKind::Perform(request) =
+                                    &mut source.method_groups[0].equations[0].body.kind
+                                else {
+                                    return false;
+                                };
+                                request.operation = crate::types::OperationId::new(
+                                    request.effect.instance.effect(),
+                                    u32::MAX,
+                                );
+                            }
+                            Mutation::DetachedOwner => unreachable!(),
+                        }
+                    }
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Returns the combined full defining registries.
@@ -1773,6 +2279,74 @@ impl ResolvedModuleProgram {
             return false;
         };
         match mutation {
+            LinkedCarrierMutationForTest::LexicalSourceIdentity
+            | LinkedCarrierMutationForTest::LexicalApplicationArgument
+            | LinkedCarrierMutationForTest::LexicalMethodIdentity
+            | LinkedCarrierMutationForTest::LexicalMethodBinder
+            | LinkedCarrierMutationForTest::LexicalEquationBinder
+            | LinkedCarrierMutationForTest::LexicalEmptyEquations
+            | LinkedCarrierMutationForTest::LexicalMethodOrder
+            | LinkedCarrierMutationForTest::LexicalContextualParameter
+            | LinkedCarrierMutationForTest::LexicalBeforeNominal => {
+                let Some(block) = self.groups[group_index]
+                    .definitions
+                    .iter_mut()
+                    .filter_map(|definition| definition.source.as_mut())
+                    .find_map(|definition| match &mut definition.kind {
+                        ResolvedDefinitionKind::Equational(global) => global.equations.first_mut()
+                            .and_then(|equation| match &mut equation.body.kind {
+                                ResolvedExprKind::Block(block) => Some(block),
+                                _ => None,
+                            }),
+                        ResolvedDefinitionKind::InlineOperational(_) => None,
+                    })
+                else { return false; };
+                let Some(index) = block.declarations.iter().position(|declaration|
+                    matches!(declaration, ResolvedLocalDeclaration::Evidence(_)))
+                else { return false; };
+                if matches!(mutation, LinkedCarrierMutationForTest::LexicalBeforeNominal) {
+                    if index == 0 { return false; }
+                    block.declarations.swap(index - 1, index);
+                    return true;
+                }
+                let ResolvedLocalDeclaration::Evidence(source) = &mut block.declarations[index]
+                else { return false; };
+                match mutation {
+                    LinkedCarrierMutationForTest::LexicalSourceIdentity =>
+                        source.id = crate::interface::LexicalEvidenceId::new(module, u32::MAX),
+                    LinkedCarrierMutationForTest::LexicalApplicationArgument => {
+                        let Some(argument) = source.application.arguments.first_mut() else { return false; };
+                        discard_type_iteratively(std::mem::replace(&mut argument.ty, Type::Int));
+                    }
+                    LinkedCarrierMutationForTest::LexicalMethodOrder => {
+                        if source.method_groups.len() < 2 { return false; }
+                        source.method_groups.swap(0, 1);
+                    }
+                    LinkedCarrierMutationForTest::LexicalMethodIdentity => {
+                        let Some(method) = source.method_groups.first_mut() else { return false; };
+                        method.method = Some(MethodId::new(source.application.interface.id, u32::MAX));
+                    }
+                    LinkedCarrierMutationForTest::LexicalMethodBinder => {
+                        let Some(method) = source.method_groups.first_mut() else { return false; };
+                        method.binder.id = BinderId::resolved(module, u32::MAX);
+                    }
+                    LinkedCarrierMutationForTest::LexicalEquationBinder => {
+                        let Some(equation) = source.method_groups.first_mut().and_then(|group| group.equations.first_mut()) else { return false; };
+                        equation.name.binder = BinderId::resolved(module, u32::MAX);
+                    }
+                    LinkedCarrierMutationForTest::LexicalEmptyEquations => {
+                        let Some(method) = source.method_groups.first_mut() else { return false; };
+                        method.equations = Box::new([]);
+                    }
+                    LinkedCarrierMutationForTest::LexicalContextualParameter => {
+                        let Some(parameter) = source.method_groups.first_mut().and_then(|method|
+                            method.contextual_parameters.first_mut()) else { return false; };
+                        parameter.id = TypeVariableId::resolved(module, u32::MAX);
+                    }
+                    _ => unreachable!(),
+                }
+                true
+            }
             LinkedCarrierMutationForTest::NominalParameterKind(ordinal) => {
                 let Some(registry) = Arc::get_mut(&mut self.registry) else {
                     return false;
@@ -2558,7 +3132,13 @@ impl ResolvedModuleProgram {
                 | ResolvedExprKind::Equal(_)
                 | ResolvedExprKind::Block(_)
                 | ResolvedExprKind::Function(_)
-                | ResolvedExprKind::Match(_) => None,
+                | ResolvedExprKind::Match(_)
+                | ResolvedExprKind::Resource(_)
+                | ResolvedExprKind::Cleanup(_)
+                | ResolvedExprKind::Perform(_)
+                | ResolvedExprKind::Handle(_)
+                | ResolvedExprKind::Resume(_)
+                | ResolvedExprKind::Discard(_) => None,
             })
         else {
             return false;
@@ -3584,15 +4164,37 @@ pub struct ImportedFacts {
     global_order: Vec<BinderId>,
     nominals: HashMap<NominalTypeId, ImportedNominalFact>,
     nominal_order: Vec<NominalTypeId>,
+    /// Canonical representations retained for opaque linkage only. Source-facing
+    /// imported nominal facts intentionally do not expose these templates.
+    canonical_representations: HashMap<NominalTypeId, CanonicalRepresentationFact>,
     constructors: HashMap<ConstructorId, ImportedConstructorFact>,
     interfaces: Vec<ImportedInterfaceFact>,
     interface_positions: HashMap<InterfaceId, usize>,
+    effects: Vec<ResolvedEffectDeclaration>,
+    effect_positions: HashMap<EffectId, usize>,
     implementations: Vec<ImportedImplementationFact>,
     implementation_positions: HashMap<ImplId, usize>,
     public_implementation_order: Vec<ImplId>,
 }
 
+/// Canonical representation authority retained for opaque linking.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CanonicalRepresentationFact {
+    pub(crate) representation: Type,
+    pub(crate) provenance: ResolvedTypeProvenance,
+}
+
+fn discard_canonical_representation_fact(fact: CanonicalRepresentationFact) {
+    discard_type_iteratively(fact.representation);
+    drop(fact.provenance);
+}
+
 impl ImportedFacts {
+    fn into_effects(mut self) -> Box<[ResolvedEffectDeclaration]> {
+        let effects = std::mem::take(&mut self.effects);
+        effects.into_boxed_slice()
+    }
+
     /// Looks up one imported checked global by semantic identity.
     #[must_use]
     pub fn global(&self, id: BinderId) -> Option<&ImportedGlobalScheme> {
@@ -3603,6 +4205,57 @@ impl ImportedFacts {
     #[must_use]
     pub fn nominal(&self, id: NominalTypeId) -> Option<&ImportedNominalFact> {
         self.nominals.get(&id)
+    }
+
+    pub(crate) fn canonical_representation(
+        &self,
+        id: NominalTypeId,
+    ) -> Option<&CanonicalRepresentationFact> {
+        self.canonical_representations.get(&id)
+    }
+
+    pub(crate) fn retain_canonical_representation(
+        &mut self,
+        id: NominalTypeId,
+        representation: &Type,
+        provenance: &ResolvedTypeProvenance,
+        type_work: &mut TypeWorkBudget,
+        constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+    ) -> Result<(), ImportedNominalMergeFailure> {
+        if let Some(existing) = self.canonical_representations.get(&id) {
+            if !same_type_with_constraint_budget(
+                &existing.representation,
+                representation,
+                constraint_work,
+            )
+            .map_err(|_| ImportedNominalMergeFailure::ConstraintResource)?
+                || !same_resolved_type_provenance_with_constraint_budget(
+                    &existing.provenance,
+                    provenance,
+                    constraint_work,
+                )
+                .map_err(|_| ImportedNominalMergeFailure::ConstraintResource)?
+            {
+                return Err(ImportedNominalMergeFailure::Conflict);
+            }
+            return Ok(());
+        }
+        type_work
+            .charge(1)
+            .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
+        self.canonical_representations
+            .try_reserve(1)
+            .map_err(|_| ImportedNominalMergeFailure::TypeResource)?;
+        let retained = CanonicalRepresentationFact {
+            representation: clone_type_with_budget(representation, type_work)
+                .map_err(|()| ImportedNominalMergeFailure::TypeResource)?,
+            provenance: provenance.clone(),
+        };
+        if let Some(displaced) = self.canonical_representations.insert(id, retained) {
+            discard_canonical_representation_fact(displaced);
+            return Err(ImportedNominalMergeFailure::Conflict);
+        }
+        Ok(())
     }
 
     /// Looks up one imported transparent constructor by semantic identity.
@@ -3620,6 +4273,35 @@ impl ImportedFacts {
                 .get(*self.interface_positions.get(&id)?)?
                 .fact,
         )
+    }
+
+    /// Looks up one imported canonical effect fact by identity.
+    #[must_use]
+    pub fn effect(&self, id: EffectId) -> Option<&ResolvedEffectDeclaration> {
+        self.effects.get(*self.effect_positions.get(&id)?)
+    }
+
+    pub(crate) fn effects(&self) -> impl Iterator<Item = &ResolvedEffectDeclaration> {
+        self.effects.iter()
+    }
+
+    pub(crate) fn insert_effect(
+        &mut self,
+        fact: ResolvedEffectDeclaration,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        if let Some(position) = self.effect_positions.get(&fact.id).copied() {
+            let slot = self.effects.get_mut(position).ok_or(())?;
+            discard_resolved_effect_iteratively(std::mem::replace(slot, fact));
+            return Ok(());
+        }
+        budget.charge(2)?;
+        self.effects.try_reserve(1).map_err(|_| ())?;
+        self.effect_positions.try_reserve(1).map_err(|_| ())?;
+        let position = self.effects.len();
+        self.effect_positions.insert(fact.id, position);
+        self.effects.push(fact);
+        Ok(())
     }
 
     /// Looks up one selected public implementation by semantic identity.
@@ -3747,6 +4429,7 @@ impl ImportedFacts {
         };
         if existing.parameter_count != candidate.parameter_count
             || existing.constructor_count != candidate.constructor_count
+            || existing.declaration_kind != candidate.declaration_kind
             || existing.parameters.len() != candidate.parameters.len()
             || existing.display_is_private != candidate.display_is_private
         {
@@ -3795,6 +4478,29 @@ impl ImportedFacts {
         if !parameters_match {
             return Err(ImportedNominalMergeFailure::Conflict);
         }
+        let representations_match = match (&existing.representation, candidate.representation) {
+            (None, None) => true,
+            (Some(existing), Some(candidate)) => {
+                same_type_with_constraint_budget(existing, candidate, constraint_work)
+                    .map_err(|_| ImportedNominalMergeFailure::ConstraintResource)?
+            }
+            (None, Some(_)) | (Some(_), None) => false,
+        };
+        let representation_provenance_matches = match (
+            &existing.representation_provenance,
+            candidate.representation_provenance,
+        ) {
+            (None, None) => true,
+            (Some(existing), Some(candidate)) => {
+                same_resolved_type_provenance_with_constraint_budget(
+                    existing,
+                    candidate,
+                    constraint_work,
+                )
+                .map_err(|_| ImportedNominalMergeFailure::ConstraintResource)?
+            }
+            (None, Some(_)) | (Some(_), None) => false,
+        };
         let origins_match =
             same_origin_with_constraint_budget(&existing.origin, candidate.origin, constraint_work)
                 .map_err(|failure| match failure {
@@ -3807,7 +4513,11 @@ impl ImportedFacts {
                 })?;
         let defining_display_conflict = existing.display_is_private
             && existing.display_spelling.as_deref() != candidate.display_spelling;
-        if !origins_match || defining_display_conflict {
+        if !representations_match
+            || !representation_provenance_matches
+            || !origins_match
+            || defining_display_conflict
+        {
             return Err(ImportedNominalMergeFailure::Conflict);
         }
         Ok(())
@@ -3861,12 +4571,21 @@ impl ImportedFacts {
                     .map(try_clone_string)
                     .transpose()
                     .map_err(|_| ImportedNominalMergeFailure::TypeResource)?;
+                let representation = candidate
+                    .representation
+                    .map(|representation| clone_type_with_budget(representation, type_work))
+                    .transpose()
+                    .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
+                let representation_provenance = candidate.representation_provenance.cloned();
                 Ok(PreparedImportedNominalMerge {
                     action: Some(PreparedImportedNominalAction::Insert(ImportedNominalFact {
+                        representation_provenance,
                         id: candidate.id,
+                        declaration_kind: candidate.declaration_kind,
                         parameter_count: candidate.parameter_count,
                         constructor_count: candidate.constructor_count,
                         parameters: parameters.into_boxed_slice(),
+                        representation,
                         constructors: constructors.into_boxed_slice(),
                         access: candidate.access,
                         display_spelling,
@@ -4055,9 +4774,12 @@ impl ImportedFacts {
         let prepared = self.prepare_nominal_merge(
             ImportedNominalFactRef {
                 id: fact.id,
+                declaration_kind: fact.declaration_kind,
                 parameter_count: fact.parameter_count,
                 constructor_count: fact.constructor_count,
                 parameters: &fact.parameters,
+                representation: fact.representation.as_ref(),
+                representation_provenance: fact.representation_provenance.as_ref(),
                 constructors: &fact.constructors,
                 access: fact.access,
                 display_spelling: fact.display_spelling.as_deref(),
@@ -4222,7 +4944,15 @@ impl ImportedFacts {
 }
 
 fn imported_nominal_family_is_valid(fact: &ImportedNominalFact) -> bool {
-    if fact.constructor_count == 0 {
+    if fact.constructor_count == 0
+        || matches!(fact.declaration_kind, ResolvedNominalDeclarationKind::Data)
+            && fact.representation.is_some()
+        || matches!(
+            fact.declaration_kind,
+            ResolvedNominalDeclarationKind::Newtype
+        ) && (fact.constructor_count != 1
+            || fact.access == ImportedTypeAccess::Transparent && fact.representation.is_none())
+    {
         return false;
     }
     match fact.access {
@@ -4252,9 +4982,15 @@ impl Drop for ImportedFacts {
             for parameter in fact.parameters.into_vec() {
                 discard_origin_iteratively(parameter.origin);
             }
+            if let Some(representation) = fact.representation {
+                discard_type_iteratively(representation);
+            }
             discard_origin_iteratively(fact.origin);
         }
         self.nominal_order.clear();
+        for (_, representation) in self.canonical_representations.drain() {
+            discard_canonical_representation_fact(representation);
+        }
         for (_, fact) in self.constructors.drain() {
             drop(fact.scheme);
             if let Some(payload) = fact.payload {
@@ -4266,6 +5002,10 @@ impl Drop for ImportedFacts {
             drop(imported.fact);
         }
         self.interface_positions.clear();
+        for effect in self.effects.drain(..) {
+            discard_resolved_effect_iteratively(effect);
+        }
+        self.effect_positions.clear();
         for imported in self.implementations.drain(..) {
             drop(imported.fact);
         }
@@ -4283,6 +5023,9 @@ fn discard_imported_global(fact: ImportedGlobalScheme) {
 fn discard_imported_nominal(fact: ImportedNominalFact) {
     for parameter in fact.parameters.into_vec() {
         discard_origin_iteratively(parameter.origin);
+    }
+    if let Some(representation) = fact.representation {
+        discard_type_iteratively(representation);
     }
     discard_origin_iteratively(fact.origin);
 }
@@ -4626,6 +5369,7 @@ impl Drop for CheckedImplementationFact {
 /// One checked implementation-method identity-to-binder relation.
 #[derive(Debug, Eq, PartialEq)]
 pub struct CheckedImplementationMethodFact {
+    pub(crate) capture: crate::core::capture::CaptureValueSummary,
     /// Stable implementation-method identity.
     pub id: ImplMethodId,
     /// Stable interface method supplied by the body.
@@ -4863,6 +5607,10 @@ fn clone_checked_implementation_fact(
             }
         }
         methods.push(CheckedImplementationMethodFact {
+            capture: method
+                .capture
+                .clone_with_budget(type_work)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?,
             id: method.id,
             method: method.method,
             binder: method.binder,
@@ -4893,6 +5641,7 @@ fn clone_checked_implementation_fact(
 /// One imported checked global scheme.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ImportedGlobalScheme {
+    pub(crate) capture: crate::core::capture::CaptureValueSummary,
     /// Stable defining binder identity.
     pub binder: BinderId,
     /// Fully zonked closed constrained rank-1 scheme.
@@ -4935,12 +5684,18 @@ impl AuthorizedImplementationFact {
 pub struct ImportedNominalFact {
     /// Stable defining nominal identity.
     pub id: NominalTypeId,
+    /// Whether this nominal is ordinary data or a representation-preserving newtype.
+    pub declaration_kind: ResolvedNominalDeclarationKind,
     /// Number of declared parameters.
     pub parameter_count: usize,
     /// Defining constructor-family cardinality, retained independently of access.
     pub(crate) constructor_count: usize,
     /// Ordered declaration parameters, preserving defining identities.
     pub parameters: Box<[ResolvedTypeVariable]>,
+    /// The canonical newtype representation template when this is a newtype.
+    pub representation: Option<Type>,
+    /// Source-aligned provenance for the canonical representation template.
+    pub representation_provenance: Option<ResolvedTypeProvenance>,
     /// Complete constructor family when access is transparent.
     pub constructors: Box<[ConstructorId]>,
     /// Importer access mode.
@@ -5078,6 +5833,8 @@ pub struct ResolvedExportCandidate {
     constructor_order: Vec<String>,
     interfaces: HashMap<String, CandidateInterface>,
     interface_order: Vec<String>,
+    effects: HashMap<String, CandidateEffect>,
+    effect_order: Vec<String>,
     methods: HashMap<String, CandidateMethod>,
     method_order: Vec<String>,
     hidden_nominals: HashMap<NominalTypeId, CandidateHiddenNominal>,
@@ -5109,6 +5866,12 @@ impl ResolvedExportCandidate {
     #[must_use]
     pub fn interface(&self, spelling: &str) -> Option<&CandidateInterface> {
         self.interfaces.get(spelling)
+    }
+
+    /// Looks up one public effect candidate.
+    #[must_use]
+    pub fn effect(&self, spelling: &str) -> Option<&CandidateEffect> {
+        self.effects.get(spelling)
     }
 
     /// Looks up one public method-name candidate.
@@ -5203,6 +5966,22 @@ impl ResolvedExportCandidate {
             candidate,
             budget,
             |_candidate: CandidateInterface| {},
+        )
+    }
+
+    pub(crate) fn try_insert_effect(
+        &mut self,
+        spelling: String,
+        candidate: CandidateEffect,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        try_insert_ordered(
+            &mut self.effects,
+            &mut self.effect_order,
+            spelling,
+            candidate,
+            budget,
+            |_candidate| {},
         )
     }
 
@@ -5350,6 +6129,8 @@ impl Drop for ResolvedExportCandidate {
         self.constructor_order.clear();
         self.interfaces.clear();
         self.interface_order.clear();
+        self.effects.clear();
+        self.effect_order.clear();
         self.methods.clear();
         self.method_order.clear();
         for (_, candidate) in self.hidden_nominals.drain() {
@@ -5400,6 +6181,14 @@ pub struct CandidateConstructor {
 pub struct CandidateInterface {
     /// Stable defining interface identity.
     pub id: InterfaceId,
+    pub(crate) source: CandidateFactSource,
+}
+
+/// One effect identity selected for publication under a source spelling.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidateEffect {
+    /// Stable defining effect identity.
+    pub id: EffectId,
     pub(crate) source: CandidateFactSource,
 }
 
@@ -5644,6 +6433,7 @@ impl ImportedTypeAccess {
 /// One checked public global in an immutable export summary.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ExportedGlobal {
+    pub(crate) capture: crate::core::capture::CaptureValueSummary,
     /// Stable binder identity from the defining module.
     pub binder: BinderId,
     /// Fully zonked closed constrained rank-1 scheme.
@@ -5657,18 +6447,36 @@ pub struct ExportedGlobal {
 pub struct ExportedType {
     /// Stable nominal identity from the defining module.
     pub id: NominalTypeId,
+    /// Whether this nominal is ordinary data or a representation-preserving newtype.
+    pub declaration_kind: ResolvedNominalDeclarationKind,
     /// Number of declared parameters.
     pub parameter_count: usize,
     /// Defining constructor-family cardinality, retained independently of access.
     pub(crate) constructor_count: usize,
     /// Ordered declaration parameters, preserving defining identities.
     pub parameters: Box<[ResolvedTypeVariable]>,
+    /// The canonical newtype representation template when this is a newtype.
+    pub representation: Option<Type>,
+    /// Source-aligned provenance for the canonical representation template.
+    pub representation_provenance: Option<ResolvedTypeProvenance>,
     /// Complete constructor family for transparent access.
     pub constructors: Box<[ConstructorId]>,
     /// Opaque or transparent importer access.
     pub access: ExportedTypeAccess,
     /// Causal declaration provenance.
     pub origin: Origin,
+}
+
+impl ExportedType {
+    fn discard_iteratively(self) {
+        for parameter in self.parameters.into_vec() {
+            discard_origin_iteratively(parameter.origin);
+        }
+        if let Some(representation) = self.representation {
+            discard_type_iteratively(representation);
+        }
+        discard_origin_iteratively(self.origin);
+    }
 }
 
 /// One transparent constructor in an immutable export summary.
@@ -5763,6 +6571,10 @@ pub struct ExportSummary {
     hidden_constructor_order: Vec<ConstructorId>,
     interface_names: HashMap<String, InterfaceId>,
     interface_name_order: Vec<String>,
+    effect_names: HashMap<String, EffectId>,
+    effect_name_order: Vec<String>,
+    effects: Vec<ResolvedEffectDeclaration>,
+    effect_positions: HashMap<EffectId, usize>,
     method_names: HashMap<String, MethodId>,
     method_name_order: Vec<String>,
     interfaces: Vec<CheckedInterfaceFact>,
@@ -5772,6 +6584,8 @@ pub struct ExportSummary {
     implementation_positions: HashMap<ImplId, usize>,
     hidden_nominals: HashMap<NominalTypeId, ExportedHiddenType>,
     hidden_nominal_order: Vec<NominalTypeId>,
+    /// Canonical representations retained for opaque public nominal linkage.
+    canonical_representations: HashMap<NominalTypeId, CanonicalRepresentationFact>,
     withheld: HashMap<String, WithheldExports>,
     withheld_order: Vec<WithheldOrderEntry>,
 }
@@ -5985,12 +6799,18 @@ fn reserve_summary_implementation_storage(
 pub struct ExportedHiddenType {
     /// Stable nominal identity from the defining module.
     pub id: NominalTypeId,
+    /// Whether this nominal is ordinary data or a representation-preserving newtype.
+    pub declaration_kind: ResolvedNominalDeclarationKind,
     /// Number of declared parameters.
     pub parameter_count: usize,
     /// Defining constructor-family cardinality, retained independently of access.
     pub(crate) constructor_count: usize,
     /// Ordered declaration parameters, preserving defining identities.
     pub parameters: Box<[ResolvedTypeVariable]>,
+    /// The canonical newtype representation template retained for linking.
+    pub representation: Option<Type>,
+    /// Source-aligned provenance for the canonical representation template.
+    pub representation_provenance: Option<ResolvedTypeProvenance>,
     /// Complete constructor family retained without source spellings.
     pub constructors: Box<[ConstructorId]>,
     /// Access metadata retained for a name-re-exported constructor family.
@@ -6001,6 +6821,18 @@ pub struct ExportedHiddenType {
     pub display_is_private: bool,
     /// Causal declaration provenance.
     pub origin: Origin,
+}
+
+impl ExportedHiddenType {
+    fn discard_iteratively(self) {
+        for parameter in self.parameters.into_vec() {
+            discard_origin_iteratively(parameter.origin);
+        }
+        if let Some(representation) = self.representation {
+            discard_type_iteratively(representation);
+        }
+        discard_origin_iteratively(self.origin);
+    }
 }
 
 fn authenticate_identity_order<K: Copy + Eq + Hash, V>(
@@ -6036,6 +6868,7 @@ fn map_summary_kind_failure(failure: KindFailure) -> ResolvedBuildFailure {
 enum SummaryBinderOwner {
     Nominal(NominalTypeId),
     Interface(InterfaceId),
+    Effect(EffectId),
     Method(MethodId),
     Global(BinderId),
     Implementation(ImplId),
@@ -6056,6 +6889,7 @@ fn register_summary_parameter<'a>(
     let expected_module = match owner {
         SummaryBinderOwner::Nominal(identity) => identity.module(),
         SummaryBinderOwner::Interface(identity) => identity.module(),
+        SummaryBinderOwner::Effect(identity) => identity.module(),
         SummaryBinderOwner::Method(identity) => identity.interface().module(),
         SummaryBinderOwner::Global(identity) => identity
             .module()
@@ -6189,6 +7023,26 @@ fn authenticate_summary_type_variables(
                 pending.push(argument);
                 pending.push(function);
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                if let Some(variable) = codomain.tail_variable() {
+                    match variable {
+                        EffectRowVariable::Rigid(variable) if allowed.contains(&variable) => {}
+                        EffectRowVariable::Rigid(_) | EffectRowVariable::Inference(_) => {
+                            return Err(ResolvedBuildFailure::InvalidState);
+                        }
+                    }
+                }
+                let children = codomain.effect_argument_count().saturating_add(2);
+                type_work
+                    .charge(children)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                pending
+                    .try_reserve(children)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                codomain.extend_effect_arguments(&mut pending);
+                pending.push(codomain.value());
+                pending.push(domain);
+            }
         }
     }
     Ok(())
@@ -6239,6 +7093,30 @@ fn collect_summary_constraint_variables(
                     .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
                 pending.push(argument);
                 pending.push(function);
+            }
+            Type::EffectfulFunction(domain, codomain) => {
+                if let Some(variable) = codomain.tail_variable() {
+                    let EffectRowVariable::Rigid(variable) = variable else {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    };
+                    constraint_work
+                        .charge(1)
+                        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                    output
+                        .try_reserve(1)
+                        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+                    output.insert(variable);
+                }
+                let children = codomain.effect_argument_count().saturating_add(2);
+                constraint_work
+                    .charge(children)
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(children)
+                    .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+                codomain.extend_effect_arguments(&mut pending);
+                pending.push(codomain.value());
+                pending.push(domain);
             }
             Type::Forall(_, _) | Type::Inference(_) => {
                 return Err(ResolvedBuildFailure::InvalidState);
@@ -6665,34 +7543,8 @@ fn same_kind_with_constraint_budget(
     right: &Kind,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<bool, ResolvedBuildFailure> {
-    constraint_work
-        .charge(1)
-        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-    let mut pending = Vec::new();
-    pending
-        .try_reserve(1)
-        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-    pending.push((left, right));
-    while let Some((left, right)) = pending.pop() {
-        match (left, right) {
-            (Kind::Type, Kind::Type) => {}
-            (
-                Kind::Arrow(left_domain, left_codomain),
-                Kind::Arrow(right_domain, right_codomain),
-            ) => {
-                constraint_work
-                    .charge(2)
-                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-                pending
-                    .try_reserve(2)
-                    .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-                pending.push((left_codomain, right_codomain));
-                pending.push((left_domain, right_domain));
-            }
-            _ => return Ok(false),
-        }
-    }
-    Ok(true)
+    same_kind_with_charge(left, right, || constraint_work.charge(1))
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)
 }
 
 fn same_origin_with_constraint_budget(
@@ -6816,6 +7668,124 @@ fn same_summary_resolved_type_variables_with_constraint_budget(
         }
     }
     Ok(true)
+}
+
+fn same_resolved_type_provenance_with_constraint_budget(
+    left: &ResolvedTypeProvenance,
+    right: &ResolvedTypeProvenance,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<bool, ResolvedBuildFailure> {
+    constraint_work
+        .charge(1)
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    if left.root != right.root || left.nodes.len() != right.nodes.len() {
+        return Ok(false);
+    }
+    for (left, right) in left.nodes.iter().zip(right.nodes.iter()) {
+        constraint_work
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        match (left, right) {
+            (ResolvedTypeProvenanceNode::Fact(left), ResolvedTypeProvenanceNode::Fact(right)) => {
+                if left != right {
+                    return Ok(false);
+                }
+            }
+            (
+                ResolvedTypeProvenanceNode::Tuple {
+                    span: left_span,
+                    elements: left_elements,
+                },
+                ResolvedTypeProvenanceNode::Tuple {
+                    span: right_span,
+                    elements: right_elements,
+                },
+            ) => {
+                constraint_work
+                    .charge(left_elements.len())
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                if left_span != right_span || left_elements != right_elements {
+                    return Ok(false);
+                }
+            }
+            (
+                ResolvedTypeProvenanceNode::Function {
+                    span: left_span,
+                    domain: left_domain,
+                    codomain: left_codomain,
+                    effect_arguments: left_effect_arguments,
+                },
+                ResolvedTypeProvenanceNode::Function {
+                    span: right_span,
+                    domain: right_domain,
+                    codomain: right_codomain,
+                    effect_arguments: right_effect_arguments,
+                },
+            ) => {
+                constraint_work
+                    .charge(left_effect_arguments.len())
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                if left_span != right_span
+                    || left_domain != right_domain
+                    || left_codomain != right_codomain
+                    || left_effect_arguments != right_effect_arguments
+                {
+                    return Ok(false);
+                }
+            }
+            (
+                ResolvedTypeProvenanceNode::Application {
+                    span: left_span,
+                    function: left_function,
+                    argument: left_argument,
+                    argument_span: left_argument_span,
+                },
+                ResolvedTypeProvenanceNode::Application {
+                    span: right_span,
+                    function: right_function,
+                    argument: right_argument,
+                    argument_span: right_argument_span,
+                },
+            ) => {
+                if left_span != right_span
+                    || left_function != right_function
+                    || left_argument != right_argument
+                    || left_argument_span != right_argument_span
+                {
+                    return Ok(false);
+                }
+            }
+            _ => return Ok(false),
+        }
+    }
+    Ok(true)
+}
+
+fn same_canonical_representation_with_constraint_budget(
+    left_representation: Option<&Type>,
+    left_provenance: Option<&ResolvedTypeProvenance>,
+    right_representation: Option<&Type>,
+    right_provenance: Option<&ResolvedTypeProvenance>,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<bool, ResolvedBuildFailure> {
+    match (
+        left_representation,
+        left_provenance,
+        right_representation,
+        right_provenance,
+    ) {
+        (None, None, None, None) => Ok(true),
+        (Some(left), Some(left_provenance), Some(right), Some(right_provenance)) => Ok(
+            same_type_with_constraint_budget(left, right, constraint_work)
+                .map_err(|_| ResolvedBuildFailure::ConstraintResource)?
+                && same_resolved_type_provenance_with_constraint_budget(
+                    left_provenance,
+                    right_provenance,
+                    constraint_work,
+                )?,
+        ),
+        _ => Ok(false),
+    }
 }
 
 fn same_checker_type_variable_after_base_charge(
@@ -7004,11 +7974,16 @@ pub(crate) fn same_imported_global_fact_observing_nominals_with_budget(
 fn same_imported_global_fact_with_optional_nominal_observer(
     left: &ImportedGlobalScheme,
     right: &ExportedGlobal,
-    _type_work: &mut TypeWorkBudget,
+    type_work: &mut TypeWorkBudget,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     nominal_identities: Option<&mut MatchedNominalIdentities>,
 ) -> Result<bool, ResolvedBuildFailure> {
-    if left.binder != right.binder {
+    if left.binder != right.binder
+        || !left
+            .capture
+            .same_with_budget(&right.capture, type_work)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?
+    {
         return Ok(false);
     }
     let metadata_work = right
@@ -7051,13 +8026,39 @@ pub(crate) fn same_imported_nominal_closure_with_constraint_budget(
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
     let defining_spelling_matches =
         !left.display_is_private || left.display_spelling.as_deref() == right.display_spelling;
+    // Access belongs to the selected import route, not the defining nominal
+    // fact. Comparing a hidden signature closure must not downgrade or reject
+    // the source access already retained through a different route.
     if left.id != right.id
+        || left.declaration_kind != right.declaration_kind
         || left.parameter_count != right.parameter_count
         || left.constructor_count != right.constructor_count
         || left.parameters.len() != right.parameters.len()
+        || (!left.constructors.is_empty()
+            && !right.constructors.is_empty()
+            && left.constructors.as_ref() != right.constructors)
         || left.display_is_private != right.display_is_private
         || !defining_spelling_matches
     {
+        return Ok(false);
+    }
+    let representations_match = match (&left.representation, right.representation) {
+        (None, None) => true,
+        (Some(left), Some(right)) => same_type_with_constraint_budget(left, right, constraint_work)
+            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?,
+        _ => false,
+    };
+    let representation_provenance_matches = match (
+        &left.representation_provenance,
+        right.representation_provenance,
+    ) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            same_resolved_type_provenance_with_constraint_budget(left, right, constraint_work)?
+        }
+        _ => false,
+    };
+    if !representations_match || !representation_provenance_matches {
         return Ok(false);
     }
     for (left, right) in left.parameters.iter().zip(right.parameters) {
@@ -7308,7 +8309,7 @@ pub(crate) fn same_checked_implementation_fact_observing_nominals_with_budget(
 fn same_checked_implementation_fact_with_optional_nominal_observer(
     left: &CheckedImplementationFact,
     right: &CheckedImplementationFact,
-    _type_work: &mut TypeWorkBudget,
+    type_work: &mut TypeWorkBudget,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     mut nominal_identities: Option<&mut MatchedNominalIdentities>,
 ) -> Result<bool, ResolvedBuildFailure> {
@@ -7386,6 +8387,10 @@ fn same_checked_implementation_fact_with_optional_nominal_observer(
     }
     for (left, right) in left.methods.iter().zip(&right.methods) {
         if left.id != right.id
+            || !left
+                .capture
+                .same_with_budget(&right.capture, type_work)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?
             || left.method != right.method
             || left.binder != right.binder
             || left.span != right.span
@@ -7460,6 +8465,71 @@ fn same_summary_type_after_substitutions(
                 continue;
             }
         }
+        match (source.function_view(), actual.function_view()) {
+            (Some(source_function), Some(actual_function)) => {
+                let effect_argument_count =
+                    match (source_function.effects(), actual_function.effects()) {
+                        (None, None) => 0,
+                        (Some(source_effects), Some(actual_effects))
+                            if source_effects.tail().is_none()
+                                && actual_effects.tail().is_none()
+                                && source_effects.known().len() == actual_effects.known().len() =>
+                        {
+                            let mut arguments = 0usize;
+                            for (source_instance, actual_instance) in
+                                source_effects.known().iter().zip(actual_effects.known())
+                            {
+                                constraint_work
+                                    .charge(1)
+                                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                                if source_instance.effect() != actual_instance.effect()
+                                    || source_instance.arguments().len()
+                                        != actual_instance.arguments().len()
+                                {
+                                    return Ok(false);
+                                }
+                                arguments = arguments
+                                    .checked_add(source_instance.arguments().len())
+                                    .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+                            }
+                            arguments
+                        }
+                        _ => return Ok(false),
+                    };
+                let children = effect_argument_count
+                    .checked_add(2)
+                    .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+                constraint_work
+                    .charge(children)
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                pending
+                    .try_reserve(children)
+                    .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+                if let (Some(source_effects), Some(actual_effects)) =
+                    (source_function.effects(), actual_function.effects())
+                {
+                    for (source_instance, actual_instance) in source_effects
+                        .known()
+                        .iter()
+                        .zip(actual_effects.known())
+                        .rev()
+                    {
+                        pending.extend(
+                            source_instance
+                                .arguments()
+                                .iter()
+                                .zip(actual_instance.arguments())
+                                .rev(),
+                        );
+                    }
+                }
+                pending.push((source_function.value(), actual_function.value()));
+                pending.push((source_function.domain(), actual_function.domain()));
+                continue;
+            }
+            (Some(_), None) | (None, Some(_)) => return Ok(false),
+            (None, None) => {}
+        }
         match (source, actual) {
             (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
@@ -7476,10 +8546,6 @@ fn same_summary_type_after_substitutions(
             (
                 Type::Application(left_function, left_argument),
                 Type::Application(right_function, right_argument),
-            )
-            | (
-                Type::Function(left_function, left_argument),
-                Type::Function(right_function, right_argument),
             ) => {
                 constraint_work
                     .charge(2)
@@ -7490,6 +8556,8 @@ fn same_summary_type_after_substitutions(
                 pending.push((left_argument, right_argument));
                 pending.push((left_function, right_function));
             }
+            (Type::Function(_, _), Type::Function(_, _))
+            | (Type::EffectfulFunction(_, _), Type::EffectfulFunction(_, _)) => unreachable!(),
             (Type::Inference(_), _)
             | (_, Type::Inference(_))
             | (Type::Forall(_, _), _)
@@ -7923,17 +8991,123 @@ fn authenticate_summary_determination_seed(
     Ok(Some(required))
 }
 
+#[cfg(test)]
+pub(crate) enum BuiltinCellSummaryMutationForTest {
+    OperationResult,
+    ProviderResult,
+    MissingHandle,
+    MissingOps,
+    HandleKind,
+    NativeSuccessPayload,
+    NativeErrorPayload,
+}
+
 impl ExportSummary {
+    #[cfg(test)]
+    pub(crate) fn corrupt_builtin_fact_for_test(
+        &mut self,
+        mutation: BuiltinCellSummaryMutationForTest,
+    ) {
+        match mutation {
+            BuiltinCellSummaryMutationForTest::NativeSuccessPayload
+            | BuiltinCellSummaryMutationForTest::NativeErrorPayload => {
+                let name = if matches!(
+                    mutation,
+                    BuiltinCellSummaryMutationForTest::NativeSuccessPayload
+                ) {
+                    "Success"
+                } else {
+                    "InvalidByte"
+                };
+                let constructor = self.constructors.get_mut(name).unwrap();
+                if let Some(payload) = constructor.payload.replace(Type::Bool) {
+                    discard_type_iteratively(payload);
+                }
+                let owner = constructor.id.owner();
+                let parameters = if let Some(name) = self.nominal_names_by_id.get(&owner) {
+                    &self.nominals[name].parameters
+                } else {
+                    &self.hidden_nominals[&owner].parameters
+                };
+                constructor.scheme = canonical_constructor_scheme(
+                    owner,
+                    parameters,
+                    constructor.payload.as_ref(),
+                    &mut TypeWorkBudget::default(),
+                )
+                .unwrap();
+            }
+            BuiltinCellSummaryMutationForTest::OperationResult => {
+                let operation = &mut self.effects[0].operations[0];
+                let Type::Function(_, result) = &mut operation.annotation.ty else {
+                    panic!("pure operation signature")
+                };
+                discard_type_iteratively(std::mem::replace(result.as_mut(), Type::Bool));
+            }
+            BuiltinCellSummaryMutationForTest::ProviderResult => {
+                let interface = self
+                    .interfaces
+                    .iter_mut()
+                    .chain(self.hidden_interfaces.iter_mut())
+                    .next()
+                    .unwrap();
+                let Type::EffectfulFunction(_, result) = &mut interface.methods[0].value_type
+                else {
+                    panic!("effectful method signature")
+                };
+                discard_type_iteratively(std::mem::replace(&mut result.value, Type::Bool));
+            }
+            BuiltinCellSummaryMutationForTest::MissingHandle => {
+                if let Some(displaced) = self.nominals.remove("Handle") {
+                    displaced.discard_iteratively();
+                }
+                self.nominal_order.clear();
+                self.nominal_names_by_id.clear();
+                if let Some(identity) = self.hidden_nominals.keys().next().copied() {
+                    if let Some(displaced) = self.hidden_nominals.remove(&identity) {
+                        displaced.discard_iteratively();
+                    }
+                    self.hidden_nominal_order.clear();
+                }
+            }
+            BuiltinCellSummaryMutationForTest::MissingOps => {
+                if let Some(displaced) = self.effects.pop() {
+                    discard_resolved_effect_iteratively(displaced);
+                }
+                self.effect_positions.clear();
+                self.effect_names.clear();
+                self.effect_name_order.clear();
+            }
+            BuiltinCellSummaryMutationForTest::HandleKind => {
+                if let Some(nominal) = self.nominals.values_mut().next() {
+                    drop(std::mem::replace(
+                        &mut nominal.parameters[0].kind,
+                        Kind::EffectRow,
+                    ));
+                } else {
+                    let nominal = self.hidden_nominals.values_mut().next().unwrap();
+                    drop(std::mem::replace(
+                        &mut nominal.parameters[0].kind,
+                        Kind::EffectRow,
+                    ));
+                }
+            }
+        }
+    }
+
     pub(crate) fn authenticate(
         &self,
         type_work: &mut TypeWorkBudget,
         constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     ) -> Result<(), ResolvedBuildFailure> {
+        self.authenticate_resource_facts()?;
         if self.terms.len() != self.term_order.len()
             || self.nominals.len() != self.nominal_order.len()
             || self.constructors.len() != self.constructor_order.len()
             || self.interface_names.len() != self.interface_name_order.len()
+            || self.effect_names.len() != self.effect_name_order.len()
             || self.method_names.len() != self.method_name_order.len()
+            || self.effects.len() != self.effect_positions.len()
         {
             return Err(ResolvedBuildFailure::InvalidState);
         }
@@ -7976,6 +9150,7 @@ impl ExportSummary {
             .nominal_order
             .len()
             .checked_add(self.interface_name_order.len())
+            .and_then(|count| count.checked_add(self.effect_name_order.len()))
             .ok_or(ResolvedBuildFailure::ConstraintResource)?;
         let mut type_spellings = HashSet::new();
         constraint_work
@@ -7989,6 +9164,8 @@ impl ExportSummary {
         }) || self.interface_name_order.iter().any(|spelling| {
             !self.interface_names.contains_key(spelling)
                 || !type_spellings.insert(spelling.as_str())
+        }) || self.effect_name_order.iter().any(|spelling| {
+            !self.effect_names.contains_key(spelling) || !type_spellings.insert(spelling.as_str())
         }) {
             return Err(ResolvedBuildFailure::InvalidState);
         }
@@ -8064,14 +9241,75 @@ impl ExportSummary {
 
         let mut environments = KindEnvironments::new();
         let mut canonical_variables = HashMap::new();
+        let mut named_effects = HashSet::new();
+        constraint_work
+            .charge(
+                self.effect_name_order
+                    .len()
+                    .saturating_add(self.effects.len()),
+            )
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        named_effects
+            .try_reserve(self.effect_name_order.len())
+            .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+        for spelling in &self.effect_name_order {
+            let identity = self
+                .effect_names
+                .get(spelling)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            if !self.effect_positions.contains_key(identity) {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            named_effects.insert(*identity);
+        }
+        for (position, effect) in self.effects.iter().enumerate() {
+            if let Some(api) = ResourceApi::for_module(effect.id.module())
+                && (!api.effect(effect) || !self.has_resource_nominals(api))
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            if self.effect_positions.get(&effect.id) != Some(&position)
+                || (named_effects.contains(&effect.id) && !effect.public)
+                || effect.operations.is_empty()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            register_summary_parameters(
+                &effect.parameters,
+                SummaryBinderOwner::Effect(effect.id),
+                &mut canonical_variables,
+                &mut environments,
+                type_work,
+            )?;
+            for (operation_index, operation) in effect.operations.iter().enumerate() {
+                if operation.id.owner() != effect.id
+                    || usize::try_from(operation.id.operation()) != Ok(operation_index)
+                    || operation
+                        .annotation
+                        .ty
+                        .function_view()
+                        .is_none_or(|view| view.effects().is_some())
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                authenticate_summary_type_variables(
+                    &operation.annotation.ty,
+                    effect.parameters.iter().map(|parameter| parameter.id),
+                    type_work,
+                )?;
+            }
+        }
         let mut canonical_nominals = HashMap::<
             NominalTypeId,
             (
                 &[ResolvedTypeVariable],
+                ResolvedNominalDeclarationKind,
                 usize,
                 &[ConstructorId],
                 ImportedTypeAccess,
                 &Origin,
+                Option<&Type>,
+                Option<&ResolvedTypeProvenance>,
                 usize,
             ),
         >::new();
@@ -8100,8 +9338,47 @@ impl ExportSummary {
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
 
         for (_, nominal) in self.nominals() {
-            if nominal.parameter_count != nominal.parameters.len()
+            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+                && !api.exported_nominal(nominal)
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            let canonical_representation = self.canonical_representations.get(&nominal.id);
+            let (representation, representation_provenance) = match canonical_representation {
+                Some(fact) => (Some(&fact.representation), Some(&fact.provenance)),
+                None => (
+                    nominal.representation.as_ref(),
+                    nominal.representation_provenance.as_ref(),
+                ),
+            };
+            if nominal.id.is_lexical()
+                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+                    && !matches!(&nominal.origin, Origin::Source(_))
+                || nominal.parameter_count != nominal.parameters.len()
                 || nominal.constructor_count == 0
+                || matches!(
+                    nominal.declaration_kind,
+                    ResolvedNominalDeclarationKind::Data
+                ) && nominal.representation.is_some()
+                || matches!(
+                    nominal.declaration_kind,
+                    ResolvedNominalDeclarationKind::Data
+                ) && nominal.representation_provenance.is_some()
+                || matches!(
+                    nominal.declaration_kind,
+                    ResolvedNominalDeclarationKind::Newtype
+                ) && (nominal.constructor_count != 1
+                    || nominal.access == ExportedTypeAccess::Transparent
+                        && (nominal.representation.is_none()
+                            || nominal.representation_provenance.is_none()))
+                || nominal.access == ExportedTypeAccess::Opaque
+                    && nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+                    && (canonical_representation.is_none()
+                        || nominal.representation.is_some()
+                        || nominal.representation_provenance.is_some())
+                || (nominal.access != ExportedTypeAccess::Opaque
+                    || nominal.declaration_kind != ResolvedNominalDeclarationKind::Newtype)
+                    && canonical_representation.is_some()
                 || match nominal.access {
                     ExportedTypeAccess::Opaque => !nominal.constructors.is_empty(),
                     ExportedTypeAccess::Transparent => {
@@ -8118,10 +9395,20 @@ impl ExportSummary {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
             }
-            if let Some((parameters, constructor_count, _, access, origin, _)) =
-                canonical_nominals.get(&nominal.id)
+            if let Some((
+                parameters,
+                declaration_kind,
+                constructor_count,
+                _constructors,
+                access,
+                origin,
+                existing_representation,
+                existing_representation_provenance,
+                _,
+            )) = canonical_nominals.get(&nominal.id)
             {
-                if *access != nominal.access.into()
+                if *declaration_kind != nominal.declaration_kind
+                    || *access != nominal.access.into()
                     || *constructor_count != nominal.constructor_count
                     || !same_summary_resolved_type_variables_with_constraint_budget(
                         parameters,
@@ -8131,6 +9418,13 @@ impl ExportSummary {
                     || !same_origin_with_constraint_budget(
                         origin,
                         &nominal.origin,
+                        constraint_work,
+                    )?
+                    || !same_canonical_representation_with_constraint_budget(
+                        *existing_representation,
+                        *existing_representation_provenance,
+                        representation,
+                        representation_provenance,
                         constraint_work,
                     )?
                 {
@@ -8153,21 +9447,65 @@ impl ExportSummary {
                     type_work,
                 )
                 .map_err(map_summary_kind_failure)?;
+            if let (Some(representation), Some(provenance)) =
+                (representation, representation_provenance)
+            {
+                authenticate_summary_type_variables(
+                    representation,
+                    nominal.parameters.iter().map(|parameter| parameter.id),
+                    type_work,
+                )?;
+                environments
+                    .expect_value_type_parts(
+                        representation,
+                        provenance,
+                        provenance
+                            .span()
+                            .unwrap_or_else(|| nominal.origin.primary_span()),
+                        type_work,
+                    )
+                    .map_err(map_summary_kind_failure)?;
+            }
             canonical_nominals.insert(
                 nominal.id,
                 (
                     &nominal.parameters,
+                    nominal.declaration_kind,
                     nominal.constructor_count,
                     &nominal.constructors,
                     nominal.access.into(),
                     &nominal.origin,
+                    representation,
+                    representation_provenance,
                     0,
                 ),
             );
         }
         for nominal in self.hidden_nominals() {
-            if nominal.parameter_count != nominal.parameters.len()
+            if let Some(api) = ResourceApi::for_module(nominal.id.module())
+                && !api.hidden_nominal(nominal)
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            if nominal.id.is_lexical()
+                || nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+                    && !matches!(&nominal.origin, Origin::Source(_))
+                || nominal.parameter_count != nominal.parameters.len()
                 || nominal.constructor_count == 0
+                || matches!(
+                    nominal.declaration_kind,
+                    ResolvedNominalDeclarationKind::Data
+                ) && nominal.representation.is_some()
+                || matches!(
+                    nominal.declaration_kind,
+                    ResolvedNominalDeclarationKind::Data
+                ) && nominal.representation_provenance.is_some()
+                || matches!(
+                    nominal.declaration_kind,
+                    ResolvedNominalDeclarationKind::Newtype
+                ) && (nominal.constructor_count != 1
+                    || nominal.representation.is_none()
+                    || nominal.representation_provenance.is_none())
                 || canonical_nominals.contains_key(&nominal.id)
                 || match nominal.access {
                     ImportedTypeAccess::Transparent => {
@@ -8206,24 +9544,87 @@ impl ExportSummary {
                     type_work,
                 )
                 .map_err(map_summary_kind_failure)?;
+            if let (Some(representation), Some(provenance)) = (
+                nominal.representation.as_ref(),
+                nominal.representation_provenance.as_ref(),
+            ) {
+                authenticate_summary_type_variables(
+                    representation,
+                    nominal.parameters.iter().map(|parameter| parameter.id),
+                    type_work,
+                )?;
+                environments
+                    .expect_value_type_parts(
+                        representation,
+                        provenance,
+                        provenance
+                            .span()
+                            .unwrap_or_else(|| nominal.origin.primary_span()),
+                        type_work,
+                    )
+                    .map_err(map_summary_kind_failure)?;
+            }
             canonical_nominals.insert(
                 nominal.id,
                 (
                     &nominal.parameters,
+                    nominal.declaration_kind,
                     nominal.constructor_count,
                     &nominal.constructors,
                     nominal.access,
                     &nominal.origin,
+                    nominal.representation.as_ref(),
+                    nominal.representation_provenance.as_ref(),
                     0,
                 ),
             );
+        }
+
+        // Operation signatures may name any retained nominal. Check their
+        // kinds only after the complete nominal environment is registered.
+        for effect in &self.effects {
+            for operation in &effect.operations {
+                environments
+                    .expect_body_free_value_type_with_ledger(
+                        &operation.annotation.ty,
+                        operation.span,
+                        type_work,
+                    )
+                    .map_err(map_summary_kind_failure)?;
+            }
+        }
+
+        constraint_work
+            .charge(self.canonical_representations.len())
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        for (identity, representation) in &self.canonical_representations {
+            let spelling = self
+                .nominal_names_by_id
+                .get(identity)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            let nominal = self
+                .nominals
+                .get(spelling)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            if nominal.access != ExportedTypeAccess::Opaque
+                || nominal.declaration_kind != ResolvedNominalDeclarationKind::Newtype
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            environments
+                .expect_body_free_value_type_with_ledger(
+                    &representation.representation,
+                    nominal.origin.primary_span(),
+                    type_work,
+                )
+                .map_err(map_summary_kind_failure)?;
         }
 
         constraint_work
             .charge(canonical_nominals.len())
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
         let mut matched_withheld_counts = 0usize;
-        for (identity, (_, constructor_count, _, access, _, _)) in &canonical_nominals {
+        for (identity, (_, _, constructor_count, _, access, _, _, _, _)) in &canonical_nominals {
             let retained_count = match access {
                 ImportedTypeAccess::Opaque => withheld_constructor_counts
                     .get(&(*identity, WithheldExportKind::OpaqueConstructor))
@@ -8429,6 +9830,9 @@ impl ExportSummary {
         }
         for (position, implementation) in self.implementations.iter().enumerate() {
             let fact = &implementation.fact;
+            if fact.interface().module().is_builtin_resource() {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
             let authorization_is_well_formed = implementation
                 .authorization
                 .is_well_formed_for(self.module, fact, constraint_work)
@@ -8517,6 +9921,13 @@ impl ExportSummary {
         }
 
         for interface in self.interfaces.iter().chain(self.hidden_interfaces.iter()) {
+            if let Some(api) = ResourceApi::for_module(interface.id.module())
+                && (!api.interface(interface)
+                    || !self.has_resource_nominals(api)
+                    || !self.effect_positions.contains_key(&api.ops()))
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
             if interface.methods.is_empty() {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
@@ -8588,15 +9999,78 @@ impl ExportSummary {
             .map(|(_, constructor)| constructor)
             .chain(self.hidden_constructors())
         {
-            let Some((parameters, _, family, access, _, _)) =
+            if ResourceApi::for_module(constructor.id.owner().module()).is_some_and(|api| {
+                api.hides_constructor(constructor.id)
+                    || !api.constructor_parts(
+                        constructor.id,
+                        &constructor.spelling,
+                        constructor.payload.as_ref(),
+                    )
+            }) {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            let Some((parameters, declaration_kind, _, family, access, _, _, _, _)) =
                 canonical_nominals.get(&constructor.id.owner())
             else {
                 return Err(ResolvedBuildFailure::InvalidState);
+            };
+            let spelling_matches_owner = if *declaration_kind
+                == ResolvedNominalDeclarationKind::Newtype
+                && constructor.id.owner().module() == self.module
+            {
+                // A public re-export may rename the nominal source binding while
+                // preserving its defining constructor identity and spelling.
+                // Only a defining-module summary owns the source-spelling
+                // equality claim.
+                let owner_spelling = self
+                    .nominal_names_by_id
+                    .get(&constructor.id.owner())
+                    .map(String::as_str)
+                    .or_else(|| {
+                        self.hidden_nominals
+                            .get(&constructor.id.owner())
+                            .map(|nominal| nominal.spelling.as_str())
+                    })
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                constructor.spelling == owner_spelling
+            } else {
+                true
+            };
+            let representation_matches_constructor = if *declaration_kind
+                == ResolvedNominalDeclarationKind::Newtype
+            {
+                let representation = self
+                    .nominal_names_by_id
+                    .get(&constructor.id.owner())
+                    .and_then(|spelling| self.nominals.get(spelling))
+                    .and_then(|nominal| {
+                        self.canonical_representations
+                            .get(&nominal.id)
+                            .map(|fact| &fact.representation)
+                            .or(nominal.representation.as_ref())
+                    })
+                    .or_else(|| {
+                        self.hidden_nominals
+                            .get(&constructor.id.owner())
+                            .and_then(|nominal| nominal.representation.as_ref())
+                    })
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                match constructor.payload.as_ref() {
+                    Some(payload) => {
+                        same_type_with_constraint_budget(representation, payload, constraint_work)
+                            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+                    }
+                    None => false,
+                }
+            } else {
+                true
             };
             let constructor_position = usize::try_from(constructor.id.constructor())
                 .map_err(|_| ResolvedBuildFailure::InvalidState)?;
             if *access != ImportedTypeAccess::Transparent
                 || family.get(constructor_position) != Some(&constructor.id)
+                || !spelling_matches_owner
+                || !representation_matches_constructor
                 || (self.hidden_constructors.contains_key(&constructor.id)
                     && self.constructor_names_by_id.contains_key(&constructor.id))
                 || (self.hidden_constructors.contains_key(&constructor.id)
@@ -8641,7 +10115,7 @@ impl ExportSummary {
                 )
                 .map_err(map_summary_kind_failure)?;
             canonical_constructors.insert(constructor.id, constructor);
-            let Some((_, _, _, _, _, physical_count)) =
+            let Some((_, _, _, _, _, _, _, _, physical_count)) =
                 canonical_nominals.get_mut(&constructor.id.owner())
             else {
                 return Err(ResolvedBuildFailure::InvalidState);
@@ -8653,7 +10127,7 @@ impl ExportSummary {
         constraint_work
             .charge(canonical_nominals.len())
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-        for (_, _, family, access, _, physical_count) in canonical_nominals.values() {
+        for (_, _, _, family, access, _, _, _, physical_count) in canonical_nominals.values() {
             let expected = if *access == ImportedTypeAccess::Transparent {
                 family.len()
             } else {
@@ -8956,6 +10430,10 @@ impl ExportSummary {
             hidden_constructor_order: Vec::new(),
             interface_names: HashMap::new(),
             interface_name_order: Vec::new(),
+            effect_names: HashMap::new(),
+            effect_name_order: Vec::new(),
+            effects: Vec::new(),
+            effect_positions: HashMap::new(),
             method_names: HashMap::new(),
             method_name_order: Vec::new(),
             interfaces: Vec::new(),
@@ -8965,6 +10443,7 @@ impl ExportSummary {
             implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),
             hidden_nominal_order: Vec::new(),
+            canonical_representations: HashMap::new(),
             withheld: HashMap::new(),
             withheld_order: Vec::new(),
         }
@@ -9043,6 +10522,10 @@ impl ExportSummary {
             hidden_constructor_order: Vec::new(),
             interface_names: HashMap::new(),
             interface_name_order: Vec::new(),
+            effect_names: HashMap::new(),
+            effect_name_order: Vec::new(),
+            effects: Vec::new(),
+            effect_positions: HashMap::new(),
             method_names: HashMap::new(),
             method_name_order: Vec::new(),
             interfaces: Vec::new(),
@@ -9052,6 +10535,7 @@ impl ExportSummary {
             implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),
             hidden_nominal_order: Vec::new(),
+            canonical_representations: HashMap::new(),
             withheld: HashMap::new(),
             withheld_order: Vec::new(),
         };
@@ -9062,6 +10546,7 @@ impl ExportSummary {
             .checked_add(resolved.export_candidate.nominals.len())
             .and_then(|count| count.checked_add(resolved.export_candidate.constructors.len()))
             .and_then(|count| count.checked_add(resolved.export_candidate.interfaces.len()))
+            .and_then(|count| count.checked_add(resolved.export_candidate.effects.len()))
             .and_then(|count| count.checked_add(resolved.export_candidate.methods.len()))
             .ok_or(ResolvedBuildFailure::TypeResource)?;
         type_work
@@ -9082,6 +10567,10 @@ impl ExportSummary {
         summary
             .interface_name_order
             .try_reserve_exact(resolved.export_candidate.interfaces.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        summary
+            .effect_name_order
+            .try_reserve_exact(resolved.export_candidate.effects.len())
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         summary
             .method_name_order
@@ -9147,7 +10636,7 @@ impl ExportSummary {
                 .terms
                 .get(spelling)
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
-            let (binder, scheme, origin) = match candidate.source {
+            let (binder, scheme, origin, capture) = match candidate.source {
                 CandidateFactSource::Local => {
                     let checked = checked_by_binder
                         .get(&candidate.binder)
@@ -9155,7 +10644,12 @@ impl ExportSummary {
                     if candidate.binder.module() != Some(resolved.module) {
                         return Err(ResolvedBuildFailure::InvalidState);
                     }
-                    (checked.binder, &checked.scheme, &checked.origin)
+                    (
+                        checked.binder,
+                        &checked.scheme,
+                        &checked.origin,
+                        &checked.capture,
+                    )
                 }
                 CandidateFactSource::Imported => {
                     let imported = resolved
@@ -9165,7 +10659,12 @@ impl ExportSummary {
                     if candidate.binder.module() == Some(resolved.module) {
                         return Err(ResolvedBuildFailure::InvalidState);
                     }
-                    (imported.binder, &imported.scheme, &imported.origin)
+                    (
+                        imported.binder,
+                        &imported.scheme,
+                        &imported.origin,
+                        &imported.capture,
+                    )
                 }
             };
             if binder != candidate.binder
@@ -9174,6 +10673,9 @@ impl ExportSummary {
                     .insert(
                         spelling.clone(),
                         ExportedGlobal {
+                            capture: capture
+                                .clone_with_budget(type_work)
+                                .map_err(|()| ResolvedBuildFailure::TypeResource)?,
                             binder,
                             scheme: scheme
                                 .clone_with_budget(type_work)
@@ -9281,6 +10783,60 @@ impl ExportSummary {
             )?);
             if summary
                 .interface_positions
+                .insert(candidate.id, position)
+                .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        }
+
+        summary
+            .effects
+            .try_reserve(resolved.export_candidate.effects.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        summary
+            .effect_positions
+            .try_reserve(resolved.export_candidate.effects.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        summary
+            .effect_names
+            .try_reserve(resolved.export_candidate.effects.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for spelling in &resolved.export_candidate.effect_order {
+            let candidate = resolved
+                .export_candidate
+                .effects
+                .get(spelling)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            let source = match candidate.source {
+                CandidateFactSource::Local => resolved
+                    .effects
+                    .iter()
+                    .find(|effect| effect.id == candidate.id),
+                CandidateFactSource::Imported => resolved.imported.effect(candidate.id),
+            }
+            .ok_or(ResolvedBuildFailure::InvalidState)?;
+            let owner_is_publisher = candidate.id.module() == resolved.module;
+            if owner_is_publisher != (candidate.source == CandidateFactSource::Local)
+                || source.id != candidate.id
+                || summary
+                    .effect_names
+                    .insert(spelling.clone(), candidate.id)
+                    .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            summary.effect_name_order.push(spelling.clone());
+            if summary.effect_positions.contains_key(&candidate.id) {
+                continue;
+            }
+            let position = summary.effects.len();
+            summary.effects.push(
+                clone_resolved_effect_with_budget(source, type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+            );
+            if summary
+                .effect_positions
                 .insert(candidate.id, position)
                 .is_some()
             {
@@ -9533,7 +11089,15 @@ impl ExportSummary {
                 .nominals
                 .get(spelling)
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
-            let (parameters, constructor_count, constructors, origin) = match candidate.source {
+            let (
+                parameters,
+                constructor_count,
+                constructors,
+                origin,
+                declaration_kind,
+                representation,
+                representation_provenance,
+            ) = match candidate.source {
                 CandidateFactSource::Local => {
                     let nominal = resolved
                         .registry
@@ -9555,6 +11119,9 @@ impl ExportSummary {
                             &[]
                         },
                         &nominal.origin,
+                        nominal.declaration_kind,
+                        nominal.representation.as_ref(),
+                        nominal.representation_provenance.as_ref(),
                     )
                 }
                 CandidateFactSource::Imported => {
@@ -9579,6 +11146,23 @@ impl ExportSummary {
                         imported.constructor_count,
                         imported.constructors.as_ref(),
                         &imported.origin,
+                        imported.declaration_kind,
+                        if candidate.access == ExportedTypeAccess::Opaque {
+                            resolved
+                                .imported
+                                .canonical_representation(candidate.id)
+                                .map(|fact| &fact.representation)
+                        } else {
+                            imported.representation.as_ref()
+                        },
+                        if candidate.access == ExportedTypeAccess::Opaque {
+                            resolved
+                                .imported
+                                .canonical_representation(candidate.id)
+                                .map(|fact| &fact.provenance)
+                        } else {
+                            imported.representation_provenance.as_ref()
+                        },
                     )
                 }
             };
@@ -9593,26 +11177,67 @@ impl ExportSummary {
             let cloned_parameters =
                 clone_resolved_type_variable_buffer_with_budget(parameters, type_work)
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            if candidate.access == ExportedTypeAccess::Opaque
+                && declaration_kind == ResolvedNominalDeclarationKind::Newtype
+            {
+                type_work
+                    .charge(1)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                summary
+                    .canonical_representations
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+            }
+            let canonical_representation = match (representation, representation_provenance) {
+                (None, None) => None,
+                (Some(representation), Some(provenance)) => Some(CanonicalRepresentationFact {
+                    representation: clone_type_with_budget(representation, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                    provenance: provenance.clone(),
+                }),
+                _ => return Err(ResolvedBuildFailure::InvalidState),
+            };
+            let (representation, representation_provenance) = if candidate.access
+                == ExportedTypeAccess::Opaque
+                && declaration_kind == ResolvedNominalDeclarationKind::Newtype
+            {
+                let representation =
+                    canonical_representation.ok_or(ResolvedBuildFailure::InvalidState)?;
+                if let Some(displaced) = summary
+                    .canonical_representations
+                    .insert(candidate.id, representation)
+                {
+                    discard_canonical_representation_fact(displaced);
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                (None, None)
+            } else {
+                match canonical_representation {
+                    Some(representation) => (
+                        Some(representation.representation),
+                        Some(representation.provenance),
+                    ),
+                    None => (None, None),
+                }
+            };
             summary
                 .nominal_names_by_id
                 .entry(candidate.id)
                 .or_insert_with(|| spelling.clone());
-            if summary
-                .nominals
-                .insert(
-                    spelling.clone(),
-                    ExportedType {
-                        id: candidate.id,
-                        parameter_count: parameters.len(),
-                        constructor_count,
-                        parameters: cloned_parameters.into_boxed_slice(),
-                        constructors: cloned_constructors.into_boxed_slice(),
-                        access: candidate.access,
-                        origin: origin.clone(),
-                    },
-                )
-                .is_some()
-            {
+            let exported = ExportedType {
+                representation_provenance,
+                id: candidate.id,
+                declaration_kind,
+                parameter_count: parameters.len(),
+                constructor_count,
+                parameters: cloned_parameters.into_boxed_slice(),
+                representation,
+                constructors: cloned_constructors.into_boxed_slice(),
+                access: candidate.access,
+                origin: origin.clone(),
+            };
+            if let Some(displaced) = summary.nominals.insert(spelling.clone(), exported) {
+                displaced.discard_iteratively();
                 return Err(ResolvedBuildFailure::InvalidState);
             }
             summary.nominal_order.push(spelling.clone());
@@ -9638,6 +11263,10 @@ impl ExportSummary {
                         .registry
                         .constructor(candidate.id)
                         .ok_or(ResolvedBuildFailure::InvalidState)?;
+                    let owner = resolved
+                        .registry
+                        .nominal(candidate.id.owner())
+                        .ok_or(ResolvedBuildFailure::InvalidState)?;
                     let parameters = resolved
                         .registry
                         .nominal_parameters(candidate.id.owner())
@@ -9645,13 +11274,19 @@ impl ExportSummary {
                     if candidate.id.owner().module() != resolved.module {
                         return Err(ResolvedBuildFailure::InvalidState);
                     }
+                    let payload =
+                        if owner.declaration_kind == ResolvedNominalDeclarationKind::Newtype {
+                            owner.representation.as_ref()
+                        } else {
+                            constructor.payload.as_ref()
+                        };
                     (
                         constructor.spelling.as_str(),
-                        constructor.payload.as_ref(),
+                        payload,
                         canonical_constructor_scheme(
                             candidate.id.owner(),
                             parameters,
-                            constructor.payload.as_ref(),
+                            payload,
                             type_work,
                         )
                         .map_err(|()| ResolvedBuildFailure::TypeResource)?,
@@ -9840,43 +11475,53 @@ impl ExportSummary {
             type_work
                 .charge(1)
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-            let (spelling, payload, scheme, origin) =
-                if constructor_id.owner().module() == resolved.module {
-                    let constructor = resolved
-                        .registry
-                        .constructor(constructor_id)
-                        .ok_or(ResolvedBuildFailure::InvalidState)?;
-                    let parameters = resolved
-                        .registry
-                        .nominal_parameters(constructor_id.owner())
-                        .ok_or(ResolvedBuildFailure::InvalidState)?;
-                    (
-                        constructor.spelling.as_str(),
-                        constructor.payload.as_ref(),
-                        canonical_constructor_scheme(
-                            constructor_id.owner(),
-                            parameters,
-                            constructor.payload.as_ref(),
-                            type_work,
-                        )
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
-                        &constructor.origin,
-                    )
+            let (spelling, payload, scheme, origin) = if constructor_id.owner().module()
+                == resolved.module
+            {
+                let constructor = resolved
+                    .registry
+                    .constructor(constructor_id)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                let owner = resolved
+                    .registry
+                    .nominal(constructor_id.owner())
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                let parameters = resolved
+                    .registry
+                    .nominal_parameters(constructor_id.owner())
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                let payload = if owner.declaration_kind == ResolvedNominalDeclarationKind::Newtype {
+                    owner.representation.as_ref()
                 } else {
-                    let constructor = resolved
-                        .imported
-                        .constructor(constructor_id)
-                        .ok_or(ResolvedBuildFailure::InvalidState)?;
-                    (
-                        constructor.spelling.as_str(),
-                        constructor.payload.as_ref(),
-                        constructor
-                            .scheme
-                            .clone_with_budget(type_work)
-                            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
-                        &constructor.origin,
-                    )
+                    constructor.payload.as_ref()
                 };
+                (
+                    constructor.spelling.as_str(),
+                    payload,
+                    canonical_constructor_scheme(
+                        constructor_id.owner(),
+                        parameters,
+                        payload,
+                        type_work,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                    &constructor.origin,
+                )
+            } else {
+                let constructor = resolved
+                    .imported
+                    .constructor(constructor_id)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                (
+                    constructor.spelling.as_str(),
+                    constructor.payload.as_ref(),
+                    constructor
+                        .scheme
+                        .clone_with_budget(type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                    &constructor.origin,
+                )
+            };
             if summary
                 .hidden_constructors
                 .insert(
@@ -9901,6 +11546,14 @@ impl ExportSummary {
 
         let mut referenced_nominals = HashSet::new();
         for exported in summary.terms.values() {
+            for ty in exported
+                .capture
+                .types(type_work)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?
+            {
+                collect_capture_external_nominals(ty, &mut referenced_nominals, type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            }
             collect_scheme_nominal_identities(
                 &exported.scheme,
                 &mut referenced_nominals,
@@ -9948,6 +11601,14 @@ impl ExportSummary {
                 }
             }
             for method in &implementation.fact.methods {
+                for ty in method
+                    .capture
+                    .types(type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                {
+                    collect_capture_external_nominals(ty, &mut referenced_nominals, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
                 collect_scheme_nominal_identities(
                     &method.scheme,
                     &mut referenced_nominals,
@@ -9973,12 +11634,11 @@ impl ExportSummary {
                 .registry
                 .nominal_parameters(candidate.id)
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
-            let constructor_count = resolved
+            let nominal = resolved
                 .registry
                 .nominal(candidate.id)
-                .ok_or(ResolvedBuildFailure::InvalidState)?
-                .constructors
-                .len();
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            let constructor_count = nominal.constructors.len();
             type_work
                 .charge(2)
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
@@ -9993,24 +11653,28 @@ impl ExportSummary {
             let parameters =
                 clone_resolved_type_variable_buffer_with_budget(source_parameters, type_work)
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-            if summary
-                .hidden_nominals
-                .insert(
-                    candidate.id,
-                    ExportedHiddenType {
-                        id: candidate.id,
-                        parameter_count: candidate.parameter_count,
-                        constructor_count,
-                        parameters: parameters.into_boxed_slice(),
-                        constructors: Box::new([]),
-                        access: ImportedTypeAccess::Hidden,
-                        spelling: candidate.spelling.clone(),
-                        display_is_private: true,
-                        origin: candidate.origin.clone(),
-                    },
-                )
-                .is_some()
-            {
+            let representation = nominal
+                .representation
+                .as_ref()
+                .map(|representation| clone_type_with_budget(representation, type_work))
+                .transpose()
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            let exported = ExportedHiddenType {
+                representation_provenance: nominal.representation_provenance.clone(),
+                id: candidate.id,
+                declaration_kind: nominal.declaration_kind,
+                parameter_count: candidate.parameter_count,
+                constructor_count,
+                parameters: parameters.into_boxed_slice(),
+                representation,
+                constructors: Box::new([]),
+                access: ImportedTypeAccess::Hidden,
+                spelling: candidate.spelling.clone(),
+                display_is_private: true,
+                origin: candidate.origin.clone(),
+            };
+            if let Some(displaced) = summary.hidden_nominals.insert(candidate.id, exported) {
+                displaced.discard_iteratively();
                 return Err(ResolvedBuildFailure::InvalidState);
             }
             summary.hidden_nominal_order.push(candidate.id);
@@ -10055,41 +11719,261 @@ impl ExportSummary {
             let parameters =
                 clone_resolved_type_variable_buffer_with_budget(&imported.parameters, type_work)
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-            if summary
-                .hidden_nominals
-                .insert(
-                    imported.id,
-                    ExportedHiddenType {
-                        id: imported.id,
-                        parameter_count: imported.parameter_count,
-                        constructor_count: imported.constructor_count,
-                        parameters: parameters.into_boxed_slice(),
-                        constructors: constructors.into_boxed_slice(),
-                        access: if retains_constructor_family {
-                            imported.access
-                        } else {
-                            ImportedTypeAccess::Hidden
-                        },
-                        spelling: imported
-                            .display_spelling
-                            .clone()
-                            .unwrap_or_else(|| "hidden".to_owned()),
-                        display_is_private: imported.display_is_private,
-                        origin: imported.origin.clone(),
-                    },
-                )
-                .is_some()
-            {
+            let canonical_representation = imported
+                .representation
+                .as_ref()
+                .zip(imported.representation_provenance.as_ref())
+                .or_else(|| {
+                    resolved
+                        .imported
+                        .canonical_representation(imported.id)
+                        .map(|fact| (&fact.representation, &fact.provenance))
+                });
+            let (representation, representation_provenance) = match canonical_representation {
+                Some((representation, provenance)) => (
+                    Some(
+                        clone_type_with_budget(representation, type_work)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                    ),
+                    Some(provenance.clone()),
+                ),
+                None => (None, None),
+            };
+            let exported = ExportedHiddenType {
+                representation_provenance,
+                id: imported.id,
+                declaration_kind: imported.declaration_kind,
+                parameter_count: imported.parameter_count,
+                constructor_count: imported.constructor_count,
+                parameters: parameters.into_boxed_slice(),
+                representation,
+                constructors: constructors.into_boxed_slice(),
+                access: if retains_constructor_family {
+                    imported.access
+                } else {
+                    ImportedTypeAccess::Hidden
+                },
+                spelling: imported
+                    .display_spelling
+                    .clone()
+                    .unwrap_or_else(|| "hidden".to_owned()),
+                display_is_private: imported.display_is_private,
+                origin: imported.origin.clone(),
+            };
+            if let Some(displaced) = summary.hidden_nominals.insert(imported.id, exported) {
+                displaced.discard_iteratively();
                 return Err(ResolvedBuildFailure::InvalidState);
             }
             summary.hidden_nominal_order.push(imported.id);
         }
 
+        if !resolved.effects.is_empty() || resolved.imported.effects().next().is_some() {
+            let mut referenced_effects = HashSet::new();
+            for exported in summary.terms.values() {
+                for effect in exported
+                    .capture
+                    .effects(type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                {
+                    type_work
+                        .charge(1)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    referenced_effects
+                        .try_reserve(1)
+                        .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                    referenced_effects.insert(effect);
+                }
+                for ty in exported
+                    .capture
+                    .types(type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                {
+                    collect_effect_identities(ty, &mut referenced_effects, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+                collect_effect_identities(
+                    &exported.scheme.value_type,
+                    &mut referenced_effects,
+                    type_work,
+                )
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            }
+            for exported in summary.constructors.values() {
+                if let Some(payload) = &exported.payload {
+                    collect_effect_identities(payload, &mut referenced_effects, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            for exported in summary.hidden_constructors.values() {
+                if let Some(payload) = &exported.payload {
+                    collect_effect_identities(payload, &mut referenced_effects, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            for interface in summary.interfaces.iter().chain(&summary.hidden_interfaces) {
+                for method in &interface.methods {
+                    collect_effect_identities(
+                        &method.value_type,
+                        &mut referenced_effects,
+                        type_work,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            for effect in &summary.effects {
+                for operation in &effect.operations {
+                    collect_effect_identities(
+                        &operation.annotation.ty,
+                        &mut referenced_effects,
+                        type_work,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            for implementation in &summary.implementations {
+                for argument in implementation.fact.arguments() {
+                    collect_effect_identities(argument, &mut referenced_effects, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+                for prerequisite in &implementation.fact.prerequisites {
+                    for argument in prerequisite.arguments() {
+                        collect_effect_identities(argument, &mut referenced_effects, type_work)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    }
+                }
+                for method in &implementation.fact.methods {
+                    for effect in method
+                        .capture
+                        .effects(type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                    {
+                        type_work
+                            .charge(1)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                        referenced_effects
+                            .try_reserve(1)
+                            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                        referenced_effects.insert(effect);
+                    }
+                    for ty in method
+                        .capture
+                        .types(type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                    {
+                        collect_effect_identities(ty, &mut referenced_effects, type_work)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    }
+                    collect_effect_identities(
+                        &method.scheme.value_type,
+                        &mut referenced_effects,
+                        type_work,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            for effect in resolved.effects.iter().chain(resolved.imported.effects()) {
+                if !referenced_effects.contains(&effect.id)
+                    || summary.effect_positions.contains_key(&effect.id)
+                {
+                    continue;
+                }
+                type_work
+                    .charge(2)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                summary
+                    .effects
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                summary
+                    .effect_positions
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                let position = summary.effects.len();
+                summary.effects.push(
+                    clone_resolved_effect_with_budget(effect, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                );
+                if summary
+                    .effect_positions
+                    .insert(effect.id, position)
+                    .is_some()
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+            }
+        }
+
+        summary.authenticate_resource_facts()?;
         Ok(summary)
     }
 
     pub(crate) fn term(&self, spelling: &str) -> Option<&ExportedGlobal> {
         self.terms.get(spelling)
+    }
+
+    fn authenticate_resource_facts(&self) -> Result<(), ResolvedBuildFailure> {
+        if let Some(api) = ResourceApi::for_module(self.module)
+            && (!self.terms.is_empty()
+                || self.nominals.len() != api.nominal_count()
+                || self
+                    .nominals
+                    .get("Handle")
+                    .is_none_or(|nominal| !api.exported_nominal(nominal))
+                || api.outcome().is_some_and(|id| {
+                    self.nominals
+                        .get("Outcome")
+                        .is_none_or(|nominal| nominal.id != id || !api.exported_nominal(nominal))
+                })
+                || api.error().is_some_and(|id| {
+                    self.nominals
+                        .get("Error")
+                        .is_none_or(|nominal| nominal.id != id || !api.exported_nominal(nominal))
+                })
+                || self.interface_names.len() != 1
+                || self.interface_names.get("Provider") != Some(&api.provider())
+                || self.effect_names.len() != 1
+                || self.effect_names.get("Ops") != Some(&api.ops())
+                || self.method_names.len() != api.method_names().len()
+                || api
+                    .method_names()
+                    .iter()
+                    .enumerate()
+                    .any(|(ordinal, name)| {
+                        self.method_names.get(*name)
+                            != Some(&MethodId::new(api.provider(), ordinal as u32))
+                    })
+                || !matches!(self.interfaces.as_slice(), [interface] if api.interface(interface))
+                || !matches!(self.effects.as_slice(), [effect] if api.effect(effect))
+                || !self.hidden_interfaces.is_empty()
+                || !self.hidden_nominals.is_empty()
+                || self.constructors.len() != api.constructor_count() - 1
+                || self.constructors.iter().any(|(name, constructor)| {
+                    name != &constructor.spelling
+                        || !api.constructor_parts(
+                            constructor.id,
+                            name,
+                            constructor.payload.as_ref(),
+                        )
+                        || api.hides_constructor(constructor.id)
+                })
+                || !self.hidden_constructors.is_empty()
+                || !self.implementations.is_empty())
+        {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        Ok(())
+    }
+
+    fn has_resource_nominals(&self, api: ResourceApi) -> bool {
+        // Provider signatures require these families. Error follows ordinary
+        // constructor-payload reachability; linked validation authenticates the
+        // complete defining registry even when a facade exposes only length.
+        [Some(api.handle()), api.outcome()]
+            .into_iter()
+            .flatten()
+            .all(|id| {
+                self.nominal_names_by_id.contains_key(&id) || self.hidden_nominals.contains_key(&id)
+            })
     }
 
     pub(crate) fn nominal(&self, spelling: &str) -> Option<&ExportedType> {
@@ -10103,6 +11987,23 @@ impl ExportSummary {
     pub(crate) fn interface(&self, spelling: &str) -> Option<&CheckedInterfaceFact> {
         let id = self.interface_names.get(spelling)?;
         self.interfaces.get(*self.interface_positions.get(id)?)
+    }
+
+    /// Looks up one public canonical effect fact by exported spelling.
+    #[must_use]
+    pub fn effect(&self, spelling: &str) -> Option<&ResolvedEffectDeclaration> {
+        let id = self.effect_names.get(spelling)?;
+        self.effects.get(*self.effect_positions.get(id)?)
+    }
+
+    /// Looks up one retained canonical effect fact by semantic identity.
+    #[must_use]
+    pub fn effect_by_id(&self, id: EffectId) -> Option<&ResolvedEffectDeclaration> {
+        self.effects.get(*self.effect_positions.get(&id)?)
+    }
+
+    pub(crate) const fn has_effect_facts(&self) -> bool {
+        !self.effects.is_empty()
     }
 
     pub(crate) fn method(&self, spelling: &str) -> Option<MethodId> {
@@ -10136,6 +12037,14 @@ impl ExportSummary {
         })
     }
 
+    pub(crate) fn effect_names(&self) -> impl Iterator<Item = (&str, EffectId)> {
+        self.effect_name_order.iter().filter_map(|spelling| {
+            self.effect_names
+                .get(spelling)
+                .map(|id| (spelling.as_str(), *id))
+        })
+    }
+
     pub(crate) fn method_names(&self) -> impl Iterator<Item = (&str, MethodId)> {
         self.method_name_order.iter().filter_map(|spelling| {
             self.method_names
@@ -10158,15 +12067,19 @@ impl ExportSummary {
             .checked_add(self.nominals.len())
             .and_then(|count| count.checked_add(self.constructors.len()))
             .and_then(|count| count.checked_add(self.interface_names.len()))
+            .and_then(|count| count.checked_add(self.effect_names.len()))
             .and_then(|count| count.checked_add(self.method_names.len()))
             .and_then(|count| count.checked_add(self.withheld_order.len()))
     }
 
-    pub(crate) fn namespace_capacities(&self) -> Option<(usize, usize, usize, usize, usize)> {
+    pub(crate) fn namespace_capacities(
+        &self,
+    ) -> Option<(usize, usize, usize, usize, usize, usize)> {
         Some((
             self.terms.len().checked_add(self.method_names.len())?,
             self.nominals.len(),
             self.interface_names.len(),
+            self.effect_names.len(),
             self.constructors.len(),
             self.withheld_order.len(),
         ))
@@ -10266,9 +12179,12 @@ impl ExportSummary {
                 .expect("the checked nominal identity index must name an export");
             return Some(ImportedNominalFactRef {
                 id,
+                declaration_kind: exported.declaration_kind,
                 parameter_count: exported.parameter_count,
                 constructor_count: exported.constructor_count,
                 parameters: &exported.parameters,
+                representation: exported.representation.as_ref(),
+                representation_provenance: exported.representation_provenance.as_ref(),
                 constructors: &exported.constructors,
                 access: exported.access.into(),
                 display_spelling: Some(spelling),
@@ -10280,15 +12196,51 @@ impl ExportSummary {
             .get(&id)
             .map(|exported| ImportedNominalFactRef {
                 id,
+                declaration_kind: exported.declaration_kind,
                 parameter_count: exported.parameter_count,
                 constructor_count: exported.constructor_count,
                 parameters: &exported.parameters,
+                representation: exported.representation.as_ref(),
+                representation_provenance: exported.representation_provenance.as_ref(),
                 constructors: &exported.constructors,
                 access: exported.access,
                 display_spelling: Some(&exported.spelling),
                 display_is_private: exported.display_is_private,
                 origin: &exported.origin,
             })
+    }
+
+    /// Returns the non-source representation retained solely for opaque
+    /// re-export linkage. Ordinary import resolution must use [`Self::nominal_fact`].
+    pub(crate) fn canonical_nominal_fact(
+        &self,
+        id: NominalTypeId,
+    ) -> Option<ImportedNominalFactRef<'_>> {
+        let spelling = self.nominal_names_by_id.get(&id)?;
+        let exported = self.nominals.get(spelling)?;
+        let (representation, representation_provenance) = match (
+            self.canonical_representations.get(&id),
+            exported.representation.as_ref(),
+            exported.representation_provenance.as_ref(),
+        ) {
+            (Some(fact), None, None) => (Some(&fact.representation), Some(&fact.provenance)),
+            (None, representation, provenance) => (representation, provenance),
+            _ => return None,
+        };
+        Some(ImportedNominalFactRef {
+            id,
+            declaration_kind: exported.declaration_kind,
+            parameter_count: exported.parameter_count,
+            constructor_count: exported.constructor_count,
+            parameters: &exported.parameters,
+            representation,
+            representation_provenance,
+            constructors: &exported.constructors,
+            access: exported.access.into(),
+            display_spelling: Some(spelling),
+            display_is_private: false,
+            origin: &exported.origin,
+        })
     }
 
     pub(crate) fn constructor_by_id(&self, id: ConstructorId) -> Option<&ExportedConstructor> {
@@ -10371,6 +12323,7 @@ impl ExportSummary {
                     (
                         spelling.to_owned(),
                         ExportedGlobal {
+                            capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
                             scheme: ConstrainedScheme::from_rank1_type(scheme),
                             origin,
@@ -10385,6 +12338,9 @@ impl ExportSummary {
                     (
                         spelling.to_owned(),
                         ExportedType {
+                            representation_provenance: None,
+                            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                            representation: None,
                             id,
                             parameter_count: 0,
                             constructor_count: constructor_families
@@ -10437,6 +12393,10 @@ impl ExportSummary {
             hidden_constructor_order: Vec::new(),
             interface_names: HashMap::new(),
             interface_name_order: Vec::new(),
+            effect_names: HashMap::new(),
+            effect_name_order: Vec::new(),
+            effects: Vec::new(),
+            effect_positions: HashMap::new(),
             method_names: HashMap::new(),
             method_name_order: Vec::new(),
             interfaces: Vec::new(),
@@ -10446,9 +12406,38 @@ impl ExportSummary {
             implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),
             hidden_nominal_order: Vec::new(),
+            canonical_representations: HashMap::new(),
             withheld,
             withheld_order,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn configure_first_public_nominal_as_opaque_newtype_for_test(
+        &mut self,
+        representation: Type,
+        provenance: ResolvedTypeProvenance,
+    ) -> bool {
+        let Some(spelling) = self.nominal_order.first().cloned() else {
+            return false;
+        };
+        let Some(nominal) = self.nominals.get_mut(&spelling) else {
+            return false;
+        };
+        nominal.declaration_kind = ResolvedNominalDeclarationKind::Newtype;
+        nominal.constructor_count = 1;
+        nominal.constructors = Box::new([]);
+        nominal.representation = None;
+        nominal.representation_provenance = None;
+        nominal.access = ExportedTypeAccess::Opaque;
+        self.canonical_representations.insert(
+            nominal.id,
+            CanonicalRepresentationFact {
+                representation,
+                provenance,
+            },
+        );
+        true
     }
 
     #[cfg(test)]
@@ -12641,6 +14630,7 @@ impl ExportSummary {
         };
         discard_type_iteratively(std::mem::replace(&mut scheme.value_type, value_type));
         let exported = ExportedGlobal {
+            capture: source.capture.clone(),
             binder: source.binder,
             scheme,
             origin: source.origin.clone(),
@@ -12677,6 +14667,9 @@ impl ExportSummary {
             return false;
         };
         let exported = ExportedType {
+            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
+            representation_provenance: None,
             id: source.id,
             parameter_count: source.parameter_count,
             constructor_count: source.constructor_count,
@@ -12971,6 +14964,9 @@ impl ExportSummary {
             summary.hidden_nominals.insert(
                 id,
                 ExportedHiddenType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id,
                     parameter_count,
                     constructor_count: 1,
@@ -13005,10 +15001,27 @@ impl ExportSummary {
     }
 }
 
-fn collect_nominal_identities(
+pub(crate) fn collect_nominal_identities(
     root: &Type,
     output: &mut HashSet<NominalTypeId>,
     budget: &mut TypeWorkBudget,
+) -> Result<(), ()> {
+    collect_nominal_identities_with(root, output, budget, false)
+}
+
+fn collect_capture_external_nominals(
+    root: &Type,
+    output: &mut HashSet<NominalTypeId>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), ()> {
+    collect_nominal_identities_with(root, output, budget, true)
+}
+
+fn collect_nominal_identities_with(
+    root: &Type,
+    output: &mut HashSet<NominalTypeId>,
+    budget: &mut TypeWorkBudget,
+    external_capture_facts: bool,
 ) -> Result<(), ()> {
     budget.charge(1)?;
     let mut work = Vec::new();
@@ -13017,7 +15030,11 @@ fn collect_nominal_identities(
     while let Some(ty) = work.pop() {
         match ty {
             Type::Nominal(id) => {
-                retain_nominal_identity(*id, output, budget)?;
+                // Lexical identities stay in the immutable defining graph;
+                // they are not ordinary hidden facts exported to its callers.
+                if !external_capture_facts || !id.is_lexical() {
+                    retain_nominal_identity(*id, output, budget)?;
+                }
             }
             Type::Application(function, argument) => {
                 budget.charge(2)?;
@@ -13036,12 +15053,73 @@ fn collect_nominal_identities(
                 work.push(codomain);
                 work.push(domain);
             }
+            Type::EffectfulFunction(domain, codomain) => {
+                let children = codomain.effect_argument_count().saturating_add(2);
+                budget.charge(children)?;
+                work.try_reserve(children).map_err(|_| ())?;
+                codomain.extend_effect_arguments(&mut work);
+                work.push(codomain.value());
+                work.push(domain);
+            }
             Type::Forall(_, body) => {
                 budget.charge(1)?;
                 work.try_reserve(1).map_err(|_| ())?;
                 work.push(body);
             }
             Type::Int | Type::Bool | Type::Unit | Type::Variable(_) | Type::Inference(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn collect_effect_identities(
+    root: &Type,
+    output: &mut HashSet<EffectId>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), ()> {
+    budget.charge(1)?;
+    let mut work = Vec::new();
+    work.try_reserve(1).map_err(|_| ())?;
+    work.push(root);
+    while let Some(ty) = work.pop() {
+        match ty {
+            Type::Tuple(elements) => {
+                budget.charge(elements.len())?;
+                work.try_reserve(elements.len()).map_err(|_| ())?;
+                work.extend(elements);
+            }
+            Type::Application(function, argument) | Type::Function(function, argument) => {
+                budget.charge(2)?;
+                work.try_reserve(2).map_err(|_| ())?;
+                work.push(argument);
+                work.push(function);
+            }
+            Type::EffectfulFunction(domain, codomain) => {
+                for instance in codomain.effects().known() {
+                    if !output.contains(&instance.effect()) {
+                        budget.charge(1)?;
+                        output.try_reserve(1).map_err(|_| ())?;
+                        output.insert(instance.effect());
+                    }
+                }
+                let children = codomain.effect_argument_count().saturating_add(2);
+                budget.charge(children)?;
+                work.try_reserve(children).map_err(|_| ())?;
+                codomain.extend_effect_arguments(&mut work);
+                work.push(codomain.value());
+                work.push(domain);
+            }
+            Type::Forall(_, body) => {
+                budget.charge(1)?;
+                work.try_reserve(1).map_err(|_| ())?;
+                work.push(body);
+            }
+            Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Variable(_)
+            | Type::Inference(_)
+            | Type::Nominal(_) => {}
         }
     }
     Ok(())
@@ -13078,9 +15156,12 @@ fn collect_scheme_nominal_identities(
 #[derive(Clone, Copy)]
 pub(crate) struct ImportedNominalFactRef<'a> {
     pub(crate) id: NominalTypeId,
+    pub(crate) declaration_kind: ResolvedNominalDeclarationKind,
     pub(crate) parameter_count: usize,
     pub(crate) constructor_count: usize,
     pub(crate) parameters: &'a [ResolvedTypeVariable],
+    pub(crate) representation: Option<&'a Type>,
+    pub(crate) representation_provenance: Option<&'a ResolvedTypeProvenance>,
     pub(crate) constructors: &'a [ConstructorId],
     pub(crate) access: ImportedTypeAccess,
     pub(crate) display_spelling: Option<&'a str>,
@@ -13096,10 +15177,7 @@ impl Drop for ExportSummary {
         }
         self.term_order.clear();
         for (_, exported) in self.nominals.drain() {
-            for parameter in exported.parameters.into_vec() {
-                discard_origin_iteratively(parameter.origin);
-            }
-            discard_origin_iteratively(exported.origin);
+            exported.discard_iteratively();
         }
         self.nominal_order.clear();
         self.nominal_names_by_id.clear();
@@ -13122,6 +15200,12 @@ impl Drop for ExportSummary {
         self.hidden_constructor_order.clear();
         self.interface_names.clear();
         self.interface_name_order.clear();
+        self.effect_names.clear();
+        self.effect_name_order.clear();
+        for effect in self.effects.drain(..) {
+            discard_resolved_effect_iteratively(effect);
+        }
+        self.effect_positions.clear();
         self.method_names.clear();
         self.method_name_order.clear();
         for fact in self.interfaces.drain(..) {
@@ -13136,12 +15220,12 @@ impl Drop for ExportSummary {
         }
         self.implementation_positions.clear();
         for (_, exported) in self.hidden_nominals.drain() {
-            for parameter in exported.parameters.into_vec() {
-                discard_origin_iteratively(parameter.origin);
-            }
-            discard_origin_iteratively(exported.origin);
+            exported.discard_iteratively();
         }
         self.hidden_nominal_order.clear();
+        for (_, representation) in self.canonical_representations.drain() {
+            discard_canonical_representation_fact(representation);
+        }
         for (_, withheld) in self.withheld.drain() {
             for withheld in withheld.into_values() {
                 if let Some(origin) = withheld.origin {
@@ -13179,6 +15263,12 @@ pub struct ResolvedRegistry {
     constructors: Box<[ResolvedConstructor]>,
     nominal_positions: HashMap<NominalTypeId, usize>,
     constructor_positions: HashMap<ConstructorId, usize>,
+    lexical_nominals: Box<[ResolvedNominalType]>,
+    lexical_constructors: Box<[ResolvedConstructor]>,
+    lexical_nominal_positions: HashMap<NominalTypeId, usize>,
+    lexical_constructor_positions: HashMap<ConstructorId, usize>,
+    effects: Box<[ResolvedEffectDeclaration]>,
+    effect_positions: HashMap<EffectId, usize>,
     nominal_parameters: HashMap<NominalTypeId, Box<[ResolvedTypeVariable]>>,
     type_variables: HashMap<TypeVariableId, ResolvedTypeVariable>,
     global_parameter_rows: Box<[ResolvedGlobalParameterRow]>,
@@ -13217,6 +15307,9 @@ impl ResolvedNominalBuffer {
 impl Drop for ResolvedNominalBuffer {
     fn drop(&mut self) {
         for nominal in self.0.drain(..) {
+            if let Some(representation) = nominal.representation {
+                discard_type_iteratively(representation);
+            }
             discard_origin_iteratively(nominal.origin);
         }
     }
@@ -13292,8 +15385,13 @@ impl Drop for ResolvedNominalParameterVecBuffer {
 struct CombinedRegistryCounts {
     modules: usize,
     nominals: usize,
+    lexical_nominals: usize,
     family_entries: usize,
     constructors: usize,
+    lexical_constructors: usize,
+    effects: usize,
+    effect_operations: usize,
+    effect_parameters: usize,
     nominal_parameters: usize,
     interfaces: usize,
     interface_parameters: usize,
@@ -13313,6 +15411,12 @@ struct CombinedRegistryBuilder {
     constructors: ResolvedConstructorBuffer,
     nominal_positions: HashMap<NominalTypeId, usize>,
     constructor_positions: HashMap<ConstructorId, usize>,
+    lexical_nominals: ResolvedNominalBuffer,
+    lexical_constructors: ResolvedConstructorBuffer,
+    lexical_nominal_positions: HashMap<NominalTypeId, usize>,
+    lexical_constructor_positions: HashMap<ConstructorId, usize>,
+    effects: Vec<ResolvedEffectDeclaration>,
+    effect_positions: HashMap<EffectId, usize>,
     parameter_rows: ResolvedNominalParameterBuffer,
     canonical_variables: ResolvedTypeVariableBuffer,
     nominal_parameters: HashMap<NominalTypeId, Box<[ResolvedTypeVariable]>>,
@@ -13328,6 +15432,12 @@ impl CombinedRegistryBuilder {
             constructors: ResolvedConstructorBuffer(Vec::new()),
             nominal_positions: HashMap::new(),
             constructor_positions: HashMap::new(),
+            lexical_nominals: ResolvedNominalBuffer(Vec::new()),
+            lexical_constructors: ResolvedConstructorBuffer(Vec::new()),
+            lexical_nominal_positions: HashMap::new(),
+            lexical_constructor_positions: HashMap::new(),
+            effects: Vec::new(),
+            effect_positions: HashMap::new(),
             parameter_rows: ResolvedNominalParameterBuffer(Vec::new()),
             canonical_variables: ResolvedTypeVariableBuffer(Vec::new()),
             nominal_parameters: HashMap::new(),
@@ -13354,9 +15464,40 @@ impl CombinedRegistryBuilder {
             .try_reserve(counts.constructors)
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         builder
+            .lexical_nominals
+            .0
+            .try_reserve_exact(counts.lexical_nominals)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        builder
+            .lexical_constructors
+            .0
+            .try_reserve_exact(counts.lexical_constructors)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        builder
+            .lexical_nominal_positions
+            .try_reserve(counts.lexical_nominals)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        builder
+            .lexical_constructor_positions
+            .try_reserve(counts.lexical_constructors)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        builder
+            .effects
+            .try_reserve_exact(counts.effects)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        builder
+            .effect_positions
+            .try_reserve(counts.effects)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        builder
             .parameter_rows
             .0
-            .try_reserve_exact(counts.nominals)
+            .try_reserve_exact(
+                counts
+                    .nominals
+                    .checked_add(counts.lexical_nominals)
+                    .ok_or(ResolvedBuildFailure::TypeResource)?,
+            )
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         builder
             .canonical_variables
@@ -13365,7 +15506,12 @@ impl CombinedRegistryBuilder {
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         builder
             .nominal_parameters
-            .try_reserve(counts.nominals)
+            .try_reserve(
+                counts
+                    .nominals
+                    .checked_add(counts.lexical_nominals)
+                    .ok_or(ResolvedBuildFailure::TypeResource)?,
+            )
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         builder
             .type_variables
@@ -13445,11 +15591,27 @@ impl CombinedRegistryBuilder {
             ResolvedConstructorBuffer(Vec::new()),
         )
         .into_vec();
+        let lexical_nominals = std::mem::replace(
+            &mut self.lexical_nominals,
+            ResolvedNominalBuffer(Vec::new()),
+        )
+        .into_vec();
+        let lexical_constructors = std::mem::replace(
+            &mut self.lexical_constructors,
+            ResolvedConstructorBuffer(Vec::new()),
+        )
+        .into_vec();
         ResolvedRegistry {
             nominals: nominals.into_boxed_slice(),
             constructors: constructors.into_boxed_slice(),
             nominal_positions: std::mem::take(&mut self.nominal_positions),
             constructor_positions: std::mem::take(&mut self.constructor_positions),
+            lexical_nominals: lexical_nominals.into_boxed_slice(),
+            lexical_constructors: lexical_constructors.into_boxed_slice(),
+            lexical_nominal_positions: std::mem::take(&mut self.lexical_nominal_positions),
+            lexical_constructor_positions: std::mem::take(&mut self.lexical_constructor_positions),
+            effects: std::mem::take(&mut self.effects).into_boxed_slice(),
+            effect_positions: std::mem::take(&mut self.effect_positions),
             nominal_parameters: std::mem::take(&mut self.nominal_parameters),
             type_variables: std::mem::take(&mut self.type_variables),
             global_parameter_rows: std::mem::take(&mut self.global_parameter_rows)
@@ -13472,6 +15634,9 @@ impl Drop for CombinedRegistryBuilder {
         }
         for parameter in self.type_variables.drain().map(|(_, parameter)| parameter) {
             discard_resolved_type_variable(parameter);
+        }
+        for effect in self.effects.drain(..) {
+            discard_resolved_effect_iteratively(effect);
         }
     }
 }
@@ -13517,6 +15682,31 @@ fn checked_registry_counts(
         let registry = checked.registry();
         checked_accumulate(&mut counts.nominals, registry.nominals.len())?;
         checked_accumulate(&mut counts.constructors, registry.constructors.len())?;
+        checked_accumulate(
+            &mut counts.lexical_nominals,
+            registry.lexical_nominals.len(),
+        )?;
+        checked_accumulate(
+            &mut counts.lexical_constructors,
+            registry.lexical_constructors.len(),
+        )?;
+        checked_accumulate(&mut counts.effects, registry.effects.len())?;
+        for effect in registry.effects.iter() {
+            checked_accumulate(&mut counts.effect_operations, effect.operations.len())?;
+            checked_accumulate(&mut counts.effect_parameters, effect.parameters.len())?;
+            for parameter in effect.parameters.iter() {
+                type_accumulate(
+                    &mut counts.retention_type_work,
+                    retained_type_variable_work(parameter)?,
+                )?;
+            }
+            for operation in effect.operations.iter() {
+                let mut operation_work = TypeWorkBudget::unbounded();
+                charge_type_cells(&operation.annotation.ty, &mut operation_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                type_accumulate(&mut counts.retention_type_work, operation_work.used())?;
+            }
+        }
         checked_accumulate(&mut counts.interfaces, checked.interface_facts().len())?;
         for interface in checked.interface_facts() {
             checked_accumulate(&mut counts.interface_parameters, interface.parameters.len())?;
@@ -13527,8 +15717,18 @@ fn checked_registry_counts(
             checked.implementation_facts().len(),
         )?;
         checked_accumulate(&mut counts.type_variables, registry.type_variables.len())?;
-        for nominal in registry.nominals() {
+        for nominal in registry
+            .nominals()
+            .iter()
+            .chain(registry.lexical_nominals())
+        {
             checked_accumulate(&mut counts.family_entries, nominal.constructors.len())?;
+            if let Some(representation) = &nominal.representation {
+                let mut representation_work = TypeWorkBudget::unbounded();
+                charge_type_cells(representation, &mut representation_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                type_accumulate(&mut counts.retention_type_work, representation_work.used())?;
+            }
             if let Some(parameters) = registry.nominal_parameters.get(&nominal.id) {
                 checked_accumulate(&mut counts.nominal_parameters, parameters.len())?;
                 for parameter in parameters {
@@ -13539,7 +15739,11 @@ fn checked_registry_counts(
                 }
             }
         }
-        for constructor in registry.constructors() {
+        for constructor in registry
+            .constructors()
+            .iter()
+            .chain(registry.lexical_constructors())
+        {
             if let Some(payload) = &constructor.payload {
                 let mut payload_work = TypeWorkBudget::unbounded();
                 charge_type_cells(payload, &mut payload_work)
@@ -13576,6 +15780,7 @@ fn checked_registry_counts(
     let non_method_type_variables = counts
         .nominal_parameters
         .checked_add(counts.interface_parameters)
+        .and_then(|count| count.checked_add(counts.effect_parameters))
         .and_then(|count| count.checked_add(counts.global_parameters))
         .and_then(|count| count.checked_add(counts.implementation_parameters))
         .ok_or(ResolvedBuildFailure::ConstraintResource)?;
@@ -13583,21 +15788,30 @@ fn checked_registry_counts(
         .type_variables
         .checked_sub(non_method_type_variables)
         .ok_or(ResolvedBuildFailure::InvalidState)?;
+    let total_nominals = counts
+        .nominals
+        .checked_add(counts.lexical_nominals)
+        .ok_or(ResolvedBuildFailure::TypeResource)?;
+    let total_constructors = counts
+        .constructors
+        .checked_add(counts.lexical_constructors)
+        .ok_or(ResolvedBuildFailure::TypeResource)?;
     let builder_storage = counts
         .family_entries
         .checked_add(
-            counts
-                .nominals
+            total_nominals
                 .checked_mul(4)
                 .ok_or(ResolvedBuildFailure::TypeResource)?,
         )
         .and_then(|work| {
-            counts
-                .constructors
+            total_constructors
                 .checked_mul(2)
                 .and_then(|constructors| work.checked_add(constructors))
         })
         .and_then(|work| work.checked_add(counts.type_variables))
+        .and_then(|work| work.checked_add(counts.effects.checked_mul(2)?))
+        .and_then(|work| work.checked_add(counts.effect_operations))
+        .and_then(|work| work.checked_add(counts.effect_parameters))
         .and_then(|work| {
             counts
                 .global_rows
@@ -13610,22 +15824,24 @@ fn checked_registry_counts(
     let deterministic_visits = counts
         .modules
         .checked_add(
-            counts
-                .nominals
+            total_nominals
                 .checked_mul(2)
                 .ok_or(ResolvedBuildFailure::ConstraintResource)?,
         )
         .and_then(|work| work.checked_add(counts.family_entries))
-        .and_then(|work| work.checked_add(counts.constructors))
+        .and_then(|work| work.checked_add(total_constructors))
+        .and_then(|work| work.checked_add(counts.effects))
+        .and_then(|work| work.checked_add(counts.effect_operations))
         .and_then(|work| work.checked_add(counts.interface_parameters))
         .and_then(|work| work.checked_add(counts.schemes))
         .and_then(|work| work.checked_add(counts.implementations))
         .ok_or(ResolvedBuildFailure::ConstraintResource)?;
     let uniqueness = counts
         .modules
-        .checked_add(counts.nominals)
+        .checked_add(total_nominals)
         .and_then(|work| work.checked_add(counts.family_entries))
-        .and_then(|work| work.checked_add(counts.constructors))
+        .and_then(|work| work.checked_add(total_constructors))
+        .and_then(|work| work.checked_add(counts.effects))
         .and_then(|work| work.checked_add(counts.global_rows))
         .ok_or(ResolvedBuildFailure::ConstraintResource)?;
     counts.fixed_constraint_work = deterministic_visits
@@ -13658,18 +15874,30 @@ fn validate_checked_registries<'a>(
     let mut nominal_ids = HashSet::new();
     let mut family_ids = HashSet::new();
     let mut constructor_ids = HashSet::new();
+    let mut effect_ids = HashSet::new();
     let mut global_owners = HashSet::new();
     module_ids
         .try_reserve(counts.modules)
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+    let total_nominals = counts
+        .nominals
+        .checked_add(counts.lexical_nominals)
+        .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+    let total_constructors = counts
+        .constructors
+        .checked_add(counts.lexical_constructors)
+        .ok_or(ResolvedBuildFailure::ConstraintResource)?;
     nominal_ids
-        .try_reserve(counts.nominals)
+        .try_reserve(total_nominals)
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
     family_ids
         .try_reserve(counts.family_entries)
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
     constructor_ids
-        .try_reserve(counts.constructors)
+        .try_reserve(total_constructors)
+        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+    effect_ids
+        .try_reserve(counts.effects)
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
     global_owners
         .try_reserve(counts.global_rows)
@@ -13678,21 +15906,56 @@ fn validate_checked_registries<'a>(
     for checked in modules {
         let module = checked.module();
         let registry = checked.registry();
+        if let Some(api) = ResourceApi::for_module(module)
+            && (!api.registry(registry)
+                || registry.nominals.len() != api.nominal_count()
+                || registry.constructors.len() != api.constructor_count()
+                || registry.effects.len() != 1
+                || !registry.lexical_nominals.is_empty()
+                || !registry.lexical_constructors.is_empty()
+                || !checked.schemes().is_empty()
+                || !checked.implementation_facts().is_empty()
+                || !matches!(checked.interface_facts(), [interface] if api.interface(interface)))
+        {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
         if !module_ids.insert(module)
             || !registry.abstract_nominal_names.is_empty()
             || !registry.abstract_nominal_kinds.is_empty()
             || registry.nominal_positions.len() != registry.nominals.len()
             || registry.constructor_positions.len() != registry.constructors.len()
-            || registry.nominal_parameters.len() != registry.nominals.len()
+            || registry.lexical_nominal_positions.len() != registry.lexical_nominals.len()
+            || registry.lexical_constructor_positions.len() != registry.lexical_constructors.len()
+            || registry.nominal_parameters.len()
+                != registry
+                    .nominals
+                    .len()
+                    .checked_add(registry.lexical_nominals.len())
+                    .ok_or(ResolvedBuildFailure::InvalidState)?
         {
             return Err(ResolvedBuildFailure::InvalidState);
         }
         let mut local_variable_count = 0usize;
         for (position, nominal) in registry.nominals().iter().enumerate() {
             if nominal.id.module() != module
+                || nominal.id.is_lexical()
                 || !nominal_ids.insert(nominal.id)
                 || registry.nominal_positions.get(&nominal.id) != Some(&position)
                 || nominal.constructors.is_empty()
+                || matches!(
+                    nominal.declaration_kind,
+                    ResolvedNominalDeclarationKind::Data
+                ) && nominal.representation.is_some()
+                || matches!(
+                    nominal.declaration_kind,
+                    ResolvedNominalDeclarationKind::Data
+                ) && nominal.representation_provenance.is_some()
+                || matches!(
+                    nominal.declaration_kind,
+                    ResolvedNominalDeclarationKind::Newtype
+                ) && (nominal.constructors.len() != 1
+                    || nominal.representation.is_none()
+                    || nominal.representation_provenance.is_none())
             {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
@@ -13700,9 +15963,48 @@ fn validate_checked_registries<'a>(
                 if constructor.owner() != nominal.id
                     || usize::try_from(constructor.constructor()) != Ok(ordinal)
                     || !family_ids.insert(*constructor)
+                    || (nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype
+                        && registry
+                            .constructor(*constructor)
+                            .is_none_or(|constructor| {
+                                constructor.payload.is_some()
+                                    || constructor.spelling != nominal.spelling
+                            }))
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
+            }
+            let parameters = registry
+                .nominal_parameters
+                .get(&nominal.id)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            local_variable_count = local_variable_count
+                .checked_add(parameters.len())
+                .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+        }
+        for (position, nominal) in registry.lexical_nominals().iter().enumerate() {
+            let [constructor_id] = nominal.constructors.as_ref() else {
+                return Err(ResolvedBuildFailure::InvalidState);
+            };
+            if nominal.id.module() != module
+                || !nominal.id.is_lexical()
+                || !nominal_ids.insert(nominal.id)
+                || registry.lexical_nominal_positions.get(&nominal.id) != Some(&position)
+                || nominal.declaration_kind != ResolvedNominalDeclarationKind::Newtype
+                || nominal.representation.is_none()
+                || nominal.representation_provenance.is_none()
+                || constructor_id.owner() != nominal.id
+                || constructor_id.constructor() != 0
+                || !family_ids.insert(*constructor_id)
+                || registry
+                    .constructor(*constructor_id)
+                    .is_none_or(|constructor| {
+                        constructor.owner != nominal.id
+                            || constructor.payload.is_some()
+                            || constructor.spelling != nominal.spelling
+                    })
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
             }
             let parameters = registry
                 .nominal_parameters
@@ -13728,6 +16030,43 @@ fn validate_checked_registries<'a>(
                 return Err(ResolvedBuildFailure::InvalidState);
             }
         }
+        for (position, constructor) in registry.lexical_constructors().iter().enumerate() {
+            let owner = registry
+                .nominal(constructor.owner)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            if constructor.owner != constructor.id.owner()
+                || !constructor.owner.is_lexical()
+                || constructor.owner.module() != module
+                || !constructor_ids.insert(constructor.id)
+                || registry.lexical_constructor_positions.get(&constructor.id) != Some(&position)
+                || owner.constructors.as_ref() != [constructor.id]
+                || !family_ids.contains(&constructor.id)
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        }
+        if registry.effect_positions.len() != registry.effects.len() {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        for (position, effect) in registry.effects.iter().enumerate() {
+            if effect.id.module() != module
+                || !effect_ids.insert(effect.id)
+                || registry.effect_positions.get(&effect.id) != Some(&position)
+                || effect.operations.is_empty()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            for (ordinal, operation) in effect.operations.iter().enumerate() {
+                if operation.id.owner() != effect.id
+                    || usize::try_from(operation.id.operation()) != Ok(ordinal)
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+            }
+            local_variable_count = local_variable_count
+                .checked_add(effect.parameters.len())
+                .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+        }
         if family_ids.len() != constructor_ids.len() {
             return Err(ResolvedBuildFailure::InvalidState);
         }
@@ -13751,7 +16090,9 @@ fn validate_checked_registries<'a>(
                 .ok_or(ResolvedBuildFailure::ConstraintResource)?;
         }
         for implementation in checked.implementation_facts() {
-            if implementation.id.module() != module {
+            if implementation.id.module() != module
+                || implementation.interface().module().is_builtin_resource()
+            {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
             local_variable_count = local_variable_count
@@ -13763,9 +16104,10 @@ fn validate_checked_registries<'a>(
         }
     }
     if module_ids.len() != counts.modules
-        || nominal_ids.len() != counts.nominals
+        || nominal_ids.len() != total_nominals
         || family_ids.len() != counts.family_entries
-        || constructor_ids.len() != counts.constructors
+        || constructor_ids.len() != total_constructors
+        || effect_ids.len() != counts.effects
         || global_owners.len() != counts.global_rows
     {
         return Err(ResolvedBuildFailure::InvalidState);
@@ -13786,7 +16128,11 @@ fn validate_checked_registries<'a>(
                 return Err(ResolvedBuildFailure::InvalidState);
             }
         }
-        for nominal in registry.nominals() {
+        for nominal in registry
+            .nominals()
+            .iter()
+            .chain(registry.lexical_nominals())
+        {
             let parameters = registry
                 .nominal_parameters
                 .get(&nominal.id)
@@ -13803,6 +16149,26 @@ fn validate_checked_registries<'a>(
                 }
                 previous = Some(parameter.id.local());
                 if !type_variable_ids.insert(parameter.id) {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                let canonical = registry
+                    .type_variables
+                    .get(&parameter.id)
+                    .ok_or(ResolvedBuildFailure::InvalidState)?;
+                if !same_checker_type_variable_after_base_charge(
+                    canonical,
+                    parameter,
+                    constraint_work,
+                )? {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+            }
+        }
+        for effect in registry.effects.iter() {
+            for parameter in effect.parameters.iter() {
+                if parameter.id.module() != Some(checked.module())
+                    || !type_variable_ids.insert(parameter.id)
+                {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
                 let canonical = registry
@@ -13967,14 +16333,59 @@ fn retain_checked_registries(
         for nominal in registry.nominals() {
             let position = builder.nominals.0.len();
             let retained = ResolvedNominalType {
+                representation_provenance: nominal.representation_provenance.clone(),
                 id: nominal.id,
+                declaration_kind: nominal.declaration_kind,
                 spelling: try_clone_string(&nominal.spelling)?,
                 constructors: clone_constructor_ids_for_combined_registry(&nominal.constructors)?,
+                representation: nominal
+                    .representation
+                    .as_ref()
+                    .map(|representation| {
+                        let mut budget = TypeWorkBudget::unbounded();
+                        clone_type_with_budget(representation, &mut budget)
+                    })
+                    .transpose()
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
                 origin: nominal.origin.clone(),
             };
             let displaced = builder.nominal_positions.insert(nominal.id, position);
             debug_assert!(displaced.is_none());
             builder.nominals.0.push(retained);
+
+            let parameters = registry
+                .nominal_parameters
+                .get(&nominal.id)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            builder.parameter_rows.0.push((
+                nominal.id,
+                clone_type_variable_row_after_combined_precharge(parameters)?,
+            ));
+        }
+        for nominal in registry.lexical_nominals() {
+            let position = builder.lexical_nominals.0.len();
+            let retained = ResolvedNominalType {
+                representation_provenance: nominal.representation_provenance.clone(),
+                id: nominal.id,
+                declaration_kind: nominal.declaration_kind,
+                spelling: try_clone_string(&nominal.spelling)?,
+                constructors: clone_constructor_ids_for_combined_registry(&nominal.constructors)?,
+                representation: nominal
+                    .representation
+                    .as_ref()
+                    .map(|representation| {
+                        let mut budget = TypeWorkBudget::unbounded();
+                        clone_type_with_budget(representation, &mut budget)
+                    })
+                    .transpose()
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                origin: nominal.origin.clone(),
+            };
+            let displaced = builder
+                .lexical_nominal_positions
+                .insert(nominal.id, position);
+            debug_assert!(displaced.is_none());
+            builder.lexical_nominals.0.push(retained);
 
             let parameters = registry
                 .nominal_parameters
@@ -14007,6 +16418,43 @@ fn retain_checked_registries(
                 .insert(constructor.id, position);
             debug_assert!(displaced.is_none());
             builder.constructors.0.push(retained);
+        }
+        for constructor in registry.lexical_constructors() {
+            let position = builder.lexical_constructors.0.len();
+            let spelling = try_clone_string(&constructor.spelling)?;
+            let mut unbounded = TypeWorkBudget::unbounded();
+            let payload = constructor
+                .payload
+                .as_ref()
+                .map(|payload| clone_type_with_budget(payload, &mut unbounded))
+                .transpose()
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            let retained = ResolvedConstructor {
+                id: constructor.id,
+                owner: constructor.owner,
+                spelling,
+                payload,
+                origin: constructor.origin.clone(),
+            };
+            let displaced = builder
+                .lexical_constructor_positions
+                .insert(constructor.id, position);
+            debug_assert!(displaced.is_none());
+            builder.lexical_constructors.0.push(retained);
+        }
+        for effect in registry.effects.iter() {
+            let position = builder.effects.len();
+            let mut unbounded = TypeWorkBudget::unbounded();
+            let retained = clone_resolved_effect_with_budget(effect, &mut unbounded)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            if builder
+                .effect_positions
+                .insert(effect.id, position)
+                .is_some()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            builder.effects.push(retained);
         }
         for scheme in checked.schemes() {
             if !scheme.scheme.type_parameters.is_empty() {
@@ -14045,6 +16493,26 @@ impl Drop for ResolvedConstructorBuffer {
 }
 
 impl ResolvedRegistry {
+    #[cfg(test)]
+    pub(crate) fn corrupt_native_constructor_for_test(&mut self, error_payload: bool) {
+        let constructor = self
+            .constructors
+            .iter_mut()
+            .find(|constructor| {
+                constructor.owner.module().is_builtin_native_buffer()
+                    && constructor.spelling
+                        == if error_payload {
+                            "InvalidByte"
+                        } else {
+                            "Success"
+                        }
+            })
+            .unwrap();
+        if let Some(payload) = constructor.payload.replace(Type::Bool) {
+            discard_type_iteratively(payload);
+        }
+    }
+
     /// Constructs one closed registry after two-pass resolution.
     #[must_use]
     pub fn new(nominals: Vec<ResolvedNominalType>, constructors: Vec<ResolvedConstructor>) -> Self {
@@ -14063,6 +16531,12 @@ impl ResolvedRegistry {
             constructors: constructors.into_boxed_slice(),
             nominal_positions,
             constructor_positions,
+            lexical_nominals: Box::new([]),
+            lexical_constructors: Box::new([]),
+            lexical_nominal_positions: HashMap::new(),
+            lexical_constructor_positions: HashMap::new(),
+            effects: Box::new([]),
+            effect_positions: HashMap::new(),
             nominal_parameters: HashMap::new(),
             type_variables: HashMap::new(),
             global_parameter_rows: Box::new([]),
@@ -14109,7 +16583,20 @@ impl ResolvedRegistry {
             .try_reserve_exact(materialized_nominal_count)
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         for nominal in &self.nominals {
-            nominals.0.push(nominal.clone());
+            nominals.0.push(ResolvedNominalType {
+                representation_provenance: nominal.representation_provenance.clone(),
+                id: nominal.id,
+                declaration_kind: nominal.declaration_kind,
+                spelling: nominal.spelling.clone(),
+                constructors: nominal.constructors.clone(),
+                representation: nominal
+                    .representation
+                    .as_ref()
+                    .map(|representation| clone_type_with_budget(representation, budget))
+                    .transpose()
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                origin: nominal.origin.clone(),
+            });
         }
         let constructor_capacity = self
             .constructors
@@ -14152,6 +16639,77 @@ impl ResolvedRegistry {
             ));
         }
 
+        budget
+            .charge(
+                self.lexical_nominals
+                    .len()
+                    .checked_mul(2)
+                    .and_then(|work| {
+                        self.lexical_constructors
+                            .len()
+                            .checked_mul(2)?
+                            .checked_add(work)
+                    })
+                    .ok_or(ResolvedBuildFailure::TypeResource)?,
+            )
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let mut lexical_nominals = ResolvedNominalBuffer(Vec::new());
+        lexical_nominals
+            .0
+            .try_reserve_exact(self.lexical_nominals.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for nominal in &self.lexical_nominals {
+            lexical_nominals.0.push(ResolvedNominalType {
+                representation_provenance: nominal.representation_provenance.clone(),
+                id: nominal.id,
+                declaration_kind: nominal.declaration_kind,
+                spelling: nominal.spelling.clone(),
+                constructors: nominal.constructors.clone(),
+                representation: nominal
+                    .representation
+                    .as_ref()
+                    .map(|representation| clone_type_with_budget(representation, budget))
+                    .transpose()
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                origin: nominal.origin.clone(),
+            });
+        }
+        let mut lexical_constructors = ResolvedConstructorBuffer(Vec::new());
+        lexical_constructors
+            .0
+            .try_reserve_exact(self.lexical_constructors.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for constructor in &self.lexical_constructors {
+            lexical_constructors.0.push(ResolvedConstructor {
+                id: constructor.id,
+                owner: constructor.owner,
+                spelling: constructor.spelling.clone(),
+                payload: constructor
+                    .payload
+                    .as_ref()
+                    .map(|payload| clone_type_with_budget(payload, budget))
+                    .transpose()
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                origin: constructor.origin.clone(),
+            });
+        }
+        let mut lexical_parameters = ResolvedNominalParameterVecBuffer(Vec::new());
+        lexical_parameters
+            .0
+            .try_reserve_exact(self.lexical_nominals.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for nominal in &self.lexical_nominals {
+            let owner_parameters = self
+                .nominal_parameters
+                .get(&nominal.id)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            lexical_parameters.0.push((
+                nominal.id,
+                clone_resolved_type_variables_with_budget(owner_parameters, budget)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+            ));
+        }
+
         for fact in imported.nominals() {
             if fact.access != ImportedTypeAccess::Transparent {
                 continue;
@@ -14182,12 +16740,20 @@ impl ResolvedRegistry {
                 });
             }
             nominals.0.push(ResolvedNominalType {
+                representation_provenance: fact.representation_provenance.clone(),
                 id: fact.id,
+                declaration_kind: fact.declaration_kind,
                 spelling: fact
                     .display_spelling
                     .clone()
                     .unwrap_or_else(|| "<imported>".to_owned()),
                 constructors: fact.constructors.clone(),
+                representation: fact
+                    .representation
+                    .as_ref()
+                    .map(|representation| clone_type_with_budget(representation, budget))
+                    .transpose()
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
                 origin: fact.origin.clone(),
             });
             parameters.0.push((
@@ -14244,7 +16810,7 @@ impl ResolvedRegistry {
             }
         }
         let mut local_nominal_parameter_ids = HashSet::new();
-        for nominal in &self.nominals {
+        for nominal in self.nominals.iter().chain(self.lexical_nominals.iter()) {
             let parameters = self
                 .nominal_parameters
                 .get(&nominal.id)
@@ -14264,8 +16830,33 @@ impl ResolvedRegistry {
         let mut registry = Self::new(nominals.into_vec(), constructors.into_vec())
             .with_type_parameters_with_budget(parameters.into_vec(), budget)
             .map_err(|()| ResolvedBuildFailure::TypeResource)?
+            .with_precharged_lexical_nominals(
+                lexical_nominals,
+                lexical_constructors,
+                lexical_parameters,
+                budget,
+            )
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?
             .with_abstract_nominal_facts(abstract_nominal_names, abstract_nominal_kinds);
-        for nominal in &self.nominals {
+        let effect_count = self.effects.len().saturating_add(imported.effects.len());
+        let mut effects = Vec::new();
+        effects
+            .try_reserve_exact(effect_count)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for effect in self.effects.iter().chain(imported.effects()) {
+            if effects
+                .iter()
+                .any(|existing: &ResolvedEffectDeclaration| existing.id == effect.id)
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            effects.push(
+                clone_resolved_effect_with_budget(effect, budget)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+            );
+        }
+        registry = registry.with_effects(effects);
+        for nominal in self.nominals.iter().chain(self.lexical_nominals.iter()) {
             let parameters = self
                 .nominal_parameters
                 .get(&nominal.id)
@@ -14402,6 +16993,96 @@ impl ResolvedRegistry {
         Ok(self)
     }
 
+    pub(crate) fn with_lexical_nominals_with_budget(
+        self,
+        nominals: Vec<ResolvedNominalType>,
+        constructors: Vec<ResolvedConstructor>,
+        parameters: Vec<(NominalTypeId, Vec<ResolvedTypeVariable>)>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ()> {
+        let nominals = ResolvedNominalBuffer(nominals);
+        let constructors = ResolvedConstructorBuffer(constructors);
+        let parameters = ResolvedNominalParameterVecBuffer(parameters);
+        budget.charge(
+            nominals
+                .0
+                .len()
+                .checked_mul(2)
+                .and_then(|work| constructors.0.len().checked_mul(2)?.checked_add(work))
+                .ok_or(())?,
+        )?;
+        self.with_precharged_lexical_nominals(nominals, constructors, parameters, budget)
+    }
+
+    fn with_precharged_lexical_nominals(
+        mut self,
+        nominals: ResolvedNominalBuffer,
+        constructors: ResolvedConstructorBuffer,
+        parameters: ResolvedNominalParameterVecBuffer,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ()> {
+        let mut nominal_positions = HashMap::new();
+        let mut constructor_positions = HashMap::new();
+        nominal_positions
+            .try_reserve(nominals.0.len())
+            .map_err(|_| ())?;
+        constructor_positions
+            .try_reserve(constructors.0.len())
+            .map_err(|_| ())?;
+        for (position, nominal) in nominals.0.iter().enumerate() {
+            if !nominal.id.is_lexical() || nominal_positions.insert(nominal.id, position).is_some()
+            {
+                return Err(());
+            }
+        }
+        for (position, constructor) in constructors.0.iter().enumerate() {
+            if !constructor.id.owner().is_lexical()
+                || constructor_positions
+                    .insert(constructor.id, position)
+                    .is_some()
+            {
+                return Err(());
+            }
+        }
+        self = self.with_type_parameters_with_budget(parameters.into_vec(), budget)?;
+        Ok(self.with_lexical_nominal_facts(
+            nominals.into_vec(),
+            constructors.into_vec(),
+            nominal_positions,
+            constructor_positions,
+        ))
+    }
+
+    fn with_lexical_nominal_facts(
+        mut self,
+        nominals: Vec<ResolvedNominalType>,
+        constructors: Vec<ResolvedConstructor>,
+        nominal_positions: HashMap<NominalTypeId, usize>,
+        constructor_positions: HashMap<ConstructorId, usize>,
+    ) -> Self {
+        self.lexical_nominal_positions = nominal_positions;
+        self.lexical_constructor_positions = constructor_positions;
+        let displaced_nominals =
+            std::mem::replace(&mut self.lexical_nominals, nominals.into_boxed_slice());
+        for nominal in displaced_nominals.into_vec() {
+            if let Some(representation) = nominal.representation {
+                discard_type_iteratively(representation);
+            }
+            discard_origin_iteratively(nominal.origin);
+        }
+        let displaced_constructors = std::mem::replace(
+            &mut self.lexical_constructors,
+            constructors.into_boxed_slice(),
+        );
+        for constructor in displaced_constructors.into_vec() {
+            if let Some(payload) = constructor.payload {
+                discard_type_iteratively(payload);
+            }
+            discard_origin_iteratively(constructor.origin);
+        }
+        self
+    }
+
     /// Attaches non-nominal type parameters before the registry is published.
     #[must_use]
     pub(crate) fn with_additional_type_variables(
@@ -14412,6 +17093,31 @@ impl ResolvedRegistry {
             self.insert_type_variable(parameter);
         }
         self
+    }
+
+    pub(crate) fn with_effects(mut self, effects: Vec<ResolvedEffectDeclaration>) -> Self {
+        self.effect_positions = effects
+            .iter()
+            .enumerate()
+            .map(|(position, effect)| (effect.id, position))
+            .collect();
+        let displaced = std::mem::replace(&mut self.effects, effects.into_boxed_slice());
+        for effect in displaced.into_vec() {
+            discard_resolved_effect_iteratively(effect);
+        }
+        self
+    }
+
+    /// Looks up one canonical effect declaration by stable identity.
+    #[must_use]
+    pub fn effect(&self, id: EffectId) -> Option<&ResolvedEffectDeclaration> {
+        self.effects.get(*self.effect_positions.get(&id)?)
+    }
+
+    /// Returns canonical linked effects in deterministic module/declaration order.
+    #[must_use]
+    pub const fn effects(&self) -> &[ResolvedEffectDeclaration] {
+        &self.effects
     }
 
     fn with_abstract_nominal_facts(
@@ -14475,22 +17181,48 @@ impl ResolvedRegistry {
         &self.constructors
     }
 
+    /// Returns lexical nominal facts in source encounter order.
+    #[must_use]
+    pub fn lexical_nominals(&self) -> &[ResolvedNominalType] {
+        &self.lexical_nominals
+    }
+
+    /// Returns lexical constructor facts in source encounter order.
+    #[must_use]
+    pub fn lexical_constructors(&self) -> &[ResolvedConstructor] {
+        &self.lexical_constructors
+    }
+
     /// Looks up a nominal declaration by stable identity.
     #[must_use]
     pub fn nominal(&self, id: NominalTypeId) -> Option<&ResolvedNominalType> {
-        self.nominal_positions
-            .get(&id)
-            .and_then(|index| self.nominals.get(*index))
-            .filter(|nominal| nominal.id == id)
+        if id.is_lexical() {
+            self.lexical_nominal_positions
+                .get(&id)
+                .and_then(|index| self.lexical_nominals.get(*index))
+                .filter(|nominal| nominal.id == id)
+        } else {
+            self.nominal_positions
+                .get(&id)
+                .and_then(|index| self.nominals.get(*index))
+                .filter(|nominal| nominal.id == id)
+        }
     }
 
     /// Looks up a constructor by stable identity.
     #[must_use]
     pub fn constructor(&self, id: ConstructorId) -> Option<&ResolvedConstructor> {
-        self.constructor_positions
-            .get(&id)
-            .and_then(|index| self.constructors.get(*index))
-            .filter(|constructor| constructor.id == id)
+        if id.owner().is_lexical() {
+            self.lexical_constructor_positions
+                .get(&id)
+                .and_then(|index| self.lexical_constructors.get(*index))
+                .filter(|constructor| constructor.id == id)
+        } else {
+            self.constructor_positions
+                .get(&id)
+                .and_then(|index| self.constructors.get(*index))
+                .filter(|constructor| constructor.id == id)
+        }
     }
 
     /// Looks up a declaration type parameter by stable identity.
@@ -14568,6 +17300,47 @@ impl ResolvedRegistry {
     #[cfg(test)]
     pub(crate) fn clear_global_parameter_positions_for_core_test(&mut self) {
         self.global_parameter_positions.clear();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn corrupt_first_lexical_nominal_as_data_for_core_test(&mut self) -> bool {
+        let Some(nominal) = self.lexical_nominals.first_mut() else {
+            return false;
+        };
+        nominal.declaration_kind = ResolvedNominalDeclarationKind::Data;
+        if let Some(representation) = nominal.representation.take() {
+            discard_type_iteratively(representation);
+        }
+        nominal.representation_provenance = None;
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn duplicate_second_lexical_identity_for_core_test(&mut self) -> bool {
+        let [first, second, ..] = self.lexical_nominals.as_mut() else {
+            return false;
+        };
+        second.replace_identity_for_core_test(first.id);
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_first_lexical_representation_effect_for_core_test(
+        &mut self,
+        effect: EffectId,
+    ) -> bool {
+        let Some(Type::EffectfulFunction(_, computation)) = self
+            .lexical_nominals
+            .first_mut()
+            .and_then(|nominal| nominal.representation.as_mut())
+        else {
+            return false;
+        };
+        computation.effects = EffectRow::singleton(crate::types::EffectInstance::new(
+            effect,
+            Box::new([Type::Int]),
+        ));
+        true
     }
 
     #[cfg(test)]
@@ -14718,6 +17491,7 @@ impl ResolvedRegistry {
         enum Task<'a> {
             Type(&'a Type),
             ApplicationSpine(&'a Type),
+            EffectRow(&'a crate::types::EffectRow),
             Text(&'static str),
         }
 
@@ -14726,6 +17500,7 @@ impl ResolvedRegistry {
         while let Some(task) = work.pop() {
             match task {
                 Task::Text(text) => output.push_str(text),
+                Task::EffectRow(row) => output.push_str(&row.to_string()),
                 Task::Type(Type::Int) => output.push_str("Int"),
                 Task::Type(Type::Bool) => output.push_str("Bool"),
                 Task::Type(Type::Unit) => output.push_str("Unit"),
@@ -14763,7 +17538,12 @@ impl ResolvedRegistry {
                         work.push(Task::ApplicationSpine(function));
                     } else {
                         work.push(Task::Text("<"));
-                        if matches!(function.as_ref(), Type::Function(_, _) | Type::Forall(_, _)) {
+                        if matches!(
+                            function.as_ref(),
+                            Type::Function(_, _)
+                                | Type::EffectfulFunction(_, _)
+                                | Type::Forall(_, _)
+                        ) {
                             work.push(Task::Text(")"));
                             work.push(Task::Type(function));
                             work.push(Task::Text("("));
@@ -14811,6 +17591,22 @@ impl ResolvedRegistry {
                         work.push(Task::Type(domain));
                     }
                 }
+                Task::Type(Type::EffectfulFunction(domain, codomain)) => {
+                    work.push(Task::EffectRow(codomain.effects()));
+                    work.push(Task::Text(" ! "));
+                    work.push(Task::Type(codomain.value()));
+                    work.push(Task::Text(" -> "));
+                    if matches!(
+                        domain.as_ref(),
+                        Type::Function(_, _) | Type::EffectfulFunction(_, _)
+                    ) {
+                        work.push(Task::Text(")"));
+                        work.push(Task::Type(domain));
+                        work.push(Task::Text("("));
+                    } else {
+                        work.push(Task::Type(domain));
+                    }
+                }
             }
         }
         output
@@ -14824,14 +17620,23 @@ impl ResolvedRegistry {
     fn discard_owned_payloads(&mut self) {
         let nominals = std::mem::take(&mut self.nominals);
         let constructors = std::mem::take(&mut self.constructors);
+        let lexical_nominals = std::mem::take(&mut self.lexical_nominals);
+        let lexical_constructors = std::mem::take(&mut self.lexical_constructors);
+        let effects = std::mem::take(&mut self.effects);
         let nominal_parameters = std::mem::take(&mut self.nominal_parameters);
         let type_variables = std::mem::take(&mut self.type_variables);
         let global_parameter_rows = std::mem::take(&mut self.global_parameter_rows);
         let abstract_nominal_kinds = std::mem::take(&mut self.abstract_nominal_kinds);
         self.nominal_positions.clear();
         self.constructor_positions.clear();
+        self.lexical_nominal_positions.clear();
+        self.lexical_constructor_positions.clear();
+        self.effect_positions.clear();
         self.global_parameter_positions.clear();
         for nominal in nominals.into_vec() {
+            if let Some(representation) = nominal.representation {
+                discard_type_iteratively(representation);
+            }
             discard_origin_iteratively(nominal.origin);
         }
         for constructor in constructors.into_vec() {
@@ -14839,6 +17644,21 @@ impl ResolvedRegistry {
                 discard_type_iteratively(payload);
             }
             discard_origin_iteratively(constructor.origin);
+        }
+        for nominal in lexical_nominals.into_vec() {
+            if let Some(representation) = nominal.representation {
+                discard_type_iteratively(representation);
+            }
+            discard_origin_iteratively(nominal.origin);
+        }
+        for constructor in lexical_constructors.into_vec() {
+            if let Some(payload) = constructor.payload {
+                discard_type_iteratively(payload);
+            }
+            discard_origin_iteratively(constructor.origin);
+        }
+        for effect in effects.into_vec() {
+            discard_resolved_effect_iteratively(effect);
         }
         for parameters in nominal_parameters.into_values() {
             discard_resolved_type_variables(parameters);
@@ -14983,6 +17803,41 @@ fn clone_resolved_type_variable_buffer_with_budget(
     Ok(cloned)
 }
 
+pub(crate) fn clone_resolved_effect_with_budget(
+    effect: &ResolvedEffectDeclaration,
+    budget: &mut TypeWorkBudget,
+) -> Result<ResolvedEffectDeclaration, ()> {
+    budget.charge(effect.operations.len().saturating_add(1))?;
+    let parameters = clone_resolved_type_variable_buffer_with_budget(&effect.parameters, budget)?;
+    let mut operations = Vec::new();
+    operations
+        .try_reserve_exact(effect.operations.len())
+        .map_err(|_| ())?;
+    for operation in &effect.operations {
+        operations.push(ResolvedEffectOperation {
+            id: operation.id,
+            spelling: operation.spelling.clone(),
+            annotation: ResolvedType {
+                ty: clone_type_with_budget(&operation.annotation.ty, budget)?,
+                provenance: operation.annotation.provenance.clone(),
+                origin: operation.annotation.origin.clone(),
+                span: operation.annotation.span,
+            },
+            origin: operation.origin.clone(),
+            span: operation.span,
+        });
+    }
+    Ok(ResolvedEffectDeclaration {
+        id: effect.id,
+        public: effect.public,
+        spelling: effect.spelling.clone(),
+        parameters: parameters.into_boxed_slice(),
+        operations: operations.into_boxed_slice(),
+        origin: effect.origin.clone(),
+        span: effect.span,
+    })
+}
+
 fn discard_resolved_type_variables(parameters: Box<[ResolvedTypeVariable]>) {
     for parameter in parameters.into_vec() {
         discard_resolved_type_variable(parameter);
@@ -14995,17 +17850,40 @@ impl Drop for ResolvedRegistry {
     }
 }
 
+/// The semantic declaration form retained after parsing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResolvedNominalDeclarationKind {
+    /// An ordinary allocating data declaration.
+    Data,
+    /// A nominal declaration with a representation-preserving constructor.
+    Newtype,
+}
+
 /// Resolved metadata for one nominal declaration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedNominalType {
     /// Stable source-order identity.
     pub id: NominalTypeId,
+    /// Whether this nominal is ordinary data or a representation-preserving newtype.
+    pub declaration_kind: ResolvedNominalDeclarationKind,
     /// Exact declaration spelling.
     pub spelling: String,
     /// Constructor identities in declaration order.
     pub constructors: Box<[ConstructorId]>,
+    /// The canonical newtype representation template when this is a newtype.
+    pub representation: Option<Type>,
+    /// Source-aligned representation provenance retained until module checking
+    /// authenticates the representation graph.
+    pub representation_provenance: Option<ResolvedTypeProvenance>,
     /// Declaration provenance.
     pub origin: Origin,
+}
+
+#[cfg(test)]
+impl ResolvedNominalType {
+    fn replace_identity_for_core_test(&mut self, replacement: NominalTypeId) {
+        self.id = replacement;
+    }
 }
 
 /// One resolved source type binder.
@@ -15087,6 +17965,8 @@ pub enum ResolvedTypeProvenanceNode {
         span: Span,
         domain: usize,
         codomain: usize,
+        /// Provenance roots for canonical latent-row arguments.
+        effect_arguments: Box<[usize]>,
     },
     /// One canonical unary type application and its causal source argument.
     Application {
@@ -15183,6 +18063,40 @@ pub struct ResolvedInterfaceDeclaration {
     /// Causal declaration provenance.
     pub origin: Origin,
     /// Complete declaration span.
+    pub span: Span,
+}
+
+/// One module-owned effect API after name resolution.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedEffectDeclaration {
+    /// Stable module-qualified effect identity.
+    pub id: EffectId,
+    /// Whether the complete API may be exported.
+    pub public: bool,
+    /// Exact declared spelling.
+    pub spelling: String,
+    /// Ordered ordinary type parameters.
+    pub parameters: Box<[ResolvedTypeVariable]>,
+    /// Nonempty operations in declaration order.
+    pub operations: Box<[ResolvedEffectOperation]>,
+    /// Causal declaration provenance.
+    pub origin: Origin,
+    /// Complete declaration span.
+    pub span: Span,
+}
+
+/// One resolved signature-only operation local to its owning effect.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedEffectOperation {
+    /// Stable identity derived from owner and declaration order.
+    pub id: OperationId,
+    /// Exact declared spelling.
+    pub spelling: String,
+    /// Resolved source value type.
+    pub annotation: ResolvedType,
+    /// Causal operation provenance.
+    pub origin: Origin,
+    /// Complete operation signature span.
     pub span: Span,
 }
 
@@ -15416,6 +18330,9 @@ pub struct ResolvedImplementation {
 /// One maximal contiguous implementation method-equation group.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedImplementationMethodGroup {
+    /// Declaration-owned contextual binders for a lexical supplied method.
+    /// Module implementation methods use their existing interface binders.
+    pub contextual_parameters: Box<[ResolvedTypeVariable]>,
     /// Interface method named by the source head, when it is a method at all.
     pub method: Option<MethodId>,
     /// Identity derived from the impl and method, retained even for duplicates.
@@ -15492,6 +18409,12 @@ pub struct ResolvedInlineOperationalHeader {
     pub parameters: Vec<ResolvedTypedPattern>,
     /// Declared result type.
     pub result_type: ResolvedType,
+    /// Declared result effect row, or the canonical empty row when omitted.
+    pub result_effects: EffectRow,
+    /// Source provenance for result-row arguments in resolver encounter order.
+    pub result_effect_argument_provenance: Box<[ResolvedTypeProvenance]>,
+    /// Canonical result-row argument order as indices into retained provenance.
+    pub result_effect_argument_roots: Box<[usize]>,
     /// Ordered explicit interface requirements.
     pub requirements: Box<[ResolvedRequirement]>,
     /// Implicit outer type binders in first-occurrence order.
@@ -15558,10 +18481,217 @@ pub struct ResolvedBlock {
 /// The closed resolved local-declaration family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResolvedLocalDeclaration {
+    /// Exact methods available in the following block remainder.
+    Evidence(Box<ResolvedLexicalEvidence>),
     /// A sequential nonrecursive binding.
     Binding(Box<ResolvedBinding>),
     /// A simultaneous recursive binding group.
     Recursive(ResolvedRecursiveGroup),
+    /// A sequential lexical nominal declaration.
+    Newtype(NominalTypeId),
+}
+
+/// A resolved sequential source of exact evidence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedLexicalEvidence {
+    /// Compiler-owned acquisition authority; absent for every source `with`.
+    pub(crate) acquisition: Option<ResourceAcquisition>,
+    pub(crate) checked: crate::interface::LexicalEvidenceSlot,
+    /// Module-qualified lexical identity.
+    pub id: crate::interface::LexicalEvidenceId,
+    /// Complete application, resolved in the preceding type scope.
+    pub application: ResolvedInterfaceApplication,
+    /// Maximal contiguous method groups with ordinary hidden binders.
+    pub method_groups: Box<[ResolvedImplementationMethodGroup]>,
+    /// Complete declaration span.
+    pub span: Span,
+}
+
+/// Direct term captures of a supplied method, independent of evidence lowering.
+pub(crate) fn lexical_method_captures(
+    group: &ResolvedImplementationMethodGroup,
+    budget: &mut TypeWorkBudget,
+) -> Result<Box<[BinderId]>, ()> {
+    let occurrences = lexical_method_capture_occurrences(group, budget)?;
+    budget.charge(occurrences.len())?;
+    let mut captures = Vec::new();
+    captures.try_reserve(occurrences.len()).map_err(|_| ())?;
+    for occurrence in occurrences {
+        let ResolvedTermName::Global(binder) = occurrence.term else {
+            unreachable!();
+        };
+        captures.push(binder);
+    }
+    Ok(captures.into_boxed_slice())
+}
+
+/// The same direct-capture walk, retaining borrowed occurrence identity for final lowering.
+pub(crate) fn lexical_method_capture_occurrences<'a>(
+    group: &'a ResolvedImplementationMethodGroup,
+    budget: &mut TypeWorkBudget,
+) -> Result<Box<[&'a ResolvedOccurrence]>, ()> {
+    fn pattern_ids(
+        pattern: &ResolvedPattern,
+        bound: &mut HashSet<BinderId>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        budget.charge(1)?;
+        let mut pending = Vec::new();
+        pending.try_reserve(1).map_err(|_| ())?;
+        pending.push(pattern);
+        while let Some(pattern) = pending.pop() {
+            budget.charge(1)?;
+            match &pattern.kind {
+                ResolvedPatternKind::Binder(binder) => {
+                    bound.try_reserve(1).map_err(|_| ())?;
+                    bound.insert(binder.id);
+                }
+                ResolvedPatternKind::Tuple(elements) => {
+                    budget.charge(elements.len())?;
+                    pending.try_reserve(elements.len()).map_err(|_| ())?;
+                    pending.extend(elements);
+                }
+                ResolvedPatternKind::Constructor {
+                    payload: Some(payload),
+                    ..
+                } => pending.push(payload),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    fn block<'a>(
+        block: &'a ResolvedBlock,
+        work: &mut Vec<&'a ResolvedExpr>,
+        bound: &mut HashSet<BinderId>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
+        budget.charge(1)?;
+        work.try_reserve(1).map_err(|_| ())?;
+        work.push(&block.result);
+        for declaration in &block.declarations {
+            budget.charge(1)?;
+            match declaration {
+                ResolvedLocalDeclaration::Binding(binding) => {
+                    pattern_ids(&binding.pattern, bound, budget)?;
+                    work.try_reserve(1).map_err(|_| ())?;
+                    work.push(&binding.initializer);
+                }
+                ResolvedLocalDeclaration::Recursive(group) => {
+                    budget.charge(group.members.len())?;
+                    bound.try_reserve(group.members.len()).map_err(|_| ())?;
+                    work.try_reserve(group.members.len()).map_err(|_| ())?;
+                    for member in &group.members {
+                        bound.insert(member.binder.id);
+                        work.push(&member.initializer);
+                    }
+                }
+                ResolvedLocalDeclaration::Evidence(source) => {
+                    budget.charge(source.method_groups.len())?;
+                    for group in &source.method_groups {
+                        bound.try_reserve(1).map_err(|_| ())?;
+                        bound.insert(group.binder.id);
+                        budget.charge(group.equations.len())?;
+                        for equation in &group.equations {
+                            for pattern in &equation.patterns {
+                                pattern_ids(pattern, bound, budget)?;
+                            }
+                            work.try_reserve(1).map_err(|_| ())?;
+                            work.push(&equation.body);
+                        }
+                    }
+                }
+                ResolvedLocalDeclaration::Newtype(_) => {}
+            }
+        }
+        Ok(())
+    }
+    let mut bound = HashSet::new();
+    let mut captures = Vec::new();
+    let mut pending = Vec::new();
+    budget.charge(group.equations.len())?;
+    pending.try_reserve(group.equations.len()).map_err(|_| ())?;
+    for equation in &group.equations {
+        for pattern in &equation.patterns {
+            pattern_ids(pattern, &mut bound, budget)?;
+        }
+        pending.push(&equation.body);
+    }
+    while let Some(expression) = pending.pop() {
+        budget.charge(1)?;
+        pending.try_reserve(2).map_err(|_| ())?;
+        match &expression.kind {
+            ResolvedExprKind::Occurrence(occurrence) => {
+                if let ResolvedTermName::Global(_) = occurrence.term {
+                    captures.try_reserve(1).map_err(|_| ())?;
+                    captures.push(occurrence);
+                }
+            }
+            ResolvedExprKind::Tuple(elements) => {
+                budget.charge(elements.len())?;
+                pending.try_reserve(elements.len()).map_err(|_| ())?;
+                pending.extend(elements);
+            }
+            ResolvedExprKind::Apply(application) => {
+                pending.push(&application.function);
+                pending.push(&application.argument);
+            }
+            ResolvedExprKind::Add(binary)
+            | ResolvedExprKind::Multiply(binary)
+            | ResolvedExprKind::Equal(binary) => {
+                pending.push(&binary.left);
+                pending.push(&binary.right);
+            }
+            ResolvedExprKind::Block(body) => block(body, &mut pending, &mut bound, budget)?,
+            ResolvedExprKind::Function(function) => {
+                pattern_ids(&function.pattern, &mut bound, budget)?;
+                block(&function.body, &mut pending, &mut bound, budget)?;
+            }
+            ResolvedExprKind::Match(matched) => {
+                budget.charge(matched.arms.len())?;
+                pending
+                    .try_reserve(matched.arms.len().saturating_add(1))
+                    .map_err(|_| ())?;
+                pending.push(&matched.scrutinee);
+                for arm in &matched.arms {
+                    pattern_ids(&arm.pattern, &mut bound, budget)?;
+                    pending.push(&arm.body);
+                }
+            }
+            ResolvedExprKind::Resource(resource) => {
+                budget.charge(1)?;
+                bound.try_reserve(1).map_err(|_| ())?;
+                bound.insert(resource.handle.id);
+                pending.push(&resource.initializer);
+                pending.push(&resource.body);
+            }
+            ResolvedExprKind::Perform(request) => pending.push(&request.operand),
+            ResolvedExprKind::Cleanup(cleanup) => {
+                pending.push(&cleanup.body);
+                pending.push(&cleanup.action);
+            }
+            ResolvedExprKind::Handle(handler) => {
+                budget.charge(handler.clauses.len())?;
+                pending
+                    .try_reserve(handler.clauses.len().saturating_add(1))
+                    .map_err(|_| ())?;
+                pending.push(&handler.body);
+                for clause in &handler.clauses {
+                    pattern_ids(&clause.pattern, &mut bound, budget)?;
+                    pending.push(&clause.body);
+                }
+            }
+            ResolvedExprKind::Resume(resume) => pending.push(&resume.value),
+            ResolvedExprKind::Discard(_) => {}
+            ResolvedExprKind::Integer(_)
+            | ResolvedExprKind::Boolean(_)
+            | ResolvedExprKind::Unit
+            | ResolvedExprKind::Constructor(_) => {}
+        }
+    }
+    budget.charge(captures.len())?;
+    captures.retain(|occurrence| matches!(occurrence.term, ResolvedTermName::Global(binder) if !bound.contains(&binder)));
+    Ok(captures.into_boxed_slice())
 }
 
 /// One resolved simultaneous recursive binding group.
@@ -15613,6 +18743,8 @@ pub struct ResolvedExpr {
 /// The closed resolved expression family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResolvedExprKind {
+    /// A cleanup owner around a body and its ordinary completion call.
+    Cleanup(Box<ResolvedCleanupExpr>),
     /// An arbitrary-precision integer literal.
     Integer(Integer),
     /// A Boolean literal.
@@ -15639,6 +18771,329 @@ pub enum ResolvedExprKind {
     Function(ResolvedFunctionExpr),
     /// A structured match.
     Match(ResolvedMatchExpr),
+    /// One exact operation request.
+    Perform(ResolvedPerformExpr),
+    /// A lexical handler for one exact effect instance.
+    Handle(ResolvedHandleExpr),
+    /// A use of the nearest clause-scoped resume capability.
+    Resume(ResolvedResumeExpr),
+    /// Nullary consumption of the enclosing clause capability.
+    Discard(ResolvedDiscardExpr),
+    /// A scoped resource acquisition with a rigid, nongeneralized identity.
+    Resource(Box<ResolvedResourceExpr>),
+}
+
+/// The callback binding is also the unique lexical cleanup owner.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedCleanupExpr {
+    pub callback: BinderId,
+    pub action_span: Span,
+    pub body: Box<ResolvedExpr>,
+    pub action: Box<ResolvedExpr>,
+}
+
+/// Method binders for the closed resource APIs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResourceMethods {
+    Cell([BinderId; 2]),
+    NativeBuffer([BinderId; 3]),
+}
+
+impl std::ops::Deref for ResourceMethods {
+    type Target = [BinderId];
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Cell(methods) => methods,
+            Self::NativeBuffer(methods) => methods,
+        }
+    }
+}
+
+#[cfg(test)]
+impl std::ops::DerefMut for ResourceMethods {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            Self::Cell(methods) => methods,
+            Self::NativeBuffer(methods) => methods,
+        }
+    }
+}
+
+/// The fixed relation owned by an acquisition, never by source evidence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ResourceAcquisition {
+    pub(crate) builtin: ModuleId,
+    pub(crate) identity: TypeVariableId,
+    pub(crate) handle: BinderId,
+    pub(crate) provider: crate::interface::LexicalEvidenceId,
+    pub(crate) methods: ResourceMethods,
+    pub(crate) span: Span,
+}
+
+impl ResourceAcquisition {
+    pub(crate) fn api(self) -> Option<ResourceApi> {
+        let api = ResourceApi::for_module(self.builtin)?;
+        (api.method_names().len() == self.methods.len()).then_some(api)
+    }
+
+    pub(crate) fn owns(self, resource: &ResolvedResourceExpr) -> bool {
+        let ResolvedExprKind::Block(body) = &resource.body.kind else {
+            return false;
+        };
+        let [ResolvedLocalDeclaration::Evidence(source)] = body.declarations.as_slice() else {
+            return false;
+        };
+        self.supplies(source)
+            && self == resource.acquisition
+            && self.identity == resource.identity.id
+            && resource.identity.kind == Kind::Type
+            && self.span.cover(resource.identity.origin.primary_span()) == Some(self.span)
+            && self.span.cover(resource.handle.origin.primary_span()) == Some(self.span)
+            && self.handle == resource.handle.id
+            && self.identity.module() == Some(self.provider.module())
+            && self.handle.module() == Some(self.provider.module())
+            && self
+                .methods
+                .iter()
+                .enumerate()
+                .all(|(index, method)| !self.methods[..index].contains(method))
+            && self.methods.iter().all(|method| {
+                method.module() == Some(self.provider.module()) && *method != self.handle
+            })
+            && self.api().is_some()
+    }
+
+    /// Authenticates only the fixed generated forwarding equations. The caller
+    /// must additionally establish this acquisition as the active body owner.
+    pub(crate) fn supplies(self, source: &ResolvedLexicalEvidence) -> bool {
+        let Some(api) = self.api() else { return false };
+        if source.acquisition != Some(self)
+            || source.id != self.provider
+            || source.span != self.span
+            || source.application.interface.id != api.provider()
+            || !matches!(source.application.arguments.as_ref(), [argument] if argument.ty == Type::Variable(self.identity))
+            || source.method_groups.len() != api.method_names().len()
+        {
+            return false;
+        }
+        source.method_groups.iter().enumerate().all(|(ordinal, group)| {
+            if group.binder.id != self.methods[ordinal] || !group.contextual_parameters.is_empty()
+                || group.identity.is_some() || group.method != Some(MethodId::new(api.provider(), ordinal as u32))
+                || group.binder.spelling != api.method_names()[ordinal]
+                || group.binder.origin.primary_span() != self.span
+            { return false; }
+            let [equation] = group.equations.as_ref() else { return false };
+            let [pattern] = equation.patterns.as_slice() else { return false };
+            let ResolvedPatternKind::Binder(parameter) = &pattern.kind else { return false };
+            let ResolvedExprKind::Perform(request) = &equation.body.kind else { return false };
+            let ResolvedExprKind::Occurrence(operand) = &request.operand.kind else { return false };
+            equation.name.binder == group.binder.id
+                && equation.name.spelling == api.method_names()[ordinal]
+                && group.span == self.span
+                && equation.span == self.span
+                && pattern.span == self.span
+                && parameter.origin.primary_span() == self.span
+                && parameter.id != self.handle
+                && !self.methods.contains(&parameter.id)
+                && equation.body.span == self.span
+                && request.operand.span == self.span
+                && request.spelling == api.method_names()[ordinal]
+                && equation.name.origin.primary_span() == self.span
+                && request.origin.primary_span() == self.span
+                && request.effect.origin.primary_span() == self.span
+                && operand.origin.primary_span() == self.span
+                && request.operation == crate::types::OperationId::new(api.ops(), ordinal as u32)
+                && request.effect.instance.effect() == api.ops()
+                && matches!(request.effect.instance.arguments(), [Type::Variable(identity)] if *identity == self.identity)
+                && operand.term == ResolvedTermName::Global(parameter.id)
+                && operand.evidence.is_empty()
+                && parameter.id.module() == Some(self.provider.module())
+        })
+    }
+}
+
+/// Resolved ownership of the initializer and the identity-scoped body.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedResourceExpr {
+    pub(crate) acquisition: ResourceAcquisition,
+    /// The rigid kind-Type identity owned by this acquisition.
+    pub identity: ResolvedTypeVariable,
+    /// The body-local handle binder.
+    pub handle: Binder,
+    /// The initializer in the preceding term and type scope.
+    pub initializer: Box<ResolvedExpr>,
+    /// The body, including compiler-owned exact provider methods.
+    pub body: Box<ResolvedExpr>,
+}
+
+/// One resolved discard use, with no value operand.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolvedDiscardExpr {
+    /// Enclosing clause owner; absent only in malformed standalone probes.
+    pub owner: Option<ResumeId>,
+}
+
+/// Stable identity for one lexical handler clause's resume capability.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ResumeId(u32);
+
+impl ResumeId {
+    /// Creates one resolver-allocated clause capability identity.
+    #[must_use]
+    pub const fn new(identity: u32) -> Self {
+        Self(identity)
+    }
+}
+
+/// One resolved exact effect instance occurrence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedEffectInstance {
+    /// Canonical semantic instance.
+    pub instance: crate::types::EffectInstance,
+    /// Original source provenance for each written type argument.
+    pub argument_provenance: Box<[ResolvedTypeProvenance]>,
+    /// Causal source provenance.
+    pub origin: Origin,
+    /// Complete instance span.
+    pub span: Span,
+}
+
+/// One resolved operation request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedPerformExpr {
+    /// Exact owner instance.
+    pub effect: ResolvedEffectInstance,
+    /// Canonical owner-local operation identity.
+    pub operation: crate::types::OperationId,
+    /// Exact source operation spelling.
+    pub spelling: String,
+    /// Strict operation operand.
+    pub operand: Box<ResolvedExpr>,
+    /// Operation-name provenance.
+    pub origin: Origin,
+}
+
+/// One resolved lexical handler.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedHandleExpr {
+    /// Authenticated source relation of a scoped registration.
+    pub hook_registration: Option<Box<HookRegistrationContract>>,
+    /// Compiler-owned identity clause and source relation of an empty hook root.
+    pub hook_root: Option<HookRootContract>,
+    /// Handled computation.
+    pub body: Box<ResolvedExpr>,
+    /// Exact handled instance.
+    pub effect: ResolvedEffectInstance,
+    /// Source-ordered clauses.
+    pub clauses: Vec<ResolvedHandlerClause>,
+}
+
+/// Fresh ordinary binders and exact source target of a registration lowering.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HookRegistrationContract {
+    pub target: crate::types::EffectInstance,
+    pub span: Span,
+    pub target_span: Span,
+    pub operation: crate::types::OperationId,
+    pub callback: BinderId,
+    pub input: BinderId,
+    pub previous: BinderId,
+    pub next: BinderId,
+    pub resume: ResumeId,
+}
+
+impl HookRegistrationContract {
+    pub(crate) fn with_target(&self, target: crate::types::EffectInstance) -> Self {
+        Self {
+            target,
+            span: self.span,
+            target_span: self.target_span,
+            operation: self.operation,
+            callback: self.callback,
+            input: self.input,
+            previous: self.previous,
+            next: self.next,
+            resume: self.resume,
+        }
+    }
+
+    pub(crate) fn clone_with_budget(
+        &self,
+        budget: &mut crate::types::TypeWorkBudget,
+    ) -> Result<Self, ()> {
+        budget.charge(1)?;
+        Ok(
+            self.with_target(crate::types::clone_effect_instance_with_budget(
+                &self.target,
+                budget,
+            )?),
+        )
+    }
+}
+
+/// The source root and its fresh identity-clause capabilities.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HookRootContract {
+    /// Independently retained exact source target, including phantom arguments.
+    pub target: crate::types::EffectInstance,
+    /// Complete source scope.
+    pub span: Span,
+    /// Exact target occurrence.
+    pub target_span: Span,
+    /// Declared publication identity.
+    pub operation: crate::types::OperationId,
+    /// Hidden publication input.
+    pub input: BinderId,
+    /// Hidden identity continuation.
+    pub resume: ResumeId,
+}
+
+impl HookRootContract {
+    pub(crate) fn with_target(&self, target: crate::types::EffectInstance) -> Self {
+        Self {
+            target,
+            span: self.span,
+            target_span: self.target_span,
+            operation: self.operation,
+            input: self.input,
+            resume: self.resume,
+        }
+    }
+
+    pub(crate) fn clone_with_budget(
+        &self,
+        budget: &mut crate::types::TypeWorkBudget,
+    ) -> Result<Self, ()> {
+        budget.charge(1)?;
+        let target = crate::types::clone_effect_instance_with_budget(&self.target, budget)?;
+        Ok(self.with_target(target))
+    }
+}
+
+/// One resolved operation clause.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedHandlerClause {
+    /// Canonical owner-local operation identity.
+    pub operation: crate::types::OperationId,
+    /// Exact source operation spelling.
+    pub spelling: String,
+    /// Clause-scoped resume identity.
+    pub resume: ResumeId,
+    /// Operation-domain pattern.
+    pub pattern: ResolvedPattern,
+    /// Clause body.
+    pub body: ResolvedExpr,
+    /// Complete clause span.
+    pub span: Span,
+}
+
+/// One resolved resume use.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedResumeExpr {
+    /// Nearest owning clause, or `None` for a source-invalid outside use.
+    pub owner: Option<ResumeId>,
+    /// Strict resumed value expression.
+    pub value: Box<ResolvedExpr>,
 }
 
 /// One resolved constructor occurrence.
@@ -15774,6 +19229,17 @@ pub(crate) fn discard_resolved_interface_iteratively(interface: ResolvedInterfac
     discard_origin_iteratively(interface.origin);
 }
 
+pub(crate) fn discard_resolved_effect_iteratively(effect: ResolvedEffectDeclaration) {
+    for parameter in effect.parameters.into_vec() {
+        discard_resolved_type_variable(parameter);
+    }
+    for operation in effect.operations.into_vec() {
+        discard_resolved_type(operation.annotation);
+        discard_origin_iteratively(operation.origin);
+    }
+    discard_origin_iteratively(effect.origin);
+}
+
 fn discard_external_interface(interface: ResolvedExternalInterface) {
     discard_binder(interface.name);
     discard_resolved_type(interface.annotation);
@@ -15828,6 +19294,18 @@ fn discard_block_into_work(
     expressions.push(*block.result);
     for declaration in block.declarations {
         match declaration {
+            ResolvedLocalDeclaration::Evidence(evidence) => {
+                discard_resolved_interface_application(evidence.application);
+                for group in evidence.method_groups.into_vec() {
+                    for parameter in group.contextual_parameters.into_vec() {
+                        discard_resolved_type_variable(parameter);
+                    }
+                    discard_binder(group.binder);
+                    for equation in group.equations.into_vec() {
+                        discard_equation_into_work(equation, expressions, patterns);
+                    }
+                }
+            }
             ResolvedLocalDeclaration::Binding(binding) => {
                 let binding = *binding;
                 patterns.push(binding.pattern);
@@ -15843,6 +19321,7 @@ fn discard_block_into_work(
                     expressions.push(member.initializer);
                 }
             }
+            ResolvedLocalDeclaration::Newtype(_) => {}
         }
     }
 }
@@ -15887,6 +19366,31 @@ fn discard_resolved_body_work(
                     expressions.push(arm.body);
                 }
             }
+            ResolvedExprKind::Perform(request) => {
+                expressions.push(*request.operand);
+                discard_origin_iteratively(request.effect.origin);
+                discard_origin_iteratively(request.origin);
+            }
+            ResolvedExprKind::Handle(handler) => {
+                expressions.push(*handler.body);
+                discard_origin_iteratively(handler.effect.origin);
+                for clause in handler.clauses {
+                    patterns.push(clause.pattern);
+                    expressions.push(clause.body);
+                }
+            }
+            ResolvedExprKind::Resource(resource) => {
+                discard_resolved_type_variable(resource.identity);
+                discard_binder(resource.handle);
+                expressions.push(*resource.initializer);
+                expressions.push(*resource.body);
+            }
+            ResolvedExprKind::Cleanup(cleanup) => {
+                expressions.push(*cleanup.body);
+                expressions.push(*cleanup.action);
+            }
+            ResolvedExprKind::Resume(resume) => expressions.push(*resume.value),
+            ResolvedExprKind::Discard(_) => {}
         }
     }
     while let Some(pattern) = patterns.pop() {
@@ -15921,9 +19425,14 @@ pub(crate) fn discard_resolved_pattern_iteratively(pattern: ResolvedPattern) {
 pub(crate) fn discard_resolved_local_declaration_iteratively(
     declaration: ResolvedLocalDeclaration,
 ) {
+    if matches!(declaration, ResolvedLocalDeclaration::Newtype(_)) {
+        return;
+    }
     let span = match &declaration {
         ResolvedLocalDeclaration::Binding(binding) => binding.span,
         ResolvedLocalDeclaration::Recursive(group) => group.span,
+        ResolvedLocalDeclaration::Evidence(evidence) => evidence.span,
+        ResolvedLocalDeclaration::Newtype(_) => unreachable!("handled above"),
     };
     discard_resolved_body_work(
         vec![ResolvedExpr {
@@ -15944,6 +19453,1225 @@ pub(crate) fn discard_resolved_local_declaration_iteratively(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn capture_method_fixture() -> ResolvedImplementationMethodGroup {
+        let file = SourceFile::new("capture-work.ash", "x + x + y").expect("source");
+        let module = ModuleId::new(42_005);
+        let span = file
+            .span(ByteRange::new(0, 9).expect("range"))
+            .expect("span");
+        let occurrence = |ordinal, spelling: &str, start| ResolvedExpr {
+            kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
+                term: ResolvedTermName::Global(BinderId::resolved(module, ordinal)),
+                spelling: spelling.to_owned(),
+                origin: Origin::Source(
+                    file.span(ByteRange::new(start, start + 1).expect("range"))
+                        .expect("span"),
+                ),
+                import_span: None,
+                evidence: Box::new([]),
+            }),
+            span: file
+                .span(ByteRange::new(start, start + 1).expect("range"))
+                .expect("span"),
+        };
+        let add = |left, right| ResolvedExpr {
+            kind: ResolvedExprKind::Add(ResolvedBinaryExpr {
+                left: Box::new(left),
+                right: Box::new(right),
+                operator_span: span,
+            }),
+            span,
+        };
+        let binder = Binder {
+            id: BinderId::resolved(module, 3),
+            spelling: "read".to_owned(),
+            origin: Origin::Source(span),
+        };
+        ResolvedImplementationMethodGroup {
+            contextual_parameters: Box::new([]),
+            method: Some(MethodId::new(InterfaceId::new(module, 0), 0)),
+            identity: None,
+            binder: binder.clone(),
+            equations: Box::new([ResolvedEquation {
+                name: ResolvedEquationHead {
+                    binder: binder.id,
+                    spelling: binder.spelling,
+                    origin: binder.origin,
+                },
+                patterns: vec![ResolvedPattern {
+                    kind: ResolvedPatternKind::Binder(Binder {
+                        id: BinderId::resolved(module, 2),
+                        spelling: "ignored".to_owned(),
+                        origin: Origin::Source(span),
+                    }),
+                    span,
+                }],
+                body: add(
+                    add(occurrence(0, "x", 0), occurrence(0, "x", 4)),
+                    occurrence(1, "y", 8),
+                ),
+                span,
+            }]),
+            span,
+        }
+    }
+
+    #[test]
+    fn lexical_capture_occurrences_preserve_walk_order_and_duplicate_sites() {
+        let group = capture_method_fixture();
+        let ResolvedExprKind::Add(outer) = &group.equations[0].body.kind else {
+            panic!("outer addition");
+        };
+        let ResolvedExprKind::Add(inner) = &outer.left.kind else {
+            panic!("inner addition");
+        };
+        let expected = [&outer.right, &inner.right, &inner.left].map(|expression| {
+            let ResolvedExprKind::Occurrence(occurrence) = &expression.kind else {
+                panic!("capture occurrence");
+            };
+            occurrence
+        });
+        let captures = lexical_method_capture_occurrences(&group, &mut TypeWorkBudget::default())
+            .expect("capture walk");
+        assert_eq!(captures.len(), 3);
+        for (actual, expected) in captures.iter().zip(expected) {
+            assert!(
+                std::ptr::eq(*actual, expected),
+                "retain each original occurrence in stack traversal order"
+            );
+        }
+        let module = ModuleId::new(42_005);
+        assert_eq!(
+            lexical_method_captures(&group, &mut TypeWorkBudget::default())
+                .expect("capture binders")
+                .as_ref(),
+            &[
+                BinderId::resolved(module, 1),
+                BinderId::resolved(module, 0),
+                BinderId::resolved(module, 0)
+            ]
+        );
+    }
+
+    #[test]
+    fn lexical_capture_pattern_seed_has_an_exact_retryable_boundary() {
+        // Equation slot, pattern seed, pattern visit, five expression visits,
+        // and three occurrence-filter cells for read ignored = x + x + y.
+        const WORK: usize = 1 + 1 + 1 + 5 + 3;
+        let group = capture_method_fixture();
+        let mut short = TypeWorkBudget::with_limit(WORK - 1);
+        assert_eq!(
+            lexical_method_capture_occurrences(&group, &mut short),
+            Err(())
+        );
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(WORK);
+            assert_eq!(
+                lexical_method_capture_occurrences(&group, &mut exact)
+                    .expect("fresh exact capture walk")
+                    .len(),
+                3
+            );
+            assert_eq!(exact.used(), WORK);
+        }
+    }
+
+    #[test]
+    fn lexical_capture_binder_wrapper_has_an_exact_retryable_boundary() {
+        // The eleven-unit occurrence walk plus three retained binder IDs.
+        const WORK: usize = 11 + 3;
+        let group = capture_method_fixture();
+        assert_eq!(
+            lexical_method_captures(&group, &mut TypeWorkBudget::with_limit(WORK - 1)),
+            Err(())
+        );
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(WORK);
+            assert_eq!(
+                lexical_method_captures(&group, &mut exact)
+                    .expect("fresh exact binder capture")
+                    .len(),
+                3
+            );
+            assert_eq!(exact.used(), WORK);
+        }
+    }
+
+    fn nested_capture_method_fixture(width: usize) -> ResolvedImplementationMethodGroup {
+        let mut outer = capture_method_fixture();
+        let span = outer.span;
+        let module = ModuleId::new(42_005);
+        let interface = InterfaceId::new(module, 1);
+        let body = || ResolvedExpr {
+            kind: ResolvedExprKind::Occurrence(ResolvedOccurrence {
+                term: ResolvedTermName::Global(BinderId::resolved(module, 0)),
+                spelling: "x".to_owned(),
+                origin: Origin::Source(span),
+                import_span: None,
+                evidence: Box::new([]),
+            }),
+            span,
+        };
+        let groups = (0..width)
+            .map(|index| {
+                let binder = Binder {
+                    id: BinderId::resolved(module, 100 + index as u32),
+                    spelling: format!("nested{index}"),
+                    origin: Origin::Source(span),
+                };
+                ResolvedImplementationMethodGroup {
+                    contextual_parameters: Box::new([]),
+                    method: Some(MethodId::new(interface, index as u32)),
+                    identity: None,
+                    binder: binder.clone(),
+                    // Two disjoint, exhaustive Boolean equations per supplied method.
+                    equations: [false, true]
+                        .map(|value| ResolvedEquation {
+                            name: ResolvedEquationHead {
+                                binder: binder.id,
+                                spelling: binder.spelling.clone(),
+                                origin: binder.origin.clone(),
+                            },
+                            patterns: vec![ResolvedPattern {
+                                kind: ResolvedPatternKind::Boolean(value),
+                                span,
+                            }],
+                            body: body(),
+                            span,
+                        })
+                        .into(),
+                    span,
+                }
+            })
+            .collect();
+        outer.equations[0].body = ResolvedExpr {
+            kind: ResolvedExprKind::Block(ResolvedBlock {
+                declarations: vec![ResolvedLocalDeclaration::Evidence(Box::new(
+                    ResolvedLexicalEvidence {
+                        acquisition: None,
+                        checked: crate::interface::LexicalEvidenceSlot::default(),
+                        id: crate::interface::LexicalEvidenceId::new(module, 1),
+                        application: ResolvedInterfaceApplication {
+                            interface: ResolvedInterfaceOccurrence {
+                                id: interface,
+                                spelling: "Nested".to_owned(),
+                                origin: Origin::Source(span),
+                            },
+                            arguments: Box::new([ResolvedType {
+                                ty: Type::Nominal(NominalTypeId::lexical(module, 0)),
+                                provenance: ResolvedTypeProvenance::new(
+                                    vec![ResolvedTypeProvenanceNode::Fact(span)],
+                                    0,
+                                ),
+                                origin: Origin::Source(span),
+                                span,
+                            }]),
+                            span,
+                        },
+                        method_groups: groups,
+                        span,
+                    },
+                ))],
+                result: Box::new(ResolvedExpr {
+                    kind: ResolvedExprKind::Unit,
+                    span,
+                }),
+                span,
+            }),
+            span,
+        };
+        outer
+    }
+
+    #[test]
+    fn lexical_capture_nested_groups_precharge_binders_before_iteration() {
+        const WIDTH: usize = 64;
+        // Outer equation/pattern, block visit/result slot, declaration visit.
+        const PREFIX: usize = 1 + 1 + 1 + 1 + 1 + 1;
+        let group = nested_capture_method_fixture(WIDTH);
+        let mut short = TypeWorkBudget::with_limit(PREFIX + WIDTH - 1);
+        assert_eq!(
+            lexical_method_capture_occurrences(&group, &mut short),
+            Err(())
+        );
+        assert_eq!(
+            short.used(),
+            PREFIX,
+            "the complete binder batch must fail before nested-group traversal"
+        );
+    }
+
+    #[test]
+    fn lexical_capture_nested_evidence_retains_each_outer_value_occurrence() {
+        for width in [1, 64] {
+            let group = nested_capture_method_fixture(width);
+            let captures =
+                lexical_method_capture_occurrences(&group, &mut TypeWorkBudget::default())
+                    .expect("all nested Boolean equations should be traversable");
+            assert_eq!(captures.len(), width * 2);
+            assert!(captures.iter().all(|occurrence| occurrence.term
+                == ResolvedTermName::Global(BinderId::resolved(ModuleId::new(42_005), 0))));
+        }
+    }
+
+    #[test]
+    fn lexical_capture_nested_equations_precharge_body_slots_before_patterns() {
+        // The six-unit outer prefix and one nested method binder.
+        const PREFIX: usize = 6 + 1;
+        let group = nested_capture_method_fixture(1);
+        let mut short = TypeWorkBudget::with_limit(PREFIX + 2 - 1);
+        assert_eq!(
+            lexical_method_capture_occurrences(&group, &mut short),
+            Err(())
+        );
+        assert_eq!(
+            short.used(),
+            PREFIX,
+            "both equation slots must be admitted before either pattern"
+        );
+    }
+
+    #[test]
+    fn lexical_capture_nested_method_walk_has_exact_fresh_retry_boundaries() {
+        for width in [1, 64] {
+            let group = nested_capture_method_fixture(width);
+            // Seven outer/result units, G binder slots, then E=2 equations per
+            // group: equation slot, pattern seed/visit, body visit, filter cell.
+            let work = 7 + width + 5 * width * 2;
+            assert_eq!(
+                lexical_method_capture_occurrences(
+                    &group,
+                    &mut TypeWorkBudget::with_limit(work - 1)
+                ),
+                Err(())
+            );
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(work);
+                let captures = lexical_method_capture_occurrences(&group, &mut exact)
+                    .expect("the full nested capture walk should fit exactly");
+                assert_eq!(exact.used(), work);
+                assert_eq!(captures.len(), width * 2);
+                assert!(captures.iter().all(|occurrence| occurrence.term
+                    == ResolvedTermName::Global(BinderId::resolved(ModuleId::new(42_005), 0))));
+            }
+        }
+    }
+
+    fn canonical_representation_provenance_for_test() -> ResolvedTypeProvenance {
+        let source = SourceFile::new("canonical-representation.ash", "T")
+            .expect("the canonical representation fixture source should fit");
+        let span = source
+            .span(ByteRange::new(0, 1).expect("the fixture range should be ordered"))
+            .expect("the fixture span should fit");
+        ResolvedTypeProvenance::new(vec![ResolvedTypeProvenanceNode::Fact(span)], 0)
+    }
+
+    #[test]
+    fn lexical_nominal_registry_discards_deep_representation_iteratively() {
+        const DEPTH: usize = 32_768;
+        std::thread::Builder::new()
+            .name("deep-lexical-nominal-registry-drop".to_owned())
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let source = SourceFile::new("deep-local-newtype.ash", "Token")
+                    .expect("the lexical nominal source should fit");
+                let span = source
+                    .span(ByteRange::new(0, 5).expect("the lexical nominal range should fit"))
+                    .expect("the lexical nominal span should fit");
+                let owner = NominalTypeId::lexical(ModuleId::new(7_014), 0);
+                let constructor = ConstructorId::new(owner, 0);
+                let facts = || {
+                    let mut representation = Type::Int;
+                    for _ in 0..DEPTH {
+                        representation =
+                            Type::Application(Box::new(representation), Box::new(Type::Int));
+                    }
+                    (
+                        vec![ResolvedNominalType {
+                            id: owner,
+                            declaration_kind: ResolvedNominalDeclarationKind::Newtype,
+                            spelling: "Token".to_owned(),
+                            constructors: Box::new([constructor]),
+                            representation: Some(representation),
+                            representation_provenance: Some(
+                                canonical_representation_provenance_for_test(),
+                            ),
+                            origin: Origin::Source(span),
+                        }],
+                        vec![ResolvedConstructor {
+                            id: constructor,
+                            owner,
+                            spelling: "Token".to_owned(),
+                            payload: None,
+                            origin: Origin::Source(span),
+                        }],
+                        vec![(owner, Vec::new())],
+                    )
+                };
+                let (nominals, constructors, parameters) = facts();
+                let mut one_short = TypeWorkBudget::with_limit(3);
+                assert!(
+                    ResolvedRegistry::new(Vec::new(), Vec::new())
+                        .with_lexical_nominals_with_budget(
+                            nominals,
+                            constructors,
+                            parameters,
+                            &mut one_short,
+                        )
+                        .is_err()
+                );
+
+                let (nominals, constructors, parameters) = facts();
+                let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+                    .with_lexical_nominals_with_budget(
+                        nominals,
+                        constructors,
+                        parameters,
+                        &mut TypeWorkBudget::default(),
+                    )
+                    .expect("the deep lexical fact should publish");
+                assert_eq!(registry.nominal(owner).map(|fact| fact.id), Some(owner));
+                registry.discard_iteratively();
+            })
+            .expect("the deep lexical registry thread should start")
+            .join()
+            .expect("deep lexical registry teardown must remain iterative");
+    }
+
+    #[test]
+    fn checker_view_retains_lexical_fact_partition_exactly_and_retryably() {
+        let source = SourceFile::new("checker-local-newtype.ash", "Token")
+            .expect("the lexical nominal source should fit");
+        let span = source
+            .span(ByteRange::new(0, 5).expect("the lexical nominal range should fit"))
+            .expect("the lexical nominal span should fit");
+        let owner = NominalTypeId::lexical(ModuleId::new(7_015), 0);
+        let constructor = ConstructorId::new(owner, 0);
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new())
+            .with_lexical_nominals_with_budget(
+                vec![ResolvedNominalType {
+                    id: owner,
+                    declaration_kind: ResolvedNominalDeclarationKind::Newtype,
+                    spelling: "Token".to_owned(),
+                    constructors: Box::new([constructor]),
+                    representation: Some(Type::Int),
+                    representation_provenance: Some(canonical_representation_provenance_for_test()),
+                    origin: Origin::Source(span),
+                }],
+                vec![ResolvedConstructor {
+                    id: constructor,
+                    owner,
+                    spelling: "Token".to_owned(),
+                    payload: None,
+                    origin: Origin::Source(span),
+                }],
+                vec![(owner, Vec::new())],
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the source lexical facts should publish");
+
+        let imported = ImportedFacts::default();
+        let mut before_retention = TypeWorkBudget::with_limit(3);
+        assert_eq!(
+            registry.checker_view(&imported, &mut before_retention),
+            Err(ResolvedBuildFailure::TypeResource)
+        );
+        assert_eq!(
+            before_retention.used(),
+            0,
+            "the four lexical carrier units must precede representation cloning"
+        );
+        let mut measured = TypeWorkBudget::unbounded();
+        registry
+            .checker_view(&imported, &mut measured)
+            .expect("measurement should retain the lexical partition");
+        let exact = measured.used();
+        assert_eq!(exact, 5, "four carriers and one representation cell");
+        let mut one_short = TypeWorkBudget::with_limit(exact - 1);
+        assert_eq!(
+            registry.checker_view(&imported, &mut one_short),
+            Err(ResolvedBuildFailure::TypeResource)
+        );
+        let mut exact_budget = TypeWorkBudget::with_limit(exact);
+        let view = registry
+            .checker_view(&imported, &mut exact_budget)
+            .expect("the exact retry should retain the lexical partition");
+        assert!(view.nominals().is_empty());
+        assert!(view.constructors().is_empty());
+        assert_eq!(view.lexical_nominals(), registry.lexical_nominals());
+        assert_eq!(view.lexical_constructors(), registry.lexical_constructors());
+        assert_eq!(view.nominal(owner).map(|fact| fact.id), Some(owner));
+        assert_eq!(
+            view.constructor(constructor).map(|fact| fact.id),
+            Some(constructor)
+        );
+        assert_eq!(exact_budget.used(), exact);
+    }
+
+    #[test]
+    fn lexical_partition_survives_checked_combination_but_not_module_summary() {
+        let source = SourceFile::new("combined-local-newtype.ash", "Token")
+            .expect("the lexical nominal source should fit");
+        let span = source
+            .span(ByteRange::new(0, 5).expect("the lexical nominal range should fit"))
+            .expect("the lexical nominal span should fit");
+        let module = ModuleId::new(7_016);
+        let owner = NominalTypeId::lexical(module, 0);
+        let constructor = ConstructorId::new(owner, 0);
+        let registry = Arc::new(
+            ResolvedRegistry::new(Vec::new(), Vec::new())
+                .with_lexical_nominals_with_budget(
+                    vec![ResolvedNominalType {
+                        id: owner,
+                        declaration_kind: ResolvedNominalDeclarationKind::Newtype,
+                        spelling: "Token".to_owned(),
+                        constructors: Box::new([constructor]),
+                        representation: Some(Type::Int),
+                        representation_provenance: Some(
+                            canonical_representation_provenance_for_test(),
+                        ),
+                        origin: Origin::Source(span),
+                    }],
+                    vec![ResolvedConstructor {
+                        id: constructor,
+                        owner,
+                        spelling: "Token".to_owned(),
+                        payload: None,
+                        origin: Origin::Source(span),
+                    }],
+                    vec![(owner, Vec::new())],
+                    &mut TypeWorkBudget::default(),
+                )
+                .expect("the lexical facts should publish"),
+        );
+        let resolved = ResolvedModule::new(ResolvedModuleParts {
+            module,
+            registry: Arc::clone(&registry),
+            imported: ImportedFacts::default(),
+            direct_dependencies: Vec::new(),
+            declaration_order: Vec::new(),
+            interfaces: Vec::new(),
+            effects: Vec::new(),
+            implementations: Vec::new(),
+            definitions: Vec::new(),
+            export_candidate: ResolvedExportCandidate::default(),
+            span,
+        });
+        let summary = ExportSummary::freeze(
+            &resolved,
+            &[],
+            &[],
+            &[],
+            &[],
+            &mut TypeWorkBudget::default(),
+            &mut crate::interface::InterfaceConstraintBudget::default(),
+        )
+        .expect("the empty public module boundary should freeze");
+        assert!(summary.nominal("Token").is_none());
+        assert!(summary.constructors.is_empty());
+        assert!(summary.hidden_nominals.is_empty());
+        assert!(summary.hidden_constructors.is_empty());
+
+        let checked = CheckedModule {
+            module,
+            registry,
+            direct_dependencies: Box::new([]),
+            declaration_order: Box::new([]),
+            interfaces: Box::new([]),
+            effects: Box::new([]),
+            imported_effects: Box::new([]),
+            implementations: Box::new([]),
+            definitions: Box::new([]),
+            available_implementations: Box::new([]),
+            schemes: Vec::new(),
+            checked_interfaces: Box::new([]),
+            checked_implementations: Box::new([]),
+            interface_facts: Box::new([]),
+            implementation_facts: Box::new([]),
+            exports: summary,
+            span,
+        };
+        let checked = [checked];
+        let mut measured_type = TypeWorkBudget::unbounded();
+        let mut measured_constraint = crate::interface::InterfaceConstraintBudget::default();
+        ResolvedRegistry::combine_checked(&checked, &mut measured_type, &mut measured_constraint)
+            .expect("measurement should retain the lexical partition");
+        let exact_type = measured_type.used();
+        let exact_constraint = measured_constraint.used();
+        assert!(exact_type > 0);
+        assert!(exact_constraint > 0);
+
+        let mut constraint_short =
+            crate::interface::InterfaceConstraintBudget::with_limit(exact_constraint - 1);
+        let mut untouched_type = TypeWorkBudget::with_limit(exact_type);
+        assert_eq!(
+            ResolvedRegistry::combine_checked(&checked, &mut untouched_type, &mut constraint_short,),
+            Err(ResolvedBuildFailure::ConstraintResource),
+        );
+        assert_eq!(constraint_short.used(), 0);
+        assert_eq!(untouched_type.used(), 0);
+        assert_eq!(checked[0].registry().lexical_nominals().len(), 1);
+
+        let mut exact_constraint_budget =
+            crate::interface::InterfaceConstraintBudget::with_limit(exact_constraint);
+        let mut type_short = TypeWorkBudget::with_limit(exact_type - 1);
+        assert_eq!(
+            ResolvedRegistry::combine_checked(
+                &checked,
+                &mut type_short,
+                &mut exact_constraint_budget,
+            ),
+            Err(ResolvedBuildFailure::TypeResource),
+        );
+        assert_eq!(exact_constraint_budget.used(), exact_constraint);
+        assert_eq!(type_short.used(), 0);
+        assert_eq!(checked[0].registry().lexical_constructors().len(), 1);
+
+        let mut exact_type_budget = TypeWorkBudget::with_limit(exact_type);
+        let mut retry_constraint =
+            crate::interface::InterfaceConstraintBudget::with_limit(exact_constraint);
+        let combined = ResolvedRegistry::combine_checked(
+            &checked,
+            &mut exact_type_budget,
+            &mut retry_constraint,
+        )
+        .expect("the exact retry should retain the lexical partition");
+        assert_eq!(exact_type_budget.used(), exact_type);
+        assert_eq!(retry_constraint.used(), exact_constraint);
+        assert_eq!(combined.lexical_nominals().len(), 1);
+        assert_eq!(combined.lexical_constructors().len(), 1);
+        assert_eq!(combined.nominal(owner).map(|fact| fact.id), Some(owner));
+        assert_eq!(
+            combined.constructor(constructor).map(|fact| fact.id),
+            Some(constructor),
+        );
+    }
+
+    fn transparent_newtype_summary_for_test() -> ExportSummary {
+        let source = SourceFile::new("newtype-summary.ash", "User")
+            .expect("the newtype summary fixture source should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the fixture range should be ordered"))
+            .expect("the fixture span should fit");
+        let module = ModuleId::new(9_994);
+        let owner = NominalTypeId::new(module, 0);
+        let constructor = ConstructorId::new(owner, 0);
+        let mut summary = ExportSummary::test_fixture(
+            module,
+            Vec::new(),
+            vec![(
+                "User",
+                owner,
+                ExportedTypeAccess::Transparent,
+                Origin::Source(span),
+            )],
+            vec![("User", constructor, Some(Type::Int), Origin::Source(span))],
+            Vec::new(),
+        );
+        let nominal = summary
+            .nominals
+            .get_mut("User")
+            .expect("the fixture should retain its public nominal");
+        nominal.declaration_kind = ResolvedNominalDeclarationKind::Newtype;
+        nominal.representation = Some(Type::Int);
+        nominal.representation_provenance = Some(canonical_representation_provenance_for_test());
+        summary
+    }
+
+    fn exact_summary_rejection(summary: ExportSummary) {
+        let mut measured_types = TypeWorkBudget::default();
+        let mut measured_constraints = crate::interface::InterfaceConstraintBudget::default();
+        assert!(matches!(
+            summary.authenticate(&mut measured_types, &mut measured_constraints),
+            Err(ResolvedBuildFailure::InvalidState)
+        ));
+        let exact_work = measured_types.used();
+        assert!(exact_work > 0);
+
+        let mut short_types = TypeWorkBudget::with_limit(exact_work - 1);
+        assert!(matches!(
+            summary.authenticate(
+                &mut short_types,
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::TypeResource)
+        ));
+        for _ in 0..2 {
+            let mut exact_types = TypeWorkBudget::with_limit(exact_work);
+            assert!(matches!(
+                summary.authenticate(
+                    &mut exact_types,
+                    &mut crate::interface::InterfaceConstraintBudget::default(),
+                ),
+                Err(ResolvedBuildFailure::InvalidState)
+            ));
+            assert_eq!(exact_types.used(), exact_work);
+        }
+    }
+
+    #[test]
+    fn transparent_newtype_summary_fixture_authenticates_before_tampering() {
+        transparent_newtype_summary_for_test()
+            .authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .expect("the authentic newtype fixture should authenticate");
+    }
+
+    #[test]
+    fn newtype_summary_authentication_rejects_each_canonical_family_tamper() {
+        let mutate = |summary: &mut ExportSummary, case: usize| {
+            let owner = summary.nominals["User"].id;
+            match case {
+                0 => {
+                    summary.nominals.get_mut("User").unwrap().declaration_kind =
+                        ResolvedNominalDeclarationKind::Data
+                }
+                1 => {
+                    summary.nominals.get_mut("User").unwrap().id =
+                        NominalTypeId::new(ModuleId::new(7), 0)
+                }
+                2 => summary.nominals.get_mut("User").unwrap().representation = Some(Type::Bool),
+                3 => summary.nominals.get_mut("User").unwrap().constructor_count = 2,
+                4 => {
+                    summary.nominals.get_mut("User").unwrap().constructors[0] =
+                        ConstructorId::new(owner, 1)
+                }
+                5 => summary.constructors.get_mut("User").unwrap().spelling = "Other".to_owned(),
+                6 => {
+                    summary.constructors.get_mut("User").unwrap().id =
+                        ConstructorId::new(NominalTypeId::new(ModuleId::new(7), 0), 0)
+                }
+                7 => summary.constructors.get_mut("User").unwrap().payload = Some(Type::Bool),
+                8 => summary.nominals.get_mut("User").unwrap().access = ExportedTypeAccess::Opaque,
+                9 => {
+                    let origin = summary.nominals["User"].origin.clone();
+                    summary.nominals.get_mut("User").unwrap().origin = Origin::Generated {
+                        cause: Box::new(origin),
+                        reason: GeneratedReason::TypeChecking,
+                    };
+                }
+                _ => unreachable!("the tamper matrix is finite"),
+            }
+        };
+
+        for case in 0..=9 {
+            let mut summary = transparent_newtype_summary_for_test();
+            mutate(&mut summary, case);
+            let rejected = matches!(
+                summary.authenticate(
+                    &mut TypeWorkBudget::default(),
+                    &mut crate::interface::InterfaceConstraintBudget::default(),
+                ),
+                Err(ResolvedBuildFailure::InvalidState)
+            );
+            assert!(rejected, "newtype summary tamper case {case} must reject");
+        }
+    }
+
+    #[test]
+    fn newtype_summary_authentication_rejects_representation_provenance_tampering() {
+        let mut summary = transparent_newtype_summary_for_test();
+        summary
+            .nominals
+            .get_mut("User")
+            .expect("fixture nominal")
+            .representation_provenance = None;
+        assert!(
+            summary
+                .authenticate(
+                    &mut TypeWorkBudget::default(),
+                    &mut crate::interface::InterfaceConstraintBudget::default(),
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn summary_newtype_representations_reject_cross_owner_parameters_in_public_and_hidden_facts() {
+        let source = SourceFile::new("summary-newtype-parameters.ash", "A B")
+            .expect("the summary parameter fixture source should fit");
+        let first = source
+            .span(ByteRange::new(0, 1).expect("the first range should be ordered"))
+            .expect("the first span should fit");
+        let second = source
+            .span(ByteRange::new(2, 3).expect("the second range should be ordered"))
+            .expect("the second span should fit");
+        let module = ModuleId::new(9_991);
+        let public_owner = NominalTypeId::new(module, 0);
+        let other_owner = NominalTypeId::new(ModuleId::new(9_989), 0);
+        let hidden_owner = NominalTypeId::new(ModuleId::new(9_990), 0);
+        let public_parameter = ResolvedTypeVariable {
+            id: TypeVariableId::resolved(module, 0),
+            spelling: "A".to_owned(),
+            kind: Kind::Type,
+            origin: Origin::Source(first),
+        };
+        let other_parameter = ResolvedTypeVariable {
+            id: TypeVariableId::resolved(other_owner.module(), 0),
+            spelling: "B".to_owned(),
+            kind: Kind::Type,
+            origin: Origin::Source(second),
+        };
+        let hidden_parameter = ResolvedTypeVariable {
+            id: TypeVariableId::resolved(hidden_owner.module(), 0),
+            spelling: "H".to_owned(),
+            kind: Kind::Type,
+            origin: Origin::Source(first),
+        };
+        let provenance =
+            ResolvedTypeProvenance::new(vec![ResolvedTypeProvenanceNode::Fact(first)], 0);
+
+        let mut public = ExportSummary::test_fixture_with_access(
+            module,
+            Vec::new(),
+            vec![(
+                "User",
+                public_owner,
+                ExportedTypeAccess::Opaque,
+                Origin::Source(first),
+            )],
+            Vec::new(),
+            Vec::new(),
+            vec![("User", Origin::Source(first))],
+            Vec::new(),
+        );
+        assert!(
+            public.configure_first_public_nominal_as_opaque_newtype_for_test(
+                Type::Variable(public_parameter.id),
+                provenance.clone(),
+            )
+        );
+        public.nominals.get_mut("User").unwrap().parameters =
+            vec![public_parameter.clone()].into_boxed_slice();
+        public.nominals.get_mut("User").unwrap().parameter_count = 1;
+        public.hidden_nominal_order.push(other_owner);
+        public.hidden_nominals.insert(
+            other_owner,
+            ExportedHiddenType {
+                representation_provenance: Some(provenance.clone()),
+                declaration_kind: ResolvedNominalDeclarationKind::Newtype,
+                representation: Some(Type::Variable(other_parameter.id)),
+                id: other_owner,
+                parameter_count: 1,
+                constructor_count: 1,
+                parameters: vec![other_parameter.clone()].into_boxed_slice(),
+                constructors: Box::new([]),
+                access: ImportedTypeAccess::Hidden,
+                spelling: "Other".to_owned(),
+                display_is_private: true,
+                origin: Origin::Source(second),
+            },
+        );
+        public
+            .authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .expect("the authentic public representation should authenticate");
+        public
+            .canonical_representations
+            .get_mut(&public_owner)
+            .unwrap()
+            .representation = Type::Variable(other_parameter.id);
+        exact_summary_rejection(public);
+
+        let mut hidden =
+            ExportSummary::test_fixture(module, Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        hidden.hidden_nominal_order.push(other_owner);
+        hidden.hidden_nominals.insert(
+            other_owner,
+            ExportedHiddenType {
+                representation_provenance: Some(provenance.clone()),
+                declaration_kind: ResolvedNominalDeclarationKind::Newtype,
+                representation: Some(Type::Variable(other_parameter.id)),
+                id: other_owner,
+                parameter_count: 1,
+                constructor_count: 1,
+                parameters: vec![other_parameter.clone()].into_boxed_slice(),
+                constructors: Box::new([]),
+                access: ImportedTypeAccess::Hidden,
+                spelling: "Other".to_owned(),
+                display_is_private: true,
+                origin: Origin::Source(second),
+            },
+        );
+        hidden.hidden_nominal_order.push(hidden_owner);
+        hidden.hidden_nominals.insert(
+            hidden_owner,
+            ExportedHiddenType {
+                representation_provenance: Some(provenance),
+                declaration_kind: ResolvedNominalDeclarationKind::Newtype,
+                representation: Some(Type::Variable(hidden_parameter.id)),
+                id: hidden_owner,
+                parameter_count: 1,
+                constructor_count: 1,
+                parameters: vec![hidden_parameter].into_boxed_slice(),
+                constructors: Box::new([]),
+                access: ImportedTypeAccess::Hidden,
+                spelling: "HiddenUser".to_owned(),
+                display_is_private: true,
+                origin: Origin::Source(first),
+            },
+        );
+        hidden
+            .authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .expect("the authentic hidden representation should authenticate");
+        hidden
+            .hidden_nominals
+            .get_mut(&hidden_owner)
+            .unwrap()
+            .representation = Some(Type::Variable(other_parameter.id));
+        exact_summary_rejection(hidden);
+    }
+
+    #[test]
+    fn opaque_canonical_representation_retention_is_retryable_and_authenticated() {
+        let identity = NominalTypeId::new(ModuleId::new(9_998), 0);
+        let provenance = canonical_representation_provenance_for_test();
+        let mut measured = ImportedFacts::default();
+        let mut measured_types = TypeWorkBudget::default();
+        let mut measured_constraints = crate::interface::InterfaceConstraintBudget::default();
+        measured
+            .retain_canonical_representation(
+                identity,
+                &Type::Int,
+                &provenance,
+                &mut measured_types,
+                &mut measured_constraints,
+            )
+            .expect("unbounded retention should measure canonical work");
+        const REPRESENTATION_SLOT_WORK: usize = 1;
+        const REPRESENTATION_TYPE_WORK: usize = 1; // `Int` has one type cell.
+        const EXACT_WORK: usize = REPRESENTATION_SLOT_WORK + REPRESENTATION_TYPE_WORK;
+        let exact_work = measured_types.used();
+        assert_eq!(exact_work, EXACT_WORK);
+        assert_eq!(measured_constraints.used(), 0);
+
+        let mut short = ImportedFacts::default();
+        let mut short_types = TypeWorkBudget::with_limit(exact_work - 1);
+        let mut short_constraints = crate::interface::InterfaceConstraintBudget::default();
+        assert!(matches!(
+            short.retain_canonical_representation(
+                identity,
+                &Type::Int,
+                &provenance,
+                &mut short_types,
+                &mut short_constraints,
+            ),
+            Err(ImportedNominalMergeFailure::TypeResource)
+        ));
+        assert_eq!(short_constraints.used(), 0);
+        assert!(short.canonical_representation(identity).is_none());
+
+        let mut exact_types = TypeWorkBudget::with_limit(exact_work);
+        let mut exact_constraints = crate::interface::InterfaceConstraintBudget::default();
+        short
+            .retain_canonical_representation(
+                identity,
+                &Type::Int,
+                &provenance,
+                &mut exact_types,
+                &mut exact_constraints,
+            )
+            .expect("a fresh exact retry should retain the canonical representation");
+        assert_eq!(exact_types.used(), exact_work);
+        assert_eq!(exact_constraints.used(), 0);
+        assert!(
+            short
+                .canonical_representation(identity)
+                .is_some_and(|fact| fact.representation == Type::Int)
+        );
+
+        assert!(matches!(
+            short.retain_canonical_representation(
+                identity,
+                &Type::Bool,
+                &provenance,
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ImportedNominalMergeFailure::Conflict)
+        ));
+        assert!(
+            short
+                .canonical_representation(identity)
+                .is_some_and(|fact| fact.representation == Type::Int)
+        );
+        assert!(matches!(
+            short.retain_canonical_representation(
+                identity,
+                &Type::Int,
+                &ResolvedTypeProvenance::new(
+                    vec![ResolvedTypeProvenanceNode::Fact(
+                        canonical_representation_provenance_for_test()
+                            .span()
+                            .expect("fixture provenance has one root span"),
+                    )],
+                    0,
+                ),
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ImportedNominalMergeFailure::Conflict)
+        ));
+    }
+
+    #[test]
+    fn imported_newtype_routes_reject_parameter_and_canonical_fact_tampering() {
+        let source = SourceFile::new("newtype-route-tampering.ash", "A B C")
+            .expect("the fixture source should fit");
+        let first = source
+            .span(ByteRange::new(0, 1).expect("the first range should be ordered"))
+            .expect("the first span should fit");
+        let second = source
+            .span(ByteRange::new(2, 3).expect("the second range should be ordered"))
+            .expect("the second span should fit");
+        let third = source
+            .span(ByteRange::new(4, 5).expect("the third range should be ordered"))
+            .expect("the third span should fit");
+        let module = ModuleId::new(9_993);
+        let owner = NominalTypeId::new(module, 0);
+        let constructor = ConstructorId::new(owner, 0);
+        let constructors = [constructor];
+        let parameters = [
+            ResolvedTypeVariable {
+                id: TypeVariableId::resolved(module, 0),
+                spelling: "A".to_owned(),
+                kind: Kind::Type,
+                origin: Origin::Source(first),
+            },
+            ResolvedTypeVariable {
+                id: TypeVariableId::resolved(module, 1),
+                spelling: "B".to_owned(),
+                kind: Kind::Type,
+                origin: Origin::Source(second),
+            },
+        ];
+        let representation = Type::Variable(parameters[0].id);
+        let provenance =
+            ResolvedTypeProvenance::new(vec![ResolvedTypeProvenanceNode::Fact(first)], 0);
+        let origin = Origin::Source(first);
+        macro_rules! candidate {
+            ($parameters:expr, $representation:expr, $provenance:expr, $origin:expr $(,)?) => {
+                ImportedNominalFactRef {
+                    id: owner,
+                    declaration_kind: ResolvedNominalDeclarationKind::Newtype,
+                    parameter_count: $parameters.len(),
+                    constructor_count: 1,
+                    parameters: $parameters,
+                    representation: Some($representation),
+                    representation_provenance: Some($provenance),
+                    constructors: &constructors,
+                    access: ImportedTypeAccess::Transparent,
+                    display_spelling: Some("Route"),
+                    display_is_private: false,
+                    origin: $origin,
+                }
+            };
+        }
+        let mut imported = ImportedFacts::default();
+        let staged = imported
+            .prepare_nominal_merge(
+                candidate!(&parameters, &representation, &provenance, &origin),
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .expect("the authentic route should stage");
+        imported
+            .commit_nominal_merge(staged)
+            .expect("the authentic route should publish");
+
+        let wrong_identity = [
+            ResolvedTypeVariable {
+                id: TypeVariableId::resolved(module, 2),
+                ..parameters[0].clone()
+            },
+            parameters[1].clone(),
+        ];
+        let wrong_order = [parameters[1].clone(), parameters[0].clone()];
+        let wrong_kind = [
+            ResolvedTypeVariable {
+                kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                ..parameters[0].clone()
+            },
+            parameters[1].clone(),
+        ];
+        let substituted_representation = Type::Variable(parameters[1].id);
+        let forged_provenance =
+            ResolvedTypeProvenance::new(vec![ResolvedTypeProvenanceNode::Fact(third)], 0);
+        let forged_origin = Origin::Source(third);
+        for route in [
+            candidate!(&wrong_identity, &representation, &provenance, &origin),
+            candidate!(&wrong_order, &representation, &provenance, &origin),
+            candidate!(&wrong_kind, &representation, &provenance, &origin),
+            candidate!(
+                &parameters,
+                &substituted_representation,
+                &provenance,
+                &origin,
+            ),
+            candidate!(&parameters, &representation, &forged_provenance, &origin),
+            candidate!(&parameters, &representation, &provenance, &forged_origin),
+        ] {
+            assert!(matches!(
+                imported.validate_nominal_merge(
+                    route,
+                    &mut crate::interface::InterfaceConstraintBudget::default(),
+                ),
+                Err(ImportedNominalMergeFailure::Conflict)
+            ));
+        }
+    }
+
+    #[test]
+    fn opaque_canonical_representation_discards_deep_retry_state_iteratively() {
+        const DEPTH: usize = 32_768;
+        std::thread::Builder::new()
+            .name("deep-opaque-canonical-representation-drop".to_owned())
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                let identity = NominalTypeId::new(ModuleId::new(9_997), 0);
+                let provenance = canonical_representation_provenance_for_test();
+                let mut representation = Type::Int;
+                for _ in 0..DEPTH {
+                    representation =
+                        Type::Application(Box::new(representation), Box::new(Type::Int));
+                }
+
+                let mut measured = ImportedFacts::default();
+                let mut measured_types = TypeWorkBudget::default();
+                let mut measured_constraints =
+                    crate::interface::InterfaceConstraintBudget::default();
+                measured
+                    .retain_canonical_representation(
+                        identity,
+                        &representation,
+                        &provenance,
+                        &mut measured_types,
+                        &mut measured_constraints,
+                    )
+                    .expect("unbounded deep retention should measure work");
+                let exact_work = measured_types.used();
+                drop(measured);
+
+                let mut rejected = ImportedFacts::default();
+                let mut short_types = TypeWorkBudget::with_limit(exact_work - 1);
+                let mut short_constraints = crate::interface::InterfaceConstraintBudget::default();
+                assert!(matches!(
+                    rejected.retain_canonical_representation(
+                        identity,
+                        &representation,
+                        &provenance,
+                        &mut short_types,
+                        &mut short_constraints,
+                    ),
+                    Err(ImportedNominalMergeFailure::TypeResource)
+                ));
+                assert!(rejected.canonical_representation(identity).is_none());
+                drop(rejected);
+
+                let mut accepted = ImportedFacts::default();
+                let mut exact_types = TypeWorkBudget::with_limit(exact_work);
+                let mut exact_constraints = crate::interface::InterfaceConstraintBudget::default();
+                accepted
+                    .retain_canonical_representation(
+                        identity,
+                        &representation,
+                        &provenance,
+                        &mut exact_types,
+                        &mut exact_constraints,
+                    )
+                    .expect("fresh deep retry should succeed");
+                assert_eq!(exact_types.used(), exact_work);
+                discard_type_iteratively(representation);
+                drop(accepted);
+            })
+            .expect("deep teardown thread should start")
+            .join()
+            .expect("deep canonical retention should not overflow its stack");
+    }
+
+    #[test]
+    fn summary_authentication_rejects_a_canonical_representation_for_non_newtype() {
+        let source =
+            SourceFile::new("opaque-cache.ash", "Token").expect("fixture source should fit");
+        let span = source
+            .span(ByteRange::new(0, 5).expect("fixture range should be ordered"))
+            .expect("fixture span should fit");
+        let module = ModuleId::new(9_996);
+        let identity = NominalTypeId::new(module, 0);
+        let provenance =
+            ResolvedTypeProvenance::new(vec![ResolvedTypeProvenanceNode::Fact(span)], 0);
+        let mut summary = ExportSummary::test_fixture(
+            module,
+            Vec::new(),
+            vec![(
+                "Token",
+                identity,
+                ExportedTypeAccess::Opaque,
+                Origin::Source(span),
+            )],
+            Vec::new(),
+            Vec::new(),
+        );
+        summary.canonical_representations.insert(
+            identity,
+            CanonicalRepresentationFact {
+                representation: Type::Int,
+                provenance,
+            },
+        );
+
+        assert!(matches!(
+            summary.authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState)
+        ));
+    }
+
+    #[test]
+    fn summary_authentication_requires_the_opaque_newtype_canonical_representation() {
+        let source = SourceFile::new("opaque-cache-missing.ash", "Token")
+            .expect("fixture source should fit");
+        let span = source
+            .span(ByteRange::new(0, 5).expect("fixture range should be ordered"))
+            .expect("fixture span should fit");
+        let module = ModuleId::new(9_995);
+        let identity = NominalTypeId::new(module, 0);
+        let mut summary = ExportSummary::test_fixture(
+            module,
+            Vec::new(),
+            vec![(
+                "Token",
+                identity,
+                ExportedTypeAccess::Opaque,
+                Origin::Source(span),
+            )],
+            Vec::new(),
+            Vec::new(),
+        );
+        summary
+            .nominals
+            .get_mut("Token")
+            .expect("fixture has Token")
+            .declaration_kind = ResolvedNominalDeclarationKind::Newtype;
+
+        assert!(matches!(
+            summary.authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            ),
+            Err(ResolvedBuildFailure::InvalidState)
+        ));
+    }
 
     #[test]
     fn empty_resolved_determination_side_never_authenticates_as_total() {
@@ -16309,6 +21037,9 @@ mod tests {
                     summary.nominals.insert(
                         spelling.clone(),
                         ExportedType {
+                            representation_provenance: None,
+                            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                            representation: None,
                             id: owner,
                             parameter_count: 0,
                             constructor_count: width,
@@ -16326,6 +21057,9 @@ mod tests {
                 summary.hidden_nominals.insert(
                     owner,
                     ExportedHiddenType {
+                        representation_provenance: None,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                        representation: None,
                         id: owner,
                         parameter_count: 0,
                         constructor_count: width,
@@ -16481,6 +21215,51 @@ mod tests {
     }
 
     #[test]
+    fn capture_external_nominal_collection_is_exact_deep_and_preserves_lexical_types() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let module = ModuleId::new(9_831);
+                let external = NominalTypeId::new(module, 0);
+                let lexical = NominalTypeId::lexical(module, 0);
+                let mut root =
+                    Type::Tuple(Box::new([Type::Nominal(external), Type::Nominal(lexical)]));
+                for _ in 0..32_768 {
+                    root = Type::Function(Box::new(Type::Nominal(lexical)), Box::new(root));
+                }
+                let root = crate::types::IterativeTypeOwner::new(root);
+                let run = |budget: &mut TypeWorkBudget| {
+                    let mut output = HashSet::new();
+                    collect_capture_external_nominals(&root, &mut output, budget)?;
+                    assert_eq!(output, HashSet::from([external]));
+                    Ok::<(), ()>(())
+                };
+                let mut measured = TypeWorkBudget::unbounded();
+                run(&mut measured).unwrap();
+                assert_eq!(measured.used(), 2 * 32_768 + 4);
+                for limit in [0, measured.used() - 1] {
+                    assert!(run(&mut TypeWorkBudget::with_limit(limit)).is_err());
+                }
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(measured.used());
+                    run(&mut exact).unwrap();
+                    assert_eq!(exact.used(), measured.used());
+                }
+                let mut ordinary = HashSet::new();
+                collect_nominal_identities(&root, &mut ordinary, &mut TypeWorkBudget::unbounded())
+                    .unwrap();
+                assert_eq!(
+                    ordinary,
+                    HashSet::from([external, lexical]),
+                    "capture inventory must not rewrite the immutable types"
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
     fn nominal_identity_collection_has_exact_fallible_stack_and_index_work() {
         const DEPTH: usize = 32_768;
         const WIDTH: usize = 32_768;
@@ -16583,6 +21362,9 @@ mod tests {
             summary.nominals.insert(
                 "Opaque".to_owned(),
                 ExportedType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: opaque,
                     parameter_count: 0,
                     constructor_count: width_per_owner,
@@ -16596,6 +21378,9 @@ mod tests {
             summary.hidden_nominals.insert(
                 hidden,
                 ExportedHiddenType {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: hidden,
                     parameter_count: 0,
                     constructor_count: width_per_owner,
@@ -16897,6 +21682,7 @@ mod tests {
         summary.terms.insert(
             "duplicate".to_owned(),
             ExportedGlobal {
+                capture: crate::core::capture::CaptureValueSummary::default(),
                 binder,
                 scheme: ConstrainedScheme {
                     type_parameters: Box::new([]),
@@ -17076,6 +21862,7 @@ mod tests {
                 summary.terms.insert(
                     "forged".to_owned(),
                     ExportedGlobal {
+                        capture: crate::core::capture::CaptureValueSummary::default(),
                         binder,
                         scheme: ConstrainedScheme {
                             type_parameters: Box::new([]),
@@ -17241,6 +22028,7 @@ mod tests {
             direct_dependencies: Vec::new(),
             declaration_order: vec![ResolvedDeclarationIndex::Interface(0)],
             interfaces: vec![resolved_interface],
+            effects: Vec::new(),
             implementations: Vec::new(),
             definitions: Vec::new(),
             export_candidate,
@@ -17361,6 +22149,7 @@ mod tests {
             direct_dependencies: Vec::new(),
             declaration_order: vec![ResolvedDeclarationIndex::Interface(0)],
             interfaces: vec![resolved_interface],
+            effects: Vec::new(),
             implementations: Vec::new(),
             definitions: Vec::new(),
             export_candidate,
@@ -17565,6 +22354,7 @@ mod tests {
                     head_parameters: Box::new([]),
                     prerequisites: Box::new([]),
                     methods: Box::new([CheckedImplementationMethodFact {
+                        capture: crate::core::capture::CaptureValueSummary::default(),
                         id: ImplMethodId::new(id, method),
                         method,
                         binder: BinderId::resolved(summary.module, 0),
@@ -17721,6 +22511,7 @@ mod tests {
                     summary.terms.insert(
                         spelling,
                         ExportedGlobal {
+                            capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
                             scheme: ConstrainedScheme {
                                 type_parameters: Box::new([]),
@@ -17751,6 +22542,9 @@ mod tests {
                     summary.nominals.insert(
                         spelling.clone(),
                         ExportedType {
+                            representation_provenance: None,
+                            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                            representation: None,
                             id: nominal,
                             parameter_count: 1,
                             constructor_count: 1,
@@ -18009,6 +22803,12 @@ mod tests {
                 constructors,
                 nominal_positions,
                 constructor_positions,
+                lexical_nominals,
+                lexical_constructors,
+                lexical_nominal_positions,
+                lexical_constructor_positions,
+                effects,
+                effect_positions,
                 nominal_parameters,
                 type_variables,
                 global_parameter_rows,
@@ -18016,6 +22816,12 @@ mod tests {
                 abstract_nominal_names,
                 abstract_nominal_kinds,
             } = registry;
+            let _ = (
+                lexical_nominals,
+                lexical_constructors,
+                lexical_nominal_positions,
+                lexical_constructor_positions,
+            );
             let global_parameter_rows: &Box<[ResolvedGlobalParameterRow]> = global_parameter_rows;
             for row in global_parameter_rows {
                 let ResolvedGlobalParameterRow { owner, parameters } = row;
@@ -18030,6 +22836,8 @@ mod tests {
                 constructors,
                 nominal_positions,
                 constructor_positions,
+                effects,
+                effect_positions,
                 nominal_parameters,
                 type_variables,
                 global_parameter_rows,
@@ -18054,6 +22862,7 @@ mod tests {
         let module = ModuleId::new(9_700);
         let nominal = NominalTypeId::new(module, 0);
         let constructor = ConstructorId::new(nominal, 0);
+        let effect = EffectId::new(module, 0);
         let parameter_id = TypeVariableId::resolved(module, 0);
         let mut kind = Kind::Type;
         let mut payload = Type::Variable(parameter_id);
@@ -18074,6 +22883,9 @@ mod tests {
         };
         let registry = ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: nominal,
                 spelling: "Deep".to_owned(),
                 constructors: vec![constructor].into_boxed_slice(),
@@ -18087,13 +22899,39 @@ mod tests {
                 origin: Origin::Source(span),
             }],
         )
-        .with_type_parameters(vec![(nominal, vec![parameter])]);
+        .with_type_parameters(vec![(nominal, vec![parameter])])
+        .with_effects(vec![ResolvedEffectDeclaration {
+            id: effect,
+            public: false,
+            spelling: "DeepEffect".into(),
+            parameters: Box::new([]),
+            operations: vec![ResolvedEffectOperation {
+                id: OperationId::new(effect, 0),
+                spelling: "step".into(),
+                annotation: ResolvedType {
+                    ty: Type::Function(Box::new(Type::Unit), Box::new(Type::Unit)),
+                    provenance: ResolvedTypeProvenance::new(
+                        vec![ResolvedTypeProvenanceNode::Fact(span)],
+                        0,
+                    ),
+                    origin: Origin::Source(span),
+                    span,
+                },
+                origin: Origin::Source(span),
+                span,
+            }]
+            .into_boxed_slice(),
+            origin: Origin::Source(span),
+            span,
+        }]);
         vec![CheckedModule {
             module,
             registry: Arc::new(registry),
             direct_dependencies: Box::new([]),
             declaration_order: Box::new([]),
             interfaces: Box::new([]),
+            effects: Box::new([]),
+            imported_effects: Box::new([]),
             implementations: Box::new([]),
             definitions: Box::new([]),
             available_implementations: Box::new([]),
@@ -18114,11 +22952,11 @@ mod tests {
         // constructor inventory, binder-identity index, and the complete
         // record/Origin/Kind mirror. TypeWork retains both binder copies and
         // the constructor payload only after authentication succeeds.
-        const CONSTRAINT_WORK: usize = 3 * DEPTH + 13;
+        const CONSTRAINT_WORK: usize = 3 * DEPTH + 16;
         // The fixed eight cells retain the family-id slice, both nominal
         // staging/destination rows and positions, both constructor
         // carrier/position cells, and the canonical-variable staging slot.
-        const TYPE_WORK: usize = 6 * DEPTH + 13;
+        const TYPE_WORK: usize = 6 * DEPTH + 19;
         std::thread::Builder::new()
             .name("deep-combined-registry".to_owned())
             .stack_size(256 * 1024)
@@ -18138,8 +22976,8 @@ mod tests {
                 );
                 assert_eq!(
                     constraint_short.used(),
-                    CONSTRAINT_WORK - 2,
-                    "the final two-child Kind comparison charge is atomic",
+                    CONSTRAINT_WORK - 1,
+                    "the one-short Kind traversal charges every completed visit",
                 );
                 assert_eq!(untouched_type.used(), 0);
 
@@ -18171,6 +23009,7 @@ mod tests {
                     assert_eq!(type_work.used(), TYPE_WORK);
                     let owner = NominalTypeId::new(ModuleId::new(9_700), 0);
                     let constructor = ConstructorId::new(owner, 0);
+                    let effect = EffectId::new(ModuleId::new(9_700), 0);
                     let parameter = TypeVariableId::resolved(ModuleId::new(9_700), 0);
                     assert_eq!(
                         combined
@@ -18178,6 +23017,7 @@ mod tests {
                             .map(|nominal| nominal.constructors.as_ref()),
                         Some([constructor].as_slice()),
                     );
+                    assert_eq!(combined.effect(effect).unwrap().operations.len(), 1);
                     let payload = combined
                         .constructor(constructor)
                         .and_then(|constructor| constructor.payload.as_ref())
@@ -18248,6 +23088,9 @@ mod tests {
             .collect::<Vec<_>>();
         let registry = ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: nominal,
                 spelling: "Wide".to_owned(),
                 constructors: vec![constructor].into_boxed_slice(),
@@ -18296,6 +23139,7 @@ mod tests {
             .collect::<Vec<_>>();
         let global_binder = BinderId::resolved(module, 0);
         let global_scheme = CheckedGlobalScheme {
+            capture: crate::core::capture::CaptureValueSummary::default(),
             binder: global_binder,
             spelling: "wide".to_owned(),
             scheme: ConstrainedScheme {
@@ -18338,6 +23182,7 @@ mod tests {
             head_parameters: implementation_parameters.into_boxed_slice(),
             prerequisites: Box::new([]),
             methods: Box::new([CheckedImplementationMethodFact {
+                capture: crate::core::capture::CaptureValueSummary::default(),
                 id: ImplMethodId::new(implementation_id, implementation_method),
                 method: implementation_method,
                 binder: BinderId::resolved(module, 1),
@@ -18370,6 +23215,8 @@ mod tests {
             direct_dependencies: Box::new([]),
             declaration_order: Box::new([]),
             interfaces: Box::new([]),
+            effects: Box::new([]),
+            imported_effects: Box::new([]),
             implementations: Box::new([]),
             definitions: Box::new([]),
             available_implementations: Box::new([AvailableImplementation::local(
@@ -18562,6 +23409,9 @@ mod tests {
                     .collect::<Vec<_>>();
                 let registry = ResolvedRegistry::new(
                     vec![ResolvedNominalType {
+                        representation_provenance: None,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                        representation: None,
                         id: nominal,
                         spelling: "Wide".to_owned(),
                         constructors: Box::new([constructor]),
@@ -18624,6 +23474,8 @@ mod tests {
             direct_dependencies: Box::new([]),
             declaration_order: Box::new([]),
             interfaces: Box::new([]),
+            effects: Box::new([]),
+            imported_effects: Box::new([]),
             implementations: Box::new([]),
             definitions: Box::new([]),
             available_implementations: Box::new([]),
@@ -18653,6 +23505,7 @@ mod tests {
             span: Span,
         ) -> CheckedGlobalScheme {
             CheckedGlobalScheme {
+                capture: crate::core::capture::CaptureValueSummary::default(),
                 binder: owner,
                 spelling: format!("global{}", owner.local()),
                 scheme: ConstrainedScheme {
@@ -18805,6 +23658,7 @@ mod tests {
         let span = modules[0].span;
         let empty_owner = BinderId::resolved(module, 2);
         modules[0].schemes.push(CheckedGlobalScheme {
+            capture: crate::core::capture::CaptureValueSummary::default(),
             binder: empty_owner,
             spelling: "empty".to_owned(),
             scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
@@ -18948,6 +23802,9 @@ mod tests {
             .collect::<Vec<_>>();
         let registry = ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: nominal,
                 spelling: "Empty".to_owned(),
                 constructors: family.into_boxed_slice(),
@@ -19584,7 +24441,7 @@ mod tests {
                     authenticate_scheme_parameter_mirror(&scheme, &parameters, &mut mirror_short,),
                     Err(ResolvedBuildFailure::ConstraintResource),
                 );
-                assert_eq!(mirror_short.used(), MIRROR_WORK - 2);
+                assert_eq!(mirror_short.used(), MIRROR_WORK - 1);
                 let mut mirror_exact =
                     crate::interface::InterfaceConstraintBudget::with_limit(MIRROR_WORK);
                 authenticate_scheme_parameter_mirror(&scheme, &parameters, &mut mirror_exact)
@@ -20299,6 +25156,7 @@ mod tests {
                         requirement(1, second_dependent.clone()),
                     ]),
                     methods: Box::new([CheckedImplementationMethodFact {
+                        capture: crate::core::capture::CaptureValueSummary::default(),
                         id: ImplMethodId::new(implementation, method),
                         method,
                         binder: BinderId::resolved(module, 0),
@@ -20456,6 +25314,7 @@ mod tests {
                     head_parameters: Box::new([]),
                     prerequisites,
                     methods: Box::new([CheckedImplementationMethodFact {
+                        capture: crate::core::capture::CaptureValueSummary::default(),
                         id: ImplMethodId::new(implementation, marker_method),
                         method: marker_method,
                         binder: BinderId::resolved(module, 0),
@@ -20551,6 +25410,45 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn effectful_interface_method_summary_authenticates_after_head_substitution() {
+        let mut summary =
+            implementation_summary_with_prerequisite_dependents([Type::Bool, Type::Unit]);
+        summary.implementations[0].fact.prerequisites = Box::new([]);
+        summary.implementations[0].fact.methods[0]
+            .scheme
+            .requirements = Box::new([]);
+        let parameter = summary.interfaces[0].parameters[0].id;
+        let effect = crate::types::EffectId::new(summary.module, 0);
+        summary.interfaces[0].methods[0].value_type = Type::function_computation(
+            Type::Variable(parameter),
+            crate::types::ComputationType::new(
+                Type::Int,
+                crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                    effect,
+                    Box::new([Type::Variable(parameter)]),
+                )),
+            ),
+        );
+        summary.implementations[0].fact.methods[0].scheme.value_type = Type::function_computation(
+            Type::Int,
+            crate::types::ComputationType::new(
+                Type::Int,
+                crate::types::EffectRow::singleton(crate::types::EffectInstance::new(
+                    effect,
+                    Box::new([Type::Int]),
+                )),
+            ),
+        );
+
+        summary
+            .authenticate(
+                &mut TypeWorkBudget::default(),
+                &mut crate::interface::InterfaceConstraintBudget::default(),
+            )
+            .expect("the effectful method summary should match after interface substitution");
     }
 
     #[test]
@@ -20846,11 +25744,13 @@ mod tests {
             value_type: value_type(),
         };
         let imported_global = ImportedGlobalScheme {
+            capture: crate::core::capture::CaptureValueSummary::default(),
             binder,
             scheme: global_scheme(),
             origin: Origin::Source(span),
         };
         let mut exported_global = ExportedGlobal {
+            capture: crate::core::capture::CaptureValueSummary::default(),
             binder,
             scheme: global_scheme(),
             origin: Origin::Source(span),
@@ -20925,6 +25825,7 @@ mod tests {
             }]),
             prerequisites: Box::new([]),
             methods: Box::new([CheckedImplementationMethodFact {
+                capture: crate::core::capture::CaptureValueSummary::default(),
                 id: ImplMethodId::new(implementation_id, method_id),
                 method: method_id,
                 binder: BinderId::resolved(module, 1),
@@ -21072,11 +25973,13 @@ mod tests {
                     origin
                 };
                 let imported = ImportedGlobalScheme {
+                    capture: crate::core::capture::CaptureValueSummary::default(),
                     binder: BinderId::resolved(module, 0),
                     scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
                     origin: deep_origin(),
                 };
                 let exported = ExportedGlobal {
+                    capture: crate::core::capture::CaptureValueSummary::default(),
                     binder: BinderId::resolved(module, 0),
                     scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
                     origin: deep_origin(),
@@ -21234,11 +26137,13 @@ mod tests {
                     value_type: public_value_type(),
                 };
                 let imported_global = ImportedGlobalScheme {
+                    capture: crate::core::capture::CaptureValueSummary::default(),
                     binder: BinderId::resolved(module, 0),
                     scheme: global_scheme(),
                     origin: Origin::Source(span),
                 };
                 let exported_global = ExportedGlobal {
+                    capture: crate::core::capture::CaptureValueSummary::default(),
                     binder: BinderId::resolved(module, 0),
                     scheme: global_scheme(),
                     origin: Origin::Source(span),
@@ -21395,6 +26300,7 @@ mod tests {
                     }]),
                     prerequisites: Box::new([]),
                     methods: Box::new([CheckedImplementationMethodFact {
+                        capture: crate::core::capture::CaptureValueSummary::default(),
                         id: ImplMethodId::new(implementation, method),
                         method,
                         binder: BinderId::resolved(module, 1),
@@ -21561,11 +26467,13 @@ mod tests {
                     value_type: function_type(),
                 };
                 let imported_global = ImportedGlobalScheme {
+                    capture: crate::core::capture::CaptureValueSummary::default(),
                     binder,
                     scheme: global_scheme(),
                     origin: Origin::Source(span),
                 };
                 let mut exported_global = ExportedGlobal {
+                    capture: crate::core::capture::CaptureValueSummary::default(),
                     binder,
                     scheme: global_scheme(),
                     origin: Origin::Source(span),
@@ -21699,6 +26607,7 @@ mod tests {
                         }]),
                         prerequisites,
                         methods: Box::new([CheckedImplementationMethodFact {
+                            capture: crate::core::capture::CaptureValueSummary::default(),
                             id: ImplMethodId::new(implementation, MethodId::new(interface, 0)),
                             method: MethodId::new(interface, 0),
                             binder: BinderId::resolved(module, 1),
@@ -21795,6 +26704,7 @@ mod tests {
                         for ordinal in 0..WIDTH {
                             let method = MethodId::new(interface, ordinal as u32);
                             prerequisites.push(CheckedImplementationMethodFact {
+                                capture: crate::core::capture::CaptureValueSummary::default(),
                                 id: ImplMethodId::new(implementation, method),
                                 method,
                                 binder: BinderId::resolved(module, ordinal as u32 + 1),
@@ -21892,6 +26802,7 @@ mod tests {
                 imported
                     .insert_global(
                         ImportedGlobalScheme {
+                            capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
                             scheme: ConstrainedScheme::from_rank1_type(application_type(DEPTH)),
                             origin: generated_origin(&source, DEPTH),
@@ -21902,6 +26813,7 @@ mod tests {
                 imported
                     .insert_global(
                         ImportedGlobalScheme {
+                            capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
                             scheme: ConstrainedScheme::from_rank1_type(Type::Unit),
                             origin: generated_origin(&source, 0),
@@ -21939,6 +26851,7 @@ mod tests {
                 assert_eq!(
                     imported.insert_global(
                         ImportedGlobalScheme {
+                            capture: crate::core::capture::CaptureValueSummary::default(),
                             binder,
                             scheme: ConstrainedScheme::from_rank1_type(application_type(DEPTH)),
                             origin: generated_origin(&source, DEPTH),
@@ -22312,6 +27225,9 @@ mod tests {
             origin: Origin::Source(span),
         }];
         let candidate = || ImportedNominalFactRef {
+            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
+            representation_provenance: None,
             id: nominal,
             parameter_count: 1,
             constructor_count: 1,
@@ -22419,6 +27335,9 @@ mod tests {
             ConstructorId::new(nominal, 1),
         ];
         let hidden = ImportedNominalFactRef {
+            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
+            representation_provenance: None,
             id: nominal,
             parameter_count: 1,
             constructor_count: 2,
@@ -22430,6 +27349,8 @@ mod tests {
             origin: &parameter[0].origin,
         };
         let transparent = ImportedNominalFactRef {
+            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             constructors: &family,
             access: ImportedTypeAccess::Transparent,
             display_spelling: Some("Visible"),
@@ -22507,6 +27428,8 @@ mod tests {
         );
 
         let alias = ImportedNominalFactRef {
+            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             display_spelling: Some("Alias"),
             ..transparent
         };
@@ -22541,6 +27464,9 @@ mod tests {
         ];
         let empty_parameters: [ResolvedTypeVariable; 0] = [];
         let hidden = ImportedNominalFactRef {
+            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
+            representation_provenance: None,
             id: nominal,
             parameter_count: 0,
             constructor_count: family.len(),
@@ -22571,6 +27497,8 @@ mod tests {
         let mut imported = ImportedFacts::default();
         commit(&mut imported, hidden, 2, 1);
         let opaque = ImportedNominalFactRef {
+            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             access: ImportedTypeAccess::Opaque,
             display_spelling: Some("Opaque"),
             ..hidden
@@ -22584,6 +27512,8 @@ mod tests {
         assert!(retained.constructors.is_empty());
 
         let lower_alias = ImportedNominalFactRef {
+            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             display_spelling: Some("Alias"),
             ..hidden
         };
@@ -22595,6 +27525,8 @@ mod tests {
         assert_eq!(retained.display_spelling.as_deref(), Some("Opaque"));
 
         let transparent = ImportedNominalFactRef {
+            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             constructors: &family,
             access: ImportedTypeAccess::Transparent,
             display_spelling: Some("Visible"),
@@ -22618,6 +27550,8 @@ mod tests {
 
         let fill_nominal = NominalTypeId::new(module, 1);
         let fill_hidden = ImportedNominalFactRef {
+            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             id: fill_nominal,
             ..hidden
         };
@@ -22626,6 +27560,8 @@ mod tests {
         commit(
             &mut display_fill,
             ImportedNominalFactRef {
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 display_spelling: Some("Filled"),
                 ..fill_hidden
             },
@@ -22641,6 +27577,8 @@ mod tests {
         commit(
             &mut display_fill,
             ImportedNominalFactRef {
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 display_spelling: Some("PublicAlias"),
                 ..fill_hidden
             },
@@ -22656,6 +27594,8 @@ mod tests {
 
         let private_nominal = NominalTypeId::new(module, 2);
         let private = ImportedNominalFactRef {
+            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             id: private_nominal,
             display_spelling: Some("Secret"),
             display_is_private: true,
@@ -22664,6 +27604,8 @@ mod tests {
         let mut private_import = ImportedFacts::default();
         commit(&mut private_import, private, 2, 1);
         let private_alias = ImportedNominalFactRef {
+            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
             display_spelling: Some("Forged"),
             ..private
         };
@@ -22694,6 +27636,9 @@ mod tests {
             origin: parameter_origin.clone(),
         }];
         let parameterized = ImportedNominalFactRef {
+            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+            representation: None,
+            representation_provenance: None,
             id: parameter_nominal,
             parameter_count: 1,
             constructor_count: 1,
@@ -22731,6 +27676,8 @@ mod tests {
         }];
         assert_parameter_conflict(
             ImportedNominalFactRef {
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 parameters: &wrong_id,
                 ..parameterized
             },
@@ -22742,6 +27689,8 @@ mod tests {
         }];
         assert_parameter_conflict(
             ImportedNominalFactRef {
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 parameters: &wrong_spelling,
                 ..parameterized
             },
@@ -22753,6 +27702,8 @@ mod tests {
         }];
         assert_parameter_conflict(
             ImportedNominalFactRef {
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 parameters: &wrong_parameter_origin,
                 ..parameterized
             },
@@ -22764,6 +27715,8 @@ mod tests {
         }];
         assert_parameter_conflict(
             ImportedNominalFactRef {
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 parameters: &wrong_kind,
                 ..parameterized
             },
@@ -22771,6 +27724,8 @@ mod tests {
         );
         assert_parameter_conflict(
             ImportedNominalFactRef {
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 origin: &Origin::Source(other_span),
                 ..parameterized
             },
@@ -22788,6 +27743,8 @@ mod tests {
             ],
         ] {
             let candidate = ImportedNominalFactRef {
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 constructors: &corrupt_family,
                 ..transparent
             };
@@ -22833,6 +27790,9 @@ mod tests {
                     origin: Origin::Source(span),
                 }];
                 let candidate = ImportedNominalFactRef {
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
+                    representation_provenance: None,
                     id: nominal,
                     parameter_count: 1,
                     constructor_count: 1,
@@ -22895,6 +27855,9 @@ mod tests {
         imported
             .merge_nominal(
                 ImportedNominalFact {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: nominal,
                     parameter_count: 1,
                     constructor_count: 1,
@@ -22979,6 +27942,9 @@ mod tests {
                 imported
                     .merge_nominal(
                         ImportedNominalFact {
+                            representation_provenance: None,
+                            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                            representation: None,
                             id: nominal,
                             parameter_count: 1,
                             constructor_count: 1,
@@ -23233,6 +28199,9 @@ mod tests {
         let kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
         let registry = ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: nominal,
                 spelling: "Local".into(),
                 constructors: Box::new([]),
@@ -23279,6 +28248,9 @@ mod tests {
         let parameter = TypeVariableId::resolved(module, 0);
         let registry = ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: nominal,
                 spelling: "Local".into(),
                 constructors: Box::new([]),
@@ -23336,6 +28308,9 @@ mod tests {
         let later_parameter = TypeVariableId::resolved(module, 1);
         let registry = ResolvedRegistry::new(
             vec![ResolvedNominalType {
+                representation_provenance: None,
+                declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                representation: None,
                 id: nominal,
                 spelling: "Local".into(),
                 constructors: Box::new([]),
@@ -23491,6 +28466,9 @@ mod tests {
                 let constructor = ConstructorId::new(owner, 0);
                 let registry = ResolvedRegistry::new(
                     vec![ResolvedNominalType {
+                        representation_provenance: None,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                        representation: None,
                         id: owner,
                         spelling: "Deep".to_owned(),
                         constructors: Box::new([constructor]),
@@ -23552,6 +28530,9 @@ mod tests {
                 let local_parameter = TypeVariableId::resolved(local_module, 0);
                 let registry = ResolvedRegistry::new(
                     vec![ResolvedNominalType {
+                        representation_provenance: None,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                        representation: None,
                         id: local_owner,
                         spelling: "Local".to_owned(),
                         constructors: Box::new([]),
@@ -23596,6 +28577,9 @@ mod tests {
                 imported
                     .merge_nominal(
                         ImportedNominalFact {
+                            representation_provenance: None,
+                            declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                            representation: None,
                             id: imported_owner,
                             parameter_count: 1,
                             constructor_count: 1,
@@ -23818,6 +28802,7 @@ mod tests {
             direct_dependencies: Vec::new(),
             declaration_order: vec![ResolvedDeclarationIndex::Interface(0)],
             interfaces: vec![interface],
+            effects: Vec::new(),
             implementations: Vec::new(),
             definitions: Vec::new(),
             export_candidate: ResolvedExportCandidate::default(),
@@ -23986,6 +28971,7 @@ mod tests {
                 ResolvedDeclarationIndex::Implementation(0),
             ],
             interfaces: Vec::new(),
+            effects: Vec::new(),
             implementations: Vec::new(),
             definitions: Vec::new(),
             export_candidate: ResolvedExportCandidate::default(),
@@ -24005,6 +28991,10 @@ mod tests {
             hidden_constructor_order: Vec::new(),
             interface_names: HashMap::new(),
             interface_name_order: Vec::new(),
+            effect_names: HashMap::new(),
+            effect_name_order: Vec::new(),
+            effects: Vec::new(),
+            effect_positions: HashMap::new(),
             method_names: HashMap::new(),
             method_name_order: Vec::new(),
             interfaces: Vec::new(),
@@ -24014,6 +29004,7 @@ mod tests {
             implementation_positions: HashMap::new(),
             hidden_nominals: HashMap::new(),
             hidden_nominal_order: Vec::new(),
+            canonical_representations: HashMap::new(),
             withheld: HashMap::new(),
             withheld_order: Vec::new(),
         };
@@ -24126,6 +29117,7 @@ mod tests {
                     direct_dependencies: Vec::new(),
                     declaration_order: vec![ResolvedDeclarationIndex::Global(0)],
                     interfaces: Vec::new(),
+                    effects: Vec::new(),
                     implementations: Vec::new(),
                     definitions: vec![ResolvedDefinition {
                         kind: ResolvedDefinitionKind::Equational(ResolvedEquationalGlobal {
@@ -24228,6 +29220,7 @@ mod tests {
                     prerequisite_only_parameters: Box::new([]),
                     prerequisites: Box::new([]),
                     method_groups: vec![ResolvedImplementationMethodGroup {
+                        contextual_parameters: Box::new([]),
                         method: None,
                         identity: None,
                         binder: Binder {
@@ -24276,6 +29269,7 @@ mod tests {
             head_parameters: Box::new([]),
             prerequisites: Box::new([]),
             methods: vec![CheckedImplementationMethodFact {
+                capture: crate::core::capture::CaptureValueSummary::default(),
                 id: ImplMethodId::new(implementation, method),
                 method,
                 binder: BinderId::resolved(module, 0),
@@ -24404,6 +29398,12 @@ mod tests {
                     constructors: Box::new([]),
                     nominal_positions: HashMap::new(),
                     constructor_positions: HashMap::new(),
+                    lexical_nominals: Box::new([]),
+                    lexical_constructors: Box::new([]),
+                    lexical_nominal_positions: HashMap::new(),
+                    lexical_constructor_positions: HashMap::new(),
+                    effects: Box::new([]),
+                    effect_positions: HashMap::new(),
                     nominal_parameters: HashMap::from([(
                         nominal,
                         vec![parameter(generated_origin(&source, DEPTH))].into_boxed_slice(),
@@ -24449,12 +29449,14 @@ mod tests {
                     direct_dependencies: Vec::new(),
                     declaration_order: Vec::new(),
                     interfaces: Vec::new(),
+                    effects: Vec::new(),
                     implementations: Vec::new(),
                     definitions: Vec::new(),
                     export_candidate,
                     span,
                 });
                 let checked = [CheckedGlobalScheme {
+                    capture: crate::core::capture::CaptureValueSummary::default(),
                     binder,
                     spelling: "expose".to_owned(),
                     scheme: ConstrainedScheme {
@@ -24648,6 +29650,7 @@ mod tests {
             direct_dependencies,
             declaration_order: Vec::new(),
             interfaces: Vec::new(),
+            effects: Vec::new(),
             implementations: Vec::new(),
             definitions: Vec::new(),
             export_candidate: ResolvedExportCandidate::default(),
@@ -24797,6 +29800,9 @@ mod tests {
         imported
             .merge_nominal(
                 ImportedNominalFact {
+                    representation_provenance: None,
+                    declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                    representation: None,
                     id: nominal,
                     parameter_count: 0,
                     constructor_count: constructors.len(),
@@ -24847,6 +29853,7 @@ mod tests {
             direct_dependencies: Vec::new(),
             declaration_order: Vec::new(),
             interfaces: Vec::new(),
+            effects: Vec::new(),
             implementations: Vec::new(),
             definitions: Vec::new(),
             export_candidate,
@@ -24942,6 +29949,7 @@ mod tests {
             direct_dependencies: Vec::new(),
             declaration_order: Vec::new(),
             interfaces: Vec::new(),
+            effects: Vec::new(),
             implementations: vec![implementation],
             definitions: Vec::new(),
             export_candidate: ResolvedExportCandidate::default(),
@@ -25037,6 +30045,7 @@ mod tests {
                     direct_dependencies: Vec::new(),
                     declaration_order: Vec::new(),
                     interfaces: Vec::new(),
+                    effects: Vec::new(),
                     implementations: Vec::new(),
                     definitions: Vec::new(),
                     export_candidate,
@@ -25047,6 +30056,7 @@ mod tests {
                     deep = Type::Function(Box::new(Type::Unit), Box::new(deep));
                 }
                 let checked = [CheckedGlobalScheme {
+                    capture: crate::core::capture::CaptureValueSummary::default(),
                     binder,
                     spelling: "value".to_owned(),
                     scheme: ConstrainedScheme::from_rank1_type(deep),
@@ -25092,6 +30102,9 @@ mod tests {
                 let constructor = ConstructorId::new(nominal, 0);
                 let registry = ResolvedRegistry::new(
                     vec![ResolvedNominalType {
+                        representation_provenance: None,
+                        declaration_kind: crate::resolved::ResolvedNominalDeclarationKind::Data,
+                        representation: None,
                         id: nominal,
                         spelling: "Hidden".to_owned(),
                         constructors: Box::new([constructor]),
@@ -25136,12 +30149,14 @@ mod tests {
                     direct_dependencies: Vec::new(),
                     declaration_order: Vec::new(),
                     interfaces: Vec::new(),
+                    effects: Vec::new(),
                     implementations: Vec::new(),
                     definitions: Vec::new(),
                     export_candidate,
                     span: value_span,
                 });
                 let checked = [CheckedGlobalScheme {
+                    capture: crate::core::capture::CaptureValueSummary::default(),
                     binder,
                     spelling: "value".to_owned(),
                     scheme: ConstrainedScheme::from_rank1_type(Type::Nominal(nominal)),
@@ -25252,6 +30267,7 @@ mod tests {
             direct_dependencies: Vec::new(),
             declaration_order: Vec::new(),
             interfaces: Vec::new(),
+            effects: Vec::new(),
             implementations: Vec::new(),
             definitions: Vec::new(),
             export_candidate,
@@ -25379,12 +30395,14 @@ mod tests {
             direct_dependencies: vec![DirectDependencyRoute::new(base, interface_span)],
             declaration_order: Vec::new(),
             interfaces: Vec::new(),
+            effects: Vec::new(),
             implementations: Vec::new(),
             definitions: Vec::new(),
             export_candidate,
             span: global_span,
         });
         let checked_globals = [CheckedGlobalScheme {
+            capture: crate::core::capture::CaptureValueSummary::default(),
             binder,
             spelling: "apply".into(),
             scheme: ConstrainedScheme {
