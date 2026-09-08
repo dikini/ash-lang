@@ -1,7 +1,14 @@
 //! Explicit first-order evaluation of independently validated Core families.
 
+pub(crate) mod disposal;
+mod failure;
 mod machine;
 mod value;
+
+pub use failure::{
+    CleanupStatus, ResourceFailure, ResourceFailureCause, RuntimeFailureReport,
+    RuntimeFailureSummary, RuntimePhase, RuntimeResource,
+};
 
 pub use machine::{
     Control, EffectTraceEvent, Environment, Evaluation, RuntimeFailure, TraceEvent, evaluate,

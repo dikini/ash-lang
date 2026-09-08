@@ -6,6 +6,7 @@ version = 4
 name = "ash"
 version = "0.0.0"
 dependencies = [
+ "ash-native-buffer",
  "num-bigint",
 ]
 

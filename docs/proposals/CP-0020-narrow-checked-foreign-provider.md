@@ -12,6 +12,8 @@
 > Accepted by the user on 2026-09-08. This proposal is not current Ash.
 > The selected provider is a bounded native byte buffer. Implementation requires
 > a task and execution plan under this contract.
+> The user subsequently accepted the fail-stop resource-failure amendment below,
+> including the atomic allocation-attempt boundary. Implementation is pending.
 
 ## Current behavior
 
@@ -173,6 +175,16 @@ once, publishes no body authority and retains the internal failure. Tests must
 inject such a failure even if normal publication is made infallible. No implicit
 native allocation retry is performed.
 
+Recoverability is measured from the start of the native allocation attempt,
+after initializer evaluation and runtime preparation. A refused attempt may
+return the prepared `Failure(AllocationFailed)` only without observable Ash
+state changes, published authority, body execution or another allocation to
+construct or deliver that result. Earlier initializer effects remain committed.
+This is
+an execution-order condition, not a requirement that the enclosing computation
+have an allocation-only effect row. Failure to prepare or deliver the result
+is a terminal runtime failure, not another provider outcome.
+
 ### Identity, ownership and erasure
 
 Reuse the existing resource distinctions; introduce no additional certificate,
@@ -183,7 +195,7 @@ allocation identity class or runtime provider registry:
 | Lexical brand `R` and sealed provider facts | Authenticate scope, exact API relation, generated methods and dependencies through linked and Core validation; erase static evidence after its last checked use. |
 | Existing acquisition activation key | Distinguishes executions, including repeated/reentrant acquisition at one source site; remains in lexical instantiation and non-owning handles through their checked uses. It is not a native address. |
 | Non-owning `Handle<R>` | May be copied and transported while its owner is live; native access still requires the exact selected activation. |
-| Owned native block and length | One unpublished guard or one resource frame owns them, never both; ownership moves with capture and ends at structural release or internal host teardown. |
+| Owned native block and length | One unpublished guard or one resource frame owns them, never both; ownership moves with capture. Structural release or completed host destruction ends ownership; fail-stop teardown reports incomplete cleanup when necessary. |
 
 The exact builtin operation identity and activation information needed for
 dispatch remain at runtime. Erasing static evidence does not erase executable
@@ -213,7 +225,7 @@ activation. A mismatched or retired handle must fail before pointer access.
 | Outward request captures and resumes | Move the same native owner with the capture; do not release or duplicate it. |
 | Owned discard | Close contained owners at their structural positions, release this block once, skip abandoned body/suffix/result wrapping and continue the discarding clause. |
 | Outside owner or running source cleanup would be skipped | Retain existing rejection; native storage grants no extra abandonment permission. |
-| Internal evaluator failure after acquisition | Iterative host teardown releases native owners once, without running source actions or rolling back earlier writes. |
+| Internal evaluator failure after acquisition | Stop evaluation. Perform only safe host destruction, without source actions, retries or rollback. Report any teardown resource failure and do not claim incomplete cleanup succeeded. |
 | Divergence or external process termination | No source promise of eventual release, cleanup execution or recoverable outcome. |
 
 An inner cleanup action may use a still-enclosing buffer through its retained
@@ -241,18 +253,44 @@ Charge all added compiler scans, row/dependency facts and retained collections
 through their current owning ledgers. Native length cannot bypass a work limit
 or overflow a charge. Source `AllocationFailed` cannot stand in for exhaustion.
 
-Reserve fixed release/disposal work with ownership acquisition so internal
-teardown does not need fresh fallible allocation or a new budget grant to free
-an already-owned block. A failed write check or preparation leaves storage
+Reserve fixed release/disposal work with ownership acquisition. Establish finite
+worklist bounds and preallocate where practical, but do not treat preallocation
+as an unconditional guarantee against resource failure. The fixed native
+deallocator itself requires no allocation or new work-budget grant.
+A failed write check or preparation leaves storage
 unchanged; failure after earlier completed writes preserves those writes until
 release. No general execution rollback or external allocator-time guarantee is
 introduced. Pure and provider-free programs allocate no native-owner state.
+
+### Fail-stop runtime resource failures
+
+Detectable runtime resource failures terminate evaluation; they are not catchable
+provider failures. Do not resume source code, invoke source cleanup, retry
+allocation, raise limits, switch implementations or attempt rollback. Host
+destruction may release resources through already-safe, non-allocating paths;
+do not improvise a recovery traversal when its required storage is unavailable.
+
+Diagnostics must distinguish configured capacity exhaustion, allocator refusal,
+and runtime work-budget exhaustion, and identify the phase, such as acquisition,
+capture, ordinary evaluation/access, teardown or diagnostic preparation.
+Include requested/available amounts when
+known and representable without allocating. Do not infer a RAM-quota violation
+from an allocator refusal alone. Preserve the original failure if teardown also
+fails, report the secondary failure and whether cleanup completed, and provide
+a bounded best-effort diagnostic path independent of rich message construction.
+External process termination cannot guarantee an in-process report.
+
+This accepted amendment replaces the unconditional allocation-independent
+teardown guarantee. It does not authorize a general ownership framework or
+recoverable runtime starvation. Atomic native allocation refusal remains the
+explicit recoverable case described above.
 
 ## Semantic delta
 
 Add one compiler-owned API and one fixed acquisition designator, a typed
 allocation-result wrapper, native-byte access under existing resource authority,
-and fixed native release on admitted exits and internal host teardown. Extend
+and fixed native release on admitted exits and completed host teardown, with
+explicit fail-stop reporting of runtime resource failure. Extend
 closing-context proof to this retained builtin resource interpreter. Existing
 cell result types, source cleanup, evidence selection and handler rules remain
 unchanged. There is no source FFI, existential result or manual release.
@@ -339,7 +377,7 @@ proposal review.
 | FOREIGN-05 | Mixed cell/registration/cleanup/native-buffer order; inner action access; capture/resume; recursive owned discard; skipped suffixes and result wrapping; outside-owner and running-action negatives. |
 | FOREIGN-06 | Captured source override rejection versus surviving builtin/action-local interpretation; exact generic coincidence; open rows/lacks and imported callback authority; no universal closed-row restriction. |
 | FOREIGN-07 | Independent linked/Core forgery of builtin kind, provider, method, operation, handle, owner, brand, result wrapper, effect row and origin; positives and negatives after both Core transforms; native call counters stay zero for rejected Core. |
-| FOREIGN-08 | Exactly-once native deallocation across normal return, typed body failure, discard, partial publication and internal teardown; no source action on internal failure and no fake recoverable `free` failure. |
+| FOREIGN-08 | Exactly-once native deallocation across normal return, typed body failure, discard, partial publication and completed host teardown; injected teardown exhaustion terminates without source action, retry, recovery or a false cleanup-success claim; preserve primary/secondary failure and prove bounded diagnostic fallback. No fake recoverable `free` failure. |
 | FOREIGN-09 | Exact/one-short/fresh compiler and runtime boundaries; active plus captured owner capacity and reuse; proportional native length charges; deep success and failure disposal at retained stack bounds; no state or allocation for Pure/provider-free execution. |
 | FOREIGN-10 | Audited isolated bridge, safe API, unsafe invariants, dependency/linking review and AD-0001 target evidence; real backend plus fault-injection separation; source/CLI examples and all predecessor migrations; independent effects, provenance/proof, existential-pressure and Rust/resource reviews; full `cargo xtask verify`, strict lint, documentation/notation/link checks and clean local integration. |
 
