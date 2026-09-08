@@ -1576,6 +1576,20 @@ pub(crate) enum LinkedDeterminationMutationForTest {
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
+pub(crate) enum LinkedResourceMutationForTest {
+    Provider,
+    DetachedOwner,
+    Builtin,
+    MethodOrder,
+    MethodKind,
+    Handle,
+    Brand,
+    Origin,
+    Operation,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum LinkedGlobalParameterRowMutationForTest {
     Owner,
     ParameterIdentity,
@@ -1654,6 +1668,19 @@ impl ResolvedModuleProgram {
 
     #[cfg(test)]
     pub(crate) fn corrupt_first_direct_resource_owner_for_test(&mut self, detach: bool) -> bool {
+        self.corrupt_first_direct_resource_for_test(if detach {
+            LinkedResourceMutationForTest::DetachedOwner
+        } else {
+            LinkedResourceMutationForTest::Provider
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn corrupt_first_direct_resource_for_test(
+        &mut self,
+        mutation: LinkedResourceMutationForTest,
+    ) -> bool {
+        use LinkedResourceMutationForTest as Mutation;
         for group in &mut self.groups {
             for checked in &mut group.definitions {
                 let Some(definition) = checked.source.as_mut() else {
@@ -1666,7 +1693,7 @@ impl ResolvedModuleProgram {
                     let ResolvedExprKind::Resource(resource) = &mut equation.body.kind else {
                         continue;
                     };
-                    if detach {
+                    if matches!(mutation, Mutation::DetachedOwner) {
                         let replacement = std::mem::replace(
                             &mut *resource.body,
                             ResolvedExpr {
@@ -1679,8 +1706,49 @@ impl ResolvedModuleProgram {
                             replacement,
                         ));
                     } else {
-                        resource.acquisition.provider =
-                            crate::interface::LexicalEvidenceId::new(group.module, u32::MAX);
+                        match mutation {
+                            Mutation::Provider => {
+                                resource.acquisition.provider =
+                                    crate::interface::LexicalEvidenceId::new(group.module, u32::MAX)
+                            }
+                            Mutation::Builtin => resource.acquisition.builtin = self.entry,
+                            Mutation::MethodOrder => resource.acquisition.methods.swap(0, 2),
+                            Mutation::MethodKind => {
+                                resource.acquisition.methods = ResourceMethods::Cell([
+                                    resource.acquisition.methods[0],
+                                    resource.acquisition.methods[1],
+                                ])
+                            }
+                            Mutation::Handle => {
+                                resource.acquisition.handle = resource.acquisition.methods[0]
+                            }
+                            Mutation::Brand => {
+                                resource.acquisition.identity = TypeVariableId::generated(u32::MAX)
+                            }
+                            Mutation::Origin => {
+                                resource.acquisition.span = resource.initializer.span
+                            }
+                            Mutation::Operation => {
+                                let ResolvedExprKind::Block(body) = &mut resource.body.kind else {
+                                    return false;
+                                };
+                                let [ResolvedLocalDeclaration::Evidence(source)] =
+                                    body.declarations.as_mut_slice()
+                                else {
+                                    return false;
+                                };
+                                let ResolvedExprKind::Perform(request) =
+                                    &mut source.method_groups[0].equations[0].body.kind
+                                else {
+                                    return false;
+                                };
+                                request.operation = crate::types::OperationId::new(
+                                    request.effect.instance.effect(),
+                                    u32::MAX,
+                                );
+                            }
+                            Mutation::DetachedOwner => unreachable!(),
+                        }
                     }
                     return true;
                 }

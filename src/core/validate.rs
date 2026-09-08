@@ -11439,6 +11439,7 @@ mod tests {
         let validated = super::super::validate_effect_modules(core, &sources, &relation).unwrap();
         for fold in [false, true] {
             for mutation in 0..13 {
+                crate::eval::reset_native_buffer_counters_for_test();
                 let mut rebuilt = if fold {
                     crate::core::transform::fold_effect_literal_primitives(&validated).unwrap()
                 } else {
@@ -11518,9 +11519,25 @@ mod tests {
                 }
                 let result = super::super::validate_effect_modules(rebuilt, &sources, &relation);
                 if mutation == 0 {
-                    result.unwrap();
+                    let executable = result.unwrap();
+                    assert_eq!(
+                        crate::eval::evaluate_effect(&executable)
+                            .unwrap()
+                            .value
+                            .to_string(),
+                        "Success(5)"
+                    );
+                    assert_eq!(
+                        crate::eval::native_buffer_counters_for_test(),
+                        [1, 1, 0, 0, 1, 1]
+                    );
                 } else {
                     assert!(result.is_err(), "fold={fold}, mutation={mutation}");
+                    assert_eq!(
+                        crate::eval::native_buffer_counters_for_test(),
+                        [0; 6],
+                        "fold={fold}, mutation={mutation}"
+                    );
                 }
             }
         }
@@ -11530,6 +11547,7 @@ mod tests {
     fn native_buffer_core_registry_authenticates_result_constructors_after_transforms() {
         for fold in [false, true] {
             for error_payload in [false, true] {
+                crate::eval::reset_native_buffer_counters_for_test();
                 let directory = LinkedValidationDirectory::create();
                 let entry = directory.write(
                     "entry.ash",
@@ -11573,6 +11591,7 @@ mod tests {
                         .reason(),
                     ValidationReason::Registry
                 );
+                assert_eq!(crate::eval::native_buffer_counters_for_test(), [0; 6]);
             }
         }
     }

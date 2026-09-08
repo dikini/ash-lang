@@ -3,6 +3,12 @@ mod support;
 use support::run_module;
 
 #[test]
+fn targeted_renamed_builtin_import_authorizes_native_buffer_acquisition() {
+    let value = run_module("buffer.ash", "import @builtin.native_buffer (Outcome as Result, length as size)\nmain : Unit -> Result<Int>\nmain () = resource native_buffer<R> b = 4 {\nsize b\n}\n").unwrap();
+    assert_eq!(value.value().to_string(), "Success(4)");
+}
+
+#[test]
 fn cell_import_does_not_authorize_native_buffer_acquisition() {
     let source = "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = resource native_buffer<R> b = 4 {\n42\n}\n";
     let failure = run_module("buffer.ash", source).unwrap_err();

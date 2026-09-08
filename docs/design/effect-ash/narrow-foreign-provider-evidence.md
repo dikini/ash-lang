@@ -1,28 +1,30 @@
 # Narrow checked foreign-provider evidence
 
-This informative report records work on `codex/narrow-foreign-provider`.
-It is not a completion claim or current `main` semantics. Compiler admission
-is retained at `3d80fbc`; the runtime checkpoint adds the evaluator and reviewed
-failure-reporting changes. The [branch specification](../../../spec/README.md) is a
-draft pending the complete product checkpoint and integration.
+This informative report records the implemented and verified native-buffer
+increment on `codex/narrow-foreign-provider`, not current `main` semantics.
+Compiler admission is retained at `3d80fbc` and runtime execution at `f9a02b6`.
+The [branch specification](../../../spec/README.md) accompanies the implementation
+and conformance tests. Clean local integration remains pending.
 
 ## Evidence coverage
 
 The FOREIGN identifiers retain the accepted proposal's evidence obligations.
-No row is closed by this report alone.
+Independent contract, effects, provenance/proof and existential-pressure review
+approved FOREIGN-01 through FOREIGN-09. Final Rust/resource quality review also
+passed. Full verification passed; clean local integration remains for FOREIGN-10.
 
-| ID | Established evidence | Remaining gate |
+| ID | Established evidence | Review and closure |
 | --- | --- | --- |
-| FOREIGN-01 | [Syntax](../../../tests/native_buffer_syntax.rs), [modules](../../../tests/native_buffer_modules.rs), [typing](../../../tests/native_buffer_typing.rs), and [Core transforms](../../../tests/native_buffer_core.rs): closed builtin selection, direct import authority, sealed provider, exact result wrapper and unchanged cell behavior. | Final complete-contract review. |
-| FOREIGN-02 | [Native owner](../../../native-buffer/src/lib.rs), [runtime](../../../tests/native_buffer_runtime.rs), and [private boundaries](../../../src/eval/native_buffer_tests.rs): real zeroed allocation, length/access, conversions, index-before-byte checks and unchanged rejected writes. | Final resource review. |
-| FOREIGN-03 | Private boundary tests cover injected null, pre-call work exhaustion, no body authority and release of a real unpublished owner after injected publication failure. Refusal-delivery tests cover committed initializer effects and no further allocation. | Reporting correction and re-review. |
-| FOREIGN-04 | Runtime/private tests cover aliases, reentrant activations, retired-key rejection, active/captured capacity reuse and escaping closures. [Imports](../../../tests/native_buffer_imports.rs) cover generic value and selected-method captures versus copied values. | Final ownership/provenance review of the complete set. |
-| FOREIGN-05 | [Interactions](../../../tests/native_buffer_interactions.rs) cover mixed structural order, inner cleanup access, resume/discard, recursive owner discard, skipped suffixes, action-local result wrapping and outside-owner/running-action rejection. | Combined recursive cleanup stress remains unproved; see below. |
-| FOREIGN-06 | Interactions cover removed overrides versus surviving builtin/action-local interpretation. Imports cover exact/different generic hook instances, imported callbacks and positive/negative row-lacks cases. | Final effects review. |
-| FOREIGN-07 | [Linked validation](../../../src/evidence_validation.rs) checks detached provider ownership and constructor payloads. [Core validation](../../../src/core/validate.rs) mutates acquisition/method/brand/result/row/origin facts after both transforms. | Expand linked mutation coverage and assert zero native boundary calls on rejection. |
-| FOREIGN-08 | Private tests cover normal return, body failure, discard, partial publication and completed teardown releases. Injected teardown exhaustion preserves primary/secondary failure, marks cleanup incomplete and prevents source clause/suffix/cleanup writes. | Complete reporting correction; final review. |
-| FOREIGN-09 | Compiler and runtime tests retain exact/one-short/fresh budgets, proportional length charging, owner capacity/reuse and deep stack checks. | Final provider-free state and finite-work audit. |
-| FOREIGN-10 | Isolated safe-owning adapter, CLI fixture, predecessor suite and ARM64 compile checks pass. | Final evidence review, verification after remaining edits and clean unsigned local integration. |
+| FOREIGN-01 | [Syntax](../../../tests/native_buffer_syntax.rs), [modules](../../../tests/native_buffer_modules.rs), [imports](../../../tests/native_buffer_imports.rs), [typing](../../../tests/native_buffer_typing.rs), and [Core transforms](../../../tests/native_buffer_core.rs): closed builtin selection, targeted/renamed imports, facade-only and copied-API rejection, sealed provider, exact types and unchanged cells. | Contract approved. |
+| FOREIGN-02 | [Native owner](../../../native-buffer/src/lib.rs), [runtime](../../../tests/native_buffer_runtime.rs), and [private boundaries](../../../src/eval/native_buffer_tests.rs): real zeroed allocation, length/access, conversions, index-before-byte checks and unchanged rejected writes. | Contract and resource reviews approved. |
+| FOREIGN-03 | Private boundary tests cover injected null, pre-call work exhaustion, no body authority and release of a real unpublished owner after injected publication failure. Refusal-delivery tests cover committed initializer effects and no further allocation. | Contract and reporting reviews approved. |
+| FOREIGN-04 | Runtime/private tests cover aliases, reentrant activations, retired-key rejection, active/captured capacity reuse and escaping closures. Imports cover generic value and selected-method captures versus copied values. | Ownership/provenance review approved. |
+| FOREIGN-05 | [Interactions](../../../tests/native_buffer_interactions.rs) cover mixed structural order, inner cleanup access, resume/discard, recursive owner discard, skipped suffixes, action-local result wrapping and outside-owner/running-action rejection. | Contract review accepts these separate witnesses; retain the combined stress limitation below. |
+| FOREIGN-06 | Interactions cover removed overrides versus surviving builtin/action-local interpretation. Imports cover exact/different generic hook instances, imported callbacks and positive/negative row-lacks cases. | Effects review approved. |
+| FOREIGN-07 | [Linked validation](../../../src/evidence_validation.rs) checks nine independent resource mutations and constructor payloads. [Core validation](../../../src/core/validate.rs) mutates acquisition/method/brand/result/row/origin facts after both transforms. Rejections leave all six native counters zero; transformed positives execute `Success(5)` with one allocation and release. | Contract approved. |
+| FOREIGN-08 | Private tests cover normal return, body failure, discard, partial publication and completed teardown releases. Injected teardown exhaustion preserves primary/secondary failure, marks cleanup incomplete and prevents source clause/suffix/cleanup writes. Row-storage fault matrices preserve actual storage causes. | Contract and reporting reviews approved. |
+| FOREIGN-09 | Compiler and runtime tests retain exact/one-short/fresh budgets, proportional length charging, owner capacity/reuse, deep stack checks and shared Pure-locality evidence. | Contract and finite-work audit approved. |
+| FOREIGN-10 | Isolated safe-owning adapter, CLI fixture, predecessor suite and ARM64 compile checks pass. Independent complete-provider contract and Rust/resource reviews, full verification and documentation checks passed. | Clean unsigned local integration pending. |
 
 ## Native and injected observations
 
@@ -73,7 +75,8 @@ generic row-helper defects: detected clone reservations could panic,
 and canonicalization could misreport storage refusal as work exhaustion. The
 complete runtime row path now passes independent contract re-review, including
 comparison inside canonicalization and tail membership. Independent Rust
-quality review also passed. Final full verification remains pending. The bounded writer must retain both
+quality review and full verification also passed. The bounded
+writer must retain both
 a legacy primary reason and the explicit resource cause when they
 differ; an undetermined storage-reservation cause is not a claimed RAM quota.
 The structured reporting mechanism handles returned failures from fallible
@@ -82,23 +85,23 @@ allocation APIs.
 
 ## Verification and limitations
 
-On 2026-09-09, before the reporting correction, parent verification passed:
+On 2026-09-09, after the reporting correction and final validator/import QA,
+parent verification passed:
 
 - `cargo xtask verify`, including build, strict lint, workspace tests and rustdoc;
-- all 1,201 library tests and six imported-native tests independently;
-- focused refusal, teardown-exhaustion, scope-isolation and source-effect-stop
-  tests;
+- 1,214 library tests, 14 CLI tests and 50 native integration tests, including
+  the storage-fault matrices and native-owner source-effect-stop witnesses;
 - `cargo check --workspace --all-targets --target aarch64-unknown-linux-gnu --locked`.
+
+Changed Markdown has no new lint findings. Twenty-five overlong lines are
+unchanged from the compiler checkpoint; table and formal-code line lengths were
+excluded. All 82 relative file links in the twelve changed documents resolved,
+and referenced specification headings were checked. Final contract and
+Rust/resource reviews found no remaining findings.
 
 ARM64 compilation is not native ARM64 execution or release conformance.
 Native tests here ran on Linux x86-64. No other backend or simulated portability
 fallback is claimed.
-
-After the complete row-helper reporting correction, a fresh parent run passed 1,214
-library tests, 14 CLI tests, nine native runtime tests, eight interaction tests
-and seven import tests. The implementer also passed strict workspace Clippy,
-rustdoc and formatting. Parent's fresh ARM64 workspace/all-targets compile check
-passed. Final full verification and complete-provider reviews remain open.
 
 A combined recursive native-owner/cleanup witness exhausts checker work before
 evaluation. In the recursive discard interaction, wrapping the native body in

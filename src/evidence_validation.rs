@@ -9024,22 +9024,43 @@ mod tests {
     }
 
     #[test]
-    fn native_buffer_linked_authority_rejects_detached_provider_owners() {
-        for detach in [false, true] {
+    fn native_buffer_linked_authority_rejects_independent_acquisition_forgeries() {
+        use crate::resolved::LinkedResourceMutationForTest as Mutation;
+        for mutation in [
+            Mutation::Provider,
+            Mutation::DetachedOwner,
+            Mutation::Builtin,
+            Mutation::MethodOrder,
+            Mutation::MethodKind,
+            Mutation::Handle,
+            Mutation::Brand,
+            Mutation::Origin,
+            Mutation::Operation,
+        ] {
+            crate::eval::reset_native_buffer_counters_for_test();
             let fixture = ValidationFixture::create(
                 "import @builtin.native_buffer as Buffer\nmain : Unit -> Buffer.Outcome<Int>\nmain () = resource native_buffer<R> b = 4 {\nBuffer.length b\n}\n",
             );
             let graph = fixture.graph();
             let mut program =
                 crate::elaborate::link_modules(check_graph(&graph), graph.entry()).unwrap();
-            assert!(program.corrupt_first_direct_resource_owner_for_test(detach));
-            assert!(validate_interface_evidence(program).is_err());
+            assert!(program.corrupt_first_direct_resource_for_test(mutation));
+            assert!(
+                validate_interface_evidence(program).is_err(),
+                "mutation={mutation:?}"
+            );
+            assert_eq!(
+                crate::eval::native_buffer_counters_for_test(),
+                [0; 6],
+                "mutation={mutation:?}"
+            );
         }
     }
 
     #[test]
     fn native_buffer_linked_registry_authenticates_ordinary_constructor_payloads() {
         for error_payload in [false, true] {
+            crate::eval::reset_native_buffer_counters_for_test();
             let fixture = ValidationFixture::create(
                 "import @builtin.native_buffer as Buffer\nmain : Unit -> Int\nmain () = 42\n",
             );
@@ -9048,6 +9069,7 @@ mod tests {
                 crate::elaborate::link_modules(check_graph(&graph), graph.entry()).unwrap();
             program.corrupt_native_constructor_for_test(error_payload);
             assert!(validate_interface_evidence(program).is_err());
+            assert_eq!(crate::eval::native_buffer_counters_for_test(), [0; 6]);
         }
     }
 

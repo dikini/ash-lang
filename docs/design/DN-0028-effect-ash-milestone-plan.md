@@ -712,15 +712,25 @@ Prerequisite: integrated reliable cleanup.
 on 2026-09-08. It selects a bounded native byte buffer to exercise checked
 acquisition, authority, captured ownership and release. Library-defined
 acquisition is required later, with a suitable FFI design; neither that design
-nor file-specific failure rules enter this slice. Implementation is pending a
-task and execution plan under the accepted contract.
+nor file-specific failure rules enter this slice. Compiler admission is retained
+at `3d80fbc` and runtime execution at `f9a02b6`. The
+[partial evidence](effect-ash/narrow-foreign-provider-evidence.md) records the
+remaining validation, review, verification and local-integration gates. The
+10-unit planning weight is not yet closed.
 
 The accepted proposal selects one statically named provider boundary and defines
 trusted static evidence, runtime handle introduction, whether any distinct
 runtime identity witness is necessary and what purpose it serves, authority
-preservation, partial acquisition rollback, native-to-typed failure
+preservation, unpublished-owner release, native-to-typed failure
 translation, lifetime, Core validation, and the last use of each static and
 runtime carrier.
+
+The accepted failure amendment permits recoverable allocation refusal only at
+the prepared atomic attempt boundary, without further allocation to deliver
+the result. Earlier initializer effects remain committed. Detectable runtime
+resource failures terminate without source continuation, cleanup, retry or
+rollback, retaining bounded cause and teardown-completion details. Whole
+teardown is not promised allocation-independent or infallible.
 
 Static evidence may erase after authentication; the handle, cleanup state, and
 any separately justified runtime identity witness remain through their declared

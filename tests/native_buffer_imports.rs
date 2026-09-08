@@ -25,6 +25,47 @@ fn run_imported(helper: &str, entry: &str) -> Result<String, String> {
 }
 
 #[test]
+fn facade_only_import_does_not_authorize_native_buffer_acquisition() {
+    let failure = run_imported(
+        "pub import @builtin.native_buffer (Outcome, length)\n",
+        "import helper (Outcome, length)\nmain : Unit -> Outcome<Int>\nmain () = resource native_buffer<R> b = 4 {\nlength b\n}\n",
+    ).unwrap_err();
+    assert!(failure.contains("ResourceBuiltinRequired"), "{failure}");
+}
+
+#[test]
+fn copied_source_api_does_not_authorize_native_buffer_acquisition() {
+    let helper = r#"pub opaque type Handle<R> = Hidden
+pub type Error = InvalidLength
+| AllocationFailed
+| InvalidIndex
+| InvalidByte
+pub type Outcome<A> = Success(A)
+| Failure(Error)
+pub effect Ops<R> {
+length : Handle<R> -> Int
+read : (Handle<R>, Int) -> Outcome<Int>
+write : (Handle<R>, Int, Int) -> Outcome<Unit>
+}
+pub interface Provider<R> {
+length : Handle<R> -> Int ! {Ops<R>}
+read : (Handle<R>, Int) -> Outcome<Int> ! {Ops<R>}
+write : (Handle<R>, Int, Int) -> Outcome<Unit> ! {Ops<R>}
+}
+"#;
+    assert_eq!(
+        run_imported(
+            helper,
+            "import helper as Buffer\nmain : Unit -> Int\nmain () = 42\n"
+        )
+        .unwrap(),
+        "42"
+    );
+    let failure = run_imported(helper, "import helper as Buffer\nmain : Unit -> Buffer.Outcome<Int>\nmain () = resource native_buffer<R> b = 4 {\nBuffer.length b\n}\n").unwrap_err();
+    assert!(failure.contains("ResourceBuiltinRequired"), "{failure}");
+}
+
+#[test]
 fn imported_generic_callback_retains_native_authority_inside_its_owner() {
     let helper = r#"import @builtin.native_buffer as Buffer
 pub reader<R> : Buffer.Handle<R> -> (Int -> Int ! {Buffer.Ops<R>}) where Buffer.Provider<R>

@@ -25,10 +25,11 @@ once.
 `import @builtin.cell as Cell` loads the compiler-owned cell API without a
 `--root` option or filesystem lookup. `builtin` cannot be configured as a root:
 `--root builtin=path` reports `invocation.reserved-root` before inspecting
-configured paths. Only `@builtin.cell` exists beneath this root; another path
+configured paths. `@builtin.cell` and `@builtin.native_buffer` are the fixed
+modules beneath this root; another path
 reports `module.unknown-builtin`. Ordinary aliases, targeted imports and
 facade re-exports preserve the API's identity, but a module that acquires a
-resource must directly import `@builtin.cell`.
+resource must directly import its selected builtin module.
 
 ## Complete module-tree example
 
@@ -164,6 +165,29 @@ Run it with `ash entry.ash`, without a builtin root option. It prints
 `42 : Int` followed by a newline and releases the cell before observation.
 Handles and captured cell access cannot escape the scope; the returned integer
 is an ordinary copy.
+
+The executable test `native_buffer_documentation_example_has_exact_cli_output`
+checks this complete native-buffer program:
+
+```ash
+import @builtin.native_buffer as Buffer
+
+main : Unit -> Buffer.Outcome<Buffer.Outcome<Int>>
+main () = resource native_buffer<R> b = 4 {
+match Buffer.write (b, 0, 42) {
+Buffer.Success(()) => Buffer.read (b, 0)
+Buffer.Failure(error) => Buffer.Failure error
+}
+}
+```
+
+On successful allocation, `ash entry.ash` prints
+`Success(Success(42)) : Outcome<Outcome<Int>>` and a newline. The outer success
+records acquisition and normal body completion; the inner result is the body's
+ordinary read outcome. Allocation failure skips the body. Length must be
+positive and fit the bridge's addressable bound; indices and byte values are
+checked before access or mutation. Release occurs before the outer success is
+observed. This fixed byte-buffer provider is not a general FFI or file API.
 
 The executable test `synchronous_hooks_documentation_example_has_exact_cli_output`
 checks this complete hook program:
@@ -634,8 +658,24 @@ operation reports `effect.discard-unsafe`. A cleanup action requiring a removed
 interpreter reports `effect.cleanup-context`, with discard, action and handler
 labels. Safely owned cells, registrations and armed actions can be closed.
 The effect machine's live-cell, registration or cleanup capacity failure is `runtime.resource-capacity`,
-an internal status-`2` failure. It publishes no partial acquisition. There is
-no source-level allocation-failure branch or use-after-release outcome.
+an internal status-`2` failure. It publishes no partial acquisition. Cell
+acquisition has no source-level allocation-failure branch. Native allocation
+refusal can return `Failure(AllocationFailed)` only at the atomic attempt
+boundary: preceding initializer effects remain committed, but no native body
+or authority is published. Neither provider exposes source use-after-release.
+
+Detectable runtime resource failures terminate with status `2`, without source
+continuation, source cleanup, retry or rollback. Their bounded diagnostic keeps
+the original reason code and identifies the resource cause, phase and resource,
+with requested and available amounts when known. Causes distinguish
+`runtime.capacity-exhausted`, `runtime.allocator-refused`,
+`runtime.work-budget-exhausted` and `runtime.storage-reservation-failed`. The
+last means the storage API did not distinguish allocator refusal from a
+representation bound; it does not identify a RAM-quota violation.
+If host teardown also fails, the report retains the original failure, the first
+teardown failure and the observed cleanup status. This path avoids rich message
+allocation and does not retry a failed write. External termination, including termination
+inside an infallible host allocation API, cannot guarantee an in-process report.
 
 An output write or flush failure also exits with status `2` and attempts to
 report `internal.output-write` on standard error. Standard-output bytes accepted

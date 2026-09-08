@@ -8,6 +8,24 @@ use instantiation::Instantiation;
 
 #[path = "native_buffer.rs"]
 mod native_buffer;
+
+#[cfg(test)]
+pub(crate) fn reset_native_buffer_counters_for_test() {
+    native_buffer::tests::reset();
+}
+
+#[cfg(test)]
+pub(crate) fn native_buffer_counters_for_test() -> [usize; 6] {
+    use native_buffer::tests::{ADAPTER_CALLS, ATTEMPTS, OWNERS, READS, RELEASES, WRITES};
+    [
+        ATTEMPTS.get(),
+        ADAPTER_CALLS.get(),
+        READS.get(),
+        WRITES.get(),
+        OWNERS.get(),
+        RELEASES.get(),
+    ]
+}
 use native_buffer::NativeOwner;
 
 #[cfg(test)]

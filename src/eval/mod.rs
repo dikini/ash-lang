@@ -14,5 +14,7 @@ pub use machine::{
     Control, EffectTraceEvent, Environment, Evaluation, RuntimeFailure, TraceEvent, evaluate,
     evaluate_effect,
 };
+#[cfg(test)]
+pub(crate) use machine::{native_buffer_counters_for_test, reset_native_buffer_counters_for_test};
 pub(crate) use value::ObservedHeap;
 pub use value::{Closure, ExecutableNode, ExecutableProgram, ObservedValue, Value};

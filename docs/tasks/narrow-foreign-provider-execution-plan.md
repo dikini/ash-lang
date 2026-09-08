@@ -328,3 +328,19 @@ Files: `spec/syntax.md`, `spec/name-resolution.md`, `spec/static-semantics.md`,
   check passed. Record the reviewed runtime checkpoint unsigned; the remaining
   FOREIGN-07 test expansion, complete-provider review, final full verification,
   specification/artifact closure and local integration are still required.
+- Runtime checkpoint `f9a02b6` is unsigned. The full contract audit found no
+  semantic mismatch and accepted the separate FOREIGN-05 witnesses; the
+  combined recursive cleanup checker limit remains documented. It requested
+  native-specific targeted/renamed import, facade-only and copied-source-API
+  tests for FOREIGN-01 alongside the planned FOREIGN-07 mutation/counter matrix.
+  Those test-only additions are active. Final contract and quality review,
+  full verification and integration remain pending.
+- Final native import and linked/Core forgery QA passed, including transformed
+  native positives and zero counters on all rejected cases. Independent final
+  contract/effects/provenance/existential and Rust/resource reviews approved the
+  complete provider with no remaining findings. Parent's `cargo xtask verify`
+  and fresh ARM64 workspace/all-targets compile check passed after these
+  changes. Markdown has no new findings against the compiler checkpoint;
+  25 existing overlong lines remain. All 82 relative file links resolve and
+  specification anchors were checked. Record the product checkpoint, remove
+  completed transition artifacts and proceed to unsigned local integration.

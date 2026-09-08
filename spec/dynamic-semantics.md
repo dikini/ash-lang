@@ -705,6 +705,72 @@ divergence, and no abort, destructor callback, cancellation or foreign cleanup
 path is added. Resource-free Pure execution allocates no resource registry,
 resource frame or live cell.
 
+## Scoped native-buffer execution
+
+`resource native_buffer<R> b = length { body }` evaluates `length` exactly once
+before introducing the scope. The length must be positive and representable
+within both the host size type and valid pointer-offset bound. Invalid lengths
+produce `Failure(InvalidLength)` without calling the native allocator.
+
+For a valid length, the machine charges proportional initialization work and
+fixed release work, checks shared live-owner capacity, and reserves fallible
+scope, activation and outcome storage before the private C `calloc` call.
+A null allocation returns the prepared `Failure(AllocationFailed)` only when
+delivery requires no further allocation, observable Ash state change, body
+execution or published handle, activation or provider authority. Otherwise
+delivery fails terminally. Earlier initializer effects remain committed; the
+condition applies to the allocation attempt, not the enclosing effect row.
+Internal exhaustion is not an allocation-error constructor. There is no
+implicit allocation retry.
+
+A successful allocation is zero-initialized. An unpublished guard owns it until
+the prepared scope and handle are installed together. Failure during publication
+releases the guard once and remains an internal failure. The existing resource
+activation key distinguishes every successful execution, including reentrant
+executions at one source site. A handle contains that key, not a native address;
+address reuse cannot restore a retired activation.
+
+Request selection retains ordinary exact source-handler precedence. Only the
+selected authenticated builtin interpreter can use the native owner, and the
+operand handle must match its activation before access. `length` copies the
+length as `Int`. `read (b, index)` returns `Success(byte)` for a zero-based valid
+index, otherwise `Failure(InvalidIndex)`. `write (b, index, byte)` first checks
+the index, then the byte range `[0, 255]`; failure returns `InvalidIndex` or
+`InvalidByte` respectively inside `Failure`. Rejected writes leave bytes
+unchanged. Successful writes return `Success(())`. Validation, conversions,
+work admission and result preparation precede mutation. Malformed Core or
+activation disagreement is an internal failure, never one of these errors.
+
+Normal completion runs structurally inner cleanup while the buffer remains
+live, frees the native block once, and publishes `Success(body_value)` using
+reserved result storage. A body returning an error or another `Outcome` remains
+nested inside that `Success`; there is no flattening or automatic report.
+Capture and resume move the same owner. Owned discard releases it at its
+structural closing position, skips abandoned body suffixes and result wrapping,
+and continues the discarding clause. Acquisitions inside a running cleanup
+still complete normally and produce their own wrappers. Native ownership
+does not permit skipping an outside owner or running cleanup obligation.
+
+Native owners share the existing resource capacity, including captured owners;
+release makes capacity reusable but not activation keys. Fixed native `free`
+has no source failure result, source callback or retry. Internal host teardown
+uses safe host destruction without invoking source cleanup or rolling back
+earlier writes. Detectable runtime capacity, allocator and work-budget failures
+terminate evaluation without retries, limit increases or recovery. Diagnostics
+identify the cause and phase; a teardown failure preserves the original failure
+and does not claim cleanup completed. The fixed native deallocator requires no
+allocation; preallocation of traversal storage is a mitigation, not an
+unconditional teardown guarantee. Divergence and external process
+termination carry no eventual-release guarantee. Pure and provider-free
+execution create no native-owner state.
+
+The foreign boundary is one private safe-owning adapter over C `calloc`/`free`;
+pointers stay inside it. The bridge supports eight-bit-byte Linux x86-64 and
+ARM64 builds; unsupported targets fail compilation rather than substituting a
+simulated provider. Compile support does not itself establish native target
+conformance. These rules define no general ABI, library acquisition, manual
+release, filesystem policy or fallible file-close semantics.
+
 ## Synchronous hook execution
 
 `hook H { body }` enters an exact identity handler for the qualifying hook API.
@@ -856,9 +922,9 @@ ordinary structural rendering and allocation. Observation performs no runtime
 nominal-registry lookup and adds no special newtype value case.
 
 Evaluation reports uninitialized access, alias loops, invalid locations, an
-impossible complete-pattern failure, malformed effect control, and captured-
-control, live-cell or live-registration capacity exhaustion as structured internal runtime failures. They are
-not source-language error outcomes.
+impossible complete-pattern failure, malformed effect control, and runtime
+capacity exhaustion as structured internal runtime failures. They are not
+source-language error outcomes.
 
 The executable test `dynamic_cyclic_data_observation_is_finite` checks guarded
 allocation and active-path rendering:

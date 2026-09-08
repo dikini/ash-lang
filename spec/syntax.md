@@ -136,7 +136,7 @@ handler_clause ::= identifier pattern "=>" expression ;
 resume_expression ::= "resume" expression ;
 discard_expression ::= "discard" ;
 resource_expression ::=
-  "resource" "cell" "<" upper_identifier ">" identifier
+  "resource" ("cell" | "native_buffer") "<" upper_identifier ">" identifier
   "=" primary_expression block ;
 hook_expression ::= "hook" effect_instance block ;
 registration_expression ::=
@@ -383,12 +383,14 @@ name, one pattern, and one expression body. `resume` consumes one expression;
 `discard` is a nullary primary expression. Name resolution and static semantics
 restrict both completion forms to their owning operation clause.
 
-A resource expression acquires one cell. It writes exactly one uppercase
-identity binder, one ordinary value binder, one primary-expression initializer
+A resource expression selects one fixed provider, `cell` or `native_buffer`.
+It writes exactly one uppercase identity binder, one ordinary value binder,
+one primary-expression initializer
 and a block body. Neither binder has a parameter list or annotation, and the
-value binder is not a pattern or wildcard. `cell` is the only admitted resource
-kind. A non-primary initializer, such as `40 + 1` or `make ()`, must be
-parenthesized. The initializer precedes the binders' scope; both binders are
+value binder is not a pattern or wildcard. The designators remain ordinary
+identifiers outside this position. A non-primary initializer, such as `40 + 1`
+or `make ()`, must be parenthesized. The initializer precedes the binders' scope;
+both binders are
 visible only in the body. There is no resource declaration or first-class
 acquisition function.
 
