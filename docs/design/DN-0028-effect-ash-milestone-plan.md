@@ -708,7 +708,14 @@ remain provider-specific work for the next separately authorized slice.
 
 Prerequisite: integrated reliable cleanup.
 
-The proposal must select one statically named provider boundary and define
+[CP-0020](../proposals/CP-0020-narrow-checked-foreign-provider.md) was accepted
+on 2026-09-08. It selects a bounded native byte buffer to exercise checked
+acquisition, authority, captured ownership and release. Library-defined
+acquisition is required later, with a suitable FFI design; neither that design
+nor file-specific failure rules enter this slice. Implementation is pending a
+task and execution plan under the accepted contract.
+
+The accepted proposal selects one statically named provider boundary and defines
 trusted static evidence, runtime handle introduction, whether any distinct
 runtime identity witness is necessary and what purpose it serves, authority
 preservation, partial acquisition rollback, native-to-typed failure

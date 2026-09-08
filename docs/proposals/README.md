@@ -19,8 +19,11 @@ Use [the template](template.md) and allocate the next `CP-NNNN` ID.
 
 ## Proposed changes
 
-No proposed change is currently awaiting a decision.
+No proposed semantic transition is awaiting acceptance.
 
 ## Accepted changes
 
-No accepted semantic transition remains awaiting product implementation.
+- [CP-0020: Narrow Checked Foreign Provider](CP-0020-narrow-checked-foreign-provider.md)
+  selects a native byte buffer with typed allocation failure and scoped
+  release. Library-defined acquisition is required later with a suitable FFI
+  design; implementation is pending.
