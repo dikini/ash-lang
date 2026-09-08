@@ -4,7 +4,7 @@ This informative report records the verified implementation of historical
 `CP-0018`, tracked by historical `TASK-0028`. Both transition artifacts and the
 task-owned plan are retained in product checkpoint `ad2b0d4`. This report does not
 define language behavior. The complete hook contract passes its final reviews
-and verification; local integration remains a separate lifecycle step.
+and verification and is locally integrated on the milestone branch.
 The branch specification remains prospective until integration into `main`.
 
 ## Retained checkpoints
@@ -18,7 +18,8 @@ corpus and specification now pass independent reviews and full verification.
 Unsigned product checkpoint `ad2b0d4` retains that complete implementation,
 specification, tests, review and verification. The finished proposal, task and
 execution plan are removed after that checkpoint; Git preserves them.
-No integration merge, push or tag has occurred for this feature.
+Unsigned local merge `7dacce7` retains the feature on
+`integration/effect-ash-foundations`. No main merge, push or tag has occurred.
 
 At `07bb726e`, both public Effect validators run registration proof before unconditionally
 rejecting executable registration admission. Owning tests use a private,
@@ -252,8 +253,8 @@ reruns are not counted twice. The integration total includes all 32 architecture
 checks (309.98 seconds), 12 hook Core, 15 hook runtime, seven hook syntax,
 25 hook typing and 76 documentation-example tests. The original tool session
 receipt was lost during context truncation; the successful completed phase log
-and terminated process were inspected. Merged-checkout verification will retain
-a separate exit receipt.
+and terminated process were inspected. The merged-checkout verification below
+retains a separate exit receipt.
 
 Final independent high semantic and Rust/resource audits pass without remaining
 findings. The medium documentation audit verifies all eight affected files,
@@ -270,3 +271,33 @@ providers remain outside this checkpoint.
 A synthetic signature-disposal failure encountered while preparing
 one test was outside its intended boundary; it is not claimed fixed or used as
 that test's RED evidence.
+
+## Local integration and lifecycle closure
+
+The complete product checkpoint is `ad2b0d4833e40293d4847861e564274c2074f03d`.
+Transition cleanup is retained at feature tip
+`74691dcd260db21f0c16fdd7456ce1e16222d2a6`. The explicit unsigned local merge
+`7dacce795091d10f97c40f9efb31960cc0f3262e` advances
+`integration/effect-ash-foundations` from
+`ec8f86165689306a5301732a2ec995f8f7487686`. The merged tree exactly matches the
+reviewed feature tip.
+
+On September 8, `CARGO_INCREMENTAL=0 cargo xtask verify` ran from the recreated
+integration checkout and returned exit status 0. All 2,470 workspace tests
+passed with the same breakdown above, including all 32 architecture checks
+(310.59 seconds); formatting, locked build, strict Clippy and warnings-denied
+rustdoc passed. The transition-cleanup audit checked all 133 local links and
+anchors across its six retained changed documents.
+
+After verification, the feature checkout was clean, with no untracked or ignored
+files, and its exact tip was proved an ancestor of the integration branch.
+The `.worktree/synchronous-hooks` checkout and `codex/synchronous-hooks` branch
+were removed through Git. Their commits remain reachable through the merge.
+The sole remaining checkout under `.worktree/` is `effect-ash-foundations`.
+Main remains at `7195500b7a165f8191efa1485e1ca6f4114180fb`, with its original
+unrelated changes preserved; the two detached documentation pins, remote refs
+and tags are unchanged. No signing configuration was changed.
+
+This closes the original nine-unit hook scope weight: 74 of 100 milestone
+planning units are closed, with 26 remaining. Reliable cleanup is the next
+logical proposal, not work implemented or authorized by this checkpoint.

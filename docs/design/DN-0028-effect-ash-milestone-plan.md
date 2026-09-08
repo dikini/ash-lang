@@ -52,6 +52,9 @@ runtime behavior, reviews, full verification and transition cleanup.
 Safe resource scope is also complete and verified on the integration branch; its
 [evidence](effect-ash/resource-scope-evidence.md) records the retained contract
 and simplification review, including the verified unsigned local merge.
+Synchronous hooks are now also locally integrated and verified; their
+[evidence](effect-ash/synchronous-hooks-evidence.md) records the complete
+checkpoint and lifecycle closure. Reliable cleanup remains a separate proposal.
 
 ## Completion condition
 
@@ -652,8 +655,8 @@ overlapping acquisitions, hidden captures, imported abstractions, provider/Core
 authentication, exact resources, pure locality and full verification. Both
 independent reviews and the simplification/downstream reassessment pass.
 No additional proof, existential or hook machinery is justified by this slice.
-Verified local integration closes the original 16-unit weight: 65 of the
-milestone's 100 planning units are now closed, with 35 remaining. These are
+Verified local integration closed the original 16-unit weight: at that point,
+65 of the milestone's 100 planning units were closed, with 35 remaining. These are
 relative scope weights, not measured expenditure. The following hook checkpoint
 records the subsequent authorized work.
 
@@ -669,8 +672,8 @@ full verification. The [evidence](effect-ash/synchronous-hooks-evidence.md)
 records generic coincidence, callback-added dependencies, completion,
 independent Core authority and exact runtime ownership bounds.
 
-Local integration and merged-checkout verification remain the final lifecycle
-gate. Closing that gate closes the original nine-unit weight, reaching 74 of
+Unsigned local merge `7dacce7`, full merged-checkout verification and clean
+feature removal close the original nine-unit weight, reaching 74 of
 100 relative planning units, with 26 remaining: cleanup 11, foreign provider
 10 and milestone closure 5. These are scope weights, not measured expenditure.
 

@@ -314,8 +314,8 @@ general cleanup remains later work. The complete synchronous transforming-hook
 checkpoint `ad2b0d4` retains implementation, specification, tests, reviews and
 full verification. Its [evidence](effect-ash/synchronous-hooks-evidence.md)
 records scoped registration, ordered callbacks and bounded normal release.
-Local integration remains the final checkpoint lifecycle gate; it does not
-make the feature current on `main`.
+Unsigned local merge `7dacce7` and its full merged-checkout verification close
+the checkpoint lifecycle. They do not make the feature current on `main`.
 
 ## Supporting evidence
 
