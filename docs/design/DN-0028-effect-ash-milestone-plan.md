@@ -683,26 +683,23 @@ exits still reject. Reliable cleanup requires a separate accepted proposal;
 suspension, parallel fan-out, async completion and a universal event bus remain
 excluded.
 
-### Reliable cleanup — forecast 11 units
+### Reliable cleanup — verified product, integration pending; 11 units
 
 Prerequisite: integrated synchronous hooks.
 
-[CP-0019](../proposals/CP-0019-reliable-cleanup.md) is accepted: scoped cleanup
-actions, owned abandonment and typed reporting through ordinary effects, with
-no separate exception mechanism. The user accepted its full exit, failure,
-captured-handler and evidence contract and separately authorized implementation
-under [TASK-0029](../tasks/TASK-0029-implement-reliable-cleanup.md).
-The 11-unit weight remains open until the complete verified checkpoint closes.
+Checkpoint `a23ff85` retains the implemented scoped actions, owned abandonment,
+structural close order and typed reporting through ordinary effects, together
+with specification, tests, review and full verification. The
+[cleanup evidence](effect-ash/reliable-cleanup-evidence.md) records 2,545
+top-level tests plus eight subprocess checks and all acceptance obligations.
+The completed proposal and task are retained in that checkpoint's Git history;
+they do not remain active artifacts.
 
-The proposal must enumerate all admitted exits, cleanup owners, LIFO or
-dependency order, exactly-once behavior, destructor effects, handler unwind,
-checked discard, subscriber failure, partial acquisition, partial cleanup, and
-cleanup-failure ownership and combination. Runtime cleanup is not presumed
-atomic or retryable.
-
-Evidence needs an explicit exit matrix, order trace, nested obligations,
-failure during cleanup, retained capture, deep stack-safe teardown, and proof
-that unsupported exits remain rejected.
+Unsigned local integration, merged verification and feature-worktree cleanup
+remain required. The 11-unit weight stays open until those lifecycle gates close.
+Runtime cleanup is not presumed atomic, retryable, terminating or a guarantee
+of successful native release. Foreign partial acquisition and release failures
+remain provider-specific work for the next separately authorized slice.
 
 ### Narrow checked foreign provider — forecast 10 units
 

@@ -1,7 +1,7 @@
 # Reliable cleanup evidence
 
 This informative report records the verified reliable-cleanup implementation on
-`codex/reliable-cleanup`, not current `main` semantics or completed milestone
+checkpoint `a23ff85`, not current `main` semantics or completed milestone
 integration. Syntax is retained at `390708e`; typed normal completion at
 `1aabffe`. The complete owned-abandonment and reporting contract has passed
 product verification. The [branch specification](../../../spec/README.md)
