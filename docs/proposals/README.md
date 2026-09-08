@@ -25,4 +25,5 @@ No proposed change is currently awaiting a decision.
 
 - [CP-0019: Reliable Cleanup](CP-0019-reliable-cleanup.md) — accepted scoped
   actions, cleanup-capable checked discard, structural close order and ordinary
-  typed failure reporting. Implementation awaits separate authorization.
+  typed failure reporting. Authorized implementation is tracked by
+  [TASK-0029](../tasks/TASK-0029-implement-reliable-cleanup.md).

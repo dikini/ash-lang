@@ -690,8 +690,9 @@ Prerequisite: integrated synchronous hooks.
 [CP-0019](../proposals/CP-0019-reliable-cleanup.md) is accepted: scoped cleanup
 actions, owned abandonment and typed reporting through ordinary effects, with
 no separate exception mechanism. The user accepted its full exit, failure,
-captured-handler and evidence contract. Implementation awaits separate
-authorization; no cleanup task has started and the 11-unit weight remains open.
+captured-handler and evidence contract and separately authorized implementation
+under [TASK-0029](../tasks/TASK-0029-implement-reliable-cleanup.md).
+The 11-unit weight remains open until the complete verified checkpoint closes.
 
 The proposal must enumerate all admitted exits, cleanup owners, LIFO or
 dependency order, exactly-once behavior, destructor effects, handler unwind,

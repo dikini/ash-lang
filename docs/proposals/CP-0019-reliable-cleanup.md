@@ -13,8 +13,9 @@
 > This proposal is accepted but is not current Ash. The user accepted the full
 > semantic contract and required evidence, including cleanup through ordinary
 > effects and checked `discard`, with no separate exception mechanism.
-> Implementation still requires separate authorization. No specification or
-> product code is changed by this document.
+> The user separately authorized implementation under
+> [TASK-0029](../tasks/TASK-0029-implement-reliable-cleanup.md). This document
+> remains transition authority, not a claim that cleanup is implemented.
 
 ## Current behavior
 
@@ -448,10 +449,10 @@ measures its actual scans and retained fields.
 Before implementation, independent semantic and ownership/resource reviews
 must close this complete contract. Return a missing rule to this proposal;
 do not silently broaden captured-handler support or narrow a required positive
-case in product code. After implementation authorization, create one task and
-its temporary plan.
+case in product code. Authorized implementation is tracked by
+[TASK-0029](../tasks/TASK-0029-implement-reliable-cleanup.md) and its temporary plan.
 The original 11-unit forecast remains a relative scope estimate, not an
-authorization or measured budget. No implementation plan is started here.
+authorization or measured budget. The task owns execution planning.
 
 ## Design review status
 
@@ -465,5 +466,5 @@ diff checks pass.
 
 These are design and documentation reviews, not execution evidence. The
 proposed example and CLEAN-01 through CLEAN-11 remain implementation obligations.
-The user accepted the full proposal. An implementation task remains subject to
-separate authorization.
+The user accepted the full proposal and separately authorized implementation
+under [TASK-0029](../tasks/TASK-0029-implement-reliable-cleanup.md).
