@@ -310,10 +310,12 @@ choices. The completed
 implements inferred request obligations and consuming abandonment, with its
 reviews and full verification retained. The locally integrated safe-resource
 checkpoint adds stored resource dependencies and normal scope-owned release;
-general cleanup remains later work. [CP-0018](../proposals/CP-0018-synchronous-typed-hooks.md)
-records the accepted synchronous transforming-hook contract. Authorized
-implementation is tracked by [TASK-0028](../tasks/TASK-0028-implement-synchronous-hooks.md);
-it is not a completed product checkpoint.
+general cleanup remains later work. The complete synchronous transforming-hook
+checkpoint `ad2b0d4` retains implementation, specification, tests, reviews and
+full verification. Its [evidence](effect-ash/synchronous-hooks-evidence.md)
+records scoped registration, ordered callbacks and bounded normal release.
+Local integration remains the final checkpoint lifecycle gate; it does not
+make the feature current on `main`.
 
 ## Supporting evidence
 

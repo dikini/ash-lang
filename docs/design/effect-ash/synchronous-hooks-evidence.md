@@ -1,8 +1,8 @@
 # Synchronous hook implementation evidence
 
-This informative report records the verified implementation of accepted
-[CP-0018](../../proposals/CP-0018-synchronous-typed-hooks.md), tracked by
-[TASK-0028](../../tasks/TASK-0028-implement-synchronous-hooks.md). It does not
+This informative report records the verified implementation of historical
+`CP-0018`, tracked by historical `TASK-0028`. Both transition artifacts and the
+task-owned plan are retained in product checkpoint `ad2b0d4`. This report does not
 define language behavior. The complete hook contract passes its final reviews
 and verification; local integration remains a separate lifecycle step.
 The branch specification remains prospective until integration into `main`.
@@ -15,7 +15,9 @@ roots. The registration proof increment retains structure and completion
 checking after independent semantic and Rust/resource reviews and final parent
 verification in unsigned checkpoint `07bb726e`. The final runtime, interaction
 corpus and specification now pass independent reviews and full verification.
-Their complete product checkpoint precedes transition cleanup.
+Unsigned product checkpoint `ad2b0d4` retains that complete implementation,
+specification, tests, review and verification. The finished proposal, task and
+execution plan are removed after that checkpoint; Git preserves them.
 No integration merge, push or tag has occurred for this feature.
 
 At `07bb726e`, both public Effect validators run registration proof before unconditionally
