@@ -35,10 +35,10 @@ lint with explicit unchanged-baseline findings, relative-link/anchor checks and
 
 ## 3. Main integration gate
 
-Require explicit unsigned local main-merge approval. Preserve all six existing
+The user requested a signed local main merge. Preserve all six existing
 main documentation paths, including untracked TASK-0024, using the approved
 temporary shelving/restoration procedure. Preserve main's committed README.
-Use an explicit unsigned merge; never reset, overwrite or commit unrelated work.
+Use an explicit signed merge; never reset, overwrite or commit unrelated work.
 Verify the merged main code and restored user changes. Tag and push only if
 separately authorized.
 

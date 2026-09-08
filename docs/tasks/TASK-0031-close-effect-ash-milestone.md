@@ -35,6 +35,9 @@ artifacts only when the complete milestone is current on main.
   implemented `Cleanup`; corrected from the existing validation contract.
   Stale completed-slice summaries were also corrected.
 - Main approval and preservation of its uncommitted documentation are pending.
+- The user subsequently requested a signed main merge. Preserve the existing
+  documentation through temporary shelving/restoration; ordinary commits remain
+  unsigned, and tag/push authorization is not included.
 - Independent documentation review approved the pre-integration corrections
   and inventoried the post-main status updates. Changed-document lint has no
   new findings; all 96 relative file links resolve. Full `cargo xtask verify`
