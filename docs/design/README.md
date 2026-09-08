@@ -90,21 +90,24 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 ### Effects and dynamic composition
 
+- [Milestone closure evidence](effect-ash/milestone-closure-evidence.md) —
+  combined conformance, downstream-pressure and simplification audit; final
+  verification and main integration remain gated.
 - [Narrow checked foreign-provider evidence](effect-ash/narrow-foreign-provider-evidence.md)
   — native allocation, checked access, scoped ownership, fail-stop resource
   reports, independent validation and verified local integration.
 - [Reliable cleanup evidence](effect-ash/reliable-cleanup-evidence.md) —
-  verified normal-completion checkpoint and explicit outstanding abandonment
-  and full-contract evidence.
+  verified normal completion, owned abandonment, typed reporting and local
+  integration of the complete cleanup contract.
 - [Synchronous hook evidence](effect-ash/synchronous-hooks-evidence.md) —
-  verified root checkpoint and explicit outstanding registration, runtime and
-  full-contract evidence.
+  verified hook roots, registration, runtime composition and local integration
+  of the complete hook contract.
 - [Safe resource scope evidence](effect-ash/resource-scope-evidence.md) —
   cell ownership, dependency, activation, runtime and full verification
   evidence; the product checkpoint is complete and locally integrated with
   merged-checkout verification.
-- [Scoped exact evidence](effect-ash/scoped-evidence-evidence.md) — in-progress
-  pure relation, method/selection interactions, and retained review corrections.
+- [Scoped exact evidence](effect-ash/scoped-evidence-evidence.md) — verified
+  pure relation, method/selection interactions, authentication and local merge.
 - [Local `newtype` evidence](effect-ash/local-newtype-evidence.md) — lexical
   identity, escape, scope authentication, erasure, and exact resources for the
   local nominal checkpoint.

@@ -264,10 +264,14 @@ Pure Core families. Effect Core adds only these operation-family nodes:
 - `Resource(acquisition, handle, initializer, body)` retains the authenticated
   builtin relation, evaluates the initializer outside the acquired scope, and
   removes exactly its `Ops<R>` instance from the body row before union with
-  the initializer row; and
+  the initializer row;
 - `Registration(handler, callback, body)` retains the non-interpreting
   registration owner and its relation to the evaluated callback and generated
-  handler.
+  handler; and
+- `Cleanup(callback, action, body)` retains the preceding `Unit -> Unit`
+  callback binding and its authenticated ordinary invocation. The scope owns
+  completion, preserves the body's result, and carries the least outward row
+  for body execution and required invocation.
 
 Effect and operation declarations remain authenticated registry facts. Core
 contains no provider choice or machine-global registration registry. Lowering does not

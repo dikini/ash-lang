@@ -54,7 +54,10 @@ Safe resource scope is also complete and verified on the integration branch; its
 and simplification review, including the verified unsigned local merge.
 Synchronous hooks are now also locally integrated and verified; their
 [evidence](effect-ash/synchronous-hooks-evidence.md) records the complete
-checkpoint and lifecycle closure. Reliable cleanup remains a separate proposal.
+checkpoint and lifecycle closure. Reliable cleanup and the narrow native-buffer
+provider are also locally integrated and verified. Final milestone closure is
+active under [TASK-0031](../tasks/TASK-0031-close-effect-ash-milestone.md);
+completion still requires the separately approved main integration below.
 
 ## Completion condition
 
