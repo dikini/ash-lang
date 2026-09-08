@@ -687,6 +687,12 @@ excluded.
 
 Prerequisite: integrated synchronous hooks.
 
+[CP-0019](../proposals/CP-0019-reliable-cleanup.md) proposes scoped cleanup
+actions, owned abandonment and typed reporting through ordinary effects. The
+user agreed to avoid a separate exception mechanism. The proposal's detailed
+exit, failure and captured-handler rules await acceptance; no cleanup task or
+implementation is authorized, and the 11-unit weight remains open.
+
 The proposal must enumerate all admitted exits, cleanup owners, LIFO or
 dependency order, exactly-once behavior, destructor effects, handler unwind,
 checked discard, subscriber failure, partial acquisition, partial cleanup, and
