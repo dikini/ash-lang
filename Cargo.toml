@@ -10,7 +10,7 @@ publish = false
 num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] }
 
 [workspace]
-members = ["xtask"]
+members = ["native-buffer", "xtask"]
 resolver = "3"
 
 [lints]

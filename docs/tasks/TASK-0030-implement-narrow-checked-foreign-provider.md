@@ -29,8 +29,15 @@ high reasoning for authority, ownership and independent review; do not exceed hi
 ## Progress
 
 - Accepted proposal retained at `e20b3ad`.
-- Isolated worktree created; baseline workspace tests running.
-- Compiler boundary mapping underway; implementation has not started.
+- Isolated worktree created; baseline workspace tests passed: 2,545 top-level
+  tests plus 8 subprocess tests, log `/tmp/ash-foreign-baseline-20260908.log`.
+- Compiler boundary mapping complete. The isolated native owner has 6 passing
+  package tests, strict Clippy, rustdoc and ARM64 compile checks. Independent
+  contract and high-reasoning unsafe/code-quality reviews passed after correcting
+  one README admission-status overstatement. It is not yet connected to the evaluator.
+- Contextual designator projection and cell-only import rejection are implemented;
+  19 focused syntax/module tests plus the import-authority negative pass.
+  Three execution tests remain red at `module.unknown-builtin`.
 - All FOREIGN-01 through FOREIGN-10 evidence obligations remain open.
 
 ## Verification

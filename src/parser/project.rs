@@ -634,7 +634,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
         NodeKind::ResourceExpression => {
             shape.token(&TokenKind::Resource)?;
             shape.token_matching(
-                |kind| matches!(kind, TokenKind::Identifier(name) if name == "cell"),
+                |kind| matches!(kind, TokenKind::Identifier(name) if name == "cell" || name == "native_buffer"),
             )?;
             shape.token(&TokenKind::Less)?;
             shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
@@ -1786,6 +1786,19 @@ fn project_expression(
                     let handle =
                         project_binder(only_child_of_kind(node, NodeKind::Binder)?, tokens)?;
                     tasks.push(ExpressionTask::FinishResource {
+                        kind: match direct_tokens(node, tokens).find_map(|token| {
+                            if let TokenKind::Identifier(name) = &token.kind {
+                                Some(name.as_str())
+                            } else {
+                                None
+                            }
+                        }) {
+                            Some("cell") => crate::surface::SurfaceResourceKind::Cell,
+                            Some("native_buffer") => {
+                                crate::surface::SurfaceResourceKind::NativeBuffer
+                            }
+                            _ => return malformed(InternalReason::UnexpectedShape),
+                        },
                         identity: surface_name(identity)?,
                         handle: handle.name,
                         span: node_span(source, node, tokens)?,
@@ -2026,6 +2039,7 @@ fn project_expression(
                 });
             }
             ExpressionTask::FinishResource {
+                kind,
                 identity,
                 handle,
                 span,
@@ -2037,6 +2051,7 @@ fn project_expression(
                 projected.push(SurfaceExpr {
                     kind: SurfaceExprKind::Resource(Box::new(
                         crate::surface::SurfaceResourceExpr {
+                            kind,
                             identity,
                             handle,
                             initializer,
@@ -2264,6 +2279,7 @@ enum ExpressionTask<'a> {
     FinishResume(Span),
     FinishCleanup(Span),
     FinishResource {
+        kind: crate::surface::SurfaceResourceKind,
         identity: SurfaceName,
         handle: SurfaceName,
         span: Span,

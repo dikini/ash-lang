@@ -36,9 +36,11 @@ Files: new `native-buffer/Cargo.toml`, `native-buffer/src/lib.rs`,
 
 ## 2. Compiler admission and independent validation
 
-Files: `src/syntax_resource.rs`, `src/module.rs`, `src/resolve.rs`,
+Files: `src/parser/grammar.rs`, `src/parser/project.rs`, `src/surface.rs`,
+`src/module.rs`, `src/resolve.rs`,
 `src/resolved.rs`, `src/elaborate.rs`, `src/evidence.rs`, `src/interface.rs`,
-`src/core/effect.rs`, `src/core/dialect.rs`, `src/core/validate.rs` and their
+`src/evidence_validation.rs`, `src/core/effect.rs`, `src/core/dialect.rs`,
+`src/core/validate.rs` and their
 existing traversal/transform helpers as required by compiler errors.
 Tests: new `tests/native_buffer_syntax.rs`, `tests/native_buffer_typing.rs`,
 `tests/native_buffer_modules.rs`, `tests/native_buffer_core.rs` and existing
@@ -47,6 +49,9 @@ internal builtin-summary tamper tests.
 1. Add failing syntax/import/type tests for the exact CP API and nested Outcome.
 2. Extend fixed resource selection and builtin identities; retain direct import
    provenance and sealed provider authority. Reuse dependency and row machinery.
+   Authenticate the exact ordinary Outcome/Error constructors while keeping
+   Handle's hidden constructor forbidden. Do not generalize the cell's blanket
+   constructor rejection to the new builtin.
 3. Generate length/read/write provider methods through existing evidence paths.
    Wrap only the acquisition result type; keep body type and scope obligations
    distinct. Preserve cell types, syntax and behavior.
@@ -119,5 +124,24 @@ Files: `spec/syntax.md`, `spec/name-resolution.md`, `spec/static-semantics.md`,
 
 ## Execution record
 
-- Setup: isolated worktree created; baseline workspace test process started.
-- Steps 1–5: pending. No FOREIGN evidence row is complete yet.
+- Setup: isolated worktree created; baseline workspace tests passed (2,545
+  top-level plus 8 subprocess tests; `/tmp/ash-foreign-baseline-20260908.log`).
+  Independent compiler mapping confirmed the existing Resource carrier can be
+  reused; it identified selective Outcome/Error constructor authentication as
+  distinct from the opaque Handle policy. Plan paths updated accordingly.
+- Step 1: native owner implemented; 6 package tests, strict Clippy, rustdoc and
+  ARM64 package compile checks pass. Independent contract and high-reasoning
+  unsafe/code-quality reviews passed; evaluator
+  integration remains open. Step 2 syntax test observed red
+  at the missing `native_buffer` designator; contextual name and malformed input
+  tests already pass (`/tmp/ash-native-syntax-red-20260908.log`).
+  Parser/projection now retain the closed designator; 4 new and 4 predecessor
+  syntax tests pass. Three runtime tests now fail at `module.unknown-builtin`
+  (`/tmp/ash-native-runtime-loader-red-20260908.log`). Exercising the proposal
+  example exposed unparenthesized payload patterns; corrected them to existing
+  Ash constructor-pattern syntax without changing its contract.
+  A red test also caught old resolution treating the new designator as a cell
+  under a cell-only import. The guard now fails closed pending native builtin
+  admission; that negative passes. Total focused frontend checks: 19 syntax/
+  module tests plus this authority negative.
+- Steps 2–5: implementation pending. No FOREIGN evidence row is complete yet.

@@ -103,8 +103,8 @@ import @builtin.native_buffer as Buffer
 main : Unit -> Buffer.Outcome<Buffer.Outcome<Int>>
 main () = resource native_buffer<R> b = 4 {
 match Buffer.write (b, 0, 42) {
-Buffer.Success () => Buffer.read (b, 0)
-Buffer.Failure error => Buffer.Failure error
+Buffer.Success(()) => Buffer.read (b, 0)
+Buffer.Failure(error) => Buffer.Failure error
 }
 }
 ```

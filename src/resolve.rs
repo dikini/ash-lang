@@ -9425,11 +9425,21 @@ impl Resolver {
                 });
                 tasks.push(ResolveTask::VisitBlock(&hook.body));
             }
-            SurfaceExprKind::Resource(_) if self.builtin_cell.is_none() => {
+            SurfaceExprKind::Resource(source)
+                if source.kind != crate::surface::SurfaceResourceKind::Cell
+                    || self.builtin_cell.is_none() =>
+            {
                 return Err(error(
                     ResolveReason::ResourceBuiltinRequired,
                     expression.span,
-                    "resource acquisition requires a direct import of @builtin.cell",
+                    match source.kind {
+                        crate::surface::SurfaceResourceKind::Cell => {
+                            "resource acquisition requires a direct import of @builtin.cell"
+                        }
+                        crate::surface::SurfaceResourceKind::NativeBuffer => {
+                            "resource acquisition requires a direct import of @builtin.native_buffer"
+                        }
+                    },
                 ));
             }
             SurfaceExprKind::Resource(source) => {
