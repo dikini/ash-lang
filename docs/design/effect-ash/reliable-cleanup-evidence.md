@@ -213,8 +213,8 @@ Clippy and warnings-denied rustdoc passed without warnings or errors. The log is
 record, not a portable source artifact. The retained tests are linked above.
 Independent semantic, Rust/resource and final bounded correction reviews passed.
 Markdown lint with MD013 disabled, whitespace, local-link and manual
-notation/authority checks passed. Local integration and lifecycle closure remain
-separate gates.
+notation/authority checks passed. Local integration and lifecycle closure are
+recorded below.
 
 ## Acceptance evidence
 
@@ -239,7 +239,30 @@ The retained tests and independent reviews cover recursively owned abandonment,
 structural draining, effectful discard rows and per-action surviving interpreter
 checks. They retain outside-owner and running-drain negatives, distinguish
 structural order from acquisition time, and cover generic/imported handler
-coincidence. Product acceptance is verified; local integration remains open.
+coincidence. Product acceptance and local integration are verified.
+
+## Local integration and lifecycle closure
+
+Unsigned merge `4f5ac63` retains product checkpoint `a23ff85` and transition
+cleanup `1975150` on `integration/effect-ash-foundations`. Its parents are
+`699395f` and `1975150`; its product tree exactly matches the verified feature
+tip. Fresh merged-checkout `CARGO_INCREMENTAL=0 cargo xtask verify` exited 0:
+the same 2,545 top-level tests and eight subprocess checks passed, including
+all 32 architecture checks, strict Clippy and warnings-denied rustdoc. The
+execution log is `/tmp/ash-cleanup-merged-verify-20260908.log`.
+
+The feature tip `19751501dca7a598ed63937323f5315bc9cfceda` was proved an ancestor
+of the retaining integration branch, and both worktrees were clean before
+removal. The registered `.worktree/reliable-cleanup` checkout and local
+`codex/reliable-cleanup` branch were removed through Git. Their tracked work is
+retained in integration history; ignored build output is reproducible. The
+remaining milestone checkout is `.worktree/effect-ash-foundations`.
+
+The unrelated changes on `main` and both pinned documentation worktrees were
+preserved. No main merge, push, tag or signing-configuration change was made.
+This closes the cleanup slice's 11 relative planning units: 85 of 100 are
+closed, leaving foreign provider work (10) and milestone closure (5). These
+weights are not measured token or time expenditure.
 
 ## Downstream limits to retain
 

@@ -673,17 +673,18 @@ records generic coincidence, callback-added dependencies, completion,
 independent Core authority and exact runtime ownership bounds.
 
 Unsigned local merge `7dacce7`, full merged-checkout verification and clean
-feature removal close the original nine-unit weight, reaching 74 of
-100 relative planning units, with 26 remaining: cleanup 11, foreign provider
-10 and milestone closure 5. These are scope weights, not measured expenditure.
+feature removal closed the original nine-unit weight, reaching 74 of
+100 relative planning units at that checkpoint. Its remaining 26 units were
+cleanup 11, foreign provider 10 and milestone closure 5. These are scope weights,
+not measured expenditure; the cleanup closure below advances the total.
 
 The implementation uses ordinary handlers and callable values with one private
 registration owner, not a second runtime or registry. Unsupported live-obligation
-exits still reject. Reliable cleanup requires a separate accepted proposal;
+exits still rejected at that checkpoint. Reliable cleanup followed separately;
 suspension, parallel fan-out, async completion and a universal event bus remain
 excluded.
 
-### Reliable cleanup — verified product, integration pending; 11 units
+### Reliable cleanup — closed; 11 units
 
 Prerequisite: integrated synchronous hooks.
 
@@ -695,8 +696,10 @@ top-level tests plus eight subprocess checks and all acceptance obligations.
 The completed proposal and task are retained in that checkpoint's Git history;
 they do not remain active artifacts.
 
-Unsigned local integration, merged verification and feature-worktree cleanup
-remain required. The 11-unit weight stays open until those lifecycle gates close.
+Unsigned local merge `4f5ac63`, full merged verification and clean feature
+worktree/branch removal close the 11-unit weight. The milestone now has 85 of
+100 relative planning units closed, with 15 remaining: foreign provider 10 and
+milestone closure 5. No main merge, push or tag is included in this closure.
 Runtime cleanup is not presumed atomic, retryable, terminating or a guarantee
 of successful native release. Foreign partial acquisition and release failures
 remain provider-specific work for the next separately authorized slice.
