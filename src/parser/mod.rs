@@ -104,6 +104,8 @@ pub enum NodeKind {
     HookExpression,
     /// A registration with an exact target, primary transformer, and block body.
     RegistrationExpression,
+    /// A cleanup action expression followed by its owned block body.
+    CleanupExpression,
     /// A primary-precedence operation request.
     PerformExpression,
     /// One effect-qualified operation reference.
@@ -746,6 +748,7 @@ fn token_name(kind: &TokenKind) -> &'static str {
         TokenKind::Resource => "resource",
         TokenKind::Hook => "hook",
         TokenKind::Register => "register",
+        TokenKind::Cleanup => "cleanup",
         TokenKind::Discard => "discard",
         TokenKind::Import => "import",
         TokenKind::As => "as",

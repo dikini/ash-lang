@@ -61,6 +61,15 @@ fn check_graph(graph: &ModuleGraph) -> Vec<CheckedModule> {
     try_check_graph(graph).expect("the successful effect module should check")
 }
 
+fn assert_unit_entry(entry: &Path) {
+    let observation = ash::driver::run_path(ash::driver::RunConfiguration {
+        entry: entry.to_owned(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect("owned imported captures should link, validate, and execute");
+    assert_eq!(observation.value_display(), "()");
+}
+
 fn try_check_graph(graph: &ModuleGraph) -> Result<Vec<CheckedModule>, ash::elaborate::TypeError> {
     let mut checked = Vec::new();
     for module in graph.modules() {
@@ -105,15 +114,13 @@ fn registration_factory_dependencies_survive_opaque_facade_exports() {
 }
 
 #[test]
-fn imported_registration_retains_unused_completion_owner() {
+fn imported_registration_is_closed_inside_the_selected_capture() {
     let tree = ModuleTree::create();
     tree.write("helper.ash", "pub effect Adjust {\npublish : Int -> Int\n}\npub effect Stop {\nstop : Unit -> Unit\n}\nidentity : Int -> Int\nidentity value = value\npub subscribe : (Unit -> Unit ! {Stop}) -> Unit ! {Adjust, Stop}\nsubscribe action = register Adjust identity {\naction ()\n}\n");
     let entry = tree.write("entry.ash", "import helper (Adjust, Stop, subscribe)\naction : Unit -> Unit ! {Stop}\naction ignored = perform Stop.stop ()\nmain : Unit -> Unit\nmain () = handle (hook Adjust {\nsubscribe action\n}) with Stop {\nstop ignored => discard\n}\n");
     let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
-    assert!(
-        matches!(try_check_graph(&graph), Err(ash::elaborate::TypeError::Source(error))
-        if error.reason == ash::elaborate::TypeReason::DiscardUnsafe)
-    );
+    check_graph(&graph);
+    assert_unit_entry(&entry);
 }
 
 #[test]
@@ -125,7 +132,7 @@ fn imported_handlers_are_selected_after_type_specialization() {
         "route ignored = handle ({\nlet _ = perform E<U>.ask ()\nlet _ = perform A.ask ()\nperform E<T>.ask ()\n}) with E<U> {\n",
         "ask ignored => {\nlet _ = perform B.ask ()\nresume ()\n}\n}\n",
     ));
-    for (argument, accepted) in [("(1, true)", true), ("(1, 1)", false)] {
+    for argument in ["(1, true)", "(1, 1)"] {
         let entry = tree.write("entry.ash", &(format!(
             "import helper (E, A, B, route)\ninvoke : Unit -> Unit ! {{A, B}}\ninvoke () = handle (route {argument}) with E<Int> {{\nask ignored => resume ()\n}}\nmain : Unit -> Unit\nmain () = handle (handle (invoke ()) with A {{\n",
         ) + concat!(
@@ -133,35 +140,18 @@ fn imported_handlers_are_selected_after_type_specialization() {
             "}) with B {\nask ignored => resume ()\n}\n",
         )));
         let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
-        let result = try_check_graph(&graph);
-        if accepted {
-            result.expect("distinct exact instances retain the earlier capture boundary");
-        } else {
-            assert!(
-                matches!(result, Err(ash::elaborate::TypeError::Source(ref error))
-                if error.reason == ash::elaborate::TypeReason::DiscardUnsafe),
-                "{result:?}"
-            );
-        }
+        check_graph(&graph);
+        assert_unit_entry(&entry);
     }
 }
 
 #[test]
 fn imported_residual_graphs_preserve_live_and_completed_clause_owners() {
     let tree = ModuleTree::create();
-    for (clause, accepted) in [
-        (
-            "let _ = perform A.ask ()\nlet _ = perform B.ask ()\nresume ()",
-            false,
-        ),
-        (
-            "let _ = perform A.ask ()\nlet _ = resume ()\nperform B.ask ()",
-            true,
-        ),
-        (
-            "let _ = perform B.ask ()\nlet _ = resume ()\nperform A.ask ()",
-            true,
-        ),
+    for clause in [
+        "let _ = perform A.ask ()\nlet _ = perform B.ask ()\nresume ()",
+        "let _ = perform A.ask ()\nlet _ = resume ()\nperform B.ask ()",
+        "let _ = perform B.ask ()\nlet _ = resume ()\nperform A.ask ()",
     ] {
         tree.write("helper.ash", &format!(
             "pub effect A {{\nask : Unit -> Unit\n}}\npub effect B {{\nask : Unit -> Unit\n}}\neffect C {{\nask : Unit -> Unit\n}}\n\
@@ -174,14 +164,8 @@ fn imported_residual_graphs_preserve_live_and_completed_clause_owners() {
             "}) with B {\nask ignored => resume ()\n}\n",
         ));
         let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
-        let result = try_check_graph(&graph);
-        if accepted {
-            result.expect("imported known suffix has no live owner");
-        } else {
-            assert!(
-                matches!(result, Err(ash::elaborate::TypeError::Source(error)) if error.reason == ash::elaborate::TypeReason::DiscardUnsafe)
-            );
-        }
+        check_graph(&graph);
+        assert_unit_entry(&entry);
     }
 }
 
@@ -189,9 +173,9 @@ fn imported_residual_graphs_preserve_live_and_completed_clause_owners() {
 fn imported_residual_returns_continue_into_the_callers_suffix() {
     let tree = ModuleTree::create();
     tree.write("helper.ash", "pub effect A {\nask : Unit -> Unit\n}\npub ask : Unit -> Unit ! {A}\nask () = perform A.ask ()\n");
-    for (tail, accepted) in [
-        ("let _ = perform B.ask ()\nresume ()", false),
-        ("let _ = resume ()\nperform B.ask ()", true),
+    for tail in [
+        "let _ = perform B.ask ()\nresume ()",
+        "let _ = resume ()\nperform B.ask ()",
     ] {
         let entry = tree.write("entry.ash", &format!(
             "import helper (A, ask)\neffect B {{\nask : Unit -> Unit\n}}\neffect C {{\nask : Unit -> Unit\n}}\n\
@@ -199,14 +183,8 @@ fn imported_residual_returns_continue_into_the_callers_suffix() {
              }}) with A {{\nask ignored => handle ({{\nlet _ = resume ()\nperform B.ask ()\n}}) with B {{\nask ignored => discard\n}}\n}}) with B {{\nask ignored => resume ()\n}}\n"
         ));
         let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
-        let result = try_check_graph(&graph);
-        if accepted {
-            result.expect("the caller completes its owner before B");
-        } else {
-            assert!(
-                matches!(result, Err(ash::elaborate::TypeError::Source(error)) if error.reason == ash::elaborate::TypeReason::DiscardUnsafe)
-            );
-        }
+        check_graph(&graph);
+        assert_unit_entry(&entry);
     }
 }
 
@@ -242,41 +220,13 @@ fn capture_summaries_cover_helpers_importing_only_effect_declarations() {
             "ask ignored => {\nlet _ = perform B.ask ()\nresume ()\n}\n}\n",
         ),
     );
-    for (callee, accepted) in [("ask", true), ("bad", false)] {
+    for callee in ["ask", "bad"] {
         let entry = tree.write("entry.ash", &format!(
             "import effects (B)\nimport helpers (ask, bad)\nmain : Unit -> Unit\nmain () = handle ({callee} ()) with B {{\nask ignored => discard\n}}\n"
         ));
         let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
-        let mut checked: Vec<CheckedModule> = Vec::new();
-        let mut failure = None;
-        for module in graph.modules() {
-            let dependencies: Vec<_> = module
-                .dependencies()
-                .iter()
-                .map(|edge| {
-                    let dependency = checked
-                        .iter()
-                        .find(|module| module.module() == edge.target())
-                        .unwrap();
-                    DependencyExports::new(edge, dependency.exports()).unwrap()
-                })
-                .collect();
-            let resolved = resolve_module(module, &dependencies).unwrap();
-            match check_module(resolved) {
-                Ok(module) => checked.push(module),
-                Err(error) => {
-                    failure = Some(error);
-                    break;
-                }
-            }
-        }
-        if accepted {
-            assert!(failure.is_none(), "{failure:?}");
-        } else {
-            assert!(
-                matches!(failure, Some(ash::elaborate::TypeError::Source(error)) if error.reason == ash::elaborate::TypeReason::DiscardUnsafe)
-            );
-        }
+        check_graph(&graph);
+        assert_unit_entry(&entry);
     }
 }
 

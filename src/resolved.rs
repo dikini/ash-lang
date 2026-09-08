@@ -2904,6 +2904,7 @@ impl ResolvedModuleProgram {
                 | ResolvedExprKind::Function(_)
                 | ResolvedExprKind::Match(_)
                 | ResolvedExprKind::Resource(_)
+                | ResolvedExprKind::Cleanup(_)
                 | ResolvedExprKind::Perform(_)
                 | ResolvedExprKind::Handle(_)
                 | ResolvedExprKind::Resume(_)
@@ -18346,6 +18347,10 @@ pub(crate) fn lexical_method_capture_occurrences<'a>(
                 pending.push(&resource.body);
             }
             ResolvedExprKind::Perform(request) => pending.push(&request.operand),
+            ResolvedExprKind::Cleanup(cleanup) => {
+                pending.push(&cleanup.body);
+                pending.push(&cleanup.action);
+            }
             ResolvedExprKind::Handle(handler) => {
                 budget.charge(handler.clauses.len())?;
                 pending
@@ -18419,6 +18424,8 @@ pub struct ResolvedExpr {
 /// The closed resolved expression family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResolvedExprKind {
+    /// A cleanup owner around a body and its ordinary completion call.
+    Cleanup(Box<ResolvedCleanupExpr>),
     /// An arbitrary-precision integer literal.
     Integer(Integer),
     /// A Boolean literal.
@@ -18455,6 +18462,15 @@ pub enum ResolvedExprKind {
     Discard(ResolvedDiscardExpr),
     /// A scoped cell acquisition with a rigid, nongeneralized identity.
     Resource(Box<ResolvedResourceExpr>),
+}
+
+/// The callback binding is also the unique lexical cleanup owner.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedCleanupExpr {
+    pub callback: BinderId,
+    pub action_span: Span,
+    pub body: Box<ResolvedExpr>,
+    pub action: Box<ResolvedExpr>,
 }
 
 /// The fixed relation owned by a cell acquisition, never by source evidence.
@@ -19007,6 +19023,10 @@ fn discard_resolved_body_work(
                 discard_binder(resource.handle);
                 expressions.push(*resource.initializer);
                 expressions.push(*resource.body);
+            }
+            ResolvedExprKind::Cleanup(cleanup) => {
+                expressions.push(*cleanup.body);
+                expressions.push(*cleanup.action);
             }
             ResolvedExprKind::Resume(resume) => expressions.push(*resume.value),
             ResolvedExprKind::Discard(_) => {}

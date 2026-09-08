@@ -18,6 +18,10 @@ use crate::{
 
 #[derive(Debug)]
 enum Expr {
+    Cleanup {
+        body: usize,
+        action: usize,
+    },
     Scalar,
     Slot,
     Unknown,
@@ -146,6 +150,10 @@ impl Expr {
                 arguments: ids(arguments, budget)?,
                 scalar: *scalar,
                 type_application: *type_application,
+            },
+            Self::Cleanup { body, action } => Self::Cleanup {
+                body: body + offset,
+                action: action + offset,
             },
             Self::Bind {
                 binder,
@@ -284,6 +292,7 @@ impl Graph {
                     children.try_reserve(1).map_err(|_| Failure::Resource)?;
                     children.push(*function);
                 }
+                Expr::Cleanup { body, action } => children = copy_slice(&[*body, *action], budget)?,
                 Expr::Bind {
                     binder,
                     initializer,
@@ -991,6 +1000,10 @@ impl Graph {
         let node = nodes.get(id).ok_or(Failure::Invalid)?;
         let source = self.sources[id];
         Ok(match operation(&node.kind) {
+            Some(EffectOperation::Cleanup(scope)) => Expr::Cleanup {
+                body: index(scope.body),
+                action: index(scope.action),
+            },
             Some(EffectOperation::Registration(scope)) => Expr::Alias(index(scope.body)),
             Some(EffectOperation::Resource(resource)) => Expr::Resource {
                 handle: self.symbol(symbols, resource.handle.id(), source, budget)?,
@@ -2159,9 +2172,13 @@ impl<'a> Analysis<'a> {
                     self.link(slot, *value, context, budget)?;
                 }
             }
-            Expr::Function { captures, .. } => {
+            Expr::Function { captures, body, .. } => {
                 for capture in captures {
-                    self.slot(*capture, context, budget)?;
+                    let source = self.slot(*capture, context, budget)?;
+                    if let Some(root) = self.roots.get(body).copied() {
+                        let target = self.slot(*capture, root, budget)?;
+                        self.edge(target, source, budget)?;
+                    }
                 }
                 self.atom(slot, Atom::Closure(expression, context), budget)?;
             }
@@ -2286,6 +2303,15 @@ impl<'a> Analysis<'a> {
                             }
                         }
                         _ => {}
+                    }
+                }
+            }
+            Expr::Cleanup { body, action } => {
+                let body = self.slot(*body, context, budget)?;
+                if !self.slots[body].atoms.is_empty() {
+                    let action = self.slot(*action, context, budget)?;
+                    if !self.slots[action].atoms.is_empty() {
+                        self.edge(slot, body, budget)?;
                     }
                 }
             }

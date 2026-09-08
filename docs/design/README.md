@@ -90,6 +90,9 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 ### Effects and dynamic composition
 
+- [Reliable cleanup evidence](effect-ash/reliable-cleanup-evidence.md) —
+  verified normal-completion checkpoint and explicit outstanding abandonment
+  and full-contract evidence.
 - [Synchronous hook evidence](effect-ash/synchronous-hooks-evidence.md) —
   verified root checkpoint and explicit outstanding registration, runtime and
   full-contract evidence.

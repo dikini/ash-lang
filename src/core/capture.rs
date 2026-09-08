@@ -22,7 +22,7 @@ use crate::{
     resolved::BinderId,
     source::Span,
     types::{
-        EffectInstance, Type, TypeVariableId, TypeWorkBudget, clone_type_with_budget,
+        EffectInstance, EffectRow, Type, TypeVariableId, TypeWorkBudget, clone_type_with_budget,
         discard_type_iteratively, same_type_with_budget,
     },
 };
@@ -336,6 +336,7 @@ impl Value {
 struct Request {
     // None denotes admitted requests from an opaque open row.
     effect: Option<Arc<EffectInstance>>,
+    opaque_row: Option<Arc<EffectRow>>,
     ambiguous_instance: bool,
     source: Span,
     operation: Option<crate::types::OperationId>,
@@ -345,6 +346,7 @@ impl Request {
     fn unknown(source: Span) -> Self {
         Self {
             effect: None,
+            opaque_row: None,
             ambiguous_instance: false,
             source,
             operation: None,
@@ -368,6 +370,7 @@ impl Request {
         charge(budget, 1)?;
         Ok(Self {
             effect: self.effect.as_ref().map(Arc::clone),
+            opaque_row: self.opaque_row.as_ref().map(Arc::clone),
             ambiguous_instance: self.ambiguous_instance,
             source: self.source,
             operation: self.operation,
@@ -421,9 +424,20 @@ pub(crate) struct UnsafeDiscard {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CompletionOwner {
+    Cleanup(Span),
     Clause(Span),
-    Resource(Span),
-    Registration(Span),
+}
+
+#[derive(Debug)]
+pub(crate) struct CleanupRequirement {
+    pub(crate) discard: usize,
+    pub(crate) local: bool,
+    pub(crate) code: usize,
+    pub(crate) source: Span,
+    pub(crate) context: usize,
+    pub(crate) expected: EffectRow,
+    pub(crate) row: EffectRow,
+    pub(crate) retained: Vec<EffectInstance>,
 }
 
 #[derive(Clone, Copy)]
@@ -465,9 +479,21 @@ impl Drop for MethodAdapter {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Failure {
     Resource,
-    Escape { source: Span, acquisition: Span },
+    Escape {
+        source: Span,
+        acquisition: Span,
+    },
     Invalid,
     Unsafe(UnsafeDiscard),
+    CleanupContext {
+        discard: Span,
+        action: Span,
+        handler: Span,
+    },
+    CleanupRow {
+        node: usize,
+        source: Span,
+    },
 }
 
 fn charge(budget: &mut TypeWorkBudget, count: usize) -> Result<(), Failure> {
@@ -911,10 +937,44 @@ fn compile<F: CoreOperationFamily>(
                         .try_reserve(1)
                         .map_err(|_| Failure::Resource)?;
                     let ty = graph.types.0.len();
-                    graph.types.0.push(
-                        clone_type_with_budget(&nodes[actual].ty, budget)
+                    let callable = match (&nodes[actual].ty, F::effect_row(&node.effects).tail()) {
+                        (Type::EffectfulFunction(domain, codomain), Some(reported))
+                            if codomain
+                                .effects()
+                                .tail()
+                                .is_some_and(|tail| tail.variable() == reported.variable()) =>
+                        {
+                            let tail = codomain.effects().tail().ok_or(Failure::Invalid)?;
+                            let row = crate::types::rebuild_effect_row_with_budget(
+                                codomain.effects().known(),
+                                Some(tail.variable()),
+                                tail.lacks().iter().chain(reported.lacks()),
+                                clone_type_with_budget,
+                                budget,
+                            )
+                            .map_err(|_| Failure::Resource)?;
+                            let mut owned = TypeArguments(Vec::new());
+                            charge(budget, 2)?;
+                            owned.0.try_reserve(2).map_err(|_| Failure::Resource)?;
+                            owned.0.push(
+                                clone_type_with_budget(domain, budget)
+                                    .map_err(|_| Failure::Resource)?,
+                            );
+                            owned.0.push(
+                                clone_type_with_budget(codomain.value(), budget)
+                                    .map_err(|_| Failure::Resource)?,
+                            );
+                            let value = owned.0.pop().ok_or(Failure::Invalid)?;
+                            let domain = owned.0.pop().ok_or(Failure::Invalid)?;
+                            Type::function_computation(
+                                domain,
+                                crate::types::ComputationType::new(value, row),
+                            )
+                        }
+                        _ => clone_type_with_budget(&nodes[actual].ty, budget)
                             .map_err(|_| Failure::Resource)?,
-                    );
+                    };
+                    graph.types.0.push(callable);
                     graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
                     sequence.push(graph.code.len());
                     data.position(graph.code.len(), id, budget)?;
@@ -927,6 +987,30 @@ fn compile<F: CoreOperationFamily>(
                 Control::Sequence(sequence)
             }
             _ => match operation(&node.kind) {
+                Some(EffectOperation::Cleanup(scope)) => {
+                    let row_type = graph.types.0.len();
+                    charge(budget, 3)?;
+                    graph
+                        .types
+                        .0
+                        .try_reserve(1)
+                        .map_err(|_| Failure::Resource)?;
+                    let effects = crate::types::clone_effect_row_with_budget(
+                        F::effect_row(&nodes[index(scope.action)].effects),
+                        budget,
+                    )
+                    .map_err(|_| Failure::Resource)?;
+                    graph.types.0.push(Type::function_computation(
+                        Type::Unit,
+                        crate::types::ComputationType::new(Type::Unit, effects),
+                    ));
+                    Control::Cleanup {
+                        body: index(scope.body) + 1,
+                        action: index(scope.action) + 1,
+                        row_type,
+                        source: scope.span,
+                    }
+                }
                 Some(EffectOperation::Registration(scope)) => Control::Registration {
                     body: index(scope.body) + 1,
                     source: scope.span,
@@ -975,6 +1059,28 @@ fn compile<F: CoreOperationFamily>(
                         .get(&(discard.handler(), discard.owner()))
                         .ok_or(Failure::Invalid)?,
                     node: id,
+                    local: true,
+                    row_type: {
+                        charge(budget, 3)?;
+                        graph
+                            .types
+                            .0
+                            .try_reserve(1)
+                            .map_err(|_| Failure::Resource)?;
+                        let row_type = graph.types.0.len();
+                        graph.types.0.push(Type::function_computation(
+                            Type::Unit,
+                            crate::types::ComputationType::new(
+                                Type::Unit,
+                                crate::types::clone_effect_row_with_budget(
+                                    F::effect_row(&node.effects),
+                                    budget,
+                                )
+                                .map_err(|_| Failure::Resource)?,
+                            ),
+                        ));
+                        row_type
+                    },
                     source,
                 },
                 Some(EffectOperation::Handler(handler)) => {
@@ -1072,6 +1178,48 @@ fn check_nodes_with_methods<F: CoreOperationFamily>(
     adapters: &[MethodAdapter],
     budget: &mut TypeWorkBudget,
 ) -> Result<Vec<CaptureValueSummary>, Failure> {
+    analyze_nodes_with_methods(
+        nodes, globals, imports, operation, methods, adapters, None, budget,
+    )
+}
+
+pub(crate) fn infer_cleanup_rows<F: CoreOperationFamily>(
+    builder: &CoreBuilder<F>,
+    globals: &[(BinderId, NodeId)],
+    imports: &[(BinderId, &CaptureValueSummary)],
+    operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    methods: &[MethodUse],
+    adapters: &[MethodAdapter],
+    budget: &mut TypeWorkBudget,
+) -> Result<Vec<CleanupRequirement>, Failure> {
+    let mut rows = Vec::new();
+    analyze_nodes_with_methods(
+        &builder.nodes,
+        globals,
+        imports,
+        operation,
+        methods,
+        adapters,
+        Some(&mut rows),
+        budget,
+    )?;
+    Ok(rows)
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the existing complete graph inputs are shared by safety and optional cleanup-row queries"
+)]
+fn analyze_nodes_with_methods<F: CoreOperationFamily>(
+    nodes: &[StoredNode<F>],
+    globals: &[(BinderId, NodeId)],
+    imports: &[(BinderId, &CaptureValueSummary)],
+    operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    methods: &[MethodUse],
+    adapters: &[MethodAdapter],
+    rows: Option<&mut Vec<CleanupRequirement>>,
+    budget: &mut TypeWorkBudget,
+) -> Result<Vec<CaptureValueSummary>, Failure> {
     charge(budget, nodes.len() + globals.len())?;
     let mut bindings = HashMap::new();
     bindings
@@ -1083,6 +1231,9 @@ fn check_nodes_with_methods<F: CoreOperationFamily>(
     let mut resource_scope = None;
     let mut parameters = HashMap::new();
     for (id, node) in nodes.iter().enumerate() {
+        if let Some(EffectOperation::Cleanup(scope)) = operation(&node.kind) {
+            resource_scope.get_or_insert(scope.span);
+        }
         if let Some(EffectOperation::Resource(resource)) = operation(&node.kind) {
             resource_scope.get_or_insert(resource.acquisition.span);
         }
@@ -1224,6 +1375,9 @@ fn check_nodes_with_methods<F: CoreOperationFamily>(
                     _ => {}
                 },
                 _ => match operation(&node.kind) {
+                    Some(EffectOperation::Cleanup(scope)) => {
+                        value = values[index(scope.body)].copy(budget)?;
+                    }
                     Some(EffectOperation::Registration(scope)) => {
                         value = values[index(scope.body)].copy(budget)?;
                     }
@@ -1258,7 +1412,20 @@ fn check_nodes_with_methods<F: CoreOperationFamily>(
     )?;
     let (mut graph, roots) = compile(nodes, &values, &imported, operation, &mut data, budget)?;
     graph.data = Some(Arc::new(data));
-    check_control_roots(&graph, roots, budget)?;
+    if let Some(rows) = rows {
+        let mut analysis = Analysis::new(&graph, budget)?;
+        analysis.infer_cleanup_rows = true;
+        analysis.check(&roots, budget)?;
+        *rows = std::mem::take(&mut analysis.cleanup_rows);
+    } else {
+        if has_discard {
+            let mut analysis = Analysis::new(&graph, budget)?;
+            analysis.infer_cleanup_rows = true;
+            analysis.check(&roots, budget)?;
+            check_cleanup_rows(nodes, operation, &analysis.cleanup_rows, budget)?;
+        }
+        check_control_roots(&graph, roots, budget)?;
+    }
     let graph = Arc::new(graph);
     let mut summaries = Vec::new();
     summaries
@@ -1273,6 +1440,76 @@ fn check_nodes_with_methods<F: CoreOperationFamily>(
     Ok(summaries)
 }
 
+fn check_cleanup_rows<F: CoreOperationFamily>(
+    nodes: &[StoredNode<F>],
+    operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    requirements: &[CleanupRequirement],
+    budget: &mut TypeWorkBudget,
+) -> Result<(), Failure> {
+    let mut checked = std::collections::HashSet::new();
+    for requirement in requirements {
+        charge(budget, 1)?;
+        let key = (requirement.code, requirement.context);
+        if checked.contains(&key) {
+            continue;
+        }
+        checked.try_reserve(1).map_err(|_| Failure::Resource)?;
+        checked.insert(key);
+        let mut row = EffectRow::empty();
+        for action in requirements {
+            charge(budget, 1)?;
+            if (action.code, action.context) != key {
+                continue;
+            }
+            let mut next = crate::types::clone_effect_row_with_budget(&action.row, budget)
+                .map_err(|_| Failure::Resource)?;
+            for effect in &action.retained {
+                match next
+                    .remove_exact_with_budget(effect, budget)
+                    .map_err(|_| Failure::Resource)?
+                {
+                    Ok(rest) => next = rest,
+                    Err(crate::types::EffectRowError::Missing) => {}
+                    Err(_) => return Err(Failure::Invalid),
+                }
+            }
+            row = row
+                .union_with_budget(&next, budget)
+                .map_err(|_| Failure::Resource)?
+                .map_err(|_| Failure::Invalid)?;
+        }
+        if !crate::types::same_effect_rows_with_budget(&row, &requirement.expected, budget)
+            .map_err(|_| Failure::Resource)?
+        {
+            return Err(Failure::CleanupRow {
+                node: requirement.discard,
+                source: requirement.source,
+            });
+        }
+    }
+    for (id, node) in nodes.iter().enumerate() {
+        charge(budget, 1)?;
+        if !matches!(operation(&node.kind), Some(EffectOperation::Discard(_))) {
+            continue;
+        }
+        let mut lexical = false;
+        for requirement in requirements {
+            charge(budget, 1)?;
+            if requirement.local && requirement.discard == id && requirement.context == 0 {
+                lexical = true;
+                break;
+            }
+        }
+        if !lexical && !F::effect_row(&node.effects).is_empty() {
+            return Err(Failure::CleanupRow {
+                node: id,
+                source: node.origin.as_ref().ok_or(Failure::Invalid)?.primary_span(),
+            });
+        }
+    }
+    Ok(())
+}
+
 // Keep solver storage out of the graph-construction caller's stack frame.
 fn check_control_roots(
     graph: &SummaryGraph,
@@ -1283,7 +1520,10 @@ fn check_control_roots(
     if graph.code.iter().any(|code| {
         matches!(
             code,
-            Control::Discard { .. } | Control::Resource { .. } | Control::Registration { .. }
+            Control::Discard { .. }
+                | Control::Resource { .. }
+                | Control::Registration { .. }
+                | Control::Cleanup { .. }
         )
     }) {
         let mut queries = Vec::new();
@@ -1440,10 +1680,8 @@ mod tests {
     }
 
     #[test]
-    fn final_core_recomputes_capture_after_same_typed_call_target_tampering() {
-        use super::super::{
-            EffectExprKind, validate::ValidationReason, validate_effect, variable::VariableNode,
-        };
+    fn final_core_recomputes_owned_capture_after_same_typed_call_target_change() {
+        use super::super::{EffectExprKind, validate_effect, variable::VariableNode};
         let (core, source, _, _) = checked_core();
         validate_effect(core, &[&source]).expect("honest checked helper is safe");
         let (mut core, source, good, bad) = checked_core();
@@ -1456,16 +1694,17 @@ mod tests {
             }
         }
         assert_eq!(replacements, 1);
-        let error = validate_effect(core, &[&source])
-            .expect_err("same type cannot conceal a changed capture summary");
-        assert_eq!(error.reason(), ValidationReason::DiscardUnsafe);
+        let validated = validate_effect(core, &[&source])
+            .expect("the changed target's captured clause is structurally owned");
+        assert!(matches!(
+            crate::eval::evaluate_effect(&validated).unwrap().value,
+            crate::eval::Value::Unit
+        ));
     }
 
     #[test]
     fn final_core_recomputes_registration_callback_completion_from_actual_target() {
-        use super::super::{
-            EffectExprKind, validate::ValidationReason, validate_effect, variable::VariableNode,
-        };
+        use super::super::{EffectExprKind, validate_effect, variable::VariableNode};
         let source = "effect Adjust {\npublish : Int -> Int\n}\neffect Stop {\nstop : Int -> Int\n}\ngood : Int -> Int ! {Stop}\ngood value = value\nbad : Int -> Int ! {Stop}\nbad value = perform Stop.stop value\nmain : Unit -> Int\nmain () = handle (hook Adjust {\nregister Adjust good {\nperform Adjust.publish 42\n}\n}) with Stop {\nstop value => {\nlet done = discard\nvalue\n}\n}\n";
         let (core, file, good, _) = checked_core_text(source);
         super::super::validate::registration_proof_check(
@@ -1527,19 +1766,19 @@ mod tests {
                 }
             }
             assert_eq!(replacements, 1);
+            super::super::validate::registration_proof_check(
+                &core,
+                &[&file],
+                &[(good.module().unwrap(), file.id())],
+            )
+            .expect("the callback's publication and registration are owned by this capture");
+            let validated = validate_effect(core, &[&file]).unwrap();
             assert_eq!(
-                super::super::validate::registration_proof_check(
-                    &core,
-                    &[&file],
-                    &[(good.module().unwrap(), file.id())]
-                )
-                .unwrap_err()
-                .reason(),
-                ValidationReason::DiscardUnsafe
-            );
-            assert_eq!(
-                validate_effect(core, &[&file]).unwrap_err().reason(),
-                ValidationReason::DiscardUnsafe
+                crate::eval::evaluate_effect(&validated)
+                    .unwrap()
+                    .value
+                    .to_string(),
+                "42"
             );
         }
     }
@@ -1553,10 +1792,10 @@ mod tests {
             resolve::resolve_module,
             resolved::ResolvedDefinitionKind,
         };
-        for body in [
+        for (case, body) in [
             "handle (perform A.ask ()) with A {\nask ignored => {\nlet _ = handle ({\nlet _ = perform B.ask ()\nresume ()\n}) with B {\nask ignored => discard\n}\n()\n}\n}",
             "handle (handle (handle (perform C.ask ()) with C {\nask ignored => {\nlet _ = perform A.ask ()\nlet _ = perform B.ask ()\nresume ()\n}\n}) with A {\nask ignored => handle ({\nlet _ = resume ()\nperform B.ask ()\n}) with B {\nask ignored => discard\n}\n}) with B {\nask ignored => resume ()\n}",
-        ] {
+        ].into_iter().enumerate() {
             let text = format!(
                 "effect A {{\nask : Unit -> Unit\n}}\neffect B {{\nask : Unit -> Unit\n}}\neffect C {{\nask : Unit -> Unit\n}}\nmain : Unit -> Unit\nmain () = {body}\n"
             );
@@ -1581,27 +1820,25 @@ mod tests {
                 .synthesize(expression, &TypeContext::new())
                 .expect("ordinary typing precedes capture proof");
             let core = elaborator.finish(typed.node).unwrap();
-            let error = validate_effect(core, &[module.source()])
-                .expect_err("raw Core cannot bypass capture proof");
-            assert_eq!(error.reason(), ValidationReason::DiscardUnsafe);
+            let result = validate_effect(core, &[module.source()]);
+            if case == 0 {
+                assert_eq!(result.expect_err("outside live clause remains protected").reason(), ValidationReason::DiscardUnsafe);
+            } else {
+                let validated = result.expect("restored clauses contained in the selected capture are owned");
+                assert!(matches!(crate::eval::evaluate_effect(&validated).unwrap().value, crate::eval::Value::Unit));
+            }
         }
     }
 
     #[test]
     fn raw_core_preserves_the_selected_capture_prefix() {
         use super::super::{
-            EffectExprKind, ValidationReason, binding::BindingNode, effect::DiscardNode,
-            validate_effect, variable::TypedBinder,
+            EffectExprKind, binding::BindingNode, effect::DiscardNode, validate_effect,
+            variable::TypedBinder,
         };
-        for (fixture, safe) in [
-            (
-                include_str!("../../tests/fixtures/effects/capture-prefix-before.ash"),
-                true,
-            ),
-            (
-                include_str!("../../tests/fixtures/effects/capture-prefix-after.ash"),
-                false,
-            ),
+        for fixture in [
+            include_str!("../../tests/fixtures/effects/capture-prefix-before.ash"),
+            include_str!("../../tests/fixtures/effects/capture-prefix-after.ash"),
         ] {
             // Publish only a resume-only program, then introduce discard in
             // actual Core. No source capture claim can authorize this check.
@@ -1650,25 +1887,23 @@ mod tests {
                     tail,
                 )),
             ));
-            let result = validate_effect(core, &[&source]);
-            if safe {
-                result.expect("historical live owners are outside the selected suffix");
-            } else {
-                assert_eq!(
-                    result.unwrap_err().reason(),
-                    ValidationReason::DiscardUnsafe
-                );
-            }
+            let validated = validate_effect(core, &[&source]).expect(
+                "prefix clauses are either consumed outside or owned inside the selected capture",
+            );
+            assert!(matches!(
+                crate::eval::evaluate_effect(&validated).unwrap().value,
+                crate::eval::Value::Unit
+            ));
         }
     }
 
     #[test]
     fn linked_core_reselects_handlers_when_type_instances_coincide() {
         use super::super::{
-            EffectExprKind, ValidationReason, binding::BindingNode, effect::DiscardNode,
-            validate_effect_modules, variable::TypedBinder,
+            EffectExprKind, binding::BindingNode, effect::DiscardNode, validate_effect_modules,
+            variable::TypedBinder,
         };
-        for (argument, safe) in [("(1, true)", true), ("(1, 1)", false)] {
+        for argument in ["(1, true)", "(1, 1)"] {
             let text = format!(
                 "effect E<T> {{\nask : Unit -> Unit\n}}\neffect A {{\nask : Unit -> Unit\n}}\neffect B {{\nask : Unit -> Unit\n}}\n\
                  route<T, U> : (T, U) -> Unit ! {{A, B, E<T>}}\nroute ignored = handle ({{\nlet _ = perform E<U>.ask ()\nlet _ = perform A.ask ()\nperform E<T>.ask ()\n}}) with E<U> {{\nask ignored => {{\nlet _ = perform B.ask ()\nresume ()\n}}\n}}\n\
@@ -1717,17 +1952,12 @@ mod tests {
                 )),
             ));
             let module = core.registry.effects().first().unwrap().id.module();
-            let result = validate_effect_modules(core, &[&source], &[(module, source.id())]);
-            if safe {
-                result.expect(
-                    "distinct specialized handlers keep the earlier request outside capture",
-                );
-            } else {
-                assert_eq!(
-                    result.unwrap_err().reason(),
-                    ValidationReason::DiscardUnsafe
-                );
-            }
+            let validated = validate_effect_modules(core, &[&source], &[(module, source.id())])
+                .expect("coincident specialized handlers add only structurally owned clauses");
+            assert!(matches!(
+                crate::eval::evaluate_effect(&validated).unwrap().value,
+                crate::eval::Value::Unit
+            ));
         }
     }
 

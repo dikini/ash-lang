@@ -220,18 +220,13 @@ fn row_relay_preserves_payload_and_scope_completion_obligations() {
             "import @builtin.cell as Cell\neffect Stop {{\nstop : Unit -> Int\n}}\nrelay<E : EffectRow> : (Unit -> Int ! {{| E}}) -> Int ! {{| E}}\nrelay action = action ()\nmain : Unit -> Int\nmain () = handle (resource cell<R> c = 21 {{\nlet stop : Unit -> Int ! {{Stop}} = fn(ignored) {{\nperform Stop.stop ()\n}}\nrelay stop\n}}) with Stop {{\nstop ignored => {{\n{completion}\n}}\n}}\n"
         );
         let tree = Tree::new();
-        assert_check(
-            tree.check(&source),
-            if discard { Some("DiscardUnsafe") } else { None },
-        );
-        if !discard {
-            let result = ash::driver::run_path(ash::driver::RunConfiguration {
-                entry: tree.0.join("entry.ash"),
-                roots: ModuleRoots::empty(),
-            })
-            .unwrap();
-            assert_eq!(result.value().to_string(), "42");
-        }
+        tree.check(&source).unwrap();
+        let result = ash::driver::run_path(ash::driver::RunConfiguration {
+            entry: tree.0.join("entry.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap();
+        assert_eq!(result.value().to_string(), "42");
     }
 }
 
@@ -449,13 +444,8 @@ fn outward_copied_payload_and_still_live_outer_dependency_remain_admitted() {
 }
 
 #[test]
-fn discard_cannot_abandon_an_acquired_resource_scope() {
-    let error = Tree::new().check("import @builtin.cell as Cell\neffect Stop {\nstop : Unit -> Unit\n}\nmain : Unit -> Unit\nmain () = handle (resource cell<R> c = 41 {\nperform Stop.stop ()\n}) with Stop {\nstop ignored => discard\n}\n").unwrap_err();
-    assert!(error.contains("DiscardUnsafe"), "{error}");
-    assert!(
-        error.contains("this resource still requires scope completion"),
-        "{error}"
-    );
+fn discard_closes_its_owned_acquired_resource_scope() {
+    Tree::new().check("import @builtin.cell as Cell\neffect Stop {\nstop : Unit -> Unit\n}\nmain : Unit -> Unit\nmain () = handle (resource cell<R> c = 41 {\nperform Stop.stop ()\n}) with Stop {\nstop ignored => discard\n}\n").unwrap();
 }
 
 #[test]
@@ -588,9 +578,9 @@ fn capture_control_selects_the_requested_operation_not_every_effect_clause() {
 }
 
 #[test]
-fn returned_generic_callable_preserves_resource_free_discard_obligations() {
-    for safe in [true, false] {
-        let body = if safe {
+fn returned_generic_callable_closes_owned_resource_free_captures() {
+    for direct in [true, false] {
+        let body = if direct {
             "perform B.ask ()"
         } else {
             "handle (perform A.ask ()) with A {\nask ignored => {\nlet _ = perform B.ask ()\nresume ()\n}\n}"
@@ -599,18 +589,13 @@ fn returned_generic_callable_preserves_resource_free_discard_obligations() {
             "effect A {{\nask : Unit -> Unit\n}}\neffect B {{\nask : Unit -> Unit\n}}\nidentity<F> : F -> F\nidentity value = value\nask : Unit -> Unit ! {{B}}\nask () = {body}\nmain : Unit -> Int\nmain () = handle ({{\nlet action = identity ask\nlet _ = action ()\n0\n}}) with B {{\nask ignored => {{\nlet _ = discard\n42\n}}\n}}\n"
         );
         let tree = Tree::new();
-        if safe {
-            tree.check(&source).unwrap();
-            let observation = ash::driver::run_path(ash::driver::RunConfiguration {
-                entry: tree.0.join("entry.ash"),
-                roots: ModuleRoots::empty(),
-            })
-            .unwrap();
-            assert_eq!(observation.value_display(), "42");
-        } else {
-            let error = tree.check(&source).unwrap_err();
-            assert!(error.contains("DiscardUnsafe"), "{error}");
-        }
+        tree.check(&source).unwrap();
+        let observation = ash::driver::run_path(ash::driver::RunConfiguration {
+            entry: tree.0.join("entry.ash"),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap();
+        assert_eq!(observation.value_display(), "42");
     }
 }
 

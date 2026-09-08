@@ -59,8 +59,18 @@ fn typing_reason(source: &str) -> TypeReason {
     }
 }
 
+fn assert_owned_discard_runs(source: &str) {
+    let fixture = TempModule::write(source);
+    let observation = ash::driver::run_path(ash::driver::RunConfiguration {
+        entry: fixture.0.clone(),
+        roots: ModuleRoots::empty(),
+    })
+    .expect("structurally owned clause captures may be discarded");
+    assert_eq!(observation.value_display(), "()");
+}
+
 #[test]
-fn discard_rejects_direct_and_helper_requests_crossing_a_live_owner() {
+fn discard_closes_direct_and_helper_requests_crossing_an_owned_clause() {
     for request in ["perform B.ask ()", "ask ()"] {
         let source = format!(
             "effect A {{\nask : Unit -> Unit\n}}\neffect B {{\nask : Unit -> Unit\n}}\n\
@@ -68,26 +78,19 @@ fn discard_rejects_direct_and_helper_requests_crossing_a_live_owner() {
              main : Unit -> Unit\nmain () = handle (handle (perform A.ask ()) with A {{\n\
              ask ignored => {{\nlet _ = {request}\nresume ()\n}}\n}}) with B {{\nask ignored => discard\n}}\n"
         );
-        let TypeError::Source(error) = typing_error(&source) else {
-            panic!("expected capture diagnostic")
-        };
-        assert_eq!(error.reason, TypeReason::DiscardUnsafe);
-        assert!(
-            error.related.len() >= 2,
-            "request and live owner causes: {error:?}"
-        );
+        assert_owned_discard_runs(&source);
     }
 }
 
 #[test]
-fn discard_instantiates_a_polymorphic_helpers_internal_obligation() {
+fn discard_instantiates_a_polymorphic_helpers_owned_clause() {
     let source = concat!(
         "effect A {\nask : Unit -> Unit\n}\neffect B<T : Type> {\nask : T -> Unit\n}\n",
         "ask<T : Type> : T -> Unit ! {B<T>}\nask value = handle (perform A.ask ()) with A {\n",
         "ask ignored => {\nlet _ = perform B<T>.ask value\nresume ()\n}\n}\n",
         "main : Unit -> Unit\nmain () = handle (ask 1) with B<Int> {\nask ignored => discard\n}\n",
     );
-    assert_eq!(typing_reason(source), TypeReason::DiscardUnsafe);
+    assert_owned_discard_runs(source);
 }
 
 #[test]
@@ -103,15 +106,12 @@ fn ordinary_typing_rejects_ambiguous_row_only_specialization_before_capture() {
 }
 
 #[test]
-fn discard_rejects_same_effect_outward_delegation() {
-    assert_eq!(
-        typing_reason(concat!(
-            "effect B {\nask : Unit -> Unit\n}\nmain : Unit -> Unit\n",
-            "main () = handle (handle (perform B.ask ()) with B {\nask ignored => {\n",
-            "let _ = perform B.ask ()\nresume ()\n}\n}) with B {\nask ignored => discard\n}\n",
-        )),
-        TypeReason::DiscardUnsafe
-    );
+fn discard_closes_owned_clause_after_same_effect_outward_delegation() {
+    assert_owned_discard_runs(concat!(
+        "effect B {\nask : Unit -> Unit\n}\nmain : Unit -> Unit\n",
+        "main () = handle (handle (perform B.ask ()) with B {\nask ignored => {\n",
+        "let _ = perform B.ask ()\nresume ()\n}\n}) with B {\nask ignored => discard\n}\n",
+    ));
 }
 
 #[test]
@@ -127,17 +127,14 @@ fn discard_cannot_skip_an_outer_clauses_scheduled_completion() {
 }
 
 #[test]
-fn discard_checks_requests_in_a_restored_continuation() {
-    assert_eq!(
-        typing_reason(concat!(
-            "effect A {\nask : Unit -> Unit\n}\neffect B {\nask : Unit -> Unit\n}\neffect C {\nask : Unit -> Unit\n}\n",
-            "main : Unit -> Unit\nmain () = handle (handle (handle (perform C.ask ()) with C {\n",
-            "ask ignored => {\nlet _ = perform A.ask ()\nlet _ = perform B.ask ()\nresume ()\n}\n",
-            "}) with A {\nask ignored => handle ({\nlet _ = resume ()\nperform B.ask ()\n}) with B {\nask ignored => discard\n}\n",
-            "}) with B {\nask ignored => resume ()\n}\n",
-        )),
-        TypeReason::DiscardUnsafe
-    );
+fn discard_closes_owned_clause_in_a_restored_continuation() {
+    assert_owned_discard_runs(concat!(
+        "effect A {\nask : Unit -> Unit\n}\neffect B {\nask : Unit -> Unit\n}\neffect C {\nask : Unit -> Unit\n}\n",
+        "main : Unit -> Unit\nmain () = handle (handle (handle (perform C.ask ()) with C {\n",
+        "ask ignored => {\nlet _ = perform A.ask ()\nlet _ = perform B.ask ()\nresume ()\n}\n",
+        "}) with A {\nask ignored => handle ({\nlet _ = resume ()\nperform B.ask ()\n}) with B {\nask ignored => discard\n}\n",
+        "}) with B {\nask ignored => resume ()\n}\n",
+    ));
 }
 
 #[test]
@@ -165,7 +162,7 @@ fn unknown_higher_order_and_open_row_calls_block_discard_only() {
 }
 
 #[test]
-fn opaque_request_loop_exposes_a_live_owner_to_the_clients_discard() {
+fn opaque_request_loop_keeps_its_known_clause_inside_the_clients_capture() {
     let source = concat!(
         "effect H {\nask : Unit -> Unit\n}\neffect A {\nask : Unit -> Unit\n}\neffect B {\nask : Unit -> Unit\n}\n",
         "run : (Unit -> Unit ! {H}) -> Unit ! {A, B}\nrun action = handle (action ()) with H {\n",
@@ -173,7 +170,12 @@ fn opaque_request_loop_exposes_a_live_owner_to_the_clients_discard() {
         "guard : (Unit -> Unit ! {H}) -> Unit\nguard action = handle (handle (run action) with A {\nask ignored => resume ()\n}) with B {\nask ignored => discard\n}\n",
         "main : Unit -> Unit\nmain () = ()\n",
     );
-    assert_eq!(typing_reason(source), TypeReason::DiscardUnsafe);
+    assert_owned_discard_runs(source);
+    let exercised = source.replace(
+        "main () = ()",
+        "main () = guard (fn(ignored) {\nperform H.ask ()\n})",
+    );
+    assert_owned_discard_runs(&exercised);
 }
 
 #[test]
@@ -198,11 +200,11 @@ fn unknown_calls_retain_admitted_requests_after_resumption() {
 }
 
 #[test]
-fn recursive_activations_do_not_share_clause_consumption() {
+fn recursive_activations_keep_live_owned_clause_captures_discardable() {
     let source = recursive_activation_source(
         "let _ = match n == 2 {\ntrue => perform A.ask ()\nfalse => relay (n + 1)\n}\nlet _ = resume ()\nperform B.ask ()",
     );
-    assert_eq!(typing_reason(&source), TypeReason::DiscardUnsafe);
+    assert_owned_discard_runs(&source);
 }
 
 #[test]
@@ -223,11 +225,8 @@ fn recursive_activation_source(clause: &str) -> String {
 }
 
 #[test]
-fn nested_resumption_rejects_a_live_owner_in_the_selected_suffix() {
-    assert_eq!(
-        typing_reason(include_str!("fixtures/effects/capture-prefix-after.ash")),
-        TypeReason::DiscardUnsafe
-    );
+fn nested_resumption_closes_a_live_owned_clause_in_the_selected_suffix() {
+    assert_owned_discard_runs(include_str!("fixtures/effects/capture-prefix-after.ash"));
 }
 
 fn main_body(module: &ResolvedModule) -> &ResolvedExpr {

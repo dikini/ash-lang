@@ -32,6 +32,7 @@ pub(super) enum PrimaryForm {
     Discard,
     Hook,
     Registration,
+    Cleanup,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -152,6 +153,7 @@ const CURRENT_ASH_DIALECT: ParserDialect = ParserDialect {
             PrimaryForm::Discard,
             PrimaryForm::Hook,
             PrimaryForm::Registration,
+            PrimaryForm::Cleanup,
         ],
         infix: &[
             InfixDescriptor {
@@ -1656,6 +1658,21 @@ pub(super) fn registration_expression(parser: &mut Parser<'_>) {
     let _ = parser.bump();
     effect_instance(parser);
     expression::primary_expression(parser);
+    block(parser);
+    parser.leave_structure();
+    parser.finish();
+}
+
+pub(super) fn cleanup_expression(parser: &mut Parser<'_>) {
+    parser.start(NodeKind::CleanupExpression);
+    // Initializers can nest cleanup before entering any body block.
+    if !parser.enter_structure() {
+        parser.consume_rest();
+        parser.finish();
+        return;
+    }
+    let _ = parser.bump();
+    expression(parser);
     block(parser);
     parser.leave_structure();
     parser.finish();

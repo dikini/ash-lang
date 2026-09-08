@@ -576,25 +576,44 @@ clause boundary and returns the clause value to `outer`. There is no transition
 that clones a captured continuation or changes `consumed` back to `live`.
 
 `discard` consumes the matching live owner without restoring its captured
-segment. It has no operand. Checked discard leaves the clause continuation and
-its surrounding control intact, and returns unit at the discard expression:
+segment as executable body control. It has no operand. Checked discard retains
+the clause continuation and its surrounding control, closes owned abandoned
+scopes, then returns unit at the discard expression:
 
 ```sequent
 E-Discard :=
   split_owner(continuation, handler, owner) = clause_prefix, live(captured), outer
-  captured contains no other live clause capability, acquired cell or registration owner
+  closing = owned_close_control(captured)
+  ownership validation and fallible initial preparation succeed
   remaining = clause_prefix ++ CLAUSE(handler, owner, consumed) :: outer
   ===>
-  CONFIG(heap, environment, discard(handler, owner), continuation) -> CONFIG(heap, environment, (), remaining)
+  CONFIG(heap, environment, discard(handler, owner), continuation) -> CONFIG(heap, environment, (), closing ++ CLOSE :: remaining)
 ```
 
-The abandoned segment is disposed of without running suspended expressions,
-resuming with a dummy value, invoking cleanup, or terminating an enclosing
-handler. Its retained capture accounting is released exactly once. Consumed
-clause boundaries inside that segment add no live obligation. Preflight failure
-does not consume or partially release a capture. Disposal uses iterative work
-even for deeply nested captured control. After the remaining clause work,
-`E-Clause-Return` applies just as it does after resume.
+Here `owned_close_control` retains cell, registration and armed cleanup owners
+in structural innermost-to-outermost order. A contained live clause contributes
+its capture recursively at that clause's position and is consumed once;
+consumed clauses contribute no capture. Non-owning associations do not add
+owners. `CLOSE` denotes required completion of this close operation: after the
+last owner closes it returns `()` into the unchanged clause continuation.
+These are internal control descriptions, not source expressions.
+
+Closing does not resume abandoned expressions or clause suffixes, invoke pending
+callbacks from abandoned publications, or restore captured source handlers.
+It never resumes abandoned
+control with a dummy body result. Cells release their payloads; registrations
+remove their entries without invoking their transformers; cleanup owners
+invoke their actions through ordinary application before advancing outward.
+Still-enclosing builtin cells remain available until their own closing positions.
+
+Preflight validates and prepares the owned transfer before consuming the
+capability or releasing capture accounting. Initial failure leaves both
+unchanged. After source actions start, later internal failure does not roll
+back earlier effects, repeat actions or guarantee remaining invocations.
+Traversal and host disposal remain iterative for deeply nested captures.
+After closing and the remaining clause work, `E-Clause-Return` applies as after
+resume. A running action or unfinished `CLOSE` cannot itself be abandoned;
+outward requests may capture and resume it.
 
 Static checking and Effect Core validation make an unmatched request, a
 missing owner, a second completion, an unsafe discard, or an invalid capture
@@ -671,15 +690,15 @@ identity disagreement are internal failures, not source use-after-release.
 An outward resource-free request may capture a cell boundary. Capture moves
 the owned scope into the continuation; resume moves it back in its original
 order. Neither movement changes live-cell usage or duplicates a payload.
-Completion after resumption applies `E-Resource-Return` normally. Defensive
-discard checks retained live cells and clause capabilities before consuming
-any capture. Static checking additionally proves that discard skips no
-required resource completion outside the captured segment; execution does not
-rescan suspended source bodies to establish that proof.
+Completion after resumption applies `E-Resource-Return` normally. Checked
+discard closes cells inside its recursively owned capture using the same
+release transition, after validating the transfer. Static checking additionally
+proves that discard skips no required completion outside that owned closure;
+execution does not rescan suspended source bodies to establish that proof.
 
 Cell capacity counts live owned payloads, including captured scopes, rather
-than total acquisitions. Normal release makes capacity reusable; a later
-acquisition still receives a fresh key. Deep normal completion and internal
+than total acquisitions. Normal or abandoned release makes capacity reusable;
+a later acquisition still receives a fresh key. Deep normal completion and internal
 failure disposal release cells, captured control and environments iteratively.
 Internal disposal is not a source cleanup transition. Divergence remains
 divergence, and no abort, destructor callback, cancellation or foreign cleanup
@@ -742,10 +761,12 @@ publishing an activation. Stale or duplicated non-owning activation facts are
 rejected before invocation or mutation. The machine moves, rather than copies,
 owning registration frames.
 
-Checked discard cannot abandon a registration owner or bypass required
-completion outside its immediate capture. Subscriber-local discard remains
-valid when all surrounding owners and pending resumes still complete. Internal
-work, allocation or capacity failure disposes registrations, cells, environments
+Checked discard can close registration owners inside its owned capture,
+including recursively owned captures, without invoking abandoned publication
+callbacks. It cannot bypass required completion outside that closure.
+Subscriber-local discard remains valid when those outside owners and scheduled
+resumes still complete. Internal work, allocation or capacity failure disposes
+registrations, cells, environments
 and captured control iteratively. It runs no source cleanup or destructor
 callback and does not roll back earlier callback effects. Divergence promises
 no eventual deregistration.
@@ -756,6 +777,60 @@ and callback work. Added scans and retained relationships charge the existing
 evaluator work ledger. There is no machine-global registry, copied whole-chain
 snapshot, priority sort or second callback evaluator. Hook-free Pure execution
 allocates no registration owner or live-registration storage.
+
+## Scoped cleanup actions
+
+A cleanup expression evaluates its action once in the preceding environment.
+Only after this initialization and fallible acquisition preparation succeed
+does it acquire an invocation obligation and enter its body. Abandonment before
+that acquisition owns no invocation of the action. Copying the ordinary callable
+does not acquire another obligation.
+
+Normal completion saves the body value and invokes the retained action with
+`()`, using ordinary function application in the same evaluator. The action's
+`Unit` result is ignored; its completion returns the saved body value unchanged.
+An unused or pure body does not remove the acquired obligation. Nested actions
+complete in structural innermost-to-outermost order, while still-enclosing cell
+and registration owners remain available until their own closing positions.
+
+Capture and resume transfer the owner without invoking or duplicating its
+action. Starting an action makes it ineligible for another invocation, but
+retains its unfinished completion. Outward requests may capture and resume
+this running state; they may not abandon it. Actions may acquire and complete
+nested scopes through the same rules.
+
+An invocation attempt is not a proof of termination or successful native
+release. Internal exhaustion or termination provides no source-cleanup
+guarantee. Host teardown remains iterative, does not replay completed actions
+and does not roll back effects already performed.
+
+### Typed failure reporting
+
+Recoverable cleanup failure uses ordinary source effects and data. An explicit
+`CloseResult<E>` with alternatives `Closed` and `CloseFailed(E)` can feed a
+`reportClose` adapter: `Closed` returns unit; `CloseFailed(error)` performs
+`CleanupFailure<E>.report error`, whose result is unit. The adapter does not
+retry. These names denote source declarations, not privileged runtime forms.
+
+A surrounding collector retains `Report<A, E>`, containing the body value `A`
+and a `Failures<E>` list. On each report it resumes with `()`, then prepends
+that error to the returned list. This preserves emission order while allowing
+all remaining actions to finish. A collector that aborts by skipping a running
+action or close operation is not admitted.
+
+The body value may be `Outcome<T, P>`: its primary failure `P` is preserved
+separately from cleanup errors `E`. Success is preserved too; the first cleanup
+error is the primary cleanup failure, followed by later errors. With no cleanup
+errors, the collector retains the body outcome unchanged. Different cleanup
+error types require an explicit
+sum or independently collected report effects, not implicit boxing or a common
+error domain. Ignored failure constructors have no automatic reporting meaning.
+
+The [complete tool example](../docs/tools/ash.md) retains primary `7` and cleanup
+errors `22, 11`, yielding `72211`. The corresponding normal return retains
+`Success 42` with the same error order. Reporting does not relax stored-payload
+dependency checks, promise native release, or convert internal failure into a
+source outcome.
 
 ## Observation
 
@@ -768,8 +843,8 @@ the active rendering path renders as `<cycle>`. Removing a location from the
 active path after its subtree means shared acyclic data renders in full at each
 occurrence. Function values render as `<function>`.
 
-Successful observation retains no live resource scope, registration owner or
-captured continuation.
+Successful observation retains no live resource scope, registration owner,
+cleanup obligation or captured continuation.
 The observed heap may retain copied values and unused non-owning handle
 entries, but owns no released cell payload.
 

@@ -161,7 +161,7 @@ fn discard_core_checks_owners_types_rows_and_exact_once_before_safety() {
         ("wrong-handler", Some(ValidationReason::Resume)),
         ("available", Some(ValidationReason::Resume)),
         ("wrong-type", Some(ValidationReason::Resume)),
-        ("wrong-row", Some(ValidationReason::Resume)),
+        ("wrong-row", Some(ValidationReason::EffectRow)),
         ("double", Some(ValidationReason::Resume)),
         ("outside", Some(ValidationReason::Resume)),
         ("closure", Some(ValidationReason::Resume)),
@@ -374,6 +374,7 @@ fn checked_source_lowers_to_explicit_effect_core() {
                 EffectOperation::Registration(_) => {
                     panic!("resume-only fixture cannot contain registration")
                 }
+                EffectOperation::Cleanup(_) => panic!("resume-only fixture cannot contain cleanup"),
             }
         }
         pending.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));

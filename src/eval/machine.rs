@@ -426,6 +426,14 @@ impl Error for RuntimeFailure {}
 
 #[derive(Debug)]
 enum Frame {
+    CloseCompletion,
+    CleanupBoundary {
+        action: NodeId,
+        environment: Environment,
+    },
+    CleanupCompletion {
+        saved: Value,
+    },
     // This private, non-Clone frame is the release authority. Acquisition is
     // its only constructor in execution; capture/resume move it, and normal
     // return consumes it. Keys in handler/clause frames are non-owning facts.
@@ -553,9 +561,15 @@ impl Transition {
     }
 }
 
+/// Shared test observation also retains the prefix of a failed run.
+#[cfg(test)]
+type WorkTrace = Arc<std::sync::Mutex<Vec<(NodeId, usize)>>>;
+
 /// The retained explicit evaluator machine shared by pure and effect Core.
 #[derive(Debug)]
 pub struct Machine {
+    cleanup_limit: usize,
+    live_cleanups: usize,
     program: ExecutableProgram,
     control: Option<Control>,
     frames: Vec<Frame>,
@@ -573,13 +587,15 @@ pub struct Machine {
     live_registrations: usize,
     next_registration: u32,
     #[cfg(test)]
-    work_trace: Option<Vec<(NodeId, usize)>>,
+    work_trace: Option<WorkTrace>,
 }
 
 impl Machine {
     fn new(program: &ValidatedProgram) -> Self {
         Self {
             program: ExecutableProgram::Pure(program.shared()),
+            cleanup_limit: 0,
+            live_cleanups: 0,
             control: Some(Control::Evaluate(program.root(), Environment::new())),
             frames: Vec::new(),
             max_frame_depth: 0,
@@ -610,6 +626,8 @@ impl Machine {
     ) -> Self {
         Self {
             program: ExecutableProgram::Effect(program.shared()),
+            cleanup_limit: MAX_CAPTURED_FRAME_CELLS,
+            live_cleanups: 0,
             control: Some(Control::Evaluate(program.root(), Environment::new())),
             frames: Vec::new(),
             max_frame_depth: 0,
@@ -640,9 +658,19 @@ impl Machine {
                 Control::Evaluate(node, environment) => {
                     #[cfg(test)]
                     if let Some(trace) = &mut self.work_trace {
-                        trace.push((node, self.instantiation_work.used()));
+                        trace
+                            .lock()
+                            .unwrap()
+                            .push((node, self.instantiation_work.used()));
                     }
                     self.trace.push(TraceEvent::Enter(node));
+                    if let Some(ExecutableNode::Effect(expression)) = self.program.node(node)
+                        && let EffectExprKind::Operation(EffectOperation::Cleanup(scope)) =
+                            expression.kind
+                    {
+                        self.acquire_cleanup(scope, environment)?;
+                        continue;
+                    }
                     if self.registration(node).is_some() {
                         self.acquire_registration(node, environment)?;
                         continue;
@@ -657,6 +685,7 @@ impl Machine {
                 Control::Return(value) => {
                     let Some(frame) = self.frames.pop() else {
                         if self.live_resources != 0
+                            || self.live_cleanups != 0
                             || self.live_registrations != 0
                             || self.captured_cells != 0
                         {
@@ -681,7 +710,7 @@ impl Machine {
                             #[cfg(test)]
                             runtime_work: self.instantiation_work.used(),
                             #[cfg(test)]
-                            work_trace: self.work_trace,
+                            work_trace: self.work_trace.map(|trace| trace.lock().unwrap().clone()),
                         });
                     };
                     self.return_from(frame, value)?;
@@ -707,6 +736,35 @@ impl Machine {
 
     fn return_from(&mut self, frame: Frame, value: Value) -> Result<(), RuntimeFailure> {
         match frame {
+            Frame::CloseCompletion => {
+                if !matches!(value, Value::Unit) {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                self.control = Some(Control::Return(Value::Unit));
+            }
+            Frame::CleanupBoundary {
+                action,
+                environment,
+            } => {
+                self.instantiation_work
+                    .charge(2)
+                    .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+                self.frames
+                    .try_reserve(1)
+                    .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+                self.frames.push(Frame::CleanupCompletion { saved: value });
+                self.control = Some(Control::Evaluate(action, environment));
+            }
+            Frame::CleanupCompletion { saved } => {
+                if !matches!(value, Value::Unit) {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                self.live_cleanups = self
+                    .live_cleanups
+                    .checked_sub(1)
+                    .ok_or(RuntimeFailure::InvalidControlState)?;
+                self.control = Some(Control::Return(saved));
+            }
             Frame::RegistrationBoundary {
                 handler_active,
                 pending_invocations,
@@ -889,6 +947,38 @@ impl Machine {
             return Err(RuntimeFailure::InvalidControlState);
         }
         Ok(index)
+    }
+
+    fn acquire_cleanup(
+        &mut self,
+        scope: crate::core::effect::CleanupScopeNode,
+        environment: Environment,
+    ) -> Result<(), RuntimeFailure> {
+        self.instantiation_work
+            .charge(2usize.saturating_add(environment.len()))
+            .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+        let callback = environment
+            .lookup(scope.callback, &self.program)
+            .ok_or(RuntimeFailure::MissingBinding)?;
+        if !matches!(callback, Value::Function(_)) {
+            return Err(RuntimeFailure::UnexpectedFunctionValue);
+        }
+        let live = self
+            .live_cleanups
+            .checked_add(1)
+            .filter(|live| *live <= self.cleanup_limit)
+            .ok_or(RuntimeFailure::ResourceCapacity)?;
+        self.frames
+            .try_reserve(1)
+            .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+        self.frames.push(Frame::CleanupBoundary {
+            action: scope.action,
+            environment: environment.clone(),
+        });
+        self.live_cleanups = live;
+        self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
+        self.control = Some(Control::Evaluate(scope.body, environment));
+        Ok(())
     }
 
     fn acquire_registration(
@@ -1408,18 +1498,19 @@ impl Machine {
     }
 
     fn discard(&mut self, handler: HandlerId, owner: ResumeId) -> Result<(), RuntimeFailure> {
-        let (boundary, registration) = self
+        let (boundary_index, registration) = self
             .frames
-            .iter_mut()
+            .iter()
+            .enumerate()
             .rev()
-            .find_map(|frame| match frame {
+            .find_map(|(index, frame)| match frame {
                 Frame::ClauseBoundary {
                     handler: found_handler,
                     owner: found_owner,
-                    continuation,
                     registration,
+                    ..
                 } if *found_handler == handler && *found_owner == owner => {
-                    Some((continuation, *registration))
+                    Some((index, *registration))
                 }
                 _ => None,
             })
@@ -1429,31 +1520,133 @@ impl Machine {
         if registration.is_some() {
             return Err(RuntimeFailure::InvalidControlState);
         }
-        let captured = boundary
-            .as_ref()
-            .ok_or(RuntimeFailure::InvalidControlState)?;
-        // Resource boundaries own cells, and live clause boundaries can hide
-        // further obligations. Reject both before consuming any retained owner.
-        if captured.frames.iter().any(|frame| {
-            matches!(
-                frame,
-                Frame::ClauseBoundary {
-                    continuation: Some(_),
-                    ..
-                } | Frame::ResourceBoundary { .. }
-                    | Frame::RegistrationBoundary { .. }
-            )
-        }) {
+        let Frame::ClauseBoundary {
+            continuation: Some(captured),
+            ..
+        } = &self.frames[boundary_index]
+        else {
             return Err(RuntimeFailure::InvalidControlState);
+        };
+        let mut pending = Vec::new();
+        let mut count = 0usize;
+        let mut owners = 0usize;
+        let mut registrations = Vec::new();
+        let mut associated = Vec::new();
+        self.instantiation_work
+            .charge(1)
+            .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+        pending
+            .try_reserve(1)
+            .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+        pending.push(captured);
+        while let Some(capture) = pending.pop() {
+            self.instantiation_work
+                .charge(capture.frames.len().saturating_add(1))
+                .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+            count = count
+                .checked_add(capture.frames.len())
+                .ok_or(RuntimeFailure::CapturedControlCapacity)?;
+            for frame in &capture.frames {
+                match frame {
+                    Frame::CleanupCompletion { .. } | Frame::CloseCompletion => {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    Frame::ClauseBoundary {
+                        continuation,
+                        registration,
+                        ..
+                    } => {
+                        if let Some(nested) = continuation {
+                            pending
+                                .try_reserve(1)
+                                .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+                            pending.push(nested);
+                        }
+                        // Consuming a capture does not complete its registration clause.
+                        if let Some(key) = registration {
+                            associated
+                                .try_reserve(1)
+                                .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+                            associated.push(*key);
+                        }
+                    }
+                    Frame::RegistrationBoundary { key, .. } => {
+                        registrations
+                            .try_reserve(1)
+                            .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+                        registrations.push(*key);
+                        owners += 1;
+                    }
+                    Frame::ResourceBoundary { .. } | Frame::CleanupBoundary { .. } => owners += 1,
+                    _ => {}
+                }
+            }
+        }
+        for key in associated {
+            self.instantiation_work
+                .charge(registrations.len())
+                .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+            if !registrations.contains(&key) {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
         }
         let retained = self
             .captured_cells
-            .checked_sub(captured.frames.len())
+            .checked_sub(count)
             .ok_or(RuntimeFailure::InvalidControlState)?;
+        self.instantiation_work
+            .charge(count.saturating_add(owners).saturating_add(1))
+            .map_err(|()| RuntimeFailure::EnvironmentCapacity)?;
+        let mut work = Vec::new();
+        let mut closing = Vec::new();
+        work.try_reserve_exact(count)
+            .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+        closing
+            .try_reserve_exact(owners)
+            .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+        self.frames
+            .try_reserve(owners.saturating_add(1))
+            .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+        if let Some(trace) = &mut self.effect_trace {
+            trace
+                .try_reserve(1)
+                .map_err(|_| RuntimeFailure::CapturedControlCapacity)?;
+        }
         // All fallible checks precede consumption and accounting release.
-        let continuation = boundary.take();
+        let Frame::ClauseBoundary { continuation, .. } = &mut self.frames[boundary_index] else {
+            return Err(RuntimeFailure::InvalidControlState);
+        };
+        let mut captured = continuation
+            .take()
+            .ok_or(RuntimeFailure::InvalidControlState)?;
+        work.append(&mut captured.frames);
+        while let Some(mut frame) = work.pop() {
+            match &mut frame {
+                Frame::ClauseBoundary {
+                    continuation: Some(nested),
+                    ..
+                } => work.append(&mut nested.frames),
+                Frame::RegistrationBoundary {
+                    handler_active,
+                    pending_invocations,
+                    ..
+                } => {
+                    *handler_active = false;
+                    *pending_invocations = 0;
+                    closing.push(frame);
+                }
+                Frame::ResourceBoundary { .. } | Frame::CleanupBoundary { .. } => {
+                    closing.push(frame)
+                }
+                _ => {}
+            }
+        }
         self.captured_cells = retained;
-        drop(continuation);
+        if owners != 0 {
+            self.frames.push(Frame::CloseCompletion);
+        }
+        self.frames.extend(closing.into_iter().rev());
+        self.max_frame_depth = self.max_frame_depth.max(self.frames.len());
         self.trace_effect(EffectTraceEvent::Discard(handler));
         self.control = Some(Control::Return(Value::Unit));
         Ok(())
@@ -1526,6 +1719,7 @@ fn dispatch_entry(
                     EffectOperation::Registration(_) => {
                         return Err(RuntimeFailure::InvalidControlState);
                     }
+                    EffectOperation::Cleanup(_) => return Err(RuntimeFailure::InvalidControlState),
                     EffectOperation::Resource(resource) => Transition::suspend(
                         Control::Evaluate(resource.initializer(), environment.clone()),
                         Frame::ResourceInitializer { node, environment },
@@ -1874,13 +2068,16 @@ fn dispatch_return(
             environment,
         } => return_recursive_initialization(pending, next, body, environment, value, heap),
         Frame::HandlerBoundary { .. }
+        | Frame::CleanupBoundary { .. }
+        | Frame::CleanupCompletion { .. }
         | Frame::ResourceInitializer { .. }
         | Frame::ResourceBoundary { .. }
         | Frame::Request { .. }
         | Frame::TypeApplication { .. }
         | Frame::Resume { .. }
         | Frame::ClauseBoundary { .. }
-        | Frame::RegistrationBoundary { .. } => Err(RuntimeFailure::InvalidControlState),
+        | Frame::RegistrationBoundary { .. }
+        | Frame::CloseCompletion => Err(RuntimeFailure::InvalidControlState),
     }
 }
 
@@ -2320,6 +2517,421 @@ mod tests {
 
     fn integer(value: &str) -> Value {
         Value::Integer(Integer::parse_decimal(value).unwrap())
+    }
+
+    fn cleanup_fixture() -> (
+        ValidatedEffectProgram,
+        crate::core::effect::CleanupScopeNode,
+        Environment,
+    ) {
+        let program =
+            effect_program("main : Unit -> Int\nmain () = cleanup fn(ignored) {\n()\n} {\n42\n}\n");
+        let mut pending = vec![program.root()];
+        let mut scope = None;
+        let mut bindings = Vec::new();
+        while let Some(node) = pending.pop() {
+            let expression = program.node(node).unwrap();
+            match &expression.kind {
+                EffectExprKind::Operation(EffectOperation::Cleanup(found)) => scope = Some(*found),
+                EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) => {
+                    bindings.push((binding.binder().id(), binding.initializer()))
+                }
+                _ => {}
+            }
+            pending.extend(
+                (0..expression.kind.child_count())
+                    .filter_map(|index| expression.kind.child_at(index)),
+            );
+        }
+        let scope = scope.unwrap();
+        let initializer = bindings
+            .into_iter()
+            .find(|(binder, _)| *binder == scope.callback)
+            .unwrap()
+            .1;
+        let executable = ExecutableProgram::Effect(program.shared());
+        let transition = dispatch_entry(
+            &executable,
+            initializer,
+            Environment::new(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let Control::Return(callback) = transition.control else {
+            panic!("ordinary callback")
+        };
+        let environment = Environment::new().extend(scope.callback, callback).unwrap();
+        (program, scope, environment)
+    }
+
+    #[test]
+    fn cleanup_preflight_charges_exactly_before_publication_and_reuses_capacity() {
+        let (program, scope, environment) = cleanup_fixture();
+        let exact = 2 + environment.len();
+        for allowance in [exact - 1, exact, exact] {
+            let mut machine = Machine::new_effect(&program);
+            machine.instantiation_work = TypeWorkBudget::with_limit(allowance);
+            let result = machine.acquire_cleanup(scope, environment.clone());
+            if allowance < exact {
+                assert_eq!(result, Err(RuntimeFailure::EnvironmentCapacity));
+                assert!(machine.frames.is_empty());
+                assert_eq!(machine.live_cleanups, 0);
+            } else {
+                result.unwrap();
+                assert_eq!(machine.instantiation_work.used(), exact);
+                assert_eq!(machine.live_cleanups, 1);
+            }
+        }
+        let mut machine = Machine::new_effect(&program);
+        machine.cleanup_limit = 1;
+        for _ in 0..3 {
+            machine.acquire_cleanup(scope, environment.clone()).unwrap();
+            assert_eq!(
+                machine.acquire_cleanup(scope, environment.clone()),
+                Err(RuntimeFailure::ResourceCapacity)
+            );
+            assert_eq!(machine.frames.len(), 1);
+            let owner = machine.frames.pop().unwrap();
+            machine.return_from(owner, integer("42")).unwrap();
+            assert_eq!(
+                machine.live_cleanups, 1,
+                "running completion retains capacity"
+            );
+            let completion = machine.frames.pop().unwrap();
+            machine.return_from(completion, Value::Unit).unwrap();
+            assert_eq!(machine.live_cleanups, 0);
+            assert!(
+                matches!(&machine.control, Some(Control::Return(Value::Integer(value))) if value.to_string() == "42")
+            );
+        }
+    }
+
+    #[test]
+    fn owned_discard_preflight_is_exact_atomic_and_fresh_retryable() {
+        let (program, scope, environment) = cleanup_fixture();
+        let handler = HandlerId::new(0);
+        let owner = ResumeId::new(0);
+        let prepared = || {
+            let mut machine = Machine::new_effect(&program);
+            machine.acquire_cleanup(scope, environment.clone()).unwrap();
+            let nested = machine.capture_from(0).unwrap();
+            machine.frames.push(Frame::ClauseBoundary {
+                registration: None,
+                handler: HandlerId::new(1),
+                owner: ResumeId::new(1),
+                continuation: Some(nested),
+            });
+            machine.acquire_cleanup(scope, environment.clone()).unwrap();
+            let captured = machine.capture_from(0).unwrap();
+            machine.frames.push(Frame::ClauseBoundary {
+                registration: None,
+                handler,
+                owner,
+                continuation: Some(captured),
+            });
+            machine.effect_trace = Some(Vec::new());
+            machine.control = Some(Control::Return(Value::Unit));
+            machine.instantiation_work = TypeWorkBudget::unbounded();
+            machine
+        };
+        let mut measured = prepared();
+        measured.discard(handler, owner).unwrap();
+        let exact = measured.instantiation_work.used();
+        assert!(exact > 0);
+        for allowance in [exact - 1, exact, exact] {
+            let mut machine = prepared();
+            machine.instantiation_work = TypeWorkBudget::with_limit(allowance);
+            let result = machine.discard(handler, owner);
+            assert_eq!(machine.live_cleanups, 2);
+            if allowance < exact {
+                assert_eq!(result, Err(RuntimeFailure::EnvironmentCapacity));
+                assert_eq!(machine.captured_cells, 3);
+                assert!(matches!(
+                    machine.frames.as_slice(),
+                    [Frame::ClauseBoundary {
+                        continuation: Some(_),
+                        ..
+                    }]
+                ));
+                assert!(machine.effect_trace.as_ref().unwrap().is_empty());
+                assert!(matches!(
+                    machine.control,
+                    Some(Control::Return(Value::Unit))
+                ));
+                assert_eq!(
+                    machine.discard(handler, owner),
+                    Err(RuntimeFailure::EnvironmentCapacity)
+                );
+                assert_eq!(machine.captured_cells, 3);
+            } else {
+                result.unwrap();
+                assert_eq!(machine.instantiation_work.used(), exact);
+                assert_eq!(machine.captured_cells, 0);
+                assert!(matches!(
+                    machine.frames.as_slice(),
+                    [
+                        Frame::ClauseBoundary {
+                            continuation: None,
+                            ..
+                        },
+                        Frame::CloseCompletion,
+                        Frame::CleanupBoundary { .. },
+                        Frame::CleanupBoundary { .. }
+                    ]
+                ));
+                machine.instantiation_work = TypeWorkBudget::unbounded();
+                assert_eq!(machine.run().unwrap().value.to_string(), "()");
+            }
+        }
+    }
+
+    #[test]
+    fn owned_capture_and_running_action_share_cleanup_capacity_until_close() {
+        let (program, scope, environment) = cleanup_fixture();
+        let mut machine = Machine::new_effect(&program);
+        machine.cleanup_limit = 1;
+        for _ in 0..3 {
+            machine.acquire_cleanup(scope, environment.clone()).unwrap();
+            let captured = machine.capture_from(machine.frames.len() - 1).unwrap();
+            assert_eq!(
+                machine.acquire_cleanup(scope, environment.clone()),
+                Err(RuntimeFailure::ResourceCapacity)
+            );
+            machine.frames.push(Frame::ClauseBoundary {
+                registration: None,
+                handler: HandlerId::new(0),
+                owner: ResumeId::new(0),
+                continuation: Some(captured),
+            });
+            machine
+                .discard(HandlerId::new(0), ResumeId::new(0))
+                .unwrap();
+            assert_eq!(
+                machine.acquire_cleanup(scope, environment.clone()),
+                Err(RuntimeFailure::ResourceCapacity)
+            );
+            let armed = machine.frames.pop().unwrap();
+            machine.return_from(armed, Value::Unit).unwrap();
+            assert_eq!(
+                machine.acquire_cleanup(scope, environment.clone()),
+                Err(RuntimeFailure::ResourceCapacity)
+            );
+            let running = machine.frames.pop().unwrap();
+            machine.return_from(running, Value::Unit).unwrap();
+            assert_eq!(machine.live_cleanups, 0);
+            assert_eq!(machine.captured_cells, 0);
+            let driver = machine.frames.pop().unwrap();
+            machine.return_from(driver, Value::Unit).unwrap();
+            let clause = machine.frames.pop().unwrap();
+            machine.return_from(clause, Value::Unit).unwrap();
+        }
+    }
+
+    #[test]
+    fn cleanup_start_has_an_exact_charge_and_failure_does_not_start_an_action() {
+        let (program, scope, environment) = cleanup_fixture();
+        for allowance in [1, 2, 2] {
+            let mut machine = Machine::new_effect(&program);
+            machine.acquire_cleanup(scope, environment.clone()).unwrap();
+            machine.instantiation_work = TypeWorkBudget::with_limit(allowance);
+            let owner = machine.frames.pop().unwrap();
+            let result = machine.return_from(owner, integer("42"));
+            assert_eq!(machine.live_cleanups, 1);
+            if allowance == 1 {
+                assert_eq!(result, Err(RuntimeFailure::EnvironmentCapacity));
+                assert!(machine.frames.is_empty());
+                assert!(
+                    !matches!(machine.control, Some(Control::Evaluate(node, _)) if node == scope.action)
+                );
+            } else {
+                result.unwrap();
+                assert_eq!(machine.instantiation_work.used(), 2);
+                assert!(matches!(
+                    machine.frames.as_slice(),
+                    [Frame::CleanupCompletion { .. }]
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn cleanup_partial_action_and_completed_inner_action_are_not_replayed_on_failure() {
+        let program = effect_program(
+            "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = resource cell<R> trace = 0 {\nlet result = cleanup fn(ignored) {\nlet outer_started = 7003\nCell.write (trace, 1)\n} {\nlet result = cleanup fn(ignored) {\nlet written = Cell.write (trace, 2)\nlet first_write_completed = 7001\nCell.write (trace, 3)\n} {\n42\n}\nlet inner_completed = 7002\nresult\n}\nCell.read trace\n}\n",
+        );
+        let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut measured = Machine::new_effect(&program);
+        measured.work_trace = Some(Arc::clone(&observed));
+        assert_eq!(measured.run().unwrap().value.to_string(), "1");
+        let trace = observed.lock().unwrap();
+        let marker = |value: &str| {
+            trace
+                .iter()
+                .copied()
+                .find(|(node, _)| {
+                    matches!(&program.node(*node).unwrap().kind,
+                    EffectExprKind::Pure(PureExprKind::Value(PureValue::Integer(integer)))
+                        if integer.value().to_string() == value)
+                })
+                .unwrap()
+        };
+        let first_write = marker("7001");
+        let inner_done = marker("7002");
+        let outer_started = marker("7003");
+        for (stop, completed_inner) in [(first_write, false), (inner_done, true)] {
+            for _ in 0..2 {
+                let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+                let mut failure = Machine::new_effect(&program);
+                failure.work_trace = Some(Arc::clone(&observed));
+                failure.instantiation_work = TypeWorkBudget::with_limit(stop.1);
+                assert_eq!(
+                    failure.run().unwrap_err(),
+                    RuntimeFailure::EnvironmentCapacity
+                );
+                let trace = observed.lock().unwrap();
+                let visits = |marker| trace.iter().filter(|(node, _)| *node == marker).count();
+                // These strict markers run only after the preceding cell
+                // write or inner action returned, not merely on request entry.
+                assert_eq!(visits(first_write.0), 1);
+                assert_eq!(visits(inner_done.0), usize::from(completed_inner));
+                assert_eq!(visits(outer_started.0), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn owned_drain_internal_failure_retains_exact_written_and_reported_prefix_without_replay() {
+        let program = effect_program(
+            "import @builtin.cell as Cell\neffect Stop {\nstop : Unit -> Unit\n}\neffect Report {\nreport : Int -> Unit\n}\nmain : Unit -> Int\nmain () = resource cell<R> trace = 0 {\nlet result = handle (handle (cleanup fn(ignored) {\nlet outer_started = 7003\nCell.write (trace, 1)\n} {\ncleanup fn(ignored) {\nlet written = Cell.write (trace, 2)\nlet first_write_completed = 7001\nlet reported = perform Report.report 22\nlet report_completed = 7002\n()\n} {\nlet stopped = perform Stop.stop ()\n42\n}\n}) with Stop {\nstop ignored => {\nlet done = discard\nlet clause_continued = 7004\n7\n}\n}) with Report {\nreport error => resume ()\n}\nCell.read trace\n}\n",
+        );
+        let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut measured = Machine::new_effect(&program);
+        measured.work_trace = Some(Arc::clone(&observed));
+        assert_eq!(measured.run().unwrap().value.to_string(), "1");
+        let baseline = observed.lock().unwrap().clone();
+        let marker = |value: &str| {
+            baseline.iter().copied().find(|(node, _)| {
+            matches!(&program.node(*node).unwrap().kind,
+                EffectExprKind::Pure(PureExprKind::Value(PureValue::Integer(integer))) if integer.value().to_string() == value)
+        }).unwrap()
+        };
+        let written = marker("7001");
+        let reported = marker("7002");
+        let outer = marker("7003");
+        let clause = marker("7004");
+        for stop in [written, outer] {
+            for _ in 0..2 {
+                let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+                let mut failure = Machine::new_effect(&program);
+                failure.work_trace = Some(Arc::clone(&observed));
+                failure.instantiation_work = TypeWorkBudget::with_limit(stop.1);
+                assert_eq!(
+                    failure.run().unwrap_err(),
+                    RuntimeFailure::EnvironmentCapacity
+                );
+                let actual = observed.lock().unwrap();
+                assert_eq!(actual.as_slice(), &baseline[..actual.len()]);
+                let visits = |node| {
+                    actual
+                        .iter()
+                        .filter(|(observed, _)| *observed == node)
+                        .count()
+                };
+                assert_eq!(visits(written.0), 1);
+                assert_eq!(visits(reported.0), usize::from(stop == outer));
+                assert_eq!(visits(outer.0), usize::from(stop == outer));
+                assert_eq!(visits(clause.0), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn cleanup_live_owner_cannot_be_published_as_a_successful_result() {
+        let (program, _, _) = cleanup_fixture();
+        let mut machine = Machine::new_effect(&program);
+        machine.control = Some(Control::Return(integer("42")));
+        machine.live_cleanups = 1;
+        assert_eq!(
+            machine.run().unwrap_err(),
+            RuntimeFailure::InvalidControlState
+        );
+    }
+
+    #[test]
+    fn owned_deep_drain_success_and_partial_failure_use_the_predecessor_stack_bound() {
+        const CHILD: &str = "ASH_OWNED_CLEANUP_MACHINE_STACK_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "eval::machine::tests::owned_deep_drain_success_and_partial_failure_use_the_predecessor_stack_bound", "--nocapture"])
+                .env(CHILD, "1").status().unwrap();
+            assert!(status.success());
+            return;
+        }
+        std::thread::Builder::new().stack_size(256 * 1024).spawn(|| {
+            let mut source = String::from("effect Stop {\nstop : Unit -> Unit\n}\nmain : Unit -> Int\nmain () = handle (");
+            for depth in 0..24 {
+                source.push_str(&format!("cleanup fn(ignored) {{\nlet marker = {}\n()\n}} {{\n", 8000 + depth));
+            }
+            source.push_str("let stopped = perform Stop.stop ()\n42\n");
+            for _ in 0..24 { source.push_str("}\n"); }
+            source.push_str(") with Stop {\nstop ignored => {\nlet done = discard\n7\n}\n}\n");
+            let program = effect_program(&source);
+            let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let mut exact = Machine::new_effect(&program);
+            exact.cleanup_limit = 24;
+            exact.work_trace = Some(Arc::clone(&observed));
+            assert_eq!(exact.run().unwrap().value.to_string(), "7");
+            let baseline = observed.lock().unwrap().clone();
+            let stop = baseline.iter().copied().find(|(node, _)| {
+                matches!(&program.node(*node).unwrap().kind, EffectExprKind::Pure(PureExprKind::Value(PureValue::Integer(integer))) if integer.value().to_string() == "8012")
+            }).unwrap();
+            let completed_inner = baseline.iter().copied().find(|(node, _)| {
+                matches!(&program.node(*node).unwrap().kind, EffectExprKind::Pure(PureExprKind::Value(PureValue::Integer(integer))) if integer.value().to_string() == "8013")
+            }).unwrap().0;
+            for _ in 0..2 {
+                let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+                let mut partial = Machine::new_effect(&program);
+                partial.work_trace = Some(Arc::clone(&observed));
+                partial.instantiation_work = TypeWorkBudget::with_limit(stop.1);
+                assert_eq!(partial.run().unwrap_err(), RuntimeFailure::EnvironmentCapacity);
+                let trace = observed.lock().unwrap();
+                assert_eq!(trace.as_slice(), &baseline[..trace.len()]);
+                assert_eq!(trace.iter().filter(|(node, _)| *node == stop.0).count(), 1);
+                assert_eq!(trace.iter().filter(|(node, _)| *node == completed_inner).count(), 1);
+            }
+        }).unwrap().join().unwrap();
+    }
+
+    #[test]
+    fn cleanup_deep_normal_completion_and_capacity_failure_use_a_small_stack() {
+        const CHILD: &str = "ASH_CLEANUP_MACHINE_STACK_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact", "eval::machine::tests::cleanup_deep_normal_completion_and_capacity_failure_use_a_small_stack", "--nocapture"]).env(CHILD, "1").status().unwrap();
+            assert!(status.success());
+            return;
+        }
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut source = String::from("main : Unit -> Int\nmain () = ");
+                for _ in 0..24 {
+                    source.push_str("cleanup fn(ignored) {\n()\n} {\n");
+                }
+                source.push_str("42\n");
+                for _ in 0..24 {
+                    source.push_str("}\n");
+                }
+                let program = effect_program(&source);
+                let mut exact = Machine::new_effect(&program);
+                exact.cleanup_limit = 24;
+                assert_eq!(exact.run().unwrap().value.to_string(), "42");
+                let mut short = Machine::new_effect(&program);
+                short.cleanup_limit = 23;
+                assert_eq!(short.run().unwrap_err(), RuntimeFailure::ResourceCapacity);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     fn registration_fixture() -> (ValidatedEffectProgram, NodeId, Environment) {
@@ -2978,7 +3590,7 @@ mod tests {
             .stack_size(256 * 1024)
             .spawn(move || {
                 let mut machine = Machine::new_effect(&program);
-                machine.work_trace = Some(Vec::new());
+                machine.work_trace = Some(Arc::new(std::sync::Mutex::new(Vec::new())));
                 let result = machine.run().unwrap();
                 assert_eq!(
                     result.value.to_string(),
@@ -3184,60 +3796,76 @@ mod tests {
     }
 
     #[test]
-    fn captured_resource_counts_until_normal_release_and_forbids_discard() {
-        let program = resource_program();
-        let node = resource_node(&program);
-        let mut machine = Machine::new_effect(&program);
-        machine.resource_limit = 1;
-        machine
-            .acquire_resource(node, Environment::new(), integer("41"))
-            .unwrap();
-        machine.capture_limit = 0;
-        assert!(matches!(
-            machine.capture_from(0),
-            Err(RuntimeFailure::CapturedControlCapacity)
-        ));
-        assert_eq!(machine.frames.len(), 1);
-        machine.capture_limit = 1;
-        let captured = machine.capture_from(0).unwrap();
-        assert_eq!(machine.live_resources, 1);
-        assert_eq!(machine.captured_cells, 1);
-        assert_eq!(
-            machine.acquire_resource(node, Environment::new(), integer("99")),
-            Err(RuntimeFailure::ResourceCapacity)
-        );
-        let handler = HandlerId::new(0);
-        let owner = ResumeId::new(0);
-        machine.frames.push(Frame::ClauseBoundary {
-            registration: None,
-            handler,
-            owner,
-            continuation: Some(captured),
-        });
-        let before = machine.effect_trace.clone();
-        assert_eq!(
-            machine.discard(handler, owner),
-            Err(RuntimeFailure::InvalidControlState)
-        );
-        assert_eq!(machine.effect_trace, before);
-        assert_eq!(machine.live_resources, 1);
-        assert_eq!(machine.captured_cells, 1);
-        let Frame::ClauseBoundary {
-            continuation: Some(mut captured),
-            ..
-        } = machine.frames.pop().unwrap()
-        else {
-            panic!("retained capture")
-        };
-        machine.frames.append(&mut captured.frames);
-        machine.captured_cells = 0;
-        let frame = machine.frames.pop().unwrap();
-        machine.return_from(frame, integer("42")).unwrap();
-        assert_eq!(machine.live_resources, 0);
-        machine
-            .acquire_resource(node, Environment::new(), integer("42"))
-            .unwrap();
-        assert_eq!(machine.next_activation, 2);
+    fn captured_resource_counts_until_normal_or_owned_release() {
+        for discard in [false, true] {
+            let program = resource_program();
+            let node = resource_node(&program);
+            let mut machine = Machine::new_effect(&program);
+            machine.resource_limit = 1;
+            machine
+                .acquire_resource(node, Environment::new(), integer("41"))
+                .unwrap();
+            machine.capture_limit = 0;
+            assert!(matches!(
+                machine.capture_from(0),
+                Err(RuntimeFailure::CapturedControlCapacity)
+            ));
+            assert_eq!(machine.frames.len(), 1);
+            machine.capture_limit = 1;
+            let captured = machine.capture_from(0).unwrap();
+            assert_eq!(machine.live_resources, 1);
+            assert_eq!(machine.captured_cells, 1);
+            assert_eq!(
+                machine.acquire_resource(node, Environment::new(), integer("99")),
+                Err(RuntimeFailure::ResourceCapacity)
+            );
+            let handler = HandlerId::new(0);
+            let owner = ResumeId::new(0);
+            machine.frames.push(Frame::ClauseBoundary {
+                registration: None,
+                handler,
+                owner,
+                continuation: Some(captured),
+            });
+            if discard {
+                machine.discard(handler, owner).unwrap();
+                assert_eq!(machine.captured_cells, 0);
+                assert_eq!(machine.live_resources, 1);
+            } else {
+                let Frame::ClauseBoundary {
+                    continuation: Some(mut captured),
+                    ..
+                } = machine.frames.pop().unwrap()
+                else {
+                    panic!("retained capture")
+                };
+                machine.frames.append(&mut captured.frames);
+                machine.captured_cells = 0;
+            }
+            let frame = machine.frames.pop().unwrap();
+            machine
+                .return_from(frame, if discard { Value::Unit } else { integer("42") })
+                .unwrap();
+            assert_eq!(machine.live_resources, 0);
+            if discard {
+                let frame = machine.frames.pop().unwrap();
+                assert!(matches!(frame, Frame::CloseCompletion));
+                machine.return_from(frame, Value::Unit).unwrap();
+                let frame = machine.frames.pop().unwrap();
+                assert!(matches!(
+                    frame,
+                    Frame::ClauseBoundary {
+                        continuation: None,
+                        ..
+                    }
+                ));
+                machine.return_from(frame, Value::Unit).unwrap();
+            }
+            machine
+                .acquire_resource(node, Environment::new(), integer("42"))
+                .unwrap();
+            assert_eq!(machine.next_activation, 2);
+        }
     }
 
     #[test]
@@ -3610,11 +4238,91 @@ mod tests {
     }
 
     #[test]
+    fn discard_rejects_consumed_clause_with_outside_registration_before_consumption() {
+        let handler = HandlerId::new(0);
+        let owner = ResumeId::new(0);
+        let key = RegistrationKey(0);
+        let mut machine = capture_machine(2);
+        let root = machine.program.root();
+        machine.frames.clear();
+        machine.frames.push(Frame::RegistrationBoundary {
+            key,
+            handler: root,
+            callback: Value::Unit,
+            handler_active: false,
+            pending_invocations: 1,
+        });
+        machine.frames.push(Frame::ClauseBoundary {
+            handler: HandlerId::new(1),
+            owner: ResumeId::new(1),
+            continuation: None,
+            registration: Some(key),
+        });
+        machine.frames.push(Frame::CleanupBoundary {
+            action: root,
+            environment: Environment::new(),
+        });
+        machine.live_registrations = 1;
+        machine.live_cleanups = 1;
+        let captured = machine.capture_from(1).unwrap();
+        machine.frames.push(Frame::ClauseBoundary {
+            handler,
+            owner,
+            continuation: Some(captured),
+            registration: None,
+        });
+        machine.control = Some(Control::Discard(handler, owner));
+
+        for _ in 0..2 {
+            assert_eq!(
+                machine.discard(handler, owner),
+                Err(RuntimeFailure::InvalidControlState)
+            );
+            assert_eq!(machine.captured_cells, 2);
+            assert_eq!(machine.live_registrations, 1);
+            assert_eq!(machine.live_cleanups, 1);
+            assert_eq!(machine.frames.len(), 2);
+            assert!(matches!(
+                machine.frames[0],
+                Frame::RegistrationBoundary {
+                    key: found,
+                    handler_active: false,
+                    pending_invocations: 1,
+                    ..
+                } if found == key
+            ));
+            let Frame::ClauseBoundary {
+                continuation: Some(captured),
+                ..
+            } = &machine.frames[1]
+            else {
+                panic!("rejected discard must retain its capability")
+            };
+            assert!(matches!(
+                captured.frames.as_slice(),
+                [Frame::ClauseBoundary {
+                    continuation: None,
+                    registration: Some(found),
+                    ..
+                }, Frame::CleanupBoundary { action, .. }]
+                    if *found == key && *action == root
+            ));
+            assert!(
+                matches!(machine.control, Some(Control::Discard(found, resume))
+                if found == handler && resume == owner)
+            );
+            assert!(machine.trace.is_empty());
+            assert!(machine.effect_trace.as_ref().unwrap().is_empty());
+        }
+    }
+
+    #[test]
     fn malformed_discard_checks_owner_nested_obligations_and_accounting_before_consuming() {
         let handler = HandlerId::new(0);
         let owner = ResumeId::new(0);
         for (nested, retained, found_handler, found_owner) in [
             (true, 3, handler, owner),
+            (true, 4, handler, owner),
             (false, 2, handler, owner),
             (false, 3, HandlerId::new(1), owner),
             (false, 3, handler, ResumeId::new(1)),
@@ -3626,7 +4334,13 @@ mod tests {
                     registration: None,
                     handler: HandlerId::new(1),
                     owner: ResumeId::new(1),
-                    continuation: Some(CapturedContinuation { frames: Vec::new() }),
+                    continuation: Some(CapturedContinuation {
+                        frames: if retained == 4 {
+                            vec![Frame::CloseCompletion]
+                        } else {
+                            Vec::new()
+                        },
+                    }),
                 };
             }
             machine.captured_cells = retained;
@@ -3636,6 +4350,18 @@ mod tests {
                 owner: found_owner,
                 continuation: Some(captured),
             });
+            if nested && retained == 3 {
+                machine.discard(handler, owner).unwrap();
+                assert_eq!(machine.captured_cells, 0);
+                assert!(matches!(
+                    machine.frames[0],
+                    Frame::ClauseBoundary {
+                        continuation: None,
+                        ..
+                    }
+                ));
+                continue;
+            }
             assert_eq!(
                 machine.discard(handler, owner),
                 Err(RuntimeFailure::InvalidControlState)
@@ -3678,7 +4404,9 @@ mod tests {
                 const DEPTH: usize = 32_768;
                 let handler = HandlerId::new(0);
                 let owner = ResumeId::new(0);
-                for live_nested in [false, true, false] {
+                for (live_nested, malformed) in
+                    [(false, false), (true, false), (true, true), (false, false)]
+                {
                     let mut machine = capture_machine(DEPTH);
                     machine.frames.clear();
                     let mut captured = CapturedContinuation { frames: Vec::new() };
@@ -3702,7 +4430,7 @@ mod tests {
                         }
                     }
                     if live_nested {
-                        machine.captured_cells = DEPTH;
+                        machine.captured_cells = if malformed { DEPTH - 1 } else { DEPTH };
                     } else {
                         machine.frames.append(&mut captured.frames);
                         machine.capture_limit = DEPTH - 1;
@@ -3725,7 +4453,7 @@ mod tests {
                     });
                     machine.control = Some(Control::Discard(handler, owner));
                     let result = machine.run();
-                    if live_nested {
+                    if malformed {
                         assert!(matches!(result, Err(RuntimeFailure::InvalidControlState)));
                     } else {
                         let evaluation =
@@ -3880,6 +4608,13 @@ mod tests {
     ];
 
     const EFFECT_TRANSITION_OWNERSHIP: &[TransitionOwner] = &[
+        TransitionOwner {
+            feature: "cleanup",
+            entry: "Machine::acquire_cleanup",
+            frames: &["Frame::CleanupBoundary", "Frame::CleanupCompletion"],
+            // Both frame-return transitions belong to separate arms of this method.
+            returns: &["Machine::return_from", "Machine::return_from"],
+        },
         TransitionOwner {
             feature: "registration",
             entry: "Machine::acquire_registration",
@@ -4064,13 +4799,14 @@ mod tests {
     #[test]
     fn every_effect_operation_has_one_explicit_transition_owner() {
         assert_eq!(TRANSITION_OWNERSHIP.len(), 14);
-        assert_eq!(EFFECT_TRANSITION_OWNERSHIP.len(), 7);
+        assert_eq!(EFFECT_TRANSITION_OWNERSHIP.len(), 8);
         assert_eq!(
             EFFECT_TRANSITION_OWNERSHIP
                 .iter()
                 .map(|owner| owner.feature)
                 .collect::<Vec<_>>(),
             [
+                "cleanup",
                 "registration",
                 "resource",
                 "handler",
@@ -4084,7 +4820,7 @@ mod tests {
             !owner.entry.is_empty()
                 && owner.frames.len()
                     == match owner.feature {
-                        "resource" => 2,
+                        "resource" | "cleanup" => 2,
                         "discard" => 0,
                         _ => 1,
                     }

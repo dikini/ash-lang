@@ -1,5 +1,7 @@
 //! Bidirectional typed elaboration from resolved surface syntax to pure Core.
 
+mod cleanup_rows;
+
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -141,6 +143,8 @@ pub enum TypeReason {
     ResumeCapture,
     /// Discard lacks proof that its captured segment has no live obligations.
     DiscardUnsafe,
+    /// Cleanup would require an interpreter removed by abandonment.
+    CleanupContext,
 }
 
 /// Projects source computation arrows onto the predecessor pure-Core type
@@ -361,6 +365,7 @@ impl fmt::Display for TypeReason {
             Self::ResumeAlreadyConsumed => formatter.write_str("effect.resume-already-consumed"),
             Self::ResumeCapture => formatter.write_str("effect.resume-capture"),
             Self::DiscardUnsafe => formatter.write_str("effect.discard-unsafe"),
+            Self::CleanupContext => formatter.write_str("effect.cleanup-context"),
         }
     }
 }
@@ -1791,6 +1796,7 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     generated_type_variables: GeneratedTypeVariableRegistry,
     inference_solutions: InferenceSolutionMap,
     row_inference_solutions: RowInferenceSolutionMap,
+    cleanup_rows: cleanup_rows::CleanupRows,
     authenticated_inference_solutions: HashSet<InferenceVariableId>,
     deferred_local_nominal_escapes: Vec<(NominalTypeId, InferenceVariableId, Span)>,
     deferred_resource_escapes: Vec<(TypeVariableId, InferenceVariableId, Span, Span)>,
@@ -1864,6 +1870,9 @@ pub trait CoreLoweringFamily: CoreOperationFamily {
         handler: HandlerId,
         owner: ResumeId,
     ) -> Result<(), BuildError>;
+    fn finish_cleanup_effect_rows(_builder: &mut CoreBuilder<Self>) -> Result<(), BuildError> {
+        Ok(())
+    }
 }
 
 #[allow(
@@ -1937,6 +1946,7 @@ impl CoreLoweringFamily for EffectOperationFamily {
         operation: EffectOperation,
     ) -> Result<NodeId, BuildError> {
         match operation {
+            EffectOperation::Cleanup(scope) => builder.cleanup_scope(scope, ty, effects, origin),
             EffectOperation::Registration(scope) => {
                 builder.registration_scope(scope, ty, effects, origin)
             }
@@ -1983,6 +1993,9 @@ impl CoreLoweringFamily for EffectOperationFamily {
         owner: ResumeId,
     ) -> Result<(), BuildError> {
         builder.recompute_effect_rows_in_range(range, output, handler, owner)
+    }
+    fn finish_cleanup_effect_rows(builder: &mut CoreBuilder<Self>) -> Result<(), BuildError> {
+        builder.finish_cleanup_effect_rows()
     }
 }
 
@@ -2068,6 +2081,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
             inference_solutions: InferenceSolutionMap::default(),
             row_inference_solutions: RowInferenceSolutionMap::default(),
+            cleanup_rows: cleanup_rows::CleanupRows::default(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
@@ -2167,6 +2181,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
             inference_solutions: InferenceSolutionMap::default(),
             row_inference_solutions: RowInferenceSolutionMap::default(),
+            cleanup_rows: cleanup_rows::CleanupRows::default(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
@@ -2233,6 +2248,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
             inference_solutions: InferenceSolutionMap::default(),
             row_inference_solutions: RowInferenceSolutionMap::default(),
+            cleanup_rows: cleanup_rows::CleanupRows::default(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
@@ -2680,6 +2696,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
             inference_solutions: InferenceSolutionMap::default(),
             row_inference_solutions: RowInferenceSolutionMap::default(),
+            cleanup_rows: cleanup_rows::CleanupRows::default(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
             deferred_resource_escapes: Vec::new(),
@@ -2728,13 +2745,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             return Err(error);
         }
         let mut context = context.clone();
-        let result = self.elaborate_expression_with_context(
-            ElaborationTask::Synthesize {
-                expression,
-                cause: None,
-            },
-            &mut context,
-        );
+        let result = self
+            .elaborate_expression_with_context(
+                ElaborationTask::Synthesize {
+                    expression,
+                    cause: None,
+                },
+                &mut context,
+            )
+            .and_then(|result| self.finish_standalone_cleanup_rows(result));
         if result.is_err() {
             self.state = ElaboratorState::Poisoned;
         }
@@ -2774,17 +2793,19 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
         };
         let mut context = context.clone();
-        let result = self.elaborate_expression_with_context(
-            ElaborationTask::Check {
-                expression,
-                expected: ProvenancedType {
-                    ty: expected.clone(),
-                    provenance: expected_provenance,
+        let result = self
+            .elaborate_expression_with_context(
+                ElaborationTask::Check {
+                    expression,
+                    expected: ProvenancedType {
+                        ty: expected.clone(),
+                        provenance: expected_provenance,
+                    },
+                    kind: CheckKind::General,
                 },
-                kind: CheckKind::General,
-            },
-            &mut context,
-        );
+                &mut context,
+            )
+            .and_then(|result| self.finish_standalone_cleanup_rows(result));
         if result.is_err() {
             self.state = ElaboratorState::Poisoned;
         }
@@ -2972,7 +2993,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         };
         self.elaborate_result(&result, &mut context)?;
         let publication = self.prepare_evidence_publication()?;
-        self.zonk_builder_types().map_err(TypeError::Internal)?;
+        if self.cleanup_rows.is_empty() {
+            self.zonk_builder_types().map_err(TypeError::Internal)?;
+        } else {
+            self.zonk_builder_types_since(None, false)
+                .map_err(TypeError::Internal)?;
+        }
         if self.capture_publication_required(module, checked_schemes)? {
             self.type_work
                 .charge(globals.len())
@@ -3008,6 +3034,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
             let (method_routes, method_adapters) =
                 self.capture_method_routes(&publication, module, &facts.0)?;
+            self.solve_cleanup_rows(&roots, &imports, &method_routes, &method_adapters)?;
             let captures = crate::core::capture::check_builder(
                 &self.builder,
                 &roots,
@@ -6615,9 +6642,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut inserted_rows = Vec::new();
         let inference_marker = self.inference_variables.len();
         let next_inference = self.next_inference;
+        let cleanup_marker = self.cleanup_rows.checkpoint();
         let result =
             self.unify_effect_rows_inner(left, right, &mut inserted_types, &mut inserted_rows);
         if result.is_err() {
+            self.rollback_cleanup_rows(cleanup_marker);
             for variable in inserted_types.drain(..).rev() {
                 self.inference_solutions.remove_and_discard(variable);
                 self.authenticated_inference_solutions.remove(&variable);
@@ -6654,6 +6683,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         (|| {
             let mut left = self.zonk_effect_row(left).map_err(map_type_error)?;
             let mut right = self.zonk_effect_row(right).map_err(map_type_error)?;
+            if self.cleanup_row_pending(&left) || self.cleanup_row_pending(&right) {
+                return self
+                    .defer_cleanup_equality(&left, &right)
+                    .map_err(map_type_error);
+            }
 
             // Solving an exact instance argument can collapse duplicate row
             // members. Re-canonicalize after every such solution before
@@ -6717,6 +6751,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         let row_marker = inserted_rows.len();
                         let inference_marker = self.inference_variables.len();
                         let next_inference = self.next_inference;
+                        let cleanup_marker = self.cleanup_rows.checkpoint();
                         let result = left_member
                             .arguments()
                             .iter()
@@ -6741,6 +6776,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             }
                             Ok(())
                             | Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
+                                self.rollback_cleanup_rows(cleanup_marker);
                                 self.rollback_unification_to(
                                     inserted_types,
                                     inserted_rows,
@@ -7008,8 +7044,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut inserted_rows = Vec::new();
         let inference_marker = self.inference_variables.len();
         let next_inference = self.next_inference;
+        let cleanup_marker = self.cleanup_rows.checkpoint();
         let result = self.unify_recorded(left, right, &mut inserted, &mut inserted_rows);
         if result.is_err() {
+            self.rollback_cleanup_rows(cleanup_marker);
             for variable in inserted.drain(..).rev() {
                 self.inference_solutions.remove_and_discard(variable);
                 self.authenticated_inference_solutions.remove(&variable);
@@ -7468,6 +7506,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             discard_typed_node(result);
             return Err(error);
         }
+        self.solve_cleanup_rows(&[], &[], &[], &[])?;
         Ok(result)
     }
 
@@ -8508,11 +8547,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             },
             context,
         )?);
-        self.check_deferred_local_nominal_escapes()?;
-        self.check_deferred_resource_escapes()?;
+        if self.cleanup_rows.is_empty() {
+            self.check_deferred_local_nominal_escapes()?;
+            self.check_deferred_resource_escapes()?;
+        }
         let (zonked_result, result_is_ambiguous) = self.zonk_with_status(&result.ty)?;
         let zonked_result = IterativeTypeOwner::new(zonked_result);
-        if result_is_ambiguous {
+        if result_is_ambiguous && self.cleanup_rows.is_empty() {
             return Err(inference_failure(
                 TypeReason::AmbiguousType,
                 result_expression.span,
@@ -8528,6 +8569,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let identity = InferenceVariableId::new(*identity);
             !self.inference_solutions.contains_key(&identity)
                 && !self.row_inference_solutions.contains_key(&identity)
+                && !self.cleanup_rows.contains(identity)
         });
         if let Some(identity) = ambiguous {
             let origin = self
@@ -8555,6 +8597,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         let left = self.qualify_effect_row(left)?;
         let right = self.qualify_effect_row(right)?;
+        if self.cleanup_row_pending(&left) || self.cleanup_row_pending(&right) {
+            return self.defer_cleanup_union(left, right, span);
+        }
         left.union_with_budget(&right, &mut self.type_work)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
             .map_err(|_| {
@@ -8567,6 +8612,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     }
 
     fn same_effect_rows(&mut self, left: &EffectRow, right: &EffectRow) -> Result<bool, TypeError> {
+        if self.cleanup_row_pending(left) || self.cleanup_row_pending(right) {
+            self.defer_cleanup_equality(left, right)?;
+            return Ok(true);
+        }
         same_effect_rows_with_budget(left, right, &mut self.type_work)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
     }
@@ -8751,17 +8800,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             owner,
             ResumeUse::Consumed,
         ));
-        let node = self.push_effect_core(
-            Type::Unit,
-            EffectRow::empty(),
-            Origin::Source(span),
-            operation,
-        )?;
+        let effects = self.defer_cleanup_discard(self.builder.node_checkpoint(), span)?;
+        let core_effects = self.core_effect_row(&effects)?;
+        let node =
+            self.push_effect_core(Type::Unit, core_effects, Origin::Source(span), operation)?;
         let provenance = self.at_span_provenance(&Type::Unit, span)?;
         Ok(TypedNode {
             node,
             ty: Type::Unit,
-            effects: EffectRow::empty(),
+            effects,
             provenance,
         })
     }
@@ -8908,20 +8955,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let body_effects = self.zonk_effect_row(&body.effects)?;
         let instance =
             EffectInstance::new(api.ops(), Box::new([Type::Variable(resource.identity.id)]));
-        let outward = match body_effects
-            .remove_exact_with_budget(&instance, &mut self.type_work)
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
-        {
-            Ok(row) => row,
-            Err(crate::types::EffectRowError::Missing) => body_effects,
-            Err(_) => {
-                return Err(inference_failure(
-                    TypeReason::AmbiguousEffectRow,
-                    span,
-                    "this resource body has an ambiguous outward effect row",
-                ));
-            }
-        };
+        let outward = self.remove_cleanup_effect(&body_effects, &instance, span, true)?;
         let ty = IterativeTypeOwner::new(self.zonk(&body.ty)?);
         let effects = self.union_effects(&initializer.effects, &outward, span)?;
         let row_type = IterativeTypeOwner::new(Type::function_computation(
@@ -9005,23 +9039,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             effects,
             provenance: body.provenance.clone(),
         })
-    }
-
-    fn synthesize_handler(
-        &mut self,
-        handler: &crate::resolved::ResolvedHandleExpr,
-        span: Span,
-        context: &mut TypeContext,
-    ) -> Result<TypedNode, TypeError> {
-        let rewrite_checkpoint = self.builder.type_rewrite_checkpoint();
-        let body = self.elaborate_expression_with_context(
-            ElaborationTask::Synthesize {
-                expression: &handler.body,
-                cause: None,
-            },
-            context,
-        )?;
-        self.finish_handler(handler, span, context, body, rewrite_checkpoint)
     }
 
     fn check_registration_callback(
@@ -9158,24 +9175,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     ) -> Result<TypedNode, TypeError> {
         let body = TypedNodeOwner::new(body);
         self.check_registration_callback(handler, span, context)?;
-        let output = match body
-            .effects
-            .remove_exact_with_budget(&handler.effect.instance, &mut self.type_work)
-            .map_err(|()| type_resource())?
-        {
-            Ok(row) => row,
-            Err(crate::types::EffectRowError::Missing) => {
-                clone_effect_row_with_budget(&body.effects, &mut self.type_work)
-                    .map_err(|()| type_resource())?
-            }
-            Err(_) => {
-                return Err(inference_failure(
-                    TypeReason::AmbiguousEffectRow,
-                    handler.effect.span,
-                    "the registration body does not determine whether it requests this exact effect instance",
-                ));
-            }
-        };
+        let output = self.remove_cleanup_effect(
+            &body.effects,
+            &handler.effect.instance,
+            handler.effect.span,
+            true,
+        )?;
         let output = self.registration_outward_row(handler, span, context, output)?;
         self.lower_hook_registration(handler, body, output, rewrite_checkpoint, context)
     }
@@ -9245,28 +9250,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ));
             }
         }
-        let mut output = match body
-            .effects
-            .remove_exact_with_budget(&handler.effect.instance, &mut self.type_work)
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
-        {
-            Ok(row) => row,
-            Err(crate::types::EffectRowError::Missing) if handler.hook_root.is_some() => {
-                clone_effect_row_with_budget(&body.effects, &mut self.type_work)
-                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
-            }
-            Err(_) => {
-                return Err(inference_failure(
-                    if handler.hook_root.is_some() {
-                        TypeReason::AmbiguousEffectRow
-                    } else {
-                        TypeReason::MissingHandledEffect
-                    },
-                    handler.effect.span,
-                    "the handled computation does not request this exact effect instance",
-                ));
-            }
-        };
+        let mut output = self.remove_cleanup_effect(
+            &body.effects,
+            &handler.effect.instance,
+            handler.effect.span,
+            handler.hook_root.is_some(),
+        )?;
         if let Some(root) = &handler.hook_root {
             self.type_work
                 .charge(1)
@@ -9453,7 +9442,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .try_reserve_exact(core_clauses.len())
             .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         for (operation, resume, pattern, body_node, origin, range) in core_clauses {
-            F::recompute_clause_effect_rows(&mut self.builder, range, &output, handler_id, resume)?;
+            self.recompute_cleanup_clause(range, &output, handler_id, resume)?;
             clauses.push(EffectClause::new(
                 operation,
                 resume,
@@ -10563,6 +10552,329 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
+    fn step_function_completion(
+        &mut self,
+        task: ElaborationTask<'_>,
+        context: &mut TypeContext,
+        values: &mut TypedNodeBuffer,
+        tasks: &mut ElaborationTaskBuffer<'_>,
+    ) -> Result<(), TypeError> {
+        match task {
+            ElaborationTask::FinishFunction {
+                direct_binder,
+                pattern_binders,
+                binder,
+                pattern,
+                domain,
+                ty,
+                origin,
+                provenance,
+                contains_newtype,
+                pattern_count,
+                infer_effects,
+                cleanup_completion,
+            } => {
+                let effect_span = origin.primary_span();
+                let origin = OriginOwner::new(origin);
+                let mut pattern = CorePatternOwner::new(pattern);
+                let domain = domain.map(IterativeTypeOwner::new);
+                let mut ty = IterativeTypeOwner::new(ty);
+                let mut body = values.pop().ok_or_else(invalid_state)?;
+                if let Some(binder) = direct_binder
+                    && !context.remove_and_discard(binder)
+                {
+                    return Err(invalid_state());
+                }
+                self.remove_pattern_binders(context, &pattern_binders)?;
+                if let Some(completion) = cleanup_completion {
+                    self.record_cleanup_action_effects(completion, &body.effects, tasks)?;
+                } else if infer_effects && !body.effects.is_empty() {
+                    let effects = self.zonk_effect_row(&body.effects)?;
+                    let zonked = IterativeTypeOwner::new(self.zonk(&ty)?);
+                    let source = zonked.into_inner();
+                    let Type::Function(domain, codomain) = source else {
+                        discard_type_iteratively(source);
+                        return Err(invalid_state());
+                    };
+                    ty.replace(Type::function_computation(
+                        *domain,
+                        ComputationType::new(*codomain, effects),
+                    ));
+                } else if !infer_effects {
+                    let expected_effects = match ty
+                        .function_view()
+                        .and_then(|function| function.effects())
+                    {
+                        Some(effects) => clone_effect_row_with_budget(effects, &mut self.type_work)
+                            .map_err(|()| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?,
+                        None => EffectRow::empty(),
+                    };
+                    let expected_is_inference = expected_effects.tail().is_some_and(|tail| {
+                        matches!(tail.variable(), EffectRowVariable::Inference(_))
+                    });
+                    if expected_is_inference {
+                        self.unify_effect_rows(&expected_effects, &body.effects)
+                            .map_err(|failure| match failure {
+                                UnificationFailure::Resource => {
+                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                                }
+                                UnificationFailure::Infinite => inference_failure(
+                                    TypeReason::AmbiguousEffectRow,
+                                    effect_span,
+                                    "this function would require an infinite latent effect row",
+                                ),
+                                UnificationFailure::Mismatch | UnificationFailure::Invariant => {
+                                    inference_failure(
+                                        TypeReason::AmbiguousEffectRow,
+                                        effect_span,
+                                        "this function body does not match its latent effect row",
+                                    )
+                                }
+                            })?;
+                        let zonked = self.zonk(&ty)?;
+                        ty.replace(zonked);
+                    } else {
+                        let weakened =
+                            self.union_effects(&body.effects, &expected_effects, effect_span)?;
+                        if !self.same_effect_rows(&weakened, &expected_effects)? {
+                            return Err(inference_failure(
+                                TypeReason::AmbiguousEffectRow,
+                                effect_span,
+                                "this function body requests effects outside its declared row",
+                            ));
+                        }
+                    }
+                }
+                if pattern.0.is_some() {
+                    let domain = domain.ok_or_else(invalid_state)?;
+                    let pattern_span = pattern.origin.primary_span();
+                    let mut matrix = CorePatternMatrixBuffer(vec![vec![
+                        pattern.take().ok_or_else(invalid_state)?,
+                    ]]);
+                    if let Some(witness) = missing_witness_for_types_with_budget(
+                        &matrix,
+                        std::slice::from_ref(&domain),
+                        &self.registry,
+                        &mut self.coverage_work,
+                    )? {
+                        return Err(case_error(
+                            TypeReason::RefutableFunctionDomain,
+                            pattern_span,
+                            "this function pattern is not exhaustive",
+                            Some(display_witness(&witness, &self.registry)),
+                        ));
+                    }
+                    let mut row = matrix.pop().ok_or_else(invalid_state)?;
+                    let mut pattern = row.pop().ok_or_else(invalid_state)?;
+                    if !row.is_empty() {
+                        return Err(invalid_state());
+                    }
+                    let scrutinee_origin = OriginOwner::new(pattern.origin.clone());
+                    let arm_origin = OriginOwner::new(pattern.origin.clone());
+                    let match_origin = OriginOwner::new(pattern.origin.clone());
+                    let core_body_type = IterativeTypeOwner::new(self.clone_type(&body.ty)?);
+                    let scrutinee = self.builder.variable(
+                        binder.id(),
+                        domain.into_inner(),
+                        scrutinee_origin.into_inner(),
+                    )?;
+                    let match_node = self.lower_match_expression(
+                        scrutinee,
+                        vec![CoreMatchArm::new(
+                            pattern.take().ok_or_else(invalid_state)?,
+                            body.node,
+                            arm_origin.into_inner(),
+                        )],
+                        core_body_type.into_inner(),
+                        match_origin.into_inner(),
+                        contains_newtype,
+                        pattern_count,
+                    )?;
+                    body.set_node(match_node);
+                }
+                let core_ty = self.pure_core_type(&ty)?;
+                let node =
+                    self.builder
+                        .function(binder, body.node, core_ty, origin.into_inner())?;
+                values.push(TypedNode {
+                    node,
+                    ty: ty.into_inner(),
+                    effects: EffectRow::empty(),
+                    provenance,
+                });
+            }
+            other => {
+                discard_elaboration_task(other);
+                return Err(invalid_state());
+            }
+        }
+        Ok(())
+    }
+
+    fn step_cleanup_completion(
+        &mut self,
+        cleanup: &crate::resolved::ResolvedCleanupExpr,
+        span: Span,
+        values: &mut TypedNodeBuffer,
+    ) -> Result<(), TypeError> {
+        let action = values.pop().ok_or_else(invalid_state)?;
+        let body = values.pop().ok_or_else(invalid_state)?;
+        let ty = self.clone_type(&body.ty)?;
+        let effects = self.union_effects(&body.effects, &action.effects, span)?;
+        let core_effects = self.core_effect_row(&effects)?;
+        let node = self.push_effect_core(
+            ty,
+            core_effects,
+            Origin::Source(span),
+            EffectOperation::Cleanup(crate::core::effect::CleanupScopeNode {
+                callback: cleanup.callback,
+                body: body.node,
+                action: action.node,
+                span,
+                action_span: cleanup.action_span,
+            }),
+        )?;
+        values.push(TypedNode {
+            node,
+            ty: self.clone_type(&body.ty)?,
+            effects,
+            provenance: body.provenance.clone(),
+        });
+        Ok(())
+    }
+
+    fn schedule_cleanup<'a>(
+        &mut self,
+        cleanup: &'a crate::resolved::ResolvedCleanupExpr,
+        span: Span,
+        context: &TypeContext,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+    ) -> Result<(), TypeError> {
+        let callback = self.zonk(context.lookup(cleanup.callback).ok_or_else(invalid_state)?)?;
+        self.check_registration_callback_type(&Type::Unit, callback, cleanup.action_span, span)?;
+        self.type_work.charge(3).map_err(|()| type_resource())?;
+        tasks.0.try_reserve(3).map_err(|_| type_resource())?;
+        tasks.push(ElaborationTask::FinishCleanup { cleanup, span });
+        tasks.push(ElaborationTask::Synthesize {
+            expression: &cleanup.action,
+            cause: None,
+        });
+        tasks.push(ElaborationTask::Synthesize {
+            expression: &cleanup.body,
+            cause: None,
+        });
+        Ok(())
+    }
+
+    fn schedule_cleanup_binding<'a>(
+        &mut self,
+        binding: &'a ResolvedBinding,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+    ) -> Result<(), TypeError> {
+        self.type_work.charge(4).map_err(|()| type_resource())?;
+        tasks.0.try_reserve(3).map_err(|_| type_resource())?;
+        let evidence_marker =
+            if self.purpose == ElaborationPurpose::ModuleCheck && self.selection.is_some() {
+                Some(self.evidence_marker()?)
+            } else {
+                None
+            };
+        tasks.push(ElaborationTask::FinishBinding {
+            binding,
+            expected: None,
+            evidence_marker,
+        });
+        let effects = self.fresh_effect_row(binding.initializer.span)?;
+        let completion = tasks.0.len();
+        tasks.push(ElaborationTask::FinishCleanupAction(Box::new(
+            CleanupActionProgress {
+                expected: clone_effect_row_with_budget(&effects, &mut self.type_work)
+                    .map_err(|()| type_resource())?,
+                inferred: None,
+                span: binding.initializer.span,
+            },
+        )));
+        let ty = IterativeTypeOwner::new(Type::function_computation(
+            Type::Unit,
+            ComputationType::new(Type::Unit, effects),
+        ));
+        let provenance = self.unknown_provenance(&ty)?;
+        tasks.push(ElaborationTask::Check {
+            expression: &binding.initializer,
+            expected: ProvenancedType {
+                ty: ty.into_inner(),
+                provenance,
+            },
+            kind: CheckKind::CleanupAction(completion),
+        });
+        Ok(())
+    }
+
+    fn finish_cleanup_action(
+        &mut self,
+        progress: CleanupActionProgress,
+        values: &mut TypedNodeBuffer,
+    ) -> Result<(), TypeError> {
+        let CleanupActionProgress {
+            expected,
+            inferred,
+            span,
+        } = progress;
+        if let Some(inferred) = inferred {
+            let expected = self.zonk_effect_row(&expected)?;
+            if expected
+                .tail()
+                .is_some_and(|tail| matches!(tail.variable(), EffectRowVariable::Inference(_)))
+            {
+                self.unify_effect_rows(&expected, &inferred)
+                    .map_err(|failure| match failure {
+                        UnificationFailure::Resource => type_resource(),
+                        UnificationFailure::Invariant => invalid_state(),
+                        UnificationFailure::Infinite | UnificationFailure::Mismatch => {
+                            inference_failure(
+                                TypeReason::AmbiguousEffectRow,
+                                span,
+                                "this cleanup action has no principal latent effect row",
+                            )
+                        }
+                    })?;
+            } else {
+                let combined = self.union_effects(&expected, &inferred, span)?;
+                if !self.same_effect_rows(&combined, &expected)? {
+                    return Err(inference_failure(
+                        TypeReason::AmbiguousEffectRow,
+                        span,
+                        "this cleanup action requests effects outside its expected row",
+                    ));
+                }
+            }
+        }
+        let mut action = values.pop().ok_or_else(invalid_state)?;
+        action.replace_type(self.zonk(&action.ty)?);
+        values.push(action.into_inner());
+        Ok(())
+    }
+
+    fn record_cleanup_action_effects(
+        &mut self,
+        completion: usize,
+        effects: &EffectRow,
+        tasks: &mut ElaborationTaskBuffer<'_>,
+    ) -> Result<(), TypeError> {
+        self.type_work.charge(1).map_err(|()| type_resource())?;
+        let Some(ElaborationTask::FinishCleanupAction(progress)) = tasks.0.get_mut(completion)
+        else {
+            return Err(invalid_state());
+        };
+        // Keep the common expected row unsolved until all contextual result
+        // alternatives have contributed. Ordinary named values still unify.
+        let accumulated = progress.inferred.take().unwrap_or_else(EffectRow::empty);
+        progress.inferred = Some(self.union_effects(&accumulated, effects, progress.span)?);
+        Ok(())
+    }
+
     fn elaborate_expression_with_context<'a>(
         &mut self,
         initial: ElaborationTask<'a>,
@@ -10595,9 +10907,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut declarations = ElaboratedDeclarationBuffer(Vec::new());
         while let Some(task) = tasks.pop() {
             match task {
-                ElaborationTask::FinishPerform(progress) => {
-                    self.step_perform_completion(progress, &mut values)?;
-                }
                 ElaborationTask::FinishHookBody {
                     handler,
                     span,
@@ -10616,1371 +10925,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         self.finish_handler(handler, span, context, body, rewrite_checkpoint)?
                     });
                 }
-                ElaborationTask::ResourceBody { resource, span } => {
-                    self.step_resource_body(resource, span, context, &mut tasks, &mut values)?;
-                }
-                ElaborationTask::FinishResource(progress) => {
-                    self.step_resource_completion(progress, context, &mut values)?;
-                }
-                ElaborationTask::Equation(task) => {
-                    self.step_equation_task(
-                        task,
-                        context,
-                        &mut tasks,
-                        &mut values,
-                        &mut declarations,
-                    )?;
-                }
-                ElaborationTask::RetainLocalNewtype(owner) => {
-                    declarations.push(ElaboratedDeclaration::Newtype(owner));
-                }
-                ElaborationTask::Synthesize {
-                    expression: current,
-                    cause,
-                } => match &current.kind {
-                    ResolvedExprKind::Integer(value) => {
-                        let ty = Type::Int;
-                        let node = self.builder.integer(
-                            value.clone(),
-                            Type::Int,
-                            Origin::Source(current.span),
-                        )?;
-                        values.push(TypedNode {
-                            node,
-                            ty,
-                            effects: EffectRow::empty(),
-                            provenance: TypeProvenance::atom(Some(current.span)),
-                        });
-                    }
-                    ResolvedExprKind::Boolean(value) => {
-                        let ty = Type::Bool;
-                        let node = self.builder.boolean(
-                            *value,
-                            Type::Bool,
-                            Origin::Source(current.span),
-                        )?;
-                        values.push(TypedNode {
-                            node,
-                            ty,
-                            effects: EffectRow::empty(),
-                            provenance: TypeProvenance::atom(Some(current.span)),
-                        });
-                    }
-                    ResolvedExprKind::Unit => {
-                        let ty = Type::Unit;
-                        let node = self
-                            .builder
-                            .unit(Type::Unit, Origin::Source(current.span))?;
-                        values.push(TypedNode {
-                            node,
-                            ty,
-                            effects: EffectRow::empty(),
-                            provenance: TypeProvenance::atom(Some(current.span)),
-                        });
-                    }
-                    ResolvedExprKind::Add(binary) => {
-                        schedule_left(Primitive::Add, current.span, binary, &mut tasks)
-                    }
-                    ResolvedExprKind::Multiply(binary) => {
-                        schedule_left(Primitive::Multiply, current.span, binary, &mut tasks)
-                    }
-                    ResolvedExprKind::Equal(binary) => {
-                        schedule_left(Primitive::Equal, current.span, binary, &mut tasks)
-                    }
-                    ResolvedExprKind::Occurrence(occurrence) => match occurrence.term {
-                        crate::resolved::ResolvedTermName::Global(binder) => {
-                            let fact = context.fact(binder).ok_or_else(invalid_state)?;
-                            let rigid = self.monomorphic_recursive.contains(&binder);
-                            let (ty, arguments, row_arguments) =
-                                self.instantiate(fact, rigid, current.span)?;
-                            let ty = IterativeTypeOwner::new(ty);
-                            let arguments = OwnedTypeBuffer(arguments);
-                            let provenance = fact.provenance.clone();
-                            let has_lowered_global_scheme =
-                                self.evidence_lowering.as_ref().is_some_and(|lowering| {
-                                    lowering.global_schemes.contains_key(&binder)
-                                });
-                            if self.purpose == ElaborationPurpose::FinalSynthesis
-                                && has_lowered_global_scheme
-                            {
-                                let mut lowering =
-                                    self.evidence_lowering.take().ok_or_else(invalid_state)?;
-                                let result = (|| {
-                                    let scheme = lowering
-                                        .global_schemes
-                                        .get(&binder)
-                                        .ok_or_else(invalid_state)?;
-                                    let core_scheme = IterativeTypeOwner::new(
-                                        self.clone_type(&scheme.core_scheme)?,
-                                    );
-                                    let variable_ty = self.clone_type(&core_scheme)?;
-                                    let mut current = TypedNodeOwner::new(TypedNode {
-                                        node: self.builder.variable(
-                                            binder,
-                                            variable_ty,
-                                            occurrence.origin.clone(),
-                                        )?,
-                                        ty: core_scheme.into_inner(),
-                                        effects: EffectRow::empty(),
-                                        provenance: provenance.clone(),
-                                    });
-                                    self.authenticate_lexical_capture_occurrence(
-                                        occurrence,
-                                        current.node,
-                                    )?;
-                                    let mut current_arguments = OwnedTypeBuffer(Vec::new());
-                                    self.type_work.charge(arguments.len()).map_err(|()| {
-                                        TypeError::Internal(
-                                            ElaborationFailure::TypeResourceExhausted,
-                                        )
-                                    })?;
-                                    current_arguments.try_reserve(arguments.len()).map_err(
-                                        |_| {
-                                            TypeError::Internal(
-                                                ElaborationFailure::TypeResourceExhausted,
-                                            )
-                                        },
-                                    )?;
-                                    for argument in arguments.iter() {
-                                        current_arguments.push(self.clone_type(argument)?);
-                                    }
-                                    let mut current_row_arguments = Vec::new();
-                                    self.type_work
-                                        .charge(row_arguments.len())
-                                        .map_err(|()| type_resource())?;
-                                    current_row_arguments
-                                        .try_reserve(row_arguments.len())
-                                        .map_err(|_| type_resource())?;
-                                    for row in &row_arguments {
-                                        current_row_arguments.push(
-                                            clone_effect_row_with_budget(row, &mut self.type_work)
-                                                .map_err(|()| type_resource())?,
-                                        );
-                                    }
-                                    self.replay_lowered_global_determination(
-                                        scheme,
-                                        &current_arguments,
-                                        &current_row_arguments,
-                                        occurrence,
-                                        &lowering,
-                                    )?;
-                                    if !arguments.is_empty() || !row_arguments.is_empty() {
-                                        let core_ty = IterativeTypeOwner::new(
-                                            self.instantiate_lowered_core_body(
-                                                scheme,
-                                                &arguments,
-                                                &row_arguments,
-                                            )?,
-                                        );
-                                        let application_ty = self.clone_type(&core_ty)?;
-                                        let node =
-                                            self.builder.type_application_with_row_arguments(
-                                                current.node,
-                                                arguments.into_vec(),
-                                                row_arguments,
-                                                application_ty,
-                                                occurrence.origin.clone(),
-                                            )?;
-                                        current.set_node(node);
-                                        current.replace_type(core_ty.into_inner());
-                                    }
-                                    let requirement_count = lowering
-                                        .global_schemes
-                                        .get(&binder)
-                                        .ok_or_else(invalid_state)?
-                                        .requirements
-                                        .len();
-                                    if occurrence.evidence.len() != requirement_count {
-                                        return Err(invalid_state());
-                                    }
-                                    for (requirement_index, slot) in
-                                        occurrence.evidence.iter().enumerate()
-                                    {
-                                        let selection =
-                                            slot.selection().ok_or_else(invalid_state)?;
-                                        let methods = self.lower_evidence_selection(
-                                            selection,
-                                            &mut lowering,
-                                            &occurrence.origin,
-                                            None,
-                                            slot.storage_id(),
-                                        )?;
-                                        let target_requirement = lowering
-                                            .global_schemes
-                                            .get(&binder)
-                                            .and_then(|scheme| {
-                                                scheme.requirements.get(requirement_index)
-                                            })
-                                            .ok_or_else(invalid_state)?;
-                                        if methods.len() != target_requirement.methods.len() {
-                                            return Err(invalid_state());
-                                        }
-                                        for (method, target_method) in
-                                            methods.iter().zip(&target_requirement.methods)
-                                        {
-                                            let target_application = self
-                                                .instantiate_lowered_source_application(
-                                                    lowering
-                                                        .global_schemes
-                                                        .get(&binder)
-                                                        .ok_or_else(invalid_state)?
-                                                        .binder_parameters(),
-                                                    &target_method.application,
-                                                    &current_arguments,
-                                                    &current_row_arguments,
-                                                )?;
-                                            let canonical_method = lowering
-                                                .interface_methods
-                                                .get(&target_method.method)
-                                                .ok_or_else(invalid_state)?;
-                                            current =
-                                                TypedNodeOwner::new(self.apply_lowered_argument(
-                                                    current.into_inner(),
-                                                    method,
-                                                    target_requirement.owner,
-                                                    target_requirement.id,
-                                                    target_method,
-                                                    &target_application,
-                                                    canonical_method,
-                                                    None,
-                                                    &occurrence.origin,
-                                                    slot.storage_id(),
-                                                )?);
-                                        }
-                                    }
-                                    if !same_type(&current.ty, &ty) {
-                                        return Err(invalid_state());
-                                    }
-                                    current.set_provenance(provenance);
-                                    Ok(current.into_inner())
-                                })();
-                                self.evidence_lowering = Some(lowering);
-                                values.push(result?);
-                            } else {
-                                self.record_global_obligations(
-                                    binder,
-                                    occurrence,
-                                    &arguments,
-                                    &row_arguments,
-                                    current.span,
-                                )?;
-                                let scheme = self.pure_core_scheme(fact)?;
-                                let mut node = self.builder.variable(
-                                    binder,
-                                    scheme,
-                                    occurrence.origin.clone(),
-                                )?;
-                                self.authenticate_lexical_capture_occurrence(occurrence, node)?;
-                                if !arguments.is_empty() || F::EFFECTS && !row_arguments.is_empty()
-                                {
-                                    let core_ty = self.pure_core_type(&ty)?;
-                                    node = if F::EFFECTS {
-                                        self.builder.type_application_with_row_arguments(
-                                            node,
-                                            arguments.into_vec(),
-                                            row_arguments,
-                                            core_ty,
-                                            occurrence.origin.clone(),
-                                        )
-                                    } else {
-                                        self.builder.type_application(
-                                            node,
-                                            arguments.into_vec(),
-                                            core_ty,
-                                            occurrence.origin.clone(),
-                                        )
-                                    }?;
-                                }
-                                self.record_capture_global(binder, node, occurrence)?;
-                                values.push(TypedNode {
-                                    node,
-                                    ty: ty.into_inner(),
-                                    effects: EffectRow::empty(),
-                                    provenance,
-                                });
-                            }
-                        }
-                        crate::resolved::ResolvedTermName::Method(method) => {
-                            if self.purpose == ElaborationPurpose::FinalSynthesis {
-                                values.push(
-                                    self.synthesize_lowered_method_occurrence(method, occurrence)?,
-                                );
-                            } else {
-                                values.push(self.synthesize_method_occurrence(
-                                    method,
-                                    occurrence,
-                                    current.span,
-                                    cause,
-                                )?);
-                            }
-                        }
-                    },
-                    ResolvedExprKind::Constructor(occurrence) => {
-                        let constructor = self
-                            .registry
-                            .constructor(occurrence.constructor)
-                            .ok_or_else(invalid_state)?;
-                        let constructor_owner = constructor.owner;
-                        let owner = self
-                            .registry
-                            .nominal(constructor_owner)
-                            .ok_or_else(invalid_state)?;
-                        let is_newtype =
-                            owner.declaration_kind == ResolvedNominalDeclarationKind::Newtype;
-                        let declared_payload = if is_newtype {
-                            Some(owner.representation.as_ref().ok_or_else(invalid_state)?)
-                        } else {
-                            constructor.payload.as_ref()
-                        };
-                        let declaration_span = constructor.origin.primary_span();
-                        let parameters = self
-                            .registry
-                            .nominal_parameters(constructor_owner)
-                            .ok_or_else(invalid_state)?;
-                        let parameter_count = parameters.len();
-                        let result_cells = if parameters.is_empty() {
-                            1
-                        } else {
-                            parameter_count.saturating_add(1)
-                        };
-                        self.type_work
-                            .charge(result_cells.saturating_add(parameter_count))
-                            .map_err(|()| {
-                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                            })?;
-                        let payload = if let Some(payload) = declared_payload {
-                            self.type_work.charge(1).map_err(|()| {
-                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                            })?;
-                            Some(IterativeTypeOwner::new(
-                                clone_type_with_budget(payload, &mut self.type_work).map_err(
-                                    |()| {
-                                        TypeError::Internal(
-                                            ElaborationFailure::TypeResourceExhausted,
-                                        )
-                                    },
-                                )?,
-                            ))
-                        } else {
-                            None
-                        };
-                        let mut quantified = Vec::new();
-                        quantified.try_reserve(parameter_count).map_err(|_| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
-                        for parameter in parameters {
-                            quantified.push((
-                                parameter.id,
-                                clone_kind_with_budget(&parameter.kind, &mut self.type_work)
-                                    .map_err(|()| {
-                                        TypeError::Internal(
-                                            ElaborationFailure::TypeResourceExhausted,
-                                        )
-                                    })?,
-                            ));
-                        }
-                        let result = if parameters.is_empty() {
-                            Type::Nominal(constructor_owner)
-                        } else {
-                            let mut arguments = Vec::new();
-                            arguments.try_reserve(parameter_count).map_err(|_| {
-                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                            })?;
-                            arguments.extend(
-                                parameters
-                                    .iter()
-                                    .map(|parameter| Type::Variable(parameter.id)),
-                            );
-                            Type::apply_arguments(Type::Nominal(constructor_owner), arguments)
-                        };
-                        let scheme = IterativeTypeOwner::new(if let Some(payload) = payload {
-                            Type::Function(Box::new(payload.into_inner()), Box::new(result))
-                        } else {
-                            result
-                        });
-                        let scheme_provenance =
-                            self.at_span_provenance(&scheme, declaration_span)?;
-                        let fact = TypeFactOwner::new(TypeFact {
-                            ty: scheme.into_inner(),
-                            provenance: scheme_provenance,
-                            quantified: quantified.into_boxed_slice(),
-                        });
-                        let (ty, arguments, row_arguments) =
-                            self.instantiate(&fact, false, current.span)?;
-                        if !row_arguments.is_empty() {
-                            return Err(invalid_state());
-                        }
-                        let ty = IterativeTypeOwner::new(ty);
-                        let arguments = OwnedTypeBuffer(arguments);
-                        let TypeFact {
-                            ty: fact_ty,
-                            provenance: _,
-                            quantified,
-                        } = fact.into_inner();
-                        let fact_ty = IterativeTypeOwner::new(fact_ty);
-                        let core_scheme = if quantified.is_empty() {
-                            fact_ty.into_inner()
-                        } else {
-                            self.type_work.charge(1).map_err(|()| {
-                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                            })?;
-                            Type::Forall(quantified, Box::new(fact_ty.into_inner()))
-                        };
-                        let mut node = if is_newtype {
-                            self.lower_newtype_constructor_value(
-                                constructor_owner,
-                                core_scheme,
-                                &occurrence.origin,
-                                current.span,
-                            )?
-                        } else {
-                            self.builder.constructor(
-                                occurrence.constructor,
-                                core_scheme,
-                                occurrence.origin.clone(),
-                            )?
-                        };
-                        if !arguments.is_empty() {
-                            let core_ty = clone_type_with_budget(&ty, &mut self.type_work)
-                                .map_err(|()| {
-                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                                })?;
-                            node = self.builder.type_application(
-                                node,
-                                arguments.into_vec(),
-                                core_ty,
-                                occurrence.origin.clone(),
-                            )?;
-                        }
-                        let provenance = self.at_span_provenance(&ty, declaration_span)?;
-                        values.push(TypedNode {
-                            node,
-                            effects: EffectRow::empty(),
-                            provenance,
-                            ty: ty.into_inner(),
-                        });
-                    }
-                    ResolvedExprKind::Tuple(elements) => {
-                        let tuple = self.elaborate_tuple(elements, current.span, context)?;
-                        values.push(tuple);
-                    }
-                    ResolvedExprKind::Match(match_expression) => {
-                        tasks.push(ElaborationTask::AfterMatchScrutinee {
-                            expression: match_expression,
-                            span: current.span,
-                            expected: None,
-                        });
-                        tasks.push(ElaborationTask::Synthesize {
-                            expression: &match_expression.scrutinee,
-                            cause: None,
-                        });
-                    }
-                    ResolvedExprKind::Apply(application) => {
-                        let recursive_call = matches!(
-                            &application.function.kind,
-                            ResolvedExprKind::Occurrence(occurrence)
-                                if occurrence.global_binder().is_some_and(|binder|
-                                    self.monomorphic_recursive.contains(&binder))
-                        );
-                        tasks.push(ElaborationTask::AfterApplicationFunction {
-                            whole_span: current.span,
-                            function_span: application.function.span,
-                            argument: &application.argument,
-                            recursive_call,
-                        });
-                        tasks.push(ElaborationTask::Synthesize {
-                            expression: &application.function,
-                            cause: Some(SynthesisCause::Application {
-                                whole_span: current.span,
-                                argument_span: application.argument.span,
-                            }),
-                        });
-                    }
-                    ResolvedExprKind::Block(block) => {
-                        schedule_block(
-                            block,
-                            None,
-                            cause,
-                            &mut tasks,
-                            declarations.len(),
-                            &mut self.type_work,
-                        )?;
-                    }
-                    ResolvedExprKind::Resource(resource) => {
-                        self.schedule_resource(resource, current.span, &mut tasks)?;
-                    }
-                    ResolvedExprKind::Perform(request) => {
-                        self.schedule_perform(request, current.span, &mut tasks)?;
-                    }
-                    ResolvedExprKind::Handle(handler)
-                        if handler.hook_root.is_some() || handler.hook_registration.is_some() =>
-                    {
-                        self.type_work.charge(2).map_err(|()| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
-                        tasks.0.try_reserve(2).map_err(|_| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
-                        tasks.push(ElaborationTask::FinishHookBody {
-                            handler,
-                            span: current.span,
-                            rewrite_checkpoint: self.builder.type_rewrite_checkpoint(),
-                        });
-                        tasks.push(ElaborationTask::Synthesize {
-                            expression: &handler.body,
-                            cause: None,
-                        });
-                    }
-                    ResolvedExprKind::Handle(handler) => {
-                        let typed = self.synthesize_handler(handler, current.span, context)?;
-                        values.push(typed);
-                    }
-                    ResolvedExprKind::Resume(resume) => {
-                        let typed = self.synthesize_resume(resume, current.span, context)?;
-                        values.push(typed);
-                    }
-                    ResolvedExprKind::Discard(discard) => {
-                        let typed = self.synthesize_discard(discard, current.span)?;
-                        values.push(typed);
-                    }
-                    ResolvedExprKind::Function(function) => {
-                        if !matches!(cause, Some(SynthesisCause::Binding(_))) {
-                            return Err(function_needs_context(current.span, cause));
-                        }
-                        self.schedule_inferred_function(function, current.span, &mut tasks, None)?;
-                    }
-                },
-                ElaborationTask::Check {
-                    expression,
-                    expected,
-                    kind,
-                } => match &expression.kind {
-                    ResolvedExprKind::Function(function) => {
-                        let expected = ProvenancedTypeOwner::new(expected);
-                        let expected = self.expose_expected_function(expected, expression.span)?;
-                        let (domain_ty, codomain_ty) =
-                            clone_function_parts_with_budget(&expected.ty, &mut self.type_work)
-                                .map_err(|()| {
-                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                                })?;
-                        let domain_ty = IterativeTypeOwner::new(domain_ty);
-                        let codomain_ty = IterativeTypeOwner::new(codomain_ty);
-                        let (domain_provenance, codomain_provenance) =
-                            expected.provenance.function_parts(&expected.ty)?;
-                        let domain = ProvenancedType {
-                            ty: domain_ty.into_inner(),
-                            provenance: domain_provenance,
-                        };
-                        let codomain = ProvenancedType {
-                            ty: codomain_ty.into_inner(),
-                            provenance: codomain_provenance,
-                        };
-                        tasks.push(ElaborationTask::CheckFunction {
-                            parameter: &function.pattern,
-                            domain,
-                            codomain,
-                            body: FunctionBody::Block(&function.body),
-                            presentation: anonymous_function_origin(expression.span, function),
-                            function_type: expected.into_inner(),
-                            body_check: kind,
-                            infer_effects: false,
-                        });
-                    }
-                    ResolvedExprKind::Block(block) => {
-                        schedule_block(
-                            block,
-                            Some((expected, kind)),
-                            None,
-                            &mut tasks,
-                            declarations.len(),
-                            &mut self.type_work,
-                        )?;
-                    }
-                    ResolvedExprKind::Match(match_expression) => {
-                        tasks.push(ElaborationTask::AfterMatchScrutinee {
-                            expression: match_expression,
-                            span: expression.span,
-                            expected: Some((expected, kind)),
-                        });
-                        tasks.push(ElaborationTask::Synthesize {
-                            expression: &match_expression.scrutinee,
-                            cause: None,
-                        });
-                    }
-                    _ => {
-                        tasks.push(ElaborationTask::FinishCheck {
-                            span: expression.span,
-                            expected,
-                            kind,
-                        });
-                        tasks.push(ElaborationTask::Synthesize {
-                            expression,
-                            cause: None,
-                        });
-                    }
-                },
-                ElaborationTask::CheckBlock {
-                    block,
-                    expected,
-                    kind,
-                } => schedule_block(
-                    block,
-                    Some((expected, kind)),
-                    None,
+                task => self.step_expression_task(
+                    task,
+                    context,
                     &mut tasks,
-                    declarations.len(),
-                    &mut self.type_work,
+                    &mut values,
+                    &mut declarations,
                 )?,
-                ElaborationTask::FinishCheck {
-                    span,
-                    expected,
-                    kind,
-                } => {
-                    let expected = ProvenancedTypeOwner::new(expected);
-                    let synthesized = values.pop().ok_or_else(invalid_state)?;
-                    if !expected.provenance.aligns(&expected.ty)
-                        || !synthesized.provenance.aligns(&synthesized.ty)
-                    {
-                        return Err(invalid_state());
-                    }
-                    match self.unify(&synthesized.ty, &expected.ty) {
-                        Ok(()) => {}
-                        Err(UnificationFailure::Infinite) => {
-                            return Err(inference_failure(
-                                TypeReason::InfiniteType,
-                                span,
-                                "this expression would require an infinite type",
-                            ));
-                        }
-                        Err(UnificationFailure::Mismatch) => {
-                            let expected_ty = IterativeTypeOwner::new(self.zonk(&expected.ty)?);
-                            let synthesized_ty =
-                                IterativeTypeOwner::new(self.zonk(&synthesized.ty)?);
-                            return Err(check_mismatch(
-                                kind,
-                                span,
-                                expected_ty.into_inner(),
-                                synthesized_ty.into_inner(),
-                                expected.provenance.span(),
-                                &self.registry,
-                            ));
-                        }
-                        Err(UnificationFailure::Resource) => {
-                            return Err(TypeError::Internal(
-                                ElaborationFailure::TypeResourceExhausted,
-                            ));
-                        }
-                        Err(UnificationFailure::Invariant) => return Err(invalid_state()),
-                    }
-                    let TypedNode {
-                        node,
-                        ty: synthesized_ty,
-                        effects,
-                        provenance,
-                    } = synthesized.into_inner();
-                    let ty = IterativeTypeOwner::new(self.zonk_owned(synthesized_ty)?);
-                    self.builder
-                        .record_type_check(node, expected.provenance.span())?;
-                    values.push(TypedNode {
-                        node,
-                        ty: ty.into_inner(),
-                        effects,
-                        provenance,
-                    });
-                }
-                ElaborationTask::CheckFunction {
-                    parameter,
-                    domain,
-                    codomain,
-                    body,
-                    presentation,
-                    function_type,
-                    body_check,
-                    infer_effects,
-                } => {
-                    self.schedule_function_check(
-                        context,
-                        &mut tasks,
-                        declarations.len(),
-                        FunctionCheck {
-                            parameter,
-                            domain,
-                            codomain,
-                            body,
-                            presentation,
-                            function_type,
-                            body_check,
-                            infer_effects,
-                        },
-                    )?;
-                }
-                ElaborationTask::FinishFunction {
-                    direct_binder,
-                    pattern_binders,
-                    binder,
-                    pattern,
-                    domain,
-                    ty,
-                    origin,
-                    provenance,
-                    contains_newtype,
-                    pattern_count,
-                    infer_effects,
-                } => {
-                    let effect_span = origin.primary_span();
-                    let origin = OriginOwner::new(origin);
-                    let mut pattern = CorePatternOwner::new(pattern);
-                    let domain = domain.map(IterativeTypeOwner::new);
-                    let mut ty = IterativeTypeOwner::new(ty);
-                    let mut body = values.pop().ok_or_else(invalid_state)?;
-                    if let Some(binder) = direct_binder
-                        && !context.remove_and_discard(binder)
-                    {
-                        return Err(invalid_state());
-                    }
-                    self.remove_pattern_binders(context, &pattern_binders)?;
-                    if infer_effects && !body.effects.is_empty() {
-                        let effects = self.zonk_effect_row(&body.effects)?;
-                        let zonked = IterativeTypeOwner::new(self.zonk(&ty)?);
-                        let source = zonked.into_inner();
-                        let Type::Function(domain, codomain) = source else {
-                            discard_type_iteratively(source);
-                            return Err(invalid_state());
-                        };
-                        ty.replace(Type::function_computation(
-                            *domain,
-                            ComputationType::new(*codomain, effects),
-                        ));
-                    } else if !infer_effects {
-                        let expected_effects =
-                            match ty.function_view().and_then(|function| function.effects()) {
-                                Some(effects) => {
-                                    clone_effect_row_with_budget(effects, &mut self.type_work)
-                                        .map_err(|()| {
-                                            TypeError::Internal(
-                                                ElaborationFailure::TypeResourceExhausted,
-                                            )
-                                        })?
-                                }
-                                None => EffectRow::empty(),
-                            };
-                        let expected_is_inference = expected_effects.tail().is_some_and(|tail| {
-                            matches!(tail.variable(), EffectRowVariable::Inference(_))
-                        });
-                        if expected_is_inference {
-                            self.unify_effect_rows(&expected_effects, &body.effects)
-                                .map_err(|failure| match failure {
-                                    UnificationFailure::Resource => TypeError::Internal(
-                                        ElaborationFailure::TypeResourceExhausted,
-                                    ),
-                                    UnificationFailure::Infinite => inference_failure(
-                                        TypeReason::AmbiguousEffectRow,
-                                        effect_span,
-                                        "this function would require an infinite latent effect row",
-                                    ),
-                                    UnificationFailure::Mismatch
-                                    | UnificationFailure::Invariant => inference_failure(
-                                        TypeReason::AmbiguousEffectRow,
-                                        effect_span,
-                                        "this function body does not match its latent effect row",
-                                    ),
-                                })?;
-                            let zonked = self.zonk(&ty)?;
-                            ty.replace(zonked);
-                        } else {
-                            let weakened =
-                                self.union_effects(&body.effects, &expected_effects, effect_span)?;
-                            if !self.same_effect_rows(&weakened, &expected_effects)? {
-                                return Err(inference_failure(
-                                    TypeReason::AmbiguousEffectRow,
-                                    effect_span,
-                                    "this function body requests effects outside its declared row",
-                                ));
-                            }
-                        }
-                    }
-                    if pattern.0.is_some() {
-                        let domain = domain.ok_or_else(invalid_state)?;
-                        let pattern_span = pattern.origin.primary_span();
-                        let mut matrix = CorePatternMatrixBuffer(vec![vec![
-                            pattern.take().ok_or_else(invalid_state)?,
-                        ]]);
-                        if let Some(witness) = missing_witness_for_types_with_budget(
-                            &matrix,
-                            std::slice::from_ref(&domain),
-                            &self.registry,
-                            &mut self.coverage_work,
-                        )? {
-                            return Err(case_error(
-                                TypeReason::RefutableFunctionDomain,
-                                pattern_span,
-                                "this function pattern is not exhaustive",
-                                Some(display_witness(&witness, &self.registry)),
-                            ));
-                        }
-                        let mut row = matrix.pop().ok_or_else(invalid_state)?;
-                        let mut pattern = row.pop().ok_or_else(invalid_state)?;
-                        if !row.is_empty() {
-                            return Err(invalid_state());
-                        }
-                        let scrutinee_origin = OriginOwner::new(pattern.origin.clone());
-                        let arm_origin = OriginOwner::new(pattern.origin.clone());
-                        let match_origin = OriginOwner::new(pattern.origin.clone());
-                        let core_body_type = IterativeTypeOwner::new(self.clone_type(&body.ty)?);
-                        let scrutinee = self.builder.variable(
-                            binder.id(),
-                            domain.into_inner(),
-                            scrutinee_origin.into_inner(),
-                        )?;
-                        let match_node = self.lower_match_expression(
-                            scrutinee,
-                            vec![CoreMatchArm::new(
-                                pattern.take().ok_or_else(invalid_state)?,
-                                body.node,
-                                arm_origin.into_inner(),
-                            )],
-                            core_body_type.into_inner(),
-                            match_origin.into_inner(),
-                            contains_newtype,
-                            pattern_count,
-                        )?;
-                        body.set_node(match_node);
-                    }
-                    let core_ty = self.pure_core_type(&ty)?;
-                    let node =
-                        self.builder
-                            .function(binder, body.node, core_ty, origin.into_inner())?;
-                    values.push(TypedNode {
-                        node,
-                        ty: ty.into_inner(),
-                        effects: EffectRow::empty(),
-                        provenance,
-                    });
-                }
-                ElaborationTask::AfterApplicationFunction {
-                    whole_span,
-                    function_span,
-                    argument,
-                    recursive_call,
-                } => {
-                    let function = values.pop().ok_or_else(invalid_state)?;
-                    self.schedule_application_argument(
-                        whole_span,
-                        function_span,
-                        argument,
-                        recursive_call,
-                        function.into_inner(),
-                        &mut tasks,
-                    )?;
-                }
-                ElaborationTask::FinishApplication {
-                    whole_span,
-                    function_span,
-                    argument_span,
-                    function,
-                    codomain,
-                    latent_effects,
-                } => {
-                    let argument = values.pop().ok_or_else(invalid_state)?;
-                    values.push(self.finish_application(
-                        whole_span,
-                        function_span,
-                        argument_span,
-                        function,
-                        codomain,
-                        latent_effects,
-                        argument.into_inner(),
-                    )?);
-                }
-                ElaborationTask::AfterLeft {
-                    primitive,
-                    whole_span,
-                    operator_span,
-                    right,
-                    left_span,
-                } => {
-                    let left = values.pop().ok_or_else(invalid_state)?;
-                    self.require_integer(&left, left_span, operator_span)?;
-                    tasks.push(ElaborationTask::AfterRight {
-                        primitive,
-                        whole_span,
-                        operator_span,
-                        left: left.into_inner(),
-                        right_span: right.span,
-                    });
-                    tasks.push(ElaborationTask::Synthesize {
-                        expression: right,
-                        cause: Some(SynthesisCause::Operator(operator_span)),
-                    });
-                }
-                ElaborationTask::AfterRight {
-                    primitive,
-                    whole_span,
-                    operator_span,
-                    left,
-                    right_span,
-                } => {
-                    let left = TypedNodeOwner::new(left);
-                    let right = values.pop().ok_or_else(invalid_state)?;
-                    self.require_integer(&right, right_span, operator_span)?;
-                    let ty = match primitive {
-                        Primitive::Add | Primitive::Multiply => Type::Int,
-                        Primitive::Equal => Type::Bool,
-                    };
-                    let origin = Origin::Related {
-                        primary: Box::new(Origin::Source(whole_span)),
-                        related: vec![operator_span],
-                    };
-                    let effects = self.union_effects(&left.effects, &right.effects, whole_span)?;
-                    let node = self.builder.primitive(
-                        primitive,
-                        left.node,
-                        right.node,
-                        ty.clone(),
-                        origin,
-                    )?;
-                    values.push(TypedNode {
-                        node,
-                        ty,
-                        effects,
-                        provenance: TypeProvenance::atom(Some(operator_span)),
-                    });
-                }
-                ElaborationTask::BeginRegistrationBinding { binding, handler } => {
-                    self.schedule_registration_binding(binding, handler, &mut tasks)?;
-                }
-                ElaborationTask::BeginBinding {
-                    binding,
-                    expected,
-                    finish_expected,
-                } => {
-                    self.schedule_binding(binding, expected, finish_expected, &mut tasks)?;
-                }
-                ElaborationTask::FinishBinding {
-                    binding,
-                    expected,
-                    evidence_marker,
-                } => {
-                    let expected = expected.map(ProvenancedTypeOwner::new);
-                    let mut initializer = values.pop().ok_or_else(invalid_state)?;
-                    let initializer_effects =
-                        clone_effect_row_with_budget(&initializer.effects, &mut self.type_work)
-                            .map_err(|()| {
-                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                            })?;
-                    if let Some(marker) = evidence_marker {
-                        self.close_evidence_obligations(marker)?;
-                    }
-                    let mut generalized = Vec::new();
-                    if expected.is_none()
-                        && matches!(binding.pattern.kind, ResolvedPatternKind::Binder(_))
-                        && matches!(binding.initializer.kind, ResolvedExprKind::Function(_))
-                    {
-                        let inferred = IterativeTypeOwner::new(self.zonk(&initializer.ty)?);
-                        let mut variables =
-                            collect_unsolved_inference(&inferred, &mut self.type_work).map_err(
-                                |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
-                            )?;
-                        let mut environment_variables = HashSet::new();
-                        for fact in context.binders.values() {
-                            let ty = IterativeTypeOwner::new(self.zonk(&fact.ty)?);
-                            let variables = collect_unsolved_inference(&ty, &mut self.type_work)
-                                .map_err(|()| {
-                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                                })?;
-                            self.type_work.charge(variables.len()).map_err(|()| {
-                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                            })?;
-                            environment_variables
-                                .try_reserve(variables.len())
-                                .map_err(|_| {
-                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                                })?;
-                            environment_variables.extend(variables);
-                        }
-                        self.type_work.charge(variables.len()).map_err(|()| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
-                        variables.retain(|variable| !environment_variables.contains(variable));
-                        let (retained, zonked) =
-                            self.generalize_inference_variables(&variables, &initializer.ty)?;
-                        generalized = retained;
-                        initializer.replace_type(zonked);
-                    }
-                    let mut binding_type =
-                        ProvenancedTypeOwner::new(if let Some(expected) = expected {
-                            expected.into_inner()
-                        } else {
-                            let TypedNode {
-                                node,
-                                ty,
-                                effects,
-                                provenance,
-                            } = initializer.into_inner();
-                            initializer = TypedNodeOwner::new(TypedNode {
-                                node,
-                                ty: Type::Unit,
-                                effects,
-                                provenance: TypeProvenance::atom(None),
-                            });
-                            ProvenancedType { ty, provenance }
-                        });
-                    let mut binder_ids = Vec::new();
-                    let checked = self.check_core_pattern(
-                        &binding.pattern,
-                        &binding_type.ty,
-                        context,
-                        &mut binder_ids,
-                        GeneratedReason::BindingLowering,
-                    )?;
-                    let contains_newtype = checked.contains_newtype;
-                    let pattern_count = checked.pattern_count;
-                    let mut pattern = CorePatternOwner::new(Some(checked.pattern));
-                    if checked.inference_changed {
-                        let rewritten = clone_type_with_budget(&pattern.ty, &mut self.type_work)
-                            .map_err(|()| {
-                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                            })?;
-                        binding_type.replace_type(rewritten);
-                        if !binding_type.provenance.aligns(&binding_type.ty) {
-                            let provenance = self.unknown_provenance(&binding_type.ty)?;
-                            binding_type.set_provenance(provenance);
-                        }
-                    }
-                    let mut matrix = CorePatternMatrixBuffer(vec![vec![
-                        pattern.take().ok_or_else(invalid_state)?,
-                    ]]);
-                    if let Some(witness) = missing_witness_for_types_with_budget(
-                        &matrix,
-                        std::slice::from_ref(&binding_type.ty),
-                        &self.registry,
-                        &mut self.coverage_work,
-                    )? {
-                        self.remove_pattern_binders(context, &binder_ids)?;
-                        return Err(case_error(
-                            TypeReason::RefutableBinding,
-                            binding.span,
-                            "this local binding pattern can fail",
-                            Some(display_witness(&witness, &self.registry)),
-                        ));
-                    }
-                    let mut row = matrix.pop().ok_or_else(invalid_state)?;
-                    let pattern = row.pop().ok_or_else(invalid_state)?;
-                    if !row.is_empty() {
-                        return Err(invalid_state());
-                    }
-                    match pattern.into_inner() {
-                        CorePattern {
-                            ty,
-                            origin: pattern_origin,
-                            kind: CorePatternKind::Binder(mut binder),
-                        } => {
-                            discard_type_iteratively(ty);
-                            discard_origin_iteratively(pattern_origin);
-                            let quantified = generalized.into_boxed_slice();
-                            let context_quantified = clone_kinded_type_parameters_with_budget(
-                                &quantified,
-                                &mut self.type_work,
-                            )
-                            .map_err(|()| {
-                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                            })?
-                            .into_boxed_slice();
-                            let core_quantified = F::project_parameters(
-                                &quantified,
-                                &mut self.type_work,
-                            )
-                            .map_err(|()| {
-                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                            })?;
-                            let abstraction = if core_quantified.is_empty() {
-                                None
-                            } else {
-                                self.type_work.charge(1).map_err(|()| {
-                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                                })?;
-                                let scheme_body = self.pure_core_type(&binding_type.ty)?;
-                                let scheme = IterativeTypeOwner::new(Type::Forall(
-                                    core_quantified.into_boxed_slice(),
-                                    Box::new(scheme_body),
-                                ));
-                                let binder_scheme =
-                                    IterativeTypeOwner::new(self.clone_type(&scheme)?);
-                                let abstraction_parameters = match &*scheme {
-                                    Type::Forall(parameters, _) => {
-                                        clone_kinded_type_parameters_with_budget(
-                                            parameters,
-                                            &mut self.type_work,
-                                        )
-                                        .map_err(|()| {
-                                            TypeError::Internal(
-                                                ElaborationFailure::TypeResourceExhausted,
-                                            )
-                                        })?
-                                    }
-                                    _ => return Err(invalid_state()),
-                                };
-                                Some((scheme, binder_scheme, abstraction_parameters))
-                            };
-                            let origin = binding_origin(binding);
-                            context.set_quantified(binder.id(), context_quantified)?;
-                            if let Some((scheme, binder_scheme, abstraction_parameters)) =
-                                abstraction
-                            {
-                                binder.replace_type(binder_scheme.into_inner());
-                                let node = self.builder.type_abstraction(
-                                    abstraction_parameters,
-                                    initializer.node,
-                                    scheme.into_inner(),
-                                    Origin::Generated {
-                                        cause: Box::new(origin.clone()),
-                                        reason: GeneratedReason::TypeChecking,
-                                    },
-                                )?;
-                                initializer.set_node(node);
-                            }
-                            declarations.push(ElaboratedDeclaration::Binding {
-                                binder,
-                                initializer: initializer.node,
-                                effects: initializer_effects,
-                                origin,
-                            });
-                        }
-                        pattern => {
-                            let origin = binding_origin(binding);
-                            declarations.push(ElaboratedDeclaration::PatternBinding {
-                                pattern,
-                                initializer: initializer.node,
-                                effects: initializer_effects,
-                                origin,
-                                contains_newtype,
-                                pattern_count,
-                            });
-                        }
-                    }
-                }
-                ElaborationTask::CheckRecursiveMember(member) => {
-                    let fact = context.fact(member.binder.id).ok_or_else(invalid_state)?;
-                    let expected = ProvenancedType {
-                        ty: clone_type_with_budget(&fact.ty, &mut self.type_work).map_err(
-                            |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
-                        )?,
-                        provenance: fact.provenance.clone(),
-                    };
-                    tasks.push(ElaborationTask::Check {
-                        expression: &member.initializer,
-                        expected,
-                        kind: CheckKind::BindingInitializer {
-                            initializer_span: member.initializer.span,
-                            annotation_span: member.annotation.span,
-                        },
-                    });
-                }
-                ElaborationTask::BeginRecursiveGroup(group) => {
-                    for member in &group.members {
-                        validate_recursive_member(group, member, &self.registry)?;
-                    }
-                    for member in &group.members {
-                        let expected = ProvenancedType::from_resolved_with_budget(
-                            &member.annotation,
-                            &mut self.type_work,
-                        )?;
-                        if context.insert_with_provenance(
-                            member.binder.id,
-                            expected.ty,
-                            expected.provenance,
-                        )? {
-                            return Err(invalid_state());
-                        }
-                    }
-                    tasks.push(ElaborationTask::FinishRecursiveGroup { group });
-                    for member in group.members.iter().rev() {
-                        tasks.push(ElaborationTask::CheckRecursiveMember(member));
-                    }
-                }
-                ElaborationTask::FinishRecursiveGroup { group } => {
-                    if values.len() < group.members.len() {
-                        return Err(invalid_state());
-                    }
-                    let value_start = values.len() - group.members.len();
-                    let mut initializers = values.split_off(value_start);
-                    self.type_work.charge(group.members.len()).map_err(|()| {
-                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                    })?;
-                    let mut members = Vec::new();
-                    members.try_reserve(group.members.len()).map_err(|_| {
-                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                    })?;
-                    initializers.reverse();
-                    let mut effects = EffectRow::empty();
-                    for member in &group.members {
-                        let initializer = initializers.pop().ok_or_else(invalid_state)?;
-                        effects =
-                            self.union_effects(&effects, &initializer.effects, member.span)?;
-                        let TypedNode {
-                            node: initializer_node,
-                            ty: initializer_ty,
-                            ..
-                        } = initializer.into_inner();
-                        let binder = self.builder.resolved_binder(
-                            member.binder.id,
-                            initializer_ty,
-                            Origin::Generated {
-                                cause: Box::new(member.binder.origin.clone()),
-                                reason: GeneratedReason::BindingLowering,
-                            },
-                        )?;
-                        members.push((binder, initializer_node));
-                    }
-                    declarations.push(ElaboratedDeclaration::Recursive {
-                        members,
-                        effects,
-                        origin: recursive_group_origin(group),
-                    });
-                }
-                ElaborationTask::AfterMatchScrutinee {
-                    expression,
-                    span,
-                    expected,
-                } => {
-                    let expected = expected
-                        .map(|(expected, kind)| (ProvenancedTypeOwner::new(expected), kind));
-                    let scrutinee = values.pop().ok_or_else(invalid_state)?;
-                    if expression.arms.is_empty() {
-                        return Err(case_error(
-                            TypeReason::NonExhaustive,
-                            span,
-                            "a match requires at least one arm",
-                            None,
-                        ));
-                    }
-                    let arm_count = expression.arms.len();
-                    self.type_work
-                        .charge(arm_count.saturating_mul(2))
-                        .map_err(|()| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
-                    let mut matrix = Vec::new();
-                    matrix.try_reserve(arm_count).map_err(|_| {
-                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                    })?;
-                    let mut arm_bodies = Vec::new();
-                    arm_bodies.try_reserve(arm_count).map_err(|_| {
-                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                    })?;
-                    let progress = Box::new(MatchProgress {
-                        expression,
-                        span,
-                        scrutinee: scrutinee.into_inner(),
-                        next_arm: 0,
-                        matrix,
-                        arm_bodies,
-                        contains_newtype: false,
-                        pattern_count: 0,
-                        result_type: expected.map(|(expected, kind)| {
-                            let ProvenancedType { ty, provenance } = expected.into_inner();
-                            (ty, provenance, kind)
-                        }),
-                    });
-                    self.schedule_match_arm(progress, context, &mut tasks)?;
-                }
-                ElaborationTask::FinishMatchArm {
-                    progress,
-                    binders,
-                    row,
-                    arm_span,
-                } => {
-                    let mut progress = MatchProgressOwner::new(progress);
-                    let row = CorePatternBuffer(row);
-                    let body = values.pop().ok_or_else(invalid_state)?;
-                    self.remove_pattern_binders(context, &binders)?;
-                    let body_node = body.node;
-                    let body_effects =
-                        clone_effect_row_with_budget(&body.effects, &mut self.type_work).map_err(
-                            |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
-                        )?;
-                    if progress.result_type.is_none() {
-                        let TypedNode { ty, provenance, .. } = body.into_inner();
-                        progress.set_result_type(
-                            ProvenancedTypeOwner::new(ProvenancedType { ty, provenance }),
-                            CheckKind::General,
-                        )?;
-                    }
-                    progress.push_row(row.into_vec());
-                    progress.push_arm_body((body_node, arm_span, body_effects));
-                    self.schedule_match_arm(progress.into_inner(), context, &mut tasks)?;
-                }
-                ElaborationTask::FinishMatch(progress) => {
-                    let mut progress = MatchProgressOwner::new(progress);
-                    let Some((result_type, _)) = progress.take_result_type() else {
-                        return Err(invalid_state());
-                    };
-                    if progress.matrix.len() != progress.arm_bodies.len() {
-                        return Err(invalid_state());
-                    }
-                    self.type_work
-                        .charge(progress.arm_bodies.len())
-                        .map_err(|()| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
-                    let mut arms = Vec::new();
-                    arms.try_reserve(progress.arm_bodies.len()).map_err(|_| {
-                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                    })?;
-                    let matrix = progress.take_matrix();
-                    let arm_bodies = progress.take_arm_bodies();
-                    let mut effects = clone_effect_row_with_budget(
-                        &progress.scrutinee.effects,
-                        &mut self.type_work,
-                    )
-                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                    for (row, (body, arm_span, arm_effects)) in
-                        matrix.into_sequence().zip(arm_bodies)
-                    {
-                        effects = self.union_effects(&effects, &arm_effects, arm_span)?;
-                        let mut row = CorePatternBuffer(row);
-                        let mut pattern = row.pop().ok_or_else(invalid_state)?;
-                        if !row.is_empty() {
-                            return Err(invalid_state());
-                        }
-                        arms.push(CoreMatchArm::new(
-                            pattern.take().ok_or_else(invalid_state)?,
-                            body,
-                            Origin::Source(arm_span),
-                        ));
-                    }
-                    let core_ty = self.clone_type(&result_type.ty)?;
-                    let node = self.lower_match_expression(
-                        progress.scrutinee.node,
-                        arms,
-                        core_ty,
-                        Origin::Source(progress.span),
-                        progress.contains_newtype,
-                        progress.pattern_count,
-                    )?;
-                    let ProvenancedType { ty, provenance } = result_type.into_inner();
-                    values.push(TypedNode {
-                        node,
-                        ty,
-                        effects,
-                        provenance,
-                    });
-                }
-                ElaborationTask::FinishBlock {
-                    declarations: source_declarations,
-                    declaration_start,
-                    result_span,
-                } => {
-                    let body = values.pop().ok_or_else(invalid_state)?;
-                    values.push(self.finish_expression_block(
-                        source_declarations,
-                        declaration_start,
-                        &mut declarations,
-                        body,
-                        context,
-                        result_span,
-                    )?);
-                }
             }
         }
         let result = values.pop().ok_or_else(invalid_state)?;
@@ -11989,6 +10940,1213 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         } else {
             Err(invalid_state())
         }
+    }
+
+    // Handler completion can check a clause using this same worklist. Keep
+    // that reentry outside the large ordinary expression-dispatch frame.
+    fn step_expression_task<'a>(
+        &mut self,
+        task: ElaborationTask<'a>,
+        context: &mut TypeContext,
+        tasks: &mut ElaborationTaskBuffer<'a>,
+        values: &mut TypedNodeBuffer,
+        declarations: &mut ElaboratedDeclarationBuffer,
+    ) -> Result<(), TypeError> {
+        match task {
+            ElaborationTask::FinishCleanup { cleanup, span } => {
+                self.step_cleanup_completion(cleanup, span, values)?;
+            }
+            ElaborationTask::FinishPerform(progress) => {
+                self.step_perform_completion(progress, values)?;
+            }
+            ElaborationTask::FinishHookBody { .. } => return Err(invalid_state()),
+            ElaborationTask::ResourceBody { resource, span } => {
+                self.step_resource_body(resource, span, context, tasks, values)?;
+            }
+            ElaborationTask::FinishResource(progress) => {
+                self.step_resource_completion(progress, context, values)?;
+            }
+            ElaborationTask::Equation(task) => {
+                self.step_equation_task(task, context, tasks, values, declarations)?;
+            }
+            ElaborationTask::RetainLocalNewtype(owner) => {
+                declarations.push(ElaboratedDeclaration::Newtype(owner));
+            }
+            ElaborationTask::Synthesize {
+                expression: current,
+                cause,
+            } => match &current.kind {
+                ResolvedExprKind::Integer(value) => {
+                    let ty = Type::Int;
+                    let node = self.builder.integer(
+                        value.clone(),
+                        Type::Int,
+                        Origin::Source(current.span),
+                    )?;
+                    values.push(TypedNode {
+                        node,
+                        ty,
+                        effects: EffectRow::empty(),
+                        provenance: TypeProvenance::atom(Some(current.span)),
+                    });
+                }
+                ResolvedExprKind::Boolean(value) => {
+                    let ty = Type::Bool;
+                    let node =
+                        self.builder
+                            .boolean(*value, Type::Bool, Origin::Source(current.span))?;
+                    values.push(TypedNode {
+                        node,
+                        ty,
+                        effects: EffectRow::empty(),
+                        provenance: TypeProvenance::atom(Some(current.span)),
+                    });
+                }
+                ResolvedExprKind::Unit => {
+                    let ty = Type::Unit;
+                    let node = self
+                        .builder
+                        .unit(Type::Unit, Origin::Source(current.span))?;
+                    values.push(TypedNode {
+                        node,
+                        ty,
+                        effects: EffectRow::empty(),
+                        provenance: TypeProvenance::atom(Some(current.span)),
+                    });
+                }
+                ResolvedExprKind::Add(binary) => {
+                    schedule_left(Primitive::Add, current.span, binary, tasks)
+                }
+                ResolvedExprKind::Multiply(binary) => {
+                    schedule_left(Primitive::Multiply, current.span, binary, tasks)
+                }
+                ResolvedExprKind::Equal(binary) => {
+                    schedule_left(Primitive::Equal, current.span, binary, tasks)
+                }
+                ResolvedExprKind::Occurrence(occurrence) => match occurrence.term {
+                    crate::resolved::ResolvedTermName::Global(binder) => {
+                        let fact = context.fact(binder).ok_or_else(invalid_state)?;
+                        let rigid = self.monomorphic_recursive.contains(&binder);
+                        let (ty, arguments, row_arguments) =
+                            self.instantiate(fact, rigid, current.span)?;
+                        let ty = IterativeTypeOwner::new(ty);
+                        let arguments = OwnedTypeBuffer(arguments);
+                        let provenance = fact.provenance.clone();
+                        let has_lowered_global_scheme = self
+                            .evidence_lowering
+                            .as_ref()
+                            .is_some_and(|lowering| lowering.global_schemes.contains_key(&binder));
+                        if self.purpose == ElaborationPurpose::FinalSynthesis
+                            && has_lowered_global_scheme
+                        {
+                            let mut lowering =
+                                self.evidence_lowering.take().ok_or_else(invalid_state)?;
+                            let result = (|| {
+                                let scheme = lowering
+                                    .global_schemes
+                                    .get(&binder)
+                                    .ok_or_else(invalid_state)?;
+                                let core_scheme =
+                                    IterativeTypeOwner::new(self.clone_type(&scheme.core_scheme)?);
+                                let variable_ty = self.clone_type(&core_scheme)?;
+                                let mut current = TypedNodeOwner::new(TypedNode {
+                                    node: self.builder.variable(
+                                        binder,
+                                        variable_ty,
+                                        occurrence.origin.clone(),
+                                    )?,
+                                    ty: core_scheme.into_inner(),
+                                    effects: EffectRow::empty(),
+                                    provenance: provenance.clone(),
+                                });
+                                self.authenticate_lexical_capture_occurrence(
+                                    occurrence,
+                                    current.node,
+                                )?;
+                                let mut current_arguments = OwnedTypeBuffer(Vec::new());
+                                self.type_work.charge(arguments.len()).map_err(|()| {
+                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                                })?;
+                                current_arguments
+                                    .try_reserve(arguments.len())
+                                    .map_err(|_| {
+                                        TypeError::Internal(
+                                            ElaborationFailure::TypeResourceExhausted,
+                                        )
+                                    })?;
+                                for argument in arguments.iter() {
+                                    current_arguments.push(self.clone_type(argument)?);
+                                }
+                                let mut current_row_arguments = Vec::new();
+                                self.type_work
+                                    .charge(row_arguments.len())
+                                    .map_err(|()| type_resource())?;
+                                current_row_arguments
+                                    .try_reserve(row_arguments.len())
+                                    .map_err(|_| type_resource())?;
+                                for row in &row_arguments {
+                                    current_row_arguments.push(
+                                        clone_effect_row_with_budget(row, &mut self.type_work)
+                                            .map_err(|()| type_resource())?,
+                                    );
+                                }
+                                self.replay_lowered_global_determination(
+                                    scheme,
+                                    &current_arguments,
+                                    &current_row_arguments,
+                                    occurrence,
+                                    &lowering,
+                                )?;
+                                if !arguments.is_empty() || !row_arguments.is_empty() {
+                                    let core_ty = IterativeTypeOwner::new(
+                                        self.instantiate_lowered_core_body(
+                                            scheme,
+                                            &arguments,
+                                            &row_arguments,
+                                        )?,
+                                    );
+                                    let application_ty = self.clone_type(&core_ty)?;
+                                    let node = self.builder.type_application_with_row_arguments(
+                                        current.node,
+                                        arguments.into_vec(),
+                                        row_arguments,
+                                        application_ty,
+                                        occurrence.origin.clone(),
+                                    )?;
+                                    current.set_node(node);
+                                    current.replace_type(core_ty.into_inner());
+                                }
+                                let requirement_count = lowering
+                                    .global_schemes
+                                    .get(&binder)
+                                    .ok_or_else(invalid_state)?
+                                    .requirements
+                                    .len();
+                                if occurrence.evidence.len() != requirement_count {
+                                    return Err(invalid_state());
+                                }
+                                for (requirement_index, slot) in
+                                    occurrence.evidence.iter().enumerate()
+                                {
+                                    let selection = slot.selection().ok_or_else(invalid_state)?;
+                                    let methods = self.lower_evidence_selection(
+                                        selection,
+                                        &mut lowering,
+                                        &occurrence.origin,
+                                        None,
+                                        slot.storage_id(),
+                                    )?;
+                                    let target_requirement = lowering
+                                        .global_schemes
+                                        .get(&binder)
+                                        .and_then(|scheme| {
+                                            scheme.requirements.get(requirement_index)
+                                        })
+                                        .ok_or_else(invalid_state)?;
+                                    if methods.len() != target_requirement.methods.len() {
+                                        return Err(invalid_state());
+                                    }
+                                    for (method, target_method) in
+                                        methods.iter().zip(&target_requirement.methods)
+                                    {
+                                        let target_application = self
+                                            .instantiate_lowered_source_application(
+                                                lowering
+                                                    .global_schemes
+                                                    .get(&binder)
+                                                    .ok_or_else(invalid_state)?
+                                                    .binder_parameters(),
+                                                &target_method.application,
+                                                &current_arguments,
+                                                &current_row_arguments,
+                                            )?;
+                                        let canonical_method = lowering
+                                            .interface_methods
+                                            .get(&target_method.method)
+                                            .ok_or_else(invalid_state)?;
+                                        current =
+                                            TypedNodeOwner::new(self.apply_lowered_argument(
+                                                current.into_inner(),
+                                                method,
+                                                target_requirement.owner,
+                                                target_requirement.id,
+                                                target_method,
+                                                &target_application,
+                                                canonical_method,
+                                                None,
+                                                &occurrence.origin,
+                                                slot.storage_id(),
+                                            )?);
+                                    }
+                                }
+                                if !same_type(&current.ty, &ty) {
+                                    return Err(invalid_state());
+                                }
+                                current.set_provenance(provenance);
+                                Ok(current.into_inner())
+                            })();
+                            self.evidence_lowering = Some(lowering);
+                            values.push(result?);
+                        } else {
+                            self.record_global_obligations(
+                                binder,
+                                occurrence,
+                                &arguments,
+                                &row_arguments,
+                                current.span,
+                            )?;
+                            let scheme = self.pure_core_scheme(fact)?;
+                            let mut node =
+                                self.builder
+                                    .variable(binder, scheme, occurrence.origin.clone())?;
+                            self.authenticate_lexical_capture_occurrence(occurrence, node)?;
+                            if !arguments.is_empty() || F::EFFECTS && !row_arguments.is_empty() {
+                                let core_ty = self.pure_core_type(&ty)?;
+                                node = if F::EFFECTS {
+                                    self.builder.type_application_with_row_arguments(
+                                        node,
+                                        arguments.into_vec(),
+                                        row_arguments,
+                                        core_ty,
+                                        occurrence.origin.clone(),
+                                    )
+                                } else {
+                                    self.builder.type_application(
+                                        node,
+                                        arguments.into_vec(),
+                                        core_ty,
+                                        occurrence.origin.clone(),
+                                    )
+                                }?;
+                            }
+                            self.record_capture_global(binder, node, occurrence)?;
+                            values.push(TypedNode {
+                                node,
+                                ty: ty.into_inner(),
+                                effects: EffectRow::empty(),
+                                provenance,
+                            });
+                        }
+                    }
+                    crate::resolved::ResolvedTermName::Method(method) => {
+                        if self.purpose == ElaborationPurpose::FinalSynthesis {
+                            values.push(
+                                self.synthesize_lowered_method_occurrence(method, occurrence)?,
+                            );
+                        } else {
+                            values.push(self.synthesize_method_occurrence(
+                                method,
+                                occurrence,
+                                current.span,
+                                cause,
+                            )?);
+                        }
+                    }
+                },
+                ResolvedExprKind::Constructor(occurrence) => {
+                    let constructor = self
+                        .registry
+                        .constructor(occurrence.constructor)
+                        .ok_or_else(invalid_state)?;
+                    let constructor_owner = constructor.owner;
+                    let owner = self
+                        .registry
+                        .nominal(constructor_owner)
+                        .ok_or_else(invalid_state)?;
+                    let is_newtype =
+                        owner.declaration_kind == ResolvedNominalDeclarationKind::Newtype;
+                    let declared_payload = if is_newtype {
+                        Some(owner.representation.as_ref().ok_or_else(invalid_state)?)
+                    } else {
+                        constructor.payload.as_ref()
+                    };
+                    let declaration_span = constructor.origin.primary_span();
+                    let parameters = self
+                        .registry
+                        .nominal_parameters(constructor_owner)
+                        .ok_or_else(invalid_state)?;
+                    let parameter_count = parameters.len();
+                    let result_cells = if parameters.is_empty() {
+                        1
+                    } else {
+                        parameter_count.saturating_add(1)
+                    };
+                    self.type_work
+                        .charge(result_cells.saturating_add(parameter_count))
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                    let payload = if let Some(payload) = declared_payload {
+                        self.type_work.charge(1).map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                        Some(IterativeTypeOwner::new(
+                            clone_type_with_budget(payload, &mut self.type_work).map_err(|()| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?,
+                        ))
+                    } else {
+                        None
+                    };
+                    let mut quantified = Vec::new();
+                    quantified.try_reserve(parameter_count).map_err(|_| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    for parameter in parameters {
+                        quantified.push((
+                            parameter.id,
+                            clone_kind_with_budget(&parameter.kind, &mut self.type_work).map_err(
+                                |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
+                            )?,
+                        ));
+                    }
+                    let result = if parameters.is_empty() {
+                        Type::Nominal(constructor_owner)
+                    } else {
+                        let mut arguments = Vec::new();
+                        arguments.try_reserve(parameter_count).map_err(|_| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                        arguments.extend(
+                            parameters
+                                .iter()
+                                .map(|parameter| Type::Variable(parameter.id)),
+                        );
+                        Type::apply_arguments(Type::Nominal(constructor_owner), arguments)
+                    };
+                    let scheme = IterativeTypeOwner::new(if let Some(payload) = payload {
+                        Type::Function(Box::new(payload.into_inner()), Box::new(result))
+                    } else {
+                        result
+                    });
+                    let scheme_provenance = self.at_span_provenance(&scheme, declaration_span)?;
+                    let fact = TypeFactOwner::new(TypeFact {
+                        ty: scheme.into_inner(),
+                        provenance: scheme_provenance,
+                        quantified: quantified.into_boxed_slice(),
+                    });
+                    let (ty, arguments, row_arguments) =
+                        self.instantiate(&fact, false, current.span)?;
+                    if !row_arguments.is_empty() {
+                        return Err(invalid_state());
+                    }
+                    let ty = IterativeTypeOwner::new(ty);
+                    let arguments = OwnedTypeBuffer(arguments);
+                    let TypeFact {
+                        ty: fact_ty,
+                        provenance: _,
+                        quantified,
+                    } = fact.into_inner();
+                    let fact_ty = IterativeTypeOwner::new(fact_ty);
+                    let core_scheme = if quantified.is_empty() {
+                        fact_ty.into_inner()
+                    } else {
+                        self.type_work.charge(1).map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                        Type::Forall(quantified, Box::new(fact_ty.into_inner()))
+                    };
+                    let mut node = if is_newtype {
+                        self.lower_newtype_constructor_value(
+                            constructor_owner,
+                            core_scheme,
+                            &occurrence.origin,
+                            current.span,
+                        )?
+                    } else {
+                        self.builder.constructor(
+                            occurrence.constructor,
+                            core_scheme,
+                            occurrence.origin.clone(),
+                        )?
+                    };
+                    if !arguments.is_empty() {
+                        let core_ty =
+                            clone_type_with_budget(&ty, &mut self.type_work).map_err(|()| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?;
+                        node = self.builder.type_application(
+                            node,
+                            arguments.into_vec(),
+                            core_ty,
+                            occurrence.origin.clone(),
+                        )?;
+                    }
+                    let provenance = self.at_span_provenance(&ty, declaration_span)?;
+                    values.push(TypedNode {
+                        node,
+                        effects: EffectRow::empty(),
+                        provenance,
+                        ty: ty.into_inner(),
+                    });
+                }
+                ResolvedExprKind::Tuple(elements) => {
+                    let tuple = self.elaborate_tuple(elements, current.span, context)?;
+                    values.push(tuple);
+                }
+                ResolvedExprKind::Match(match_expression) => {
+                    tasks.push(ElaborationTask::AfterMatchScrutinee {
+                        expression: match_expression,
+                        span: current.span,
+                        expected: None,
+                    });
+                    tasks.push(ElaborationTask::Synthesize {
+                        expression: &match_expression.scrutinee,
+                        cause: None,
+                    });
+                }
+                ResolvedExprKind::Apply(application) => {
+                    let recursive_call = matches!(
+                        &application.function.kind,
+                        ResolvedExprKind::Occurrence(occurrence)
+                            if occurrence.global_binder().is_some_and(|binder|
+                                self.monomorphic_recursive.contains(&binder))
+                    );
+                    tasks.push(ElaborationTask::AfterApplicationFunction {
+                        whole_span: current.span,
+                        function_span: application.function.span,
+                        argument: &application.argument,
+                        recursive_call,
+                    });
+                    tasks.push(ElaborationTask::Synthesize {
+                        expression: &application.function,
+                        cause: Some(SynthesisCause::Application {
+                            whole_span: current.span,
+                            argument_span: application.argument.span,
+                        }),
+                    });
+                }
+                ResolvedExprKind::Block(block) => {
+                    schedule_block(
+                        block,
+                        None,
+                        cause,
+                        tasks,
+                        declarations.len(),
+                        &mut self.type_work,
+                    )?;
+                }
+                ResolvedExprKind::Cleanup(cleanup) => {
+                    self.schedule_cleanup(cleanup, current.span, context, tasks)?;
+                }
+                ResolvedExprKind::Resource(resource) => {
+                    self.schedule_resource(resource, current.span, tasks)?;
+                }
+                ResolvedExprKind::Perform(request) => {
+                    self.schedule_perform(request, current.span, tasks)?;
+                }
+                ResolvedExprKind::Handle(handler) => {
+                    self.type_work.charge(2).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    tasks.0.try_reserve(2).map_err(|_| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    tasks.push(ElaborationTask::FinishHookBody {
+                        handler,
+                        span: current.span,
+                        rewrite_checkpoint: self.builder.type_rewrite_checkpoint(),
+                    });
+                    tasks.push(ElaborationTask::Synthesize {
+                        expression: &handler.body,
+                        cause: None,
+                    });
+                }
+                ResolvedExprKind::Resume(resume) => {
+                    let typed = self.synthesize_resume(resume, current.span, context)?;
+                    values.push(typed);
+                }
+                ResolvedExprKind::Discard(discard) => {
+                    let typed = self.synthesize_discard(discard, current.span)?;
+                    values.push(typed);
+                }
+                ResolvedExprKind::Function(function) => {
+                    if !matches!(cause, Some(SynthesisCause::Binding(_))) {
+                        return Err(function_needs_context(current.span, cause));
+                    }
+                    self.schedule_inferred_function(function, current.span, tasks, None)?;
+                }
+            },
+            ElaborationTask::Check {
+                expression,
+                expected,
+                kind,
+            } => match &expression.kind {
+                ResolvedExprKind::Function(function) => {
+                    let expected = ProvenancedTypeOwner::new(expected);
+                    let expected = self.expose_expected_function(expected, expression.span)?;
+                    let (domain_ty, codomain_ty) =
+                        clone_function_parts_with_budget(&expected.ty, &mut self.type_work)
+                            .map_err(|()| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?;
+                    let domain_ty = IterativeTypeOwner::new(domain_ty);
+                    let codomain_ty = IterativeTypeOwner::new(codomain_ty);
+                    let (domain_provenance, codomain_provenance) =
+                        expected.provenance.function_parts(&expected.ty)?;
+                    let domain = ProvenancedType {
+                        ty: domain_ty.into_inner(),
+                        provenance: domain_provenance,
+                    };
+                    let codomain = ProvenancedType {
+                        ty: codomain_ty.into_inner(),
+                        provenance: codomain_provenance,
+                    };
+                    tasks.push(ElaborationTask::CheckFunction {
+                        parameter: &function.pattern,
+                        domain,
+                        codomain,
+                        body: FunctionBody::Block(&function.body),
+                        presentation: anonymous_function_origin(expression.span, function),
+                        function_type: expected.into_inner(),
+                        body_check: kind,
+                        infer_effects: false,
+                    });
+                }
+                ResolvedExprKind::Block(block) => {
+                    schedule_block(
+                        block,
+                        Some((expected, kind)),
+                        None,
+                        tasks,
+                        declarations.len(),
+                        &mut self.type_work,
+                    )?;
+                }
+                ResolvedExprKind::Match(match_expression) => {
+                    tasks.push(ElaborationTask::AfterMatchScrutinee {
+                        expression: match_expression,
+                        span: expression.span,
+                        expected: Some((expected, kind)),
+                    });
+                    tasks.push(ElaborationTask::Synthesize {
+                        expression: &match_expression.scrutinee,
+                        cause: None,
+                    });
+                }
+                _ => {
+                    tasks.push(ElaborationTask::FinishCheck {
+                        span: expression.span,
+                        expected,
+                        kind,
+                    });
+                    tasks.push(ElaborationTask::Synthesize {
+                        expression,
+                        cause: None,
+                    });
+                }
+            },
+            ElaborationTask::CheckBlock {
+                block,
+                expected,
+                kind,
+            } => schedule_block(
+                block,
+                Some((expected, kind)),
+                None,
+                tasks,
+                declarations.len(),
+                &mut self.type_work,
+            )?,
+            ElaborationTask::FinishCheck {
+                span,
+                expected,
+                kind,
+            } => {
+                let expected = ProvenancedTypeOwner::new(expected);
+                let synthesized = values.pop().ok_or_else(invalid_state)?;
+                if !expected.provenance.aligns(&expected.ty)
+                    || !synthesized.provenance.aligns(&synthesized.ty)
+                {
+                    return Err(invalid_state());
+                }
+                match self.unify(&synthesized.ty, &expected.ty) {
+                    Ok(()) => {}
+                    Err(UnificationFailure::Infinite) => {
+                        return Err(inference_failure(
+                            TypeReason::InfiniteType,
+                            span,
+                            "this expression would require an infinite type",
+                        ));
+                    }
+                    Err(UnificationFailure::Mismatch) => {
+                        let expected_ty = IterativeTypeOwner::new(self.zonk(&expected.ty)?);
+                        let synthesized_ty = IterativeTypeOwner::new(self.zonk(&synthesized.ty)?);
+                        return Err(check_mismatch(
+                            kind,
+                            span,
+                            expected_ty.into_inner(),
+                            synthesized_ty.into_inner(),
+                            expected.provenance.span(),
+                            &self.registry,
+                        ));
+                    }
+                    Err(UnificationFailure::Resource) => {
+                        return Err(TypeError::Internal(
+                            ElaborationFailure::TypeResourceExhausted,
+                        ));
+                    }
+                    Err(UnificationFailure::Invariant) => return Err(invalid_state()),
+                }
+                let TypedNode {
+                    node,
+                    ty: synthesized_ty,
+                    effects,
+                    provenance,
+                } = synthesized.into_inner();
+                let ty = IterativeTypeOwner::new(self.zonk_owned(synthesized_ty)?);
+                self.builder
+                    .record_type_check(node, expected.provenance.span())?;
+                values.push(TypedNode {
+                    node,
+                    ty: ty.into_inner(),
+                    effects,
+                    provenance,
+                });
+            }
+            ElaborationTask::CheckFunction {
+                parameter,
+                domain,
+                codomain,
+                body,
+                presentation,
+                function_type,
+                body_check,
+                infer_effects,
+            } => {
+                self.schedule_function_check(
+                    context,
+                    tasks,
+                    declarations.len(),
+                    FunctionCheck {
+                        parameter,
+                        domain,
+                        codomain,
+                        body,
+                        presentation,
+                        function_type,
+                        body_check,
+                        infer_effects,
+                    },
+                )?;
+            }
+            task @ ElaborationTask::FinishFunction { .. } => {
+                self.step_function_completion(task, context, values, tasks)?;
+            }
+            ElaborationTask::AfterApplicationFunction {
+                whole_span,
+                function_span,
+                argument,
+                recursive_call,
+            } => {
+                let function = values.pop().ok_or_else(invalid_state)?;
+                self.schedule_application_argument(
+                    whole_span,
+                    function_span,
+                    argument,
+                    recursive_call,
+                    function.into_inner(),
+                    tasks,
+                )?;
+            }
+            ElaborationTask::FinishApplication {
+                whole_span,
+                function_span,
+                argument_span,
+                function,
+                codomain,
+                latent_effects,
+            } => {
+                let argument = values.pop().ok_or_else(invalid_state)?;
+                values.push(self.finish_application(
+                    whole_span,
+                    function_span,
+                    argument_span,
+                    function,
+                    codomain,
+                    latent_effects,
+                    argument.into_inner(),
+                )?);
+            }
+            ElaborationTask::AfterLeft {
+                primitive,
+                whole_span,
+                operator_span,
+                right,
+                left_span,
+            } => {
+                let left = values.pop().ok_or_else(invalid_state)?;
+                self.require_integer(&left, left_span, operator_span)?;
+                tasks.push(ElaborationTask::AfterRight {
+                    primitive,
+                    whole_span,
+                    operator_span,
+                    left: left.into_inner(),
+                    right_span: right.span,
+                });
+                tasks.push(ElaborationTask::Synthesize {
+                    expression: right,
+                    cause: Some(SynthesisCause::Operator(operator_span)),
+                });
+            }
+            ElaborationTask::AfterRight {
+                primitive,
+                whole_span,
+                operator_span,
+                left,
+                right_span,
+            } => {
+                let left = TypedNodeOwner::new(left);
+                let right = values.pop().ok_or_else(invalid_state)?;
+                self.require_integer(&right, right_span, operator_span)?;
+                let ty = match primitive {
+                    Primitive::Add | Primitive::Multiply => Type::Int,
+                    Primitive::Equal => Type::Bool,
+                };
+                let origin = Origin::Related {
+                    primary: Box::new(Origin::Source(whole_span)),
+                    related: vec![operator_span],
+                };
+                let effects = self.union_effects(&left.effects, &right.effects, whole_span)?;
+                let node =
+                    self.builder
+                        .primitive(primitive, left.node, right.node, ty.clone(), origin)?;
+                values.push(TypedNode {
+                    node,
+                    ty,
+                    effects,
+                    provenance: TypeProvenance::atom(Some(operator_span)),
+                });
+            }
+            ElaborationTask::BeginRegistrationBinding { binding, handler } => {
+                self.schedule_registration_binding(binding, handler, tasks)?;
+            }
+            ElaborationTask::BeginCleanupBinding { binding } => {
+                self.schedule_cleanup_binding(binding, tasks)?;
+            }
+            ElaborationTask::FinishCleanupAction(progress) => {
+                self.finish_cleanup_action(*progress, values)?;
+            }
+            ElaborationTask::BeginBinding {
+                binding,
+                expected,
+                finish_expected,
+            } => {
+                self.schedule_binding(binding, expected, finish_expected, tasks)?;
+            }
+            ElaborationTask::FinishBinding {
+                binding,
+                expected,
+                evidence_marker,
+            } => {
+                let expected = expected.map(ProvenancedTypeOwner::new);
+                let mut initializer = values.pop().ok_or_else(invalid_state)?;
+                let initializer_effects =
+                    clone_effect_row_with_budget(&initializer.effects, &mut self.type_work)
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                if let Some(marker) = evidence_marker {
+                    self.close_evidence_obligations(marker)?;
+                }
+                let mut generalized = Vec::new();
+                if expected.is_none()
+                    && matches!(binding.pattern.kind, ResolvedPatternKind::Binder(_))
+                    && matches!(binding.initializer.kind, ResolvedExprKind::Function(_))
+                {
+                    let inferred = IterativeTypeOwner::new(self.zonk(&initializer.ty)?);
+                    let mut variables = collect_unsolved_inference(&inferred, &mut self.type_work)
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                    let mut environment_variables = HashSet::new();
+                    for fact in context.binders.values() {
+                        let ty = IterativeTypeOwner::new(self.zonk(&fact.ty)?);
+                        let variables = collect_unsolved_inference(&ty, &mut self.type_work)
+                            .map_err(|()| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?;
+                        self.type_work.charge(variables.len()).map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                        environment_variables
+                            .try_reserve(variables.len())
+                            .map_err(|_| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?;
+                        environment_variables.extend(variables);
+                    }
+                    self.type_work.charge(variables.len()).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    variables.retain(|variable| {
+                        !environment_variables.contains(variable)
+                            && !self.cleanup_rows.contains(*variable)
+                    });
+                    let (retained, zonked) =
+                        self.generalize_inference_variables(&variables, &initializer.ty)?;
+                    generalized = retained;
+                    initializer.replace_type(zonked);
+                }
+                let mut binding_type =
+                    ProvenancedTypeOwner::new(if let Some(expected) = expected {
+                        expected.into_inner()
+                    } else {
+                        let TypedNode {
+                            node,
+                            ty,
+                            effects,
+                            provenance,
+                        } = initializer.into_inner();
+                        initializer = TypedNodeOwner::new(TypedNode {
+                            node,
+                            ty: Type::Unit,
+                            effects,
+                            provenance: TypeProvenance::atom(None),
+                        });
+                        ProvenancedType { ty, provenance }
+                    });
+                let mut binder_ids = Vec::new();
+                let checked = self.check_core_pattern(
+                    &binding.pattern,
+                    &binding_type.ty,
+                    context,
+                    &mut binder_ids,
+                    GeneratedReason::BindingLowering,
+                )?;
+                let contains_newtype = checked.contains_newtype;
+                let pattern_count = checked.pattern_count;
+                let mut pattern = CorePatternOwner::new(Some(checked.pattern));
+                if checked.inference_changed {
+                    let rewritten = clone_type_with_budget(&pattern.ty, &mut self.type_work)
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                    binding_type.replace_type(rewritten);
+                    if !binding_type.provenance.aligns(&binding_type.ty) {
+                        let provenance = self.unknown_provenance(&binding_type.ty)?;
+                        binding_type.set_provenance(provenance);
+                    }
+                }
+                let mut matrix =
+                    CorePatternMatrixBuffer(vec![vec![pattern.take().ok_or_else(invalid_state)?]]);
+                if let Some(witness) = missing_witness_for_types_with_budget(
+                    &matrix,
+                    std::slice::from_ref(&binding_type.ty),
+                    &self.registry,
+                    &mut self.coverage_work,
+                )? {
+                    self.remove_pattern_binders(context, &binder_ids)?;
+                    return Err(case_error(
+                        TypeReason::RefutableBinding,
+                        binding.span,
+                        "this local binding pattern can fail",
+                        Some(display_witness(&witness, &self.registry)),
+                    ));
+                }
+                let mut row = matrix.pop().ok_or_else(invalid_state)?;
+                let pattern = row.pop().ok_or_else(invalid_state)?;
+                if !row.is_empty() {
+                    return Err(invalid_state());
+                }
+                match pattern.into_inner() {
+                    CorePattern {
+                        ty,
+                        origin: pattern_origin,
+                        kind: CorePatternKind::Binder(mut binder),
+                    } => {
+                        discard_type_iteratively(ty);
+                        discard_origin_iteratively(pattern_origin);
+                        let quantified = generalized.into_boxed_slice();
+                        let context_quantified = clone_kinded_type_parameters_with_budget(
+                            &quantified,
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?
+                        .into_boxed_slice();
+                        let core_quantified =
+                            F::project_parameters(&quantified, &mut self.type_work).map_err(
+                                |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
+                            )?;
+                        let abstraction = if core_quantified.is_empty() {
+                            None
+                        } else {
+                            self.type_work.charge(1).map_err(|()| {
+                                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                            })?;
+                            let scheme_body = self.pure_core_type(&binding_type.ty)?;
+                            let scheme = IterativeTypeOwner::new(Type::Forall(
+                                core_quantified.into_boxed_slice(),
+                                Box::new(scheme_body),
+                            ));
+                            let binder_scheme = IterativeTypeOwner::new(self.clone_type(&scheme)?);
+                            let abstraction_parameters = match &*scheme {
+                                Type::Forall(parameters, _) => {
+                                    clone_kinded_type_parameters_with_budget(
+                                        parameters,
+                                        &mut self.type_work,
+                                    )
+                                    .map_err(|()| {
+                                        TypeError::Internal(
+                                            ElaborationFailure::TypeResourceExhausted,
+                                        )
+                                    })?
+                                }
+                                _ => return Err(invalid_state()),
+                            };
+                            Some((scheme, binder_scheme, abstraction_parameters))
+                        };
+                        let origin = binding_origin(binding);
+                        context.set_quantified(binder.id(), context_quantified)?;
+                        if let Some((scheme, binder_scheme, abstraction_parameters)) = abstraction {
+                            binder.replace_type(binder_scheme.into_inner());
+                            let node = self.builder.type_abstraction(
+                                abstraction_parameters,
+                                initializer.node,
+                                scheme.into_inner(),
+                                Origin::Generated {
+                                    cause: Box::new(origin.clone()),
+                                    reason: GeneratedReason::TypeChecking,
+                                },
+                            )?;
+                            initializer.set_node(node);
+                        }
+                        declarations.push(ElaboratedDeclaration::Binding {
+                            binder,
+                            initializer: initializer.node,
+                            effects: initializer_effects,
+                            origin,
+                        });
+                    }
+                    pattern => {
+                        let origin = binding_origin(binding);
+                        declarations.push(ElaboratedDeclaration::PatternBinding {
+                            pattern,
+                            initializer: initializer.node,
+                            effects: initializer_effects,
+                            origin,
+                            contains_newtype,
+                            pattern_count,
+                        });
+                    }
+                }
+            }
+            ElaborationTask::CheckRecursiveMember(member) => {
+                let fact = context.fact(member.binder.id).ok_or_else(invalid_state)?;
+                let expected = ProvenancedType {
+                    ty: clone_type_with_budget(&fact.ty, &mut self.type_work).map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?,
+                    provenance: fact.provenance.clone(),
+                };
+                tasks.push(ElaborationTask::Check {
+                    expression: &member.initializer,
+                    expected,
+                    kind: CheckKind::BindingInitializer {
+                        initializer_span: member.initializer.span,
+                        annotation_span: member.annotation.span,
+                    },
+                });
+            }
+            ElaborationTask::BeginRecursiveGroup(group) => {
+                for member in &group.members {
+                    validate_recursive_member(group, member, &self.registry)?;
+                }
+                for member in &group.members {
+                    let expected = ProvenancedType::from_resolved_with_budget(
+                        &member.annotation,
+                        &mut self.type_work,
+                    )?;
+                    if context.insert_with_provenance(
+                        member.binder.id,
+                        expected.ty,
+                        expected.provenance,
+                    )? {
+                        return Err(invalid_state());
+                    }
+                }
+                tasks.push(ElaborationTask::FinishRecursiveGroup { group });
+                for member in group.members.iter().rev() {
+                    tasks.push(ElaborationTask::CheckRecursiveMember(member));
+                }
+            }
+            ElaborationTask::FinishRecursiveGroup { group } => {
+                if values.len() < group.members.len() {
+                    return Err(invalid_state());
+                }
+                let value_start = values.len() - group.members.len();
+                let mut initializers = values.split_off(value_start);
+                self.type_work
+                    .charge(group.members.len())
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let mut members = Vec::new();
+                members
+                    .try_reserve(group.members.len())
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                initializers.reverse();
+                let mut effects = EffectRow::empty();
+                for member in &group.members {
+                    let initializer = initializers.pop().ok_or_else(invalid_state)?;
+                    effects = self.union_effects(&effects, &initializer.effects, member.span)?;
+                    let TypedNode {
+                        node: initializer_node,
+                        ty: initializer_ty,
+                        ..
+                    } = initializer.into_inner();
+                    let binder = self.builder.resolved_binder(
+                        member.binder.id,
+                        initializer_ty,
+                        Origin::Generated {
+                            cause: Box::new(member.binder.origin.clone()),
+                            reason: GeneratedReason::BindingLowering,
+                        },
+                    )?;
+                    members.push((binder, initializer_node));
+                }
+                declarations.push(ElaboratedDeclaration::Recursive {
+                    members,
+                    effects,
+                    origin: recursive_group_origin(group),
+                });
+            }
+            ElaborationTask::AfterMatchScrutinee {
+                expression,
+                span,
+                expected,
+            } => {
+                let expected =
+                    expected.map(|(expected, kind)| (ProvenancedTypeOwner::new(expected), kind));
+                let scrutinee = values.pop().ok_or_else(invalid_state)?;
+                if expression.arms.is_empty() {
+                    return Err(case_error(
+                        TypeReason::NonExhaustive,
+                        span,
+                        "a match requires at least one arm",
+                        None,
+                    ));
+                }
+                let arm_count = expression.arms.len();
+                self.type_work
+                    .charge(arm_count.saturating_mul(2))
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let mut matrix = Vec::new();
+                matrix
+                    .try_reserve(arm_count)
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let mut arm_bodies = Vec::new();
+                arm_bodies
+                    .try_reserve(arm_count)
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let progress = Box::new(MatchProgress {
+                    expression,
+                    span,
+                    scrutinee: scrutinee.into_inner(),
+                    next_arm: 0,
+                    matrix,
+                    arm_bodies,
+                    contains_newtype: false,
+                    pattern_count: 0,
+                    result_type: expected.map(|(expected, kind)| {
+                        let ProvenancedType { ty, provenance } = expected.into_inner();
+                        (ty, provenance, kind)
+                    }),
+                });
+                self.schedule_match_arm(progress, context, tasks)?;
+            }
+            ElaborationTask::FinishMatchArm {
+                progress,
+                binders,
+                row,
+                arm_span,
+            } => {
+                let mut progress = MatchProgressOwner::new(progress);
+                let row = CorePatternBuffer(row);
+                let body = values.pop().ok_or_else(invalid_state)?;
+                self.remove_pattern_binders(context, &binders)?;
+                let body_node = body.node;
+                let body_effects = clone_effect_row_with_budget(&body.effects, &mut self.type_work)
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                if progress.result_type.is_none() {
+                    let TypedNode { ty, provenance, .. } = body.into_inner();
+                    progress.set_result_type(
+                        ProvenancedTypeOwner::new(ProvenancedType { ty, provenance }),
+                        CheckKind::General,
+                    )?;
+                }
+                progress.push_row(row.into_vec());
+                progress.push_arm_body((body_node, arm_span, body_effects));
+                self.schedule_match_arm(progress.into_inner(), context, tasks)?;
+            }
+            ElaborationTask::FinishMatch(progress) => {
+                let mut progress = MatchProgressOwner::new(progress);
+                let Some((result_type, _)) = progress.take_result_type() else {
+                    return Err(invalid_state());
+                };
+                if progress.matrix.len() != progress.arm_bodies.len() {
+                    return Err(invalid_state());
+                }
+                self.type_work
+                    .charge(progress.arm_bodies.len())
+                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let mut arms = Vec::new();
+                arms.try_reserve(progress.arm_bodies.len())
+                    .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+                let matrix = progress.take_matrix();
+                let arm_bodies = progress.take_arm_bodies();
+                let mut effects =
+                    clone_effect_row_with_budget(&progress.scrutinee.effects, &mut self.type_work)
+                        .map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                for (row, (body, arm_span, arm_effects)) in matrix.into_sequence().zip(arm_bodies) {
+                    effects = self.union_effects(&effects, &arm_effects, arm_span)?;
+                    let mut row = CorePatternBuffer(row);
+                    let mut pattern = row.pop().ok_or_else(invalid_state)?;
+                    if !row.is_empty() {
+                        return Err(invalid_state());
+                    }
+                    arms.push(CoreMatchArm::new(
+                        pattern.take().ok_or_else(invalid_state)?,
+                        body,
+                        Origin::Source(arm_span),
+                    ));
+                }
+                let core_ty = self.clone_type(&result_type.ty)?;
+                let node = self.lower_match_expression(
+                    progress.scrutinee.node,
+                    arms,
+                    core_ty,
+                    Origin::Source(progress.span),
+                    progress.contains_newtype,
+                    progress.pattern_count,
+                )?;
+                let ProvenancedType { ty, provenance } = result_type.into_inner();
+                values.push(TypedNode {
+                    node,
+                    ty,
+                    effects,
+                    provenance,
+                });
+            }
+            ElaborationTask::FinishBlock {
+                declarations: source_declarations,
+                declaration_start,
+                result_span,
+            } => {
+                let body = values.pop().ok_or_else(invalid_state)?;
+                values.push(self.finish_expression_block(
+                    source_declarations,
+                    declaration_start,
+                    declarations,
+                    body,
+                    context,
+                    result_span,
+                )?);
+            }
+        }
+        Ok(())
     }
 
     fn finish_expression_block(
@@ -14725,6 +14883,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             reason: GeneratedReason::FunctionLowering,
         };
         let function_type = function_type.into_inner();
+        let (cleanup_completion, body_check) = match body_check {
+            CheckKind::CleanupAction(completion) => (Some(completion), CheckKind::General),
+            other => (None, other),
+        };
         tasks.push(ElaborationTask::FinishFunction {
             direct_binder,
             pattern_binders,
@@ -14737,6 +14899,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             contains_newtype,
             pattern_count,
             infer_effects,
+            cleanup_completion,
         });
         match body {
             FunctionBody::Block(block) => schedule_block(
@@ -18368,7 +18531,21 @@ enum EquationTask<'a> {
     LexicalEvidence(&'a crate::resolved::ResolvedLexicalEvidence),
 }
 
+struct CleanupActionProgress {
+    expected: EffectRow,
+    inferred: Option<EffectRow>,
+    span: Span,
+}
+
 enum ElaborationTask<'a> {
+    FinishCleanupAction(Box<CleanupActionProgress>),
+    FinishCleanup {
+        cleanup: &'a crate::resolved::ResolvedCleanupExpr,
+        span: Span,
+    },
+    BeginCleanupBinding {
+        binding: &'a ResolvedBinding,
+    },
     FinishPerform(Box<PerformProgress<'a>>),
     FinishHookBody {
         handler: &'a crate::resolved::ResolvedHandleExpr,
@@ -18423,6 +18600,7 @@ enum ElaborationTask<'a> {
         contains_newtype: bool,
         pattern_count: usize,
         infer_effects: bool,
+        cleanup_completion: Option<usize>,
     },
     AfterApplicationFunction {
         whole_span: Span,
@@ -18644,6 +18822,7 @@ enum FunctionBody<'a> {
 #[derive(Clone, Copy)]
 enum CheckKind {
     General,
+    CleanupAction(usize),
     Argument {
         function_span: Span,
         whole_span: Span,
@@ -19716,7 +19895,10 @@ fn discard_match_progress(progress: Box<MatchProgress<'_>>) {
 fn discard_elaboration_task(task: ElaborationTask<'_>) {
     match task {
         ElaborationTask::Equation(_) => {}
+        ElaborationTask::FinishCleanupAction(_) => {}
         ElaborationTask::ResourceBody { .. }
+        | ElaborationTask::FinishCleanup { .. }
+        | ElaborationTask::BeginCleanupBinding { .. }
         | ElaborationTask::FinishHookBody { .. }
         | ElaborationTask::FinishResource(_)
         | ElaborationTask::FinishPerform(_) => {}
@@ -19934,6 +20116,14 @@ fn schedule_block<'a>(
             }
             ResolvedLocalDeclaration::Binding(binding) => {
                 if binding.annotation.is_none()
+                    && block.declarations.len() == 1
+                    && let ResolvedExprKind::Cleanup(cleanup) = &block.result.kind
+                    && matches!(&binding.pattern.kind, ResolvedPatternKind::Binder(binder) if binder.id == cleanup.callback)
+                {
+                    tasks.push(ElaborationTask::BeginCleanupBinding { binding });
+                    continue;
+                }
+                if binding.annotation.is_none()
                     && matches!(binding.initializer.kind, ResolvedExprKind::Function(_))
                     && block.declarations.len() == 1
                     && let ResolvedExprKind::Handle(handler) = &block.result.kind
@@ -19991,7 +20181,7 @@ fn check_mismatch(
     let expected = IterativeTypeOwner::new(expected);
     let found = IterativeTypeOwner::new(found);
     match kind {
-        CheckKind::General => TypeError::Mismatch(TypeMismatch {
+        CheckKind::General | CheckKind::CleanupAction(_) => TypeError::Mismatch(TypeMismatch {
             span,
             expected_display: registry.display_source_type(&expected),
             found_display: registry.display_source_type(&found),
@@ -20803,6 +20993,10 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
             ResolvedExprKind::Resource(resource) => {
                 work.push(&resource.body);
                 work.push(&resource.initializer);
+            }
+            ResolvedExprKind::Cleanup(cleanup) => {
+                work.push(&cleanup.body);
+                work.push(&cleanup.action);
             }
             ResolvedExprKind::Perform(request) => work.push(&request.operand),
             ResolvedExprKind::Handle(handler) => {
@@ -22018,6 +22212,39 @@ fn capture_failure(
 ) -> TypeError {
     use crate::core::capture::Failure;
     match failure {
+        Failure::CleanupRow { source, .. } => inference_failure(
+            TypeReason::AmbiguousEffectRow,
+            source,
+            "discard effects differ from its owned cleanup actions",
+        ),
+        Failure::CleanupContext {
+            discard,
+            action,
+            handler,
+        } => {
+            if budget.charge(3).is_err() {
+                return type_resource();
+            }
+            let mut diagnostic = Diagnostic::new(
+                TypeReason::CleanupContext,
+                SourceLabel::new(
+                    discard,
+                    "discard removes an interpreter required by cleanup",
+                ),
+            );
+            if diagnostic.related.try_reserve_exact(2).is_err() {
+                return type_resource();
+            }
+            diagnostic.related.push(SourceLabel::new(
+                action,
+                "this cleanup action requires the interpreter",
+            ));
+            diagnostic.related.push(SourceLabel::new(
+                handler,
+                "this nearest matching handler is abandoned",
+            ));
+            TypeError::Source(Box::new(diagnostic))
+        }
         Failure::Invalid => invalid_state(),
         Failure::Resource => type_resource(),
         Failure::Escape {
@@ -22068,11 +22295,8 @@ fn capture_failure(
                         span,
                         "this clause still has an unfinished completion capability",
                     ),
-                    crate::core::capture::CompletionOwner::Resource(span) => {
-                        (span, "this resource still requires scope completion")
-                    }
-                    crate::core::capture::CompletionOwner::Registration(span) => {
-                        (span, "this registration requires normal completion")
+                    crate::core::capture::CompletionOwner::Cleanup(span) => {
+                        (span, "this cleanup action must complete")
                     }
                 };
                 diagnostic.related.push(SourceLabel::new(owner, message));
@@ -22211,6 +22435,10 @@ fn resume_usage_with_budget(
                 ResolvedExprKind::Resource(resource) => {
                     push(&mut tasks, Task::Visit(&resource.body), budget)?;
                     push(&mut tasks, Task::Visit(&resource.initializer), budget)?;
+                }
+                ResolvedExprKind::Cleanup(cleanup) => {
+                    push(&mut tasks, Task::Visit(&cleanup.action), budget)?;
+                    push(&mut tasks, Task::Visit(&cleanup.body), budget)?;
                 }
                 ResolvedExprKind::Perform(request) => {
                     push(&mut tasks, Task::Visit(&request.operand), budget)?;
@@ -22412,6 +22640,10 @@ fn contains_resume_owner_with_budget(
             ResolvedExprKind::Resource(resource) => {
                 schedule(&mut pending, &resource.body, budget)?;
                 schedule(&mut pending, &resource.initializer, budget)?;
+            }
+            ResolvedExprKind::Cleanup(cleanup) => {
+                schedule(&mut pending, &cleanup.body, budget)?;
+                schedule(&mut pending, &cleanup.action, budget)?;
             }
             ResolvedExprKind::Tuple(elements) => {
                 for element in elements {
@@ -22679,7 +22911,8 @@ pub(crate) fn checked_program_contains_effect_syntax(
 
     while let Some(expression) = work.pop() {
         match &expression.kind {
-            ResolvedExprKind::Resource(_)
+            ResolvedExprKind::Cleanup(_)
+            | ResolvedExprKind::Resource(_)
             | ResolvedExprKind::Perform(_)
             | ResolvedExprKind::Handle(_)
             | ResolvedExprKind::Resume(_)
@@ -22848,6 +23081,10 @@ fn collect_expression_binders(binders: &mut Vec<BinderId>, mut expressions: Vec<
                 binders.push(resource.handle.id);
                 expressions.push(&resource.body);
                 expressions.push(&resource.initializer);
+            }
+            ResolvedExprKind::Cleanup(cleanup) => {
+                expressions.push(&cleanup.body);
+                expressions.push(&cleanup.action);
             }
             ResolvedExprKind::Perform(request) => expressions.push(&request.operand),
             ResolvedExprKind::Handle(handler) => {
@@ -31692,6 +31929,7 @@ mod tests {
                             contains_newtype: false,
                             pattern_count: 0,
                             infer_effects: false,
+                            cleanup_completion: None,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -31915,6 +32153,7 @@ mod tests {
                             contains_newtype: false,
                             pattern_count: 0,
                             infer_effects: false,
+                            cleanup_completion: None,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -31975,6 +32214,7 @@ mod tests {
                             contains_newtype: false,
                             pattern_count: 1,
                             infer_effects: false,
+                            cleanup_completion: None,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -32038,6 +32278,7 @@ mod tests {
                             contains_newtype: false,
                             pattern_count: 1,
                             infer_effects: false,
+                            cleanup_completion: None,
                         },
                         &mut TypeContext::new(),
                     ),
@@ -33901,6 +34142,43 @@ mod tests {
             .unwrap()
             .join()
             .expect("registration lowering failure must dispose its pending result iteratively");
+    }
+
+    #[test]
+    fn cleanup_contextual_row_join_is_exact_and_fresh_retryable() {
+        let (module, _, _, _) = cell_module_fixture_sources(
+            "effect Report {\nreport : Int -> Unit\n}\nmain : Unit -> Int\nmain () = handle (cleanup (match true {\ntrue => fn(ignored) {\ncleanup fn(ignored) {\nperform Report.report 1\n} {\n()\n}\n}\nfalse => fn(ignored) {\n()\n}\n}) {\n42\n}) with Report {\nreport error => resume ()\n}\n",
+        );
+        let run = |limit| {
+            let mut elaborator = cell_resource_elaborator(&module);
+            elaborator.type_work = TypeWorkBudget::with_limit(limit);
+            let mut context = elaborator.base_context.clone();
+            let result = elaborator
+                .elaborate_expression_with_context(
+                    ElaborationTask::Synthesize {
+                        expression: fixture_result(&module),
+                        cause: None,
+                    },
+                    &mut context,
+                )
+                .map(|typed| drop(TypedNodeOwner::new(typed)));
+            (result, elaborator.type_work.used())
+        };
+        let (result, exact) = run(usize::MAX);
+        result.unwrap();
+        assert!(exact > 0);
+        for limit in 0..exact {
+            assert_eq!(
+                run(limit).0,
+                Err(TypeError::Internal(
+                    ElaborationFailure::TypeResourceExhausted
+                )),
+                "limit {limit}"
+            );
+        }
+        for _ in 0..2 {
+            assert_eq!(run(exact), (Ok(()), exact));
+        }
     }
 
     #[test]
