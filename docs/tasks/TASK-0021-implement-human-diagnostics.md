@@ -14,12 +14,12 @@
   `fluent-bundle`, `fluent-syntax`, and `unic-langid`.
 - The exact `lib-ash` migration sources in the sibling `ash-doc` repository
   remain external regression evidence. TASK-0024 owns their compiler repair
-  after `effect-ash` integrates into `main`. This task must not change summary
+  on current `main`. This task must not change summary
   acceptance or rewrite the retained sources to avoid the failure.
 - Downstream `ash-doc` automation must migrate to the JSON contract in the same
   coordinated checkpoint that changes default Ash output. A newer canary does
-  not silently change ash-doc's edition pin; TASK-0024 owns the coordinated
-  forward migration to a repaired effects checkpoint.
+  not silently change ash-doc's edition pin. That project owns its forward
+  migration after TASK-0024's compiler fixes land on `main`.
 
 ## Work
 
@@ -96,6 +96,6 @@ localization language. Color is not required for completion.
 
 ## Deviations
 
-- The migration repair and edition-wide forward migration are deferred to
-  TASK-0024 after `effect-ash` lands. Diagnostic presentation and structured
-  cause preservation remain here under AD-0010.
+- TASK-0024 owns the compiler repair on current `main`; ash-doc owns its later
+  documentation migration. Diagnostic presentation and structured cause
+  preservation remain here under AD-0010.

@@ -11,8 +11,8 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 - [TASK-0021: Implement Human Diagnostics](TASK-0021-implement-human-diagnostics.md)
 
-## Deferred tasks
+## Ready tasks
 
 - [TASK-0024: Repair Migration Regressions After Effect Ash](TASK-0024-repair-migration-regressions-after-effect-ash.md)
-  — starts after `effect-ash` integrates into `main`; includes the coordinated
-  ash-doc forward migration.
+  — fixes migration-discovered compiler bugs on current `main`; ash-doc owns
+  its later documentation migration.

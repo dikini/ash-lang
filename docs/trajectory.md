@@ -112,8 +112,8 @@ on `main`. Final merged-main verification passed, as recorded in the
 
 The ash-doc migration exposed checked dependency-summary failures at the exact
 Lib Ash checkpoint. [TASK-0024](tasks/TASK-0024-repair-migration-regressions-after-effect-ash.md)
-defers their repair until `effect-ash` integrates into `main`, then requires a
-coordinated ash-doc forward migration to one exact repaired effects commit.
+owns their repair on current `main`, with no backports. After those fixes land,
+the ash-doc project owns its separate documentation migration.
 [TASK-0021](tasks/TASK-0021-implement-human-diagnostics.md) retains the separate
 human-diagnostic feature. Historical migration evidence and published tags
 remain unchanged.

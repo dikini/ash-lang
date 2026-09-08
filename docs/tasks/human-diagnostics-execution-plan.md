@@ -16,9 +16,9 @@ registered Effect Ash worktree. The plan's parent, `5430432`, allocated
 DN-0029, AD-0010, and TASK-0021 after checking every registered worktree.
 
 [TASK-0024](TASK-0024-repair-migration-regressions-after-effect-ash.md) owns
-the compiler repair, producer-side publication check, and edition-wide ash-doc
-forward migration after `effect-ash` lands. This plan changes presentation and
-structured failure data without changing summary acceptance.
+the compiler repair and producer-side publication check on current `main`.
+The ash-doc project owns its later documentation migration. This plan changes
+presentation and structured failure data without changing summary acceptance.
 
 Keep the checkpoint narrow:
 
@@ -80,7 +80,7 @@ without treating it as the specified outcome for valid source.
 
 **Step 4: Commit the structured failure data.**
 
-Commit the cause-preservation change independently of the deferred repair.
+Commit the cause-preservation change independently of the compiler repair.
 
 ## Task 2: Add the bounded catalogue foundation
 
@@ -575,7 +575,8 @@ If ash-doc is still pinned to Lib Ash, verify a separately identified exact
 canary without replacing the active pin or breaking its checks. Preserve the
 historical two-pin lab verifier and source hashes. A retained compiler failure
 may gain structured presentation; do not describe it as repaired. TASK-0024
-owns the effects edition target, restored outcomes, and publication gate.
+owns the compiler repair and restored outcomes. The ash-doc project owns its
+edition target, documentation migration and publication gate.
 
 Verify changed shell scripts with `bash -n`, then run every affected verifier
 against its declared exact target. Record Ash and ash-doc commits and commands.
@@ -632,7 +633,7 @@ rerun the affected focused checks plus `cargo xtask verify`.
 
 Record the exact Ash and ash-doc commits, commands, outcomes, catalogue
 selection, retained failure causes, and any deviations in TASK-0021. Keep
-TASK-0024 open until its separate repair and forward-migration gates pass.
+TASK-0024 open until its compiler fixes are verified and integrated into main.
 Remove the
 temporary execution plan and active-task/index entries according to the
 project artifact policy only when the implementation is retained and no work
