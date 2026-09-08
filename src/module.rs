@@ -37,6 +37,14 @@ const CELL_SOURCE: &str = concat!(
     "pub interface Provider<R> {\nread : Handle<R> -> Int ! {Ops<R>}\nwrite : (Handle<R>, Int) -> Unit ! {Ops<R>}\n}\n",
 );
 
+const NATIVE_BUFFER_SOURCE: &str = concat!(
+    "pub opaque type Handle<R> = Hidden\n",
+    "pub type Outcome<T> = Success(T)\n| Failure(Error)\n",
+    "pub type Error = InvalidLength\n| AllocationFailed\n| InvalidIndex\n| InvalidByte\n",
+    "pub effect Ops<R> {\nlength : Handle<R> -> Int\nread : (Handle<R>, Int) -> Outcome<Int>\nwrite : (Handle<R>, Int, Int) -> Outcome<Unit>\n}\n",
+    "pub interface Provider<R> {\nlength : Handle<R> -> Int ! {Ops<R>}\nread : (Handle<R>, Int) -> Outcome<Int> ! {Ops<R>}\nwrite : (Handle<R>, Int, Int) -> Outcome<Unit> ! {Ops<R>}\n}\n",
+);
+
 /// A validated name for one configured module root.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ModuleRootName(String);
@@ -163,6 +171,7 @@ pub struct ModuleId {
 enum ModuleIdNamespace {
     Admitted,
     BuiltinCell,
+    BuiltinNativeBuffer,
     DirectCoreSource,
 }
 
@@ -200,6 +209,14 @@ impl ModuleId {
         matches!(self.namespace, ModuleIdNamespace::BuiltinCell)
     }
 
+    pub(crate) const fn is_builtin_native_buffer(self) -> bool {
+        matches!(self.namespace, ModuleIdNamespace::BuiltinNativeBuffer)
+    }
+
+    pub(crate) const fn is_builtin_resource(self) -> bool {
+        self.is_builtin_cell() || self.is_builtin_native_buffer()
+    }
+
     /// Returns the graph-local identity value.
     #[must_use]
     pub const fn value(self) -> u32 {
@@ -225,6 +242,11 @@ impl fmt::Display for ModuleId {
                 write!(formatter, "builtin.cell:{}:{}", self.graph, self.value)
             }
             ModuleIdNamespace::DirectCoreSource => write!(formatter, "source:{}", self.value),
+            ModuleIdNamespace::BuiltinNativeBuffer => write!(
+                formatter,
+                "builtin.native_buffer:{}:{}",
+                self.graph, self.value
+            ),
         }
     }
 }
@@ -875,6 +897,7 @@ pub fn load_module_graph(entry: &Path, roots: &ModuleRoots) -> Result<ModuleGrap
     }];
     let mut dependency_order = Vec::new();
     let mut builtin_cell = None;
+    let mut builtin_native_buffer = None;
 
     while let Some(frame) = frames.last() {
         let module = frame.module;
@@ -902,22 +925,30 @@ pub fn load_module_graph(entry: &Path, roots: &ModuleRoots) -> Result<ModuleGrap
         if let SurfaceModulePath::Absolute { root, segments } = &import.path
             && root.text == "builtin"
         {
-            if segments.len() != 1 || segments[0].text != "cell" {
+            if segments.len() != 1 || !matches!(segments[0].text.as_str(), "cell" | "native_buffer")
+            {
                 return Err(
                     ModuleFailure::source(ModuleReason::UnknownBuiltin, import.span, None).into(),
                 );
             }
-            let target = if let Some(id) = builtin_cell {
+            let native_buffer = segments[0].text == "native_buffer";
+            let cached = if native_buffer {
+                &mut builtin_native_buffer
+            } else {
+                &mut builtin_cell
+            };
+            let target = if let Some(id) = *cached {
                 id
             } else {
-                let id = admit_builtin_cell(
+                let id = admit_builtin_resource(
+                    native_buffer,
                     graph_identity,
                     import.span,
                     &mut budget,
                     &mut staged,
                     &mut dependency_order,
                 )?;
-                builtin_cell = Some(id);
+                *cached = Some(id);
                 id
             };
             staged[module_index]
@@ -996,7 +1027,8 @@ pub fn load_module_graph(entry: &Path, roots: &ModuleRoots) -> Result<ModuleGrap
     })
 }
 
-fn admit_builtin_cell(
+fn admit_builtin_resource(
+    native_buffer: bool,
     graph: u32,
     import_span: Span,
     budget: &mut GraphBudget,
@@ -1010,17 +1042,30 @@ fn admit_builtin_cell(
     dependency_order
         .try_reserve(1)
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
-    let path = PathBuf::from("@builtin.cell");
+    let path = PathBuf::from(if native_buffer {
+        "@builtin.native_buffer"
+    } else {
+        "@builtin.cell"
+    });
     let (source, surface) = parse_surface_module(
         &path,
-        CELL_SOURCE.to_owned(),
+        if native_buffer {
+            NATIVE_BUFFER_SOURCE
+        } else {
+            CELL_SOURCE
+        }
+        .to_owned(),
         Some(import_span),
         &mut budget.syntax_work,
     )?;
     let value = u32::try_from(staged.len())
         .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
     let id = ModuleId {
-        namespace: ModuleIdNamespace::BuiltinCell,
+        namespace: if native_buffer {
+            ModuleIdNamespace::BuiltinNativeBuffer
+        } else {
+            ModuleIdNamespace::BuiltinCell
+        },
         graph,
         value,
     };
@@ -1366,7 +1411,8 @@ mod tests {
             });
             let mut staged = Vec::new();
             let mut order = Vec::new();
-            let result = admit_builtin_cell(17, span, &mut budget, &mut staged, &mut order);
+            let result =
+                admit_builtin_resource(false, 17, span, &mut budget, &mut staged, &mut order);
             if allowance == 0 {
                 assert_resource(result.map(|_| ()), ModuleResource::Sources);
                 assert!(staged.is_empty() && order.is_empty());

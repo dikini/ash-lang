@@ -1065,7 +1065,7 @@ impl Machine {
         let api = acquisition
             .api()
             .ok_or(RuntimeFailure::InvalidControlState)?;
-        if !api.registry(self.program.registry()) {
+        if api.is_native_buffer() || !api.registry(self.program.registry()) {
             return Err(RuntimeFailure::InvalidControlState);
         }
         let live = self

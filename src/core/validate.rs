@@ -675,12 +675,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .try_reserve(module_sources.len())
             .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
         for (module, source) in module_sources.iter().copied() {
-            if let Some(api) = crate::resolved::CellApi::for_module(module) {
+            if let Some(api) = crate::resolved::ResourceApi::for_module(module) {
                 if !api.registry(&program.registry) {
                     return Err(ValidationError::new(ValidationReason::Registry, None));
                 }
-                for ordinal in 0..2 {
-                    let id = crate::interface::MethodId::new(api.provider(), ordinal);
+                for ordinal in 0..api.method_names().len() {
+                    let id = crate::interface::MethodId::new(api.provider(), ordinal as u32);
                     if program.method_evidence.method(id).is_none() {
                         return Err(ValidationError::new(ValidationReason::Registry, None));
                     }
@@ -1256,7 +1256,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut previous_interface_parameters = None;
         for method in catalog.methods() {
             self.charge_type_work(method.interface_parameters.len().saturating_add(1))?;
-            if let Some(api) = crate::resolved::CellApi::for_module(method.id.interface().module())
+            if let Some(api) =
+                crate::resolved::ResourceApi::for_module(method.id.interface().module())
                 && !api.method(
                     method.id,
                     &method.interface_parameters,
@@ -1332,14 +1333,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         };
 
         for owner in catalog.implementation_owners() {
-            if owner.application.interface().module().is_builtin_cell() {
+            if owner.application.interface().module().is_builtin_resource() {
                 return Err(ValidationError::new(ValidationReason::NodeType, None));
             }
             validate_application(self, owner.implementation.method(), &owner.application)?;
         }
         self.charge_type_work(catalog.lexical_owners().len())?;
         for owner in catalog.lexical_owners() {
-            if owner.application.interface().module().is_builtin_cell() {
+            if owner.application.interface().module().is_builtin_resource() {
                 let acquisition = owner
                     .acquisition
                     .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, None))?;
@@ -3674,8 +3675,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
         let mut previous_nominal_end = None;
         for (index, nominal) in registry.nominals().iter().enumerate() {
-            if let Some(api) = crate::resolved::CellApi::for_module(nominal.id.module())
-                && (nominal.id != api.handle() || !api.registry(registry))
+            if let Some(api) = crate::resolved::ResourceApi::for_module(nominal.id.module())
+                && (!registry
+                    .nominal_parameters(nominal.id)
+                    .is_some_and(|parameters| api.nominal(nominal, parameters))
+                    || !api.registry(registry))
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
@@ -3954,8 +3958,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
         for nominal in registry.nominals() {
             let module = nominal.id.module();
-            if let Some(api) = crate::resolved::CellApi::for_module(module)
-                && (nominal.id != api.handle() || !api.registry(registry))
+            if let Some(api) = crate::resolved::ResourceApi::for_module(module)
+                && (!registry
+                    .nominal_parameters(nominal.id)
+                    .is_some_and(|parameters| api.nominal(nominal, parameters))
+                    || !api.registry(registry))
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
             }
@@ -4338,7 +4345,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
             )?;
             let module = effect.id.module();
-            if let Some(api) = crate::resolved::CellApi::for_module(module)
+            if let Some(api) = crate::resolved::ResourceApi::for_module(module)
                 && (!api.effect(effect) || !api.registry(&self.program.registry))
             {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
@@ -5960,7 +5967,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 return Ok(());
             }
             PureValue::Constructor(constructor) => {
-                if constructor.constructor().owner().module().is_builtin_cell() {
+                if crate::resolved::ResourceApi::for_module(
+                    constructor.constructor().owner().module(),
+                )
+                .is_some_and(|api| api.hides_constructor(constructor.constructor()))
+                {
                     return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
                 }
                 let Some(info) = self.program.registry.constructor(constructor.constructor())
@@ -6773,7 +6784,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     constructor,
                     payload,
                 } => {
-                    if constructor.owner().module().is_builtin_cell() {
+                    if crate::resolved::ResourceApi::for_module(constructor.owner().module())
+                        .is_some_and(|api| api.hides_constructor(*constructor))
+                    {
                         return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
                     }
                     let Some((owner, arity)) =
@@ -8506,7 +8519,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
     fn resource_outward_row(
         &self,
         body: &EffectRow,
-        acquisition: crate::resolved::CellAcquisition,
+        acquisition: crate::resolved::ResourceAcquisition,
         id: NodeId,
     ) -> Result<EffectRow, ValidationError> {
         let api = acquisition
@@ -8547,7 +8560,11 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             || Some(authority.span) != node.origin.as_ref().map(Origin::primary_span)
             || !matches!(resource.handle.ty(), Type::Application(head, argument) if **head == Type::Nominal(api.handle()) && **argument == Type::Variable(authority.identity))
             || !self.same_type_charged(&initializer.ty, &Type::Int)?
-            || !self.same_type_charged(&body.ty, &node.ty)?
+            || if let Some(outcome) = api.outcome() {
+                !matches!(&node.ty, Type::Application(head, argument) if **head == Type::Nominal(outcome) && self.same_type_charged(&body.ty, argument)?)
+            } else {
+                !self.same_type_charged(&body.ty, &node.ty)?
+            }
         {
             return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
         }
@@ -8556,7 +8573,12 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         if !self.same_effect_row_charged(&node.effects, &expected, id)? {
             return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
         }
-        if authority.methods[0] == authority.methods[1] {
+        if authority
+            .methods
+            .iter()
+            .enumerate()
+            .any(|(index, method)| authority.methods[..index].contains(method))
+        {
             return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
         }
         for (ordinal, binder) in authority.methods.iter().enumerate() {
@@ -11369,6 +11391,188 @@ mod tests {
                 assert_eq!(result.unwrap_err().reason, ValidationReason::Registry);
             } else {
                 result.unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn native_buffer_core_authenticates_authority_and_result_after_both_transforms() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let directory = LinkedValidationDirectory::create();
+        let entry = directory.write("entry.ash", "import @builtin.native_buffer as Buffer\nmain : Unit -> Buffer.Outcome<Int>\nmain () = resource native_buffer<R> b = 4 {\nBuffer.length b + 1\n}\n");
+        let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+        let linked = link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+        let linked = validate_linked_facts_for_test(linked).unwrap();
+        let mut elaborator =
+            crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&linked)
+            .unwrap();
+        let core = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        let mut measured = Validator::new_modules(&core, &sources, &relation).unwrap();
+        measured.run_effect().unwrap();
+        let work = measured.type_work.get();
+        for remaining in [work - 1, work, work] {
+            let mut retry = Validator::new_modules(&core, &sources, &relation).unwrap();
+            retry
+                .type_work
+                .set(CORE_VALIDATION_TYPE_WORK_LIMIT - remaining);
+            assert_eq!(
+                retry.run_effect().err().map(|error| error.reason()),
+                if remaining < work {
+                    Some(ValidationReason::Resource)
+                } else {
+                    None
+                }
+            );
+        }
+        let validated = super::super::validate_effect_modules(core, &sources, &relation).unwrap();
+        for fold in [false, true] {
+            for mutation in 0..13 {
+                let mut rebuilt = if fold {
+                    crate::core::transform::fold_effect_literal_primitives(&validated).unwrap()
+                } else {
+                    crate::core::transform::identity_effect_traversal(&validated).unwrap()
+                };
+                let resource_index = rebuilt
+                    .nodes
+                    .iter()
+                    .position(|node| {
+                        matches!(
+                            &node.kind,
+                            EffectExprKind::Operation(EffectOperation::Resource(_))
+                        )
+                    })
+                    .unwrap();
+                let resource_node = &mut rebuilt.nodes[resource_index];
+                let EffectExprKind::Operation(EffectOperation::Resource(resource)) =
+                    &mut resource_node.kind
+                else {
+                    unreachable!()
+                };
+                match mutation {
+                    0 => {}
+                    1 => {
+                        resource.acquisition.identity =
+                            crate::types::TypeVariableId::generated(u32::MAX)
+                    }
+                    2 => {
+                        resource.acquisition.provider = crate::interface::LexicalEvidenceId::new(
+                            resource.acquisition.provider.module(),
+                            u32::MAX,
+                        )
+                    }
+                    3 => resource.acquisition.builtin = graph.entry(),
+                    4 => {
+                        resource.acquisition.span =
+                            sources[0].span(ByteRange::new(0, 1).unwrap()).unwrap()
+                    }
+                    5 => resource.acquisition.handle = resource.acquisition.methods[0],
+                    6 => resource.acquisition.methods.swap(0, 2),
+                    7 => resource_node.ty = Type::Int,
+                    8 => {
+                        resource_node.ty = Type::Application(
+                            Box::new(Type::Nominal(
+                                resource.acquisition.api().unwrap().error().unwrap(),
+                            )),
+                            Box::new(Type::Int),
+                        )
+                    }
+                    9 => {
+                        resource_node.effects = EffectRow::closed(Box::new([EffectInstance::new(
+                            resource.acquisition.api().unwrap().ops(),
+                            Box::new([Type::Variable(resource.acquisition.identity)]),
+                        )]))
+                    }
+                    10 => {
+                        let request = rebuilt
+                            .nodes
+                            .iter_mut()
+                            .find_map(|node| match &mut node.kind {
+                                EffectExprKind::Operation(EffectOperation::Request(request)) => {
+                                    Some(request)
+                                }
+                                _ => None,
+                            })
+                            .unwrap();
+                        request.operation = OperationId::new(request.effect.effect(), u32::MAX);
+                    }
+                    11 => rebuilt.method_evidence = Arc::default(),
+                    12 => {
+                        resource.acquisition.methods = crate::resolved::ResourceMethods::Cell([
+                            resource.acquisition.methods[0],
+                            resource.acquisition.methods[1],
+                        ])
+                    }
+                    _ => unreachable!(),
+                }
+                let result = super::super::validate_effect_modules(rebuilt, &sources, &relation);
+                if mutation == 0 {
+                    result.unwrap();
+                } else {
+                    assert!(result.is_err(), "fold={fold}, mutation={mutation}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native_buffer_core_registry_authenticates_result_constructors_after_transforms() {
+        for fold in [false, true] {
+            for error_payload in [false, true] {
+                let directory = LinkedValidationDirectory::create();
+                let entry = directory.write(
+                    "entry.ash",
+                    "import @builtin.native_buffer as Buffer\nmain : Unit -> Int\nmain () = 42\n",
+                );
+                let graph = load_module_graph(&entry, &ModuleRoots::empty()).unwrap();
+                let linked =
+                    link_modules(checked_linked_validation_graph(&graph), graph.entry()).unwrap();
+                let linked = validate_linked_facts_for_test(linked).unwrap();
+                let mut elaborator =
+                    crate::elaborate::EffectElaborator::for_module_program(&linked).unwrap();
+                let typed = elaborator
+                    .synthesize_effect_module_program(&linked)
+                    .unwrap();
+                let core = elaborator.finish(typed.node).unwrap();
+                drop(linked);
+                let sources = graph
+                    .modules()
+                    .iter()
+                    .map(|module| module.source())
+                    .collect::<Vec<_>>();
+                let relation = graph
+                    .modules()
+                    .iter()
+                    .map(|module| (module.id(), module.source().id()))
+                    .collect::<Vec<_>>();
+                let validated =
+                    super::super::validate_effect_modules(core, &sources, &relation).unwrap();
+                let mut rebuilt = if fold {
+                    crate::core::transform::fold_effect_literal_primitives(&validated).unwrap()
+                } else {
+                    crate::core::transform::identity_effect_traversal(&validated).unwrap()
+                };
+                drop(validated);
+                Arc::get_mut(&mut rebuilt.registry)
+                    .unwrap()
+                    .corrupt_native_constructor_for_test(error_payload);
+                assert_eq!(
+                    super::super::validate_effect_modules(rebuilt, &sources, &relation)
+                        .unwrap_err()
+                        .reason(),
+                    ValidationReason::Registry
+                );
             }
         }
     }

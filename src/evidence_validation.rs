@@ -5055,6 +5055,18 @@ fn authenticate_linked_registry_facts(
     )?;
     for group in program.groups() {
         charge(budget, 1, group.span())?;
+        if let Some(api) = crate::resolved::ResourceApi::for_module(group.module()) {
+            charge(
+                budget,
+                api.nominal_count() + api.constructor_count() + 2 * api.method_names().len(),
+                group.span(),
+            )?;
+            if !api.registry(registry)
+                || !matches!(group.interface_facts(), [interface] if api.interface(interface))
+            {
+                return Err(unknown(group.span()));
+            }
+        }
         if !modules.insert(group.module()) {
             return Err(unknown(group.span()));
         }
@@ -7417,7 +7429,7 @@ fn authenticate_lexical_header(
     let interface = registry
         .interface(program, checked.application.interface())
         .ok_or_else(|| unknown(source.span))?;
-    if interface.id.module().is_builtin_cell() && source.acquisition.is_none() {
+    if interface.id.module().is_builtin_resource() && source.acquisition.is_none() {
         return Err(invalid_root(source.span));
     }
     let keys = linked_selection_key_types(
@@ -9008,6 +9020,69 @@ mod tests {
                 validate_interface_evidence(program).is_err(),
                 "detached={detach} must publish no capability"
             );
+        }
+    }
+
+    #[test]
+    fn native_buffer_linked_authority_rejects_detached_provider_owners() {
+        for detach in [false, true] {
+            let fixture = ValidationFixture::create(
+                "import @builtin.native_buffer as Buffer\nmain : Unit -> Buffer.Outcome<Int>\nmain () = resource native_buffer<R> b = 4 {\nBuffer.length b\n}\n",
+            );
+            let graph = fixture.graph();
+            let mut program =
+                crate::elaborate::link_modules(check_graph(&graph), graph.entry()).unwrap();
+            assert!(program.corrupt_first_direct_resource_owner_for_test(detach));
+            assert!(validate_interface_evidence(program).is_err());
+        }
+    }
+
+    #[test]
+    fn native_buffer_linked_registry_authenticates_ordinary_constructor_payloads() {
+        for error_payload in [false, true] {
+            let fixture = ValidationFixture::create(
+                "import @builtin.native_buffer as Buffer\nmain : Unit -> Int\nmain () = 42\n",
+            );
+            let graph = fixture.graph();
+            let mut program =
+                crate::elaborate::link_modules(check_graph(&graph), graph.entry()).unwrap();
+            program.corrupt_native_constructor_for_test(error_payload);
+            assert!(validate_interface_evidence(program).is_err());
+        }
+    }
+
+    #[test]
+    fn native_buffer_linked_authority_has_exact_one_short_and_fresh_budgets() {
+        let fixture = ValidationFixture::create(
+            "import @builtin.native_buffer as Buffer\nmain : Unit -> Buffer.Outcome<Buffer.Outcome<Int>>\nmain () = resource native_buffer<R> b = 4 {\nBuffer.read (b, 0)\n}\n",
+        );
+        let graph = fixture.graph();
+        let run = |constraint_limit, type_limit| {
+            let program =
+                crate::elaborate::link_modules(check_graph(&graph), graph.entry()).unwrap();
+            let mut constraints = InterfaceConstraintBudget::with_limit(constraint_limit);
+            let mut types = TypeWorkBudget::with_limit(type_limit);
+            let result =
+                validate_interface_evidence_with_budget(program, &mut constraints, &mut types);
+            (result, constraints.used(), types.used())
+        };
+        let (result, constraints, types) = run(
+            crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT,
+            crate::types::TYPE_WORK_LIMIT,
+        );
+        result.unwrap();
+        assert_eq!(
+            run(constraints - 1, types).0.unwrap_err().reason(),
+            EvidenceValidationReason::ConstraintResourceExhausted
+        );
+        assert_eq!(
+            run(constraints, types - 1).0.unwrap_err().reason(),
+            EvidenceValidationReason::TypeResourceExhausted
+        );
+        for _ in 0..2 {
+            let (result, used_constraints, used_types) = run(constraints, types);
+            result.unwrap();
+            assert_eq!((used_constraints, used_types), (constraints, types));
         }
     }
 

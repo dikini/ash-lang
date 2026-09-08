@@ -1042,6 +1042,9 @@ fn resolve_module_names_with_budget(
             if dependency.edge.target().is_builtin_cell() {
                 resolver.builtin_cell = Some(dependency.edge.target());
             }
+            if dependency.edge.target().is_builtin_native_buffer() {
+                resolver.builtin_native_buffer = Some(dependency.edge.target());
+            }
             DirectDependencyRoute::new(dependency.edge.target(), dependency.edge.import_span())
         }));
         resolver.install_imports(surface, dependencies)?;
@@ -1484,6 +1487,7 @@ fn surface_definition_name(definition: &SurfaceDefinition) -> &crate::surface::S
 struct Resolver {
     module: ModuleId,
     builtin_cell: Option<ModuleId>,
+    builtin_native_buffer: Option<ModuleId>,
     next_binder: u32,
     next_type_variable: u32,
     next_lexical_nominal: u32,
@@ -1787,6 +1791,12 @@ fn public_implementation_route_precedes(
 }
 
 impl Resolver {
+    fn resource_builtin(&self, kind: crate::surface::SurfaceResourceKind) -> Option<ModuleId> {
+        match kind {
+            crate::surface::SurfaceResourceKind::Cell => self.builtin_cell,
+            crate::surface::SurfaceResourceKind::NativeBuffer => self.builtin_native_buffer,
+        }
+    }
     #[cfg(test)]
     fn new(module: ModuleId) -> Self {
         Self::with_budgets(
@@ -1810,6 +1820,7 @@ impl Resolver {
             module,
             next_binder: 0,
             builtin_cell: None,
+            builtin_native_buffer: None,
             next_type_variable: 0,
             next_lexical_nominal: 0,
             next_lexical_evidence: 0,
@@ -6565,7 +6576,7 @@ impl Resolver {
 
             let result = (|| -> Result<ResolvedImplementation, ResolveError> {
                 let head = self.resolve_interface_application(&implementation.head)?;
-                if head.interface.id.module().is_builtin_cell() {
+                if head.interface.id.module().is_builtin_resource() {
                     return Err(error(
                         ResolveReason::SealedProvider,
                         implementation.span,
@@ -8413,6 +8424,7 @@ impl Resolver {
 
     fn finish_resource_expression(
         &mut self,
+        kind: crate::surface::SurfaceResourceKind,
         identity: ResolvedTypeVariable,
         handle: Binder,
         initializer: ResolvedExpressionOwner,
@@ -8420,39 +8432,43 @@ impl Resolver {
         span: Span,
     ) -> Result<ResolvedExpr, ResolveError> {
         use crate::resolved::{
-            CellAcquisition, CellApi, ResolvedEffectInstance, ResolvedPerformExpr,
-            ResolvedResourceExpr,
+            ResolvedEffectInstance, ResolvedPerformExpr, ResolvedResourceExpr, ResourceAcquisition,
+            ResourceApi,
         };
-        let builtin = self.builtin_cell.ok_or_else(|| {
+        let builtin = self.resource_builtin(kind).ok_or_else(|| {
             error(
                 ResolveReason::InternalState,
                 span,
                 "resource builtin origin is missing",
             )
         })?;
-        let api = CellApi::for_module(builtin).ok_or_else(|| {
+        let api = ResourceApi::for_module(builtin).ok_or_else(|| {
             error(
                 ResolveReason::InternalState,
                 span,
                 "resource builtin origin is invalid",
             )
         })?;
-        // The fixed two-method source retains two equations, patterns, operands,
-        // effect arguments and one complete provider application.
-        self.type_work.charge(24).map_err(|()| {
-            error(
-                ResolveReason::TypeResourceExhausted,
-                span,
-                "resource provider construction exceeded its budget",
-            )
-        })?;
-        self.constraint_work.charge(3).map_err(|()| {
-            error(
-                ResolveReason::ConstraintResourceExhausted,
-                span,
-                "resource provider construction exceeded its budget",
-            )
-        })?;
+        // Each fixed method retains its forwarding equation, pattern, operand
+        // and effect argument alongside one complete provider application.
+        self.type_work
+            .charge(12 * api.method_names().len())
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "resource provider construction exceeded its budget",
+                )
+            })?;
+        self.constraint_work
+            .charge(1 + api.method_names().len())
+            .map_err(|()| {
+                error(
+                    ResolveReason::ConstraintResourceExhausted,
+                    span,
+                    "resource provider construction exceeded its budget",
+                )
+            })?;
         let provider =
             crate::interface::LexicalEvidenceId::new(self.module, self.next_lexical_evidence);
         self.next_lexical_evidence =
@@ -8464,15 +8480,18 @@ impl Resolver {
                 )
             })?;
         let mut groups = ResolvedImplementationMethodGroupBuffer(Vec::new());
-        groups.0.try_reserve(2).map_err(|_| {
-            error(
-                ResolveReason::TypeResourceExhausted,
-                span,
-                "resource methods could not be reserved",
-            )
-        })?;
-        let mut method_binders = [handle.id; 2];
-        for (ordinal, spelling) in ["read", "write"].into_iter().enumerate() {
+        groups
+            .0
+            .try_reserve(api.method_names().len())
+            .map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "resource methods could not be reserved",
+                )
+            })?;
+        let mut method_binders = [handle.id; 3];
+        for (ordinal, &spelling) in api.method_names().iter().enumerate() {
             let binder = self.allocate_binder(spelling, span)?;
             method_binders[ordinal] = binder.id;
             let parameter = self.allocate_binder("value", span)?;
@@ -8528,12 +8547,16 @@ impl Resolver {
                 span,
             });
         }
-        let acquisition = CellAcquisition {
+        let acquisition = ResourceAcquisition {
             builtin,
             identity: identity.id,
             handle: handle.id,
             provider,
-            methods: method_binders,
+            methods: if api.is_native_buffer() {
+                crate::resolved::ResourceMethods::NativeBuffer(method_binders)
+            } else {
+                crate::resolved::ResourceMethods::Cell([method_binders[0], method_binders[1]])
+            },
             span,
         };
         let generated = crate::resolved::ResolvedLexicalEvidence {
@@ -8801,6 +8824,7 @@ impl Resolver {
                         )
                     })?;
                     tasks.push(ResolveTask::FinishResource {
+                        kind: source.kind,
                         identity,
                         handle,
                         initializer: Box::new(initializer),
@@ -8811,6 +8835,7 @@ impl Resolver {
                     tasks.push(ResolveTask::VisitBlock(&source.body));
                 }
                 ResolveTask::FinishResource {
+                    kind,
                     identity,
                     handle,
                     initializer,
@@ -8828,6 +8853,7 @@ impl Resolver {
                     self.scopes.truncate(scope_checkpoint);
                     self.type_scopes.truncate(type_scope_checkpoint);
                     expressions.push(self.finish_resource_expression(
+                        kind,
                         identity,
                         handle,
                         *initializer,
@@ -8981,7 +9007,7 @@ impl Resolver {
                         )
                     })?;
                     let application = self.resolve_interface_application(&source.application)?;
-                    if application.interface.id.module().is_builtin_cell() {
+                    if application.interface.id.module().is_builtin_resource() {
                         return Err(error(
                             ResolveReason::SealedProvider,
                             source.span,
@@ -9425,10 +9451,7 @@ impl Resolver {
                 });
                 tasks.push(ResolveTask::VisitBlock(&hook.body));
             }
-            SurfaceExprKind::Resource(source)
-                if source.kind != crate::surface::SurfaceResourceKind::Cell
-                    || self.builtin_cell.is_none() =>
-            {
+            SurfaceExprKind::Resource(source) if self.resource_builtin(source.kind).is_none() => {
                 return Err(error(
                     ResolveReason::ResourceBuiltinRequired,
                     expression.span,
@@ -9884,6 +9907,7 @@ enum ResolveTask<'a> {
         span: Span,
     },
     FinishResource {
+        kind: crate::surface::SurfaceResourceKind,
         identity: ResolvedTypeVariable,
         handle: Binder,
         initializer: Box<ResolvedExpressionOwner>,

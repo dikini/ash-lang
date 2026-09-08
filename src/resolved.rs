@@ -28,16 +28,69 @@ use crate::{
     },
 };
 
-/// The fixed relation admitted by the loader's private builtin-cell origin.
+/// The fixed relation admitted by the loader's private resource origins.
 /// This descriptor contains identities only; ordinary registries own its facts.
 #[derive(Clone, Copy)]
-pub(crate) struct CellApi {
+pub(crate) struct ResourceApi {
     module: ModuleId,
 }
 
-impl CellApi {
+impl ResourceApi {
     pub(crate) fn for_module(module: ModuleId) -> Option<Self> {
-        module.is_builtin_cell().then_some(Self { module })
+        module.is_builtin_resource().then_some(Self { module })
+    }
+
+    pub(crate) fn is_native_buffer(self) -> bool {
+        self.module.is_builtin_native_buffer()
+    }
+
+    pub(crate) fn method_names(self) -> &'static [&'static str] {
+        if self.is_native_buffer() {
+            &["length", "read", "write"]
+        } else {
+            &["read", "write"]
+        }
+    }
+
+    pub(crate) fn nominal_count(self) -> usize {
+        if self.is_native_buffer() { 3 } else { 1 }
+    }
+
+    pub(crate) fn constructor_count(self) -> usize {
+        if self.is_native_buffer() { 7 } else { 1 }
+    }
+
+    pub(crate) fn outcome(self) -> Option<NominalTypeId> {
+        self.is_native_buffer()
+            .then(|| NominalTypeId::new(self.module, 1))
+    }
+
+    pub(crate) fn error(self) -> Option<NominalTypeId> {
+        self.is_native_buffer()
+            .then(|| NominalTypeId::new(self.module, 2))
+    }
+
+    pub(crate) fn hides_constructor(self, id: ConstructorId) -> bool {
+        id.owner() == self.handle()
+    }
+
+    fn nominal_shape(
+        self,
+        id: NominalTypeId,
+        parameters: &[ResolvedTypeVariable],
+    ) -> Option<(&'static str, &'static [u32])> {
+        if id == self.handle() && self.parameter(parameters, 0) {
+            Some(("Handle", &[0]))
+        } else if Some(id) == self.outcome()
+            && matches!(parameters, [parameter] if parameter.id == TypeVariableId::resolved(self.module, 1)
+                && parameter.kind == Kind::Type && parameter.spelling == "T")
+        {
+            Some(("Outcome", &[0, 1]))
+        } else if Some(id) == self.error() && parameters.is_empty() {
+            Some(("Error", &[0, 1, 2, 3]))
+        } else {
+            None
+        }
     }
 
     pub(crate) fn handle(self) -> NominalTypeId {
@@ -62,20 +115,59 @@ impl CellApi {
         nominal: &ResolvedNominalType,
         parameters: &[ResolvedTypeVariable],
     ) -> bool {
-        nominal.id == self.handle()
-            && nominal.declaration_kind == ResolvedNominalDeclarationKind::Data
-            && nominal.spelling == "Handle"
-            && nominal.constructors.as_ref() == [ConstructorId::new(self.handle(), 0)]
+        let Some((name, family)) = self.nominal_shape(nominal.id, parameters) else {
+            return false;
+        };
+        nominal.declaration_kind == ResolvedNominalDeclarationKind::Data
+            && nominal.spelling == name
+            && nominal.constructors.len() == family.len()
+            && nominal
+                .constructors
+                .iter()
+                .zip(family)
+                .all(|(id, ordinal)| *id == ConstructorId::new(nominal.id, *ordinal))
             && nominal.representation.is_none()
             && nominal.representation_provenance.is_none()
-            && self.parameter(parameters, 0)
     }
 
     pub(crate) fn constructor(self, constructor: &ResolvedConstructor) -> bool {
-        constructor.id == ConstructorId::new(self.handle(), 0)
-            && constructor.owner == self.handle()
-            && constructor.spelling == "Hidden"
-            && constructor.payload.is_none()
+        constructor.id.owner() == constructor.owner
+            && self.constructor_parts(
+                constructor.id,
+                &constructor.spelling,
+                constructor.payload.as_ref(),
+            )
+    }
+
+    fn constructor_parts(self, id: ConstructorId, spelling: &str, payload: Option<&Type>) -> bool {
+        if id == ConstructorId::new(self.handle(), 0) {
+            spelling == "Hidden" && payload.is_none()
+        } else if Some(id.owner()) == self.outcome() {
+            if id == ConstructorId::new(id.owner(), 0) {
+                spelling == "Success"
+                    && matches!(payload, Some(Type::Variable(parameter)) if *parameter == TypeVariableId::resolved(self.module, 1))
+            } else {
+                id == ConstructorId::new(id.owner(), 1)
+                    && spelling == "Failure"
+                    && matches!(payload, Some(Type::Nominal(owner)) if Some(*owner) == self.error())
+            }
+        } else if Some(id.owner()) == self.error() {
+            [
+                "InvalidLength",
+                "AllocationFailed",
+                "InvalidIndex",
+                "InvalidByte",
+            ]
+            .iter()
+            .enumerate()
+            .any(|(ordinal, name)| {
+                id == ConstructorId::new(id.owner(), ordinal as u32)
+                    && spelling == *name
+                    && payload.is_none()
+            })
+        } else {
+            false
+        }
     }
 
     pub(crate) fn registry(self, registry: &ResolvedRegistry) -> bool {
@@ -91,29 +183,79 @@ impl CellApi {
         let Some(effect) = registry.effect(self.ops()) else {
             return false;
         };
-        self.nominal(nominal, parameters) && self.constructor(constructor) && self.effect(effect)
+        if !self.nominal(nominal, parameters)
+            || !self.constructor(constructor)
+            || !self.effect(effect)
+        {
+            return false;
+        }
+        [self.outcome(), self.error()]
+            .into_iter()
+            .flatten()
+            .all(|id| {
+                let Some(nominal) = registry.nominal(id) else {
+                    return false;
+                };
+                let Some(parameters) = registry.nominal_parameters(id) else {
+                    return false;
+                };
+                self.nominal(nominal, parameters)
+                    && nominal.constructors.iter().all(|id| {
+                        registry
+                            .constructor(*id)
+                            .is_some_and(|constructor| self.constructor(constructor))
+                    })
+            })
     }
 
     fn exported_nominal(self, nominal: &ExportedType) -> bool {
-        nominal.id == self.handle()
-            && self.parameter(&nominal.parameters, 0)
-            && nominal.declaration_kind == ResolvedNominalDeclarationKind::Data
-            && nominal.constructor_count == 1
-            && nominal.parameter_count == 1
-            && nominal.access == ExportedTypeAccess::Opaque
-            && nominal.constructors.is_empty()
+        let Some((_, family)) = self.nominal_shape(nominal.id, &nominal.parameters) else {
+            return false;
+        };
+        nominal.declaration_kind == ResolvedNominalDeclarationKind::Data
+            && nominal.constructor_count == family.len()
+            && nominal.parameter_count == nominal.parameters.len()
+            && if nominal.id == self.handle() {
+                nominal.access == ExportedTypeAccess::Opaque && nominal.constructors.is_empty()
+            } else {
+                nominal.access == ExportedTypeAccess::Transparent
+                    && nominal.constructors.len() == family.len()
+                    && nominal
+                        .constructors
+                        .iter()
+                        .zip(family)
+                        .all(|(id, ordinal)| *id == ConstructorId::new(nominal.id, *ordinal))
+            }
             && nominal.representation.is_none()
             && nominal.representation_provenance.is_none()
     }
 
     fn hidden_nominal(self, nominal: &ExportedHiddenType) -> bool {
-        nominal.id == self.handle()
-            && self.parameter(&nominal.parameters, 0)
-            && nominal.declaration_kind == ResolvedNominalDeclarationKind::Data
-            && nominal.constructor_count == 1
-            && nominal.parameter_count == 1
-            && nominal.access != ImportedTypeAccess::Transparent
-            && nominal.constructors.is_empty()
+        let Some((_, family)) = self.nominal_shape(nominal.id, &nominal.parameters) else {
+            return false;
+        };
+        nominal.declaration_kind == ResolvedNominalDeclarationKind::Data
+            && nominal.constructor_count == family.len()
+            && nominal.parameter_count == nominal.parameters.len()
+            && if nominal.id == self.handle() {
+                nominal.access != ImportedTypeAccess::Transparent && nominal.constructors.is_empty()
+            } else {
+                match nominal.access {
+                    ImportedTypeAccess::Transparent => {
+                        nominal.constructors.len() == family.len()
+                            && nominal
+                                .constructors
+                                .iter()
+                                .zip(family)
+                                .all(|(id, ordinal)| {
+                                    *id == ConstructorId::new(nominal.id, *ordinal)
+                                })
+                    }
+                    ImportedTypeAccess::Hidden | ImportedTypeAccess::Opaque => {
+                        nominal.constructors.is_empty()
+                    }
+                }
+            }
             && nominal.representation.is_none()
             && nominal.representation_provenance.is_none()
     }
@@ -124,7 +266,7 @@ impl CellApi {
                 && matches!(argument.as_ref(), Type::Variable(id) if *id == parameter))
     }
 
-    fn signature(self, ty: &Type, parameter: TypeVariableId, write: bool, method: bool) -> bool {
+    fn signature(self, ty: &Type, parameter: TypeVariableId, ordinal: usize, method: bool) -> bool {
         let Some(function) = ty.function_view() else {
             return false;
         };
@@ -142,7 +284,21 @@ impl CellApi {
         } else if function.effects().is_some() {
             return false;
         }
-        if write {
+        if self.is_native_buffer() && ordinal > 0 {
+            let domain = match function.domain() {
+                Type::Tuple(fields) if ordinal == 1 => {
+                    matches!(fields.as_ref(), [handle, Type::Int] if self.handle_type(handle, parameter))
+                }
+                Type::Tuple(fields) if ordinal == 2 => {
+                    matches!(fields.as_ref(), [handle, Type::Int, Type::Int] if self.handle_type(handle, parameter))
+                }
+                _ => false,
+            };
+            domain
+                && matches!(function.value(), Type::Application(head, argument)
+                if matches!(head.as_ref(), Type::Nominal(id) if Some(*id) == self.outcome())
+                    && if ordinal == 1 { matches!(argument.as_ref(), Type::Int) } else { matches!(argument.as_ref(), Type::Unit) })
+        } else if ordinal == 1 {
             matches!(function.domain(), Type::Tuple(fields) if matches!(fields.as_ref(), [handle, Type::Int] if self.handle_type(handle, parameter)))
                 && matches!(function.value(), Type::Unit)
         } else {
@@ -154,19 +310,22 @@ impl CellApi {
         effect.id == self.ops()
             && effect.public
             && effect.spelling == "Ops"
-            && self.parameter(&effect.parameters, 1)
-            && effect.operations.len() == 2
+            && self.parameter(
+                &effect.parameters,
+                if self.is_native_buffer() { 2 } else { 1 },
+            )
+            && effect.operations.len() == self.method_names().len()
             && effect
                 .operations
                 .iter()
                 .enumerate()
                 .all(|(index, operation)| {
                     operation.id == OperationId::new(self.ops(), index as u32)
-                        && operation.spelling == if index == 0 { "read" } else { "write" }
+                        && operation.spelling == self.method_names()[index]
                         && self.signature(
                             &operation.annotation.ty,
                             effect.parameters[0].id,
-                            index == 1,
+                            index,
                             false,
                         )
                 })
@@ -175,19 +334,17 @@ impl CellApi {
     pub(crate) fn interface(self, interface: &CheckedInterfaceFact) -> bool {
         interface.id == self.provider()
             && interface.spelling == "Provider"
-            && self.parameter(&interface.parameters, 2)
+            && self.parameter(
+                &interface.parameters,
+                if self.is_native_buffer() { 3 } else { 2 },
+            )
             && interface.determination().is_none()
-            && interface.methods.len() == 2
+            && interface.methods.len() == self.method_names().len()
             && interface.methods.iter().enumerate().all(|(index, method)| {
                 method.id == MethodId::new(self.provider(), index as u32)
-                    && method.spelling == if index == 0 { "read" } else { "write" }
+                    && method.spelling == self.method_names()[index]
                     && method.type_parameters().is_empty()
-                    && self.signature(
-                        &method.value_type,
-                        interface.parameters[0].id,
-                        index == 1,
-                        true,
-                    )
+                    && self.signature(&method.value_type, interface.parameters[0].id, index, true)
             })
     }
 
@@ -198,16 +355,14 @@ impl CellApi {
         parameters: &[(TypeVariableId, Kind)],
         value_type: &Type,
     ) -> bool {
-        let parameter = TypeVariableId::resolved(self.module, 2);
+        let parameter =
+            TypeVariableId::resolved(self.module, if self.is_native_buffer() { 3 } else { 2 });
         interface_parameters == [parameter]
             && parameters.is_empty()
-            && (id == MethodId::new(self.provider(), 0) || id == MethodId::new(self.provider(), 1))
-            && self.signature(
-                value_type,
-                parameter,
-                id == MethodId::new(self.provider(), 1),
-                true,
-            )
+            && self.method_names().iter().enumerate().any(|(ordinal, _)| {
+                id == MethodId::new(self.provider(), ordinal as u32)
+                    && self.signature(value_type, parameter, ordinal, true)
+            })
     }
 }
 
@@ -1488,6 +1643,13 @@ impl ResolvedModuleProgram {
                 },
             )
             .is_none()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn corrupt_native_constructor_for_test(&mut self, error_payload: bool) {
+        Arc::get_mut(&mut self.registry)
+            .unwrap()
+            .corrupt_native_constructor_for_test(error_payload);
     }
 
     #[cfg(test)]
@@ -8768,6 +8930,8 @@ pub(crate) enum BuiltinCellSummaryMutationForTest {
     MissingHandle,
     MissingOps,
     HandleKind,
+    NativeSuccessPayload,
+    NativeErrorPayload,
 }
 
 impl ExportSummary {
@@ -8777,6 +8941,34 @@ impl ExportSummary {
         mutation: BuiltinCellSummaryMutationForTest,
     ) {
         match mutation {
+            BuiltinCellSummaryMutationForTest::NativeSuccessPayload
+            | BuiltinCellSummaryMutationForTest::NativeErrorPayload => {
+                let name = if matches!(
+                    mutation,
+                    BuiltinCellSummaryMutationForTest::NativeSuccessPayload
+                ) {
+                    "Success"
+                } else {
+                    "InvalidByte"
+                };
+                let constructor = self.constructors.get_mut(name).unwrap();
+                if let Some(payload) = constructor.payload.replace(Type::Bool) {
+                    discard_type_iteratively(payload);
+                }
+                let owner = constructor.id.owner();
+                let parameters = if let Some(name) = self.nominal_names_by_id.get(&owner) {
+                    &self.nominals[name].parameters
+                } else {
+                    &self.hidden_nominals[&owner].parameters
+                };
+                constructor.scheme = canonical_constructor_scheme(
+                    owner,
+                    parameters,
+                    constructor.payload.as_ref(),
+                    &mut TypeWorkBudget::default(),
+                )
+                .unwrap();
+            }
             BuiltinCellSummaryMutationForTest::OperationResult => {
                 let operation = &mut self.effects[0].operations[0];
                 let Type::Function(_, result) = &mut operation.annotation.ty else {
@@ -8840,7 +9032,7 @@ impl ExportSummary {
         type_work: &mut TypeWorkBudget,
         constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     ) -> Result<(), ResolvedBuildFailure> {
-        self.authenticate_cell_facts()?;
+        self.authenticate_resource_facts()?;
         if self.terms.len() != self.term_order.len()
             || self.nominals.len() != self.nominal_order.len()
             || self.constructors.len() != self.constructor_order.len()
@@ -9003,8 +9195,8 @@ impl ExportSummary {
             named_effects.insert(*identity);
         }
         for (position, effect) in self.effects.iter().enumerate() {
-            if let Some(api) = CellApi::for_module(effect.id.module())
-                && (!api.effect(effect) || !self.has_cell_handle(api))
+            if let Some(api) = ResourceApi::for_module(effect.id.module())
+                && (!api.effect(effect) || !self.has_resource_nominals(api))
             {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
@@ -9078,7 +9270,7 @@ impl ExportSummary {
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
 
         for (_, nominal) in self.nominals() {
-            if let Some(api) = CellApi::for_module(nominal.id.module())
+            if let Some(api) = ResourceApi::for_module(nominal.id.module())
                 && !api.exported_nominal(nominal)
             {
                 return Err(ResolvedBuildFailure::InvalidState);
@@ -9222,7 +9414,7 @@ impl ExportSummary {
             );
         }
         for nominal in self.hidden_nominals() {
-            if let Some(api) = CellApi::for_module(nominal.id.module())
+            if let Some(api) = ResourceApi::for_module(nominal.id.module())
                 && !api.hidden_nominal(nominal)
             {
                 return Err(ResolvedBuildFailure::InvalidState);
@@ -9570,7 +9762,7 @@ impl ExportSummary {
         }
         for (position, implementation) in self.implementations.iter().enumerate() {
             let fact = &implementation.fact;
-            if fact.interface().module().is_builtin_cell() {
+            if fact.interface().module().is_builtin_resource() {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
             let authorization_is_well_formed = implementation
@@ -9661,9 +9853,9 @@ impl ExportSummary {
         }
 
         for interface in self.interfaces.iter().chain(self.hidden_interfaces.iter()) {
-            if let Some(api) = CellApi::for_module(interface.id.module())
+            if let Some(api) = ResourceApi::for_module(interface.id.module())
                 && (!api.interface(interface)
-                    || !self.has_cell_handle(api)
+                    || !self.has_resource_nominals(api)
                     || !self.effect_positions.contains_key(&api.ops()))
             {
                 return Err(ResolvedBuildFailure::InvalidState);
@@ -9739,7 +9931,14 @@ impl ExportSummary {
             .map(|(_, constructor)| constructor)
             .chain(self.hidden_constructors())
         {
-            if constructor.id.owner().module().is_builtin_cell() {
+            if ResourceApi::for_module(constructor.id.owner().module()).is_some_and(|api| {
+                api.hides_constructor(constructor.id)
+                    || !api.constructor_parts(
+                        constructor.id,
+                        &constructor.spelling,
+                        constructor.payload.as_ref(),
+                    )
+            }) {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
             let Some((parameters, declaration_kind, _, family, access, _, _, _, _)) =
@@ -11636,7 +11835,7 @@ impl ExportSummary {
             }
         }
 
-        summary.authenticate_cell_facts()?;
+        summary.authenticate_resource_facts()?;
         Ok(summary)
     }
 
@@ -11644,26 +11843,51 @@ impl ExportSummary {
         self.terms.get(spelling)
     }
 
-    fn authenticate_cell_facts(&self) -> Result<(), ResolvedBuildFailure> {
-        if let Some(api) = CellApi::for_module(self.module)
+    fn authenticate_resource_facts(&self) -> Result<(), ResolvedBuildFailure> {
+        if let Some(api) = ResourceApi::for_module(self.module)
             && (!self.terms.is_empty()
-                || self.nominals.len() != 1
+                || self.nominals.len() != api.nominal_count()
                 || self
                     .nominals
                     .get("Handle")
                     .is_none_or(|nominal| !api.exported_nominal(nominal))
+                || api.outcome().is_some_and(|id| {
+                    self.nominals
+                        .get("Outcome")
+                        .is_none_or(|nominal| nominal.id != id || !api.exported_nominal(nominal))
+                })
+                || api.error().is_some_and(|id| {
+                    self.nominals
+                        .get("Error")
+                        .is_none_or(|nominal| nominal.id != id || !api.exported_nominal(nominal))
+                })
                 || self.interface_names.len() != 1
                 || self.interface_names.get("Provider") != Some(&api.provider())
                 || self.effect_names.len() != 1
                 || self.effect_names.get("Ops") != Some(&api.ops())
-                || self.method_names.len() != 2
-                || self.method_names.get("read") != Some(&MethodId::new(api.provider(), 0))
-                || self.method_names.get("write") != Some(&MethodId::new(api.provider(), 1))
+                || self.method_names.len() != api.method_names().len()
+                || api
+                    .method_names()
+                    .iter()
+                    .enumerate()
+                    .any(|(ordinal, name)| {
+                        self.method_names.get(*name)
+                            != Some(&MethodId::new(api.provider(), ordinal as u32))
+                    })
                 || !matches!(self.interfaces.as_slice(), [interface] if api.interface(interface))
                 || !matches!(self.effects.as_slice(), [effect] if api.effect(effect))
                 || !self.hidden_interfaces.is_empty()
                 || !self.hidden_nominals.is_empty()
-                || !self.constructors.is_empty()
+                || self.constructors.len() != api.constructor_count() - 1
+                || self.constructors.iter().any(|(name, constructor)| {
+                    name != &constructor.spelling
+                        || !api.constructor_parts(
+                            constructor.id,
+                            name,
+                            constructor.payload.as_ref(),
+                        )
+                        || api.hides_constructor(constructor.id)
+                })
                 || !self.hidden_constructors.is_empty()
                 || !self.implementations.is_empty())
         {
@@ -11672,9 +11896,16 @@ impl ExportSummary {
         Ok(())
     }
 
-    fn has_cell_handle(&self, api: CellApi) -> bool {
-        self.nominal_names_by_id.contains_key(&api.handle())
-            || self.hidden_nominals.contains_key(&api.handle())
+    fn has_resource_nominals(&self, api: ResourceApi) -> bool {
+        // Provider signatures require these families. Error follows ordinary
+        // constructor-payload reachability; linked validation authenticates the
+        // complete defining registry even when a facade exposes only length.
+        [Some(api.handle()), api.outcome()]
+            .into_iter()
+            .flatten()
+            .all(|id| {
+                self.nominal_names_by_id.contains_key(&id) || self.hidden_nominals.contains_key(&id)
+            })
     }
 
     pub(crate) fn nominal(&self, spelling: &str) -> Option<&ExportedType> {
@@ -15607,10 +15838,10 @@ fn validate_checked_registries<'a>(
     for checked in modules {
         let module = checked.module();
         let registry = checked.registry();
-        if let Some(api) = CellApi::for_module(module)
+        if let Some(api) = ResourceApi::for_module(module)
             && (!api.registry(registry)
-                || registry.nominals.len() != 1
-                || registry.constructors.len() != 1
+                || registry.nominals.len() != api.nominal_count()
+                || registry.constructors.len() != api.constructor_count()
                 || registry.effects.len() != 1
                 || !registry.lexical_nominals.is_empty()
                 || !registry.lexical_constructors.is_empty()
@@ -15792,7 +16023,7 @@ fn validate_checked_registries<'a>(
         }
         for implementation in checked.implementation_facts() {
             if implementation.id.module() != module
-                || implementation.interface().module().is_builtin_cell()
+                || implementation.interface().module().is_builtin_resource()
             {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
@@ -16194,6 +16425,26 @@ impl Drop for ResolvedConstructorBuffer {
 }
 
 impl ResolvedRegistry {
+    #[cfg(test)]
+    pub(crate) fn corrupt_native_constructor_for_test(&mut self, error_payload: bool) {
+        let constructor = self
+            .constructors
+            .iter_mut()
+            .find(|constructor| {
+                constructor.owner.module().is_builtin_native_buffer()
+                    && constructor.spelling
+                        == if error_payload {
+                            "InvalidByte"
+                        } else {
+                            "Success"
+                        }
+            })
+            .unwrap();
+        if let Some(payload) = constructor.payload.replace(Type::Bool) {
+            discard_type_iteratively(payload);
+        }
+    }
+
     /// Constructs one closed registry after two-pass resolution.
     #[must_use]
     pub fn new(nominals: Vec<ResolvedNominalType>, constructors: Vec<ResolvedConstructor>) -> Self {
@@ -18176,7 +18427,7 @@ pub enum ResolvedLocalDeclaration {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedLexicalEvidence {
     /// Compiler-owned acquisition authority; absent for every source `with`.
-    pub(crate) acquisition: Option<CellAcquisition>,
+    pub(crate) acquisition: Option<ResourceAcquisition>,
     pub(crate) checked: crate::interface::LexicalEvidenceSlot,
     /// Module-qualified lexical identity.
     pub id: crate::interface::LexicalEvidenceId,
@@ -18460,7 +18711,7 @@ pub enum ResolvedExprKind {
     Resume(ResolvedResumeExpr),
     /// Nullary consumption of the enclosing clause capability.
     Discard(ResolvedDiscardExpr),
-    /// A scoped cell acquisition with a rigid, nongeneralized identity.
+    /// A scoped resource acquisition with a rigid, nongeneralized identity.
     Resource(Box<ResolvedResourceExpr>),
 }
 
@@ -18473,20 +18724,48 @@ pub struct ResolvedCleanupExpr {
     pub action: Box<ResolvedExpr>,
 }
 
-/// The fixed relation owned by a cell acquisition, never by source evidence.
+/// Method binders for the closed resource APIs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct CellAcquisition {
+pub(crate) enum ResourceMethods {
+    Cell([BinderId; 2]),
+    NativeBuffer([BinderId; 3]),
+}
+
+impl std::ops::Deref for ResourceMethods {
+    type Target = [BinderId];
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Cell(methods) => methods,
+            Self::NativeBuffer(methods) => methods,
+        }
+    }
+}
+
+#[cfg(test)]
+impl std::ops::DerefMut for ResourceMethods {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            Self::Cell(methods) => methods,
+            Self::NativeBuffer(methods) => methods,
+        }
+    }
+}
+
+/// The fixed relation owned by an acquisition, never by source evidence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ResourceAcquisition {
     pub(crate) builtin: ModuleId,
     pub(crate) identity: TypeVariableId,
     pub(crate) handle: BinderId,
     pub(crate) provider: crate::interface::LexicalEvidenceId,
-    pub(crate) methods: [BinderId; 2],
+    pub(crate) methods: ResourceMethods,
     pub(crate) span: Span,
 }
 
-impl CellAcquisition {
-    pub(crate) fn api(self) -> Option<CellApi> {
-        CellApi::for_module(self.builtin)
+impl ResourceAcquisition {
+    pub(crate) fn api(self) -> Option<ResourceApi> {
+        let api = ResourceApi::for_module(self.builtin)?;
+        (api.method_names().len() == self.methods.len()).then_some(api)
     }
 
     pub(crate) fn owns(self, resource: &ResolvedResourceExpr) -> bool {
@@ -18505,7 +18784,11 @@ impl CellAcquisition {
             && self.handle == resource.handle.id
             && self.identity.module() == Some(self.provider.module())
             && self.handle.module() == Some(self.provider.module())
-            && self.methods[0] != self.methods[1]
+            && self
+                .methods
+                .iter()
+                .enumerate()
+                .all(|(index, method)| !self.methods[..index].contains(method))
             && self.methods.iter().all(|method| {
                 method.module() == Some(self.provider.module()) && *method != self.handle
             })
@@ -18521,13 +18804,15 @@ impl CellAcquisition {
             || source.span != self.span
             || source.application.interface.id != api.provider()
             || !matches!(source.application.arguments.as_ref(), [argument] if argument.ty == Type::Variable(self.identity))
-            || source.method_groups.len() != 2
+            || source.method_groups.len() != api.method_names().len()
         {
             return false;
         }
         source.method_groups.iter().enumerate().all(|(ordinal, group)| {
             if group.binder.id != self.methods[ordinal] || !group.contextual_parameters.is_empty()
                 || group.identity.is_some() || group.method != Some(MethodId::new(api.provider(), ordinal as u32))
+                || group.binder.spelling != api.method_names()[ordinal]
+                || group.binder.origin.primary_span() != self.span
             { return false; }
             let [equation] = group.equations.as_ref() else { return false };
             let [pattern] = equation.patterns.as_slice() else { return false };
@@ -18535,8 +18820,16 @@ impl CellAcquisition {
             let ResolvedExprKind::Perform(request) = &equation.body.kind else { return false };
             let ResolvedExprKind::Occurrence(operand) = &request.operand.kind else { return false };
             equation.name.binder == group.binder.id
+                && equation.name.spelling == api.method_names()[ordinal]
                 && group.span == self.span
                 && equation.span == self.span
+                && pattern.span == self.span
+                && parameter.origin.primary_span() == self.span
+                && parameter.id != self.handle
+                && !self.methods.contains(&parameter.id)
+                && equation.body.span == self.span
+                && request.operand.span == self.span
+                && request.spelling == api.method_names()[ordinal]
                 && equation.name.origin.primary_span() == self.span
                 && request.origin.primary_span() == self.span
                 && request.effect.origin.primary_span() == self.span
@@ -18554,7 +18847,7 @@ impl CellAcquisition {
 /// Resolved ownership of the initializer and the identity-scoped body.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedResourceExpr {
-    pub(crate) acquisition: CellAcquisition,
+    pub(crate) acquisition: ResourceAcquisition,
     /// The rigid kind-Type identity owned by this acquisition.
     pub identity: ResolvedTypeVariable,
     /// The body-local handle binder.

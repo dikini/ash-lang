@@ -75,11 +75,18 @@ new `tests/native_buffer_runtime.rs` and machine unit tests.
 3. Charge proportional work and reserve fallible result/publication storage
    before allocation. Guard successful allocation until atomic publication;
    inject post-success failure and prove release with no body authority.
+   Reserve an actual outcome heap slot, not merely spare Vec capacity that the
+   body can consume. Keep the prepared slot unreachable until its result exists.
 4. Reserve result wrapping and disposal work at acquisition. Normal completion
    releases then wraps; discard skips wrapping; internal teardown releases
    iteratively without source cleanup. Do not add a second closing schedule.
+   Mark each abandoned native owner to skip its wrapper when collecting the
+   existing closing frames; action-local acquisitions still complete normally.
 5. Test allocation failure, work exhaustion before native calls, write atomicity,
    fresh activations, captured owners and exact capacity reuse.
+   Test negative host conversion inside the Rust integer boundary: current Ash
+   source has no subtraction or negative literal syntax. Source cases cover zero
+   and oversized positive lengths, indices and bytes without extending arithmetic.
 6. Run `cargo test --test native_buffer_runtime` and focused machine tests;
    review contract then quality and commit unsigned when green.
    Covers FOREIGN-02/03/04/08/09 with real and injected native observations.
@@ -144,4 +151,15 @@ Files: `spec/syntax.md`, `spec/name-resolution.md`, `spec/static-semantics.md`,
   under a cell-only import. The guard now fails closed pending native builtin
   admission; that negative passes. Total focused frontend checks: 19 syntax/
   module tests plus this authority negative.
-- Steps 2–5: implementation pending. No FOREIGN evidence row is complete yet.
+- Steps 3–5: implementation pending. No FOREIGN evidence row is complete yet.
+- Step 2 compiler admission/typing/authentication now delegated at high reasoning;
+  parent prepared runtime bounds and cleanup/capture/override fixtures. Runtime
+  implementation remains pending compiler integration.
+- Independent compiler contract review found and then cleared two control gaps:
+  native allocation failure now reaches the continuation after initializer
+  completion without entering the body or installing its owner; restored native
+  results preserve Success projection around their frozen body value without
+  reacquisition. Both source regressions were observed red, then green. Parent
+  reran 23 native compiler integration tests and 9 internal authority/restoration
+  tests successfully. Separate high-reasoning quality review passed; parent
+  strict Clippy passed. Compiler checkpoint approved; runtime remains fail-closed.

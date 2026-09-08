@@ -59,6 +59,7 @@ enum Expr {
         arms: Vec<(Vec<(usize, usize)>, usize)>,
     },
     Resource {
+        success: Option<ConstructorId>,
         handle: usize,
         identity: usize,
         initializer: usize,
@@ -183,12 +184,14 @@ impl Expr {
                 }
             }
             Self::Resource {
+                success,
                 handle,
                 identity,
                 initializer,
                 body,
                 source,
             } => Self::Resource {
+                success: *success,
                 handle: handle + offset,
                 identity: identity + offset,
                 initializer: initializer + offset,
@@ -1006,6 +1009,12 @@ impl Graph {
             },
             Some(EffectOperation::Registration(scope)) => Expr::Alias(index(scope.body)),
             Some(EffectOperation::Resource(resource)) => Expr::Resource {
+                success: resource
+                    .acquisition
+                    .api()
+                    .ok_or(Failure::Invalid)?
+                    .outcome()
+                    .map(|outcome| ConstructorId::new(outcome, 0)),
                 handle: self.symbol(symbols, resource.handle.id(), source, budget)?,
                 identity: self.symbol(types, resource.acquisition.identity, source, budget)?,
                 initializer: index(resource.initializer),
@@ -1540,7 +1549,21 @@ impl<'a> Analysis<'a> {
         let result = self.slot(expression, context, budget)?;
         if terminal_result {
             self.slots[result].terminal = true;
-            self.edge(result, input, budget)?;
+            if let Expr::Resource {
+                success: Some(_),
+                body,
+                ..
+            } = self.graph.expressions[expression]
+            {
+                if self.slots[input].key != (body, context) {
+                    return Err(Failure::Invalid);
+                }
+                // This body already owns a successful acquisition. Preserve its
+                // result wrapper over the frozen input; never replay acquisition.
+                self.atom(result, Atom::Aggregate(expression, context), budget)?;
+            } else {
+                self.edge(result, input, budget)?;
+            }
         }
         let cut = Cut {
             context,
@@ -1599,6 +1622,7 @@ impl<'a> Analysis<'a> {
     ) -> Result<(Self, usize), Failure> {
         let expression = *self.graph.positions.get(&code).ok_or(Failure::Invalid)?;
         let Expr::Resource {
+            success,
             handle,
             identity,
             body,
@@ -1657,7 +1681,12 @@ impl<'a> Analysis<'a> {
         }
         let result = query.slot(expression, context, budget)?;
         query.slots[result].terminal = true;
-        query.link(result, body, context, budget)?;
+        if success.is_some() {
+            query.slot(body, context, budget)?;
+            query.atom(result, Atom::Aggregate(expression, context), budget)?;
+        } else {
+            query.link(result, body, context, budget)?;
+        }
         query.close(budget)?;
         Ok((query, context))
     }
@@ -2293,6 +2322,22 @@ impl<'a> Analysis<'a> {
                                         self.link(slot, *value, creation, budget)?;
                                     }
                                 }
+                                Expr::Resource {
+                                    body,
+                                    success: Some(success),
+                                    ..
+                                } if *constructor == Some(*success) && *field == 0 => {
+                                    self.link(slot, *body, creation, budget)?;
+                                }
+                                Expr::Resource {
+                                    success: Some(success),
+                                    ..
+                                } if *constructor
+                                    == Some(ConstructorId::new(success.owner(), 1))
+                                    && *field == 0 =>
+                                {
+                                    self.atom(slot, Atom::Free, budget)?;
+                                }
                                 _ => {}
                             }
                         }
@@ -2352,6 +2397,7 @@ impl<'a> Analysis<'a> {
                 }
             }
             Expr::Resource {
+                success,
                 handle,
                 identity,
                 initializer,
@@ -2366,7 +2412,14 @@ impl<'a> Analysis<'a> {
                 let identity = self.slot(*identity, context, budget)?;
                 self.atom(handle, Atom::Resource(expression, context), budget)?;
                 self.atom(identity, Atom::Resource(expression, context), budget)?;
-                self.link(slot, *body, context, budget)?;
+                if success.is_some() {
+                    // Allocation can fail independently of body completion.
+                    // Successful values retain the ordinary constructor payload.
+                    self.slot(*body, context, budget)?;
+                    self.atom(slot, Atom::Aggregate(expression, context), budget)?;
+                } else {
+                    self.link(slot, *body, context, budget)?;
+                }
             }
             Expr::Request { operand, scalar } => {
                 self.slot(*operand, context, budget)?;
@@ -2542,6 +2595,11 @@ impl<'a> Analysis<'a> {
                     Atom::Aggregate(target, context) => match &self.graph.expressions[target] {
                         Expr::Tuple(fields) => Some((fields.as_slice(), context)),
                         Expr::Call { arguments, .. } => Some((arguments.as_slice(), context)),
+                        Expr::Resource {
+                            body,
+                            success: Some(_),
+                            ..
+                        } => Some((std::slice::from_ref(body), context)),
                         _ => return Err(Failure::Invalid),
                     },
                     _ => None,
@@ -2732,6 +2790,7 @@ mod tests {
                 },
             };
             graph.expressions[3] = Expr::Resource {
+                success: None,
                 handle: 0,
                 identity: 1,
                 initializer: 0,
@@ -2943,6 +3002,7 @@ mod tests {
                     body: 3,
                 },
                 4 => Expr::Resource {
+                    success: None,
                     handle: 7,
                     identity: 8,
                     initializer: 0,
@@ -3045,6 +3105,7 @@ mod tests {
             },
         ]);
         graph.expressions.push(Expr::Resource {
+            success: None,
             handle: 1,
             identity: 2,
             initializer: 0,
@@ -3205,6 +3266,67 @@ mod tests {
     }
 
     #[test]
+    fn restored_native_result_keeps_success_projection_without_reacquiring() {
+        let success = ConstructorId::new(
+            crate::types::NominalTypeId::new(crate::module::ModuleId::new(77), 1),
+            0,
+        );
+        let mut graph = graph(vec![Expr::Scalar, Expr::Slot, Expr::Slot, Expr::Slot]);
+        graph.expressions.push(Expr::Resource {
+            success: Some(success),
+            handle: 2,
+            identity: 3,
+            initializer: 0,
+            body: 1,
+            source: graph.sources[0],
+        });
+        graph.expressions.push(Expr::Project {
+            value: 4,
+            field: 0,
+            constructor: Some(success),
+        });
+        graph.sources.extend([graph.sources[0]; 2]);
+        for code in 0..6 {
+            graph.positions.insert(code, code);
+        }
+        let run = |budget: &mut TypeWorkBudget| {
+            let mut analysis = Analysis::new(&graph, budget)?;
+            analysis.slot(4, 0, budget)?;
+            analysis.close(budget)?;
+            analysis.frozen_contexts = 1;
+            let focus = analysis.context(0, Transition::Focus, budget)?;
+            analysis.focus = Some((99, focus));
+            let cut = analysis.restore_cut(0, 4, usize::MAX - 1, 1, &[], true, budget)?;
+            let marker = Atom::Resource(99, focus);
+            analysis.atom(cut.input, marker, budget)?;
+            let projected = analysis.slot(5, cut.context, budget)?;
+            analysis.close(budget)?;
+            assert!(analysis.dependencies(projected, budget)?.contains(&marker));
+            assert!(
+                !analysis.indices.contains_key(&(0, cut.context)),
+                "the initializer is not replayed"
+            );
+            assert!(
+                !analysis.indices.contains_key(&(2, cut.context)),
+                "no fresh handle is installed"
+            );
+            assert!(
+                !analysis.indices.contains_key(&(3, cut.context)),
+                "no fresh identity is installed"
+            );
+            Ok::<(), Failure>(())
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        run(&mut measured).unwrap();
+        run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+    }
+
+    #[test]
     fn terminal_completed_value_keeps_its_frozen_creation_slots() {
         let graph = graph(vec![
             Expr::Slot,
@@ -3260,6 +3382,7 @@ mod tests {
             Expr::Tuple(vec![0, 4]),
         ]);
         graph.expressions.push(Expr::Resource {
+            success: None,
             handle: 1,
             identity: 2,
             initializer: 3,

@@ -296,7 +296,7 @@ pub struct CleanupScopeNode {
 /// initializer is a preceding-scope child, not an ordinary constructor payload.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResourceScopeNode {
-    pub(crate) acquisition: crate::resolved::CellAcquisition,
+    pub(crate) acquisition: crate::resolved::ResourceAcquisition,
     pub(super) handle: super::TypedBinder,
     pub(super) initializer: NodeId,
     pub(super) body: NodeId,
@@ -312,7 +312,7 @@ impl ResourceScopeNode {
     }
 
     pub(crate) fn new(
-        acquisition: crate::resolved::CellAcquisition,
+        acquisition: crate::resolved::ResourceAcquisition,
         handle: super::TypedBinder,
         initializer: NodeId,
         body: NodeId,
@@ -620,7 +620,7 @@ impl CoreBuilder<EffectOperationFamily> {
             Replace,
             Request(NodeId, EffectInstance),
             Handler(EffectInstance, usize, bool),
-            Resource(crate::resolved::CellAcquisition, NodeId, NodeId),
+            Resource(crate::resolved::ResourceAcquisition, NodeId, NodeId),
             Keep,
         }
 

@@ -1016,23 +1016,38 @@ fn compile<F: CoreOperationFamily>(
                     source: scope.span,
                 },
                 Some(EffectOperation::Resource(resource)) => {
-                    graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    let api = resource.acquisition.api().ok_or(Failure::Invalid)?;
+                    let fallible = api.is_native_buffer();
+                    charge(budget, usize::from(fallible))?;
+                    graph
+                        .code
+                        .try_reserve(1 + usize::from(fallible))
+                        .map_err(|_| Failure::Resource)?;
                     let scope = graph.code.len();
                     data.position(scope, id, budget)?;
                     let mut arguments = Vec::new();
                     charge(budget, 1)?;
                     arguments.try_reserve(1).map_err(|_| Failure::Resource)?;
                     arguments.push(Type::Variable(resource.acquisition.identity));
-                    let effect = EffectInstance::new(
-                        resource.acquisition.api().ok_or(Failure::Invalid)?.ops(),
-                        arguments.into_boxed_slice(),
-                    );
+                    let effect = EffectInstance::new(api.ops(), arguments.into_boxed_slice());
                     graph.code.push(Control::Resource {
                         body: index(resource.body) + 1,
                         effect: Request::effect(&effect, resource.acquisition.span, budget)?,
                     });
+                    let acquisition = if fallible {
+                        // Initializer completion precedes this choice. Failure
+                        // returns without installing a resource frame or owner.
+                        let choice = graph.code.len();
+                        data.position(choice, id, budget)?;
+                        graph
+                            .code
+                            .push(Control::Choice(copy_slice(&[0, scope], budget)?));
+                        choice
+                    } else {
+                        scope
+                    };
                     Control::Sequence(copy_slice(
-                        &[index(resource.initializer) + 1, scope],
+                        &[index(resource.initializer) + 1, acquisition],
                         budget,
                     )?)
                 }
