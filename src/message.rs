@@ -150,6 +150,42 @@ macro_rules! messages {
 }
 
 messages! {
+    /// The compiler retained different binder counts in the source and checked implementation head.
+    kind_internal_implementation_binder_count => "kind-internal-implementation-binder-count" {},
+    /// The compiler retained different binder identities in the source and checked implementation head.
+    kind_internal_implementation_binder_identity => "kind-internal-implementation-binder-identity" {},
+    /// The compiler retained different binder counts in a linked source scheme and its checked scheme.
+    kind_internal_scheme_binder_count => "kind-internal-scheme-binder-count" {},
+    /// The compiler retained different binder identities in a linked source scheme and its checked scheme.
+    kind_internal_scheme_binder_identity => "kind-internal-scheme-binder-identity" {},
+    /// The compiler retained a binder kind that disagrees with its canonical registry entry.
+    kind_internal_retained_binder_kind => "kind-internal-retained-binder-kind" {},
+    /// The compiler retained an unused rigid binder in a linked implementation head.
+    kind_internal_unused_implementation_binder => "kind-internal-unused-implementation-binder" {},
+    /// The compiler retained an unused owner binder in a linked value scheme.
+    kind_internal_unused_scheme_binder => "kind-internal-unused-scheme-binder" {},
+    /// The compiler retained an invalid allowance for dependent-only binders in a linked global definition.
+    kind_internal_invalid_dependent_allowance => "kind-internal-invalid-dependent-allowance" {},
+    /// The compiler retained a linked source type that disagrees with its checked value type.
+    kind_internal_linked_value_type => "kind-internal-linked-value-type" {},
+    /// The compiler retained a source computation row that disagrees with its checked row.
+    kind_internal_linked_computation_row => "kind-internal-linked-computation-row" {},
+    /// The compiler retained two mirrors for one linked constructor domain.
+    kind_internal_duplicate_constructor_mirror => "kind-internal-duplicate-constructor-mirror" {},
+    /// The compiler has no canonical kind for a nominal type.
+    kind_internal_missing_nominal_kind => "kind-internal-missing-nominal-kind" {},
+    /// The compiler registered more than one canonical kind for a nominal type.
+    kind_internal_duplicate_nominal_kind => "kind-internal-duplicate-nominal-kind" {},
+    /// The compiler has no fixed kind for an inference variable.
+    kind_internal_missing_inference_kind => "kind-internal-missing-inference-kind" {},
+    /// The compiler registered more than one fixed kind for an inference variable.
+    kind_internal_duplicate_inference_kind => "kind-internal-duplicate-inference-kind" {},
+    /// The compiler has no canonical parameter records for an interface.
+    kind_internal_missing_interface_parameters => "kind-internal-missing-interface-parameters" {},
+    /// The compiler retained conflicting canonical parameter counts for an interface.
+    kind_internal_interface_parameter_count => "kind-internal-interface-parameter-count" {},
+    /// The compiler retained conflicting canonical parameter records for an interface.
+    kind_internal_interface_parameter_records => "kind-internal-interface-parameter-records" {},
     /// The compiler has no canonical registry entry for a local effect.
     kind_internal_missing_effect => "kind-internal-missing-effect" {},
     /// The compiler retained a duplicate identity in the checked effect registry.

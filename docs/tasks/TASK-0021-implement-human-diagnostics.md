@@ -583,6 +583,14 @@ localization language. Color is not required for completion.
   so the reason-family coverage count does not advance. The catalogues contain
   295 templates each. All 28 kind-checker tests, three catalogue tests and
   warnings-denied Clippy passed.
+- A second kind internal-state batch adds 18 causes across 29 sites: linked
+  binder-count/identity mismatches, retained type/row disagreements, unused
+  binders and missing or conflicting canonical kinds. Together, the two batches
+  cover 24 causes at 44 sites. The remaining internal-state paths still need
+  migration, so reason-family coverage remains unchanged. All 28 kind-checker
+  tests, three catalogue tests and warnings-denied Clippy passed. Catalogues
+  now contain 313 templates per locale; checks, work charges and legacy wording
+  remain unchanged.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

@@ -225,6 +225,24 @@ pub enum KindFailure {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum KindInternalCause {
+    ImplementationBinderCount,
+    ImplementationBinderIdentity,
+    SchemeBinderCount,
+    SchemeBinderIdentity,
+    RetainedBinderKind,
+    UnusedImplementationBinder,
+    UnusedSchemeBinder,
+    InvalidDependentAllowance,
+    LinkedValueType,
+    LinkedComputationRow,
+    DuplicateConstructorMirror,
+    MissingNominalKind,
+    DuplicateNominalKind,
+    MissingInferenceKind,
+    DuplicateInferenceKind,
+    MissingInterfaceParameters,
+    InterfaceParameterCount,
+    InterfaceParameterRecords,
     MissingEffect,
     DuplicateEffect,
     NestedEffectRow,
@@ -236,6 +254,24 @@ enum KindInternalCause {
 impl KindInternalCause {
     fn name(self) -> &'static str {
         match self {
+            Self::ImplementationBinderCount => "implementation-binder-count",
+            Self::ImplementationBinderIdentity => "implementation-binder-identity",
+            Self::SchemeBinderCount => "scheme-binder-count",
+            Self::SchemeBinderIdentity => "scheme-binder-identity",
+            Self::RetainedBinderKind => "retained-binder-kind",
+            Self::UnusedImplementationBinder => "unused-implementation-binder",
+            Self::UnusedSchemeBinder => "unused-scheme-binder",
+            Self::InvalidDependentAllowance => "invalid-dependent-allowance",
+            Self::LinkedValueType => "linked-value-type",
+            Self::LinkedComputationRow => "linked-computation-row",
+            Self::DuplicateConstructorMirror => "duplicate-constructor-mirror",
+            Self::MissingNominalKind => "missing-nominal-kind",
+            Self::DuplicateNominalKind => "duplicate-nominal-kind",
+            Self::MissingInferenceKind => "missing-inference-kind",
+            Self::DuplicateInferenceKind => "duplicate-inference-kind",
+            Self::MissingInterfaceParameters => "missing-interface-parameters",
+            Self::InterfaceParameterCount => "interface-parameter-count",
+            Self::InterfaceParameterRecords => "interface-parameter-records",
             Self::MissingEffect => "missing-effect",
             Self::DuplicateEffect => "duplicate-effect",
             Self::NestedEffectRow => "nested-effect-row",
@@ -246,6 +282,46 @@ impl KindInternalCause {
     }
     fn legacy(self) -> &'static str {
         match self {
+            Self::ImplementationBinderCount => {
+                "linked implementation-head mirrors retain different binder counts"
+            }
+            Self::ImplementationBinderIdentity => {
+                "linked implementation-head mirrors retain different binder identities"
+            }
+            Self::SchemeBinderCount => {
+                "a linked source and checked scheme retain different binder counts"
+            }
+            Self::SchemeBinderIdentity => {
+                "a linked source and checked scheme retain different binder identities"
+            }
+            Self::RetainedBinderKind => {
+                "a linked retained binder Kind does not match its canonical registry fact"
+            }
+            Self::UnusedImplementationBinder => {
+                "a linked implementation head retains an unused rigid binder"
+            }
+            Self::UnusedSchemeBinder => "a linked value scheme retains an unused owner binder",
+            Self::InvalidDependentAllowance => {
+                "a linked global has an invalid dependent-only binder allowance"
+            }
+            Self::LinkedValueType => "a linked source type does not match its checked value type",
+            Self::LinkedComputationRow => {
+                "a linked source computation row does not match its checked row"
+            }
+            Self::DuplicateConstructorMirror => {
+                "a linked constructor domain has two retained mirrors"
+            }
+            Self::MissingNominalKind => "a nominal type has no canonical kind",
+            Self::DuplicateNominalKind => "a nominal type has more than one canonical kind",
+            Self::MissingInferenceKind => "an inference variable has no fixed kind",
+            Self::DuplicateInferenceKind => "an inference variable has more than one fixed kind",
+            Self::MissingInterfaceParameters => "an interface has no canonical parameter records",
+            Self::InterfaceParameterCount => {
+                "an interface has conflicting canonical parameter counts"
+            }
+            Self::InterfaceParameterRecords => {
+                "an interface has conflicting canonical parameter records"
+            }
             Self::MissingEffect => "a local effect has no canonical registry fact",
             Self::DuplicateEffect => "the checked effect registry repeats a canonical identity",
             Self::NestedEffectRow => "EffectRow cannot occur beneath a kind arrow",
@@ -256,6 +332,56 @@ impl KindInternalCause {
     }
     fn message(self) -> crate::message::Message<'static> {
         match self {
+            Self::ImplementationBinderCount => {
+                crate::message::Message::kind_internal_implementation_binder_count()
+            }
+            Self::ImplementationBinderIdentity => {
+                crate::message::Message::kind_internal_implementation_binder_identity()
+            }
+            Self::SchemeBinderCount => crate::message::Message::kind_internal_scheme_binder_count(),
+            Self::SchemeBinderIdentity => {
+                crate::message::Message::kind_internal_scheme_binder_identity()
+            }
+            Self::RetainedBinderKind => {
+                crate::message::Message::kind_internal_retained_binder_kind()
+            }
+            Self::UnusedImplementationBinder => {
+                crate::message::Message::kind_internal_unused_implementation_binder()
+            }
+            Self::UnusedSchemeBinder => {
+                crate::message::Message::kind_internal_unused_scheme_binder()
+            }
+            Self::InvalidDependentAllowance => {
+                crate::message::Message::kind_internal_invalid_dependent_allowance()
+            }
+            Self::LinkedValueType => crate::message::Message::kind_internal_linked_value_type(),
+            Self::LinkedComputationRow => {
+                crate::message::Message::kind_internal_linked_computation_row()
+            }
+            Self::DuplicateConstructorMirror => {
+                crate::message::Message::kind_internal_duplicate_constructor_mirror()
+            }
+            Self::MissingNominalKind => {
+                crate::message::Message::kind_internal_missing_nominal_kind()
+            }
+            Self::DuplicateNominalKind => {
+                crate::message::Message::kind_internal_duplicate_nominal_kind()
+            }
+            Self::MissingInferenceKind => {
+                crate::message::Message::kind_internal_missing_inference_kind()
+            }
+            Self::DuplicateInferenceKind => {
+                crate::message::Message::kind_internal_duplicate_inference_kind()
+            }
+            Self::MissingInterfaceParameters => {
+                crate::message::Message::kind_internal_missing_interface_parameters()
+            }
+            Self::InterfaceParameterCount => {
+                crate::message::Message::kind_internal_interface_parameter_count()
+            }
+            Self::InterfaceParameterRecords => {
+                crate::message::Message::kind_internal_interface_parameter_records()
+            }
             Self::MissingEffect => crate::message::Message::kind_internal_missing_effect(),
             Self::DuplicateEffect => crate::message::Message::kind_internal_duplicate_effect(),
             Self::NestedEffectRow => crate::message::Message::kind_internal_nested_effect_row(),
@@ -669,9 +795,9 @@ impl<'a> KindEnvironments<'a> {
         span: Span,
     ) -> Result<(), KindFailure> {
         if parameters.len() != source_parameters.len() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "linked implementation-head mirrors retain different binder counts",
+                KindInternalCause::ImplementationBinderCount,
             ));
         }
         self.clear_declared();
@@ -685,9 +811,9 @@ impl<'a> KindEnvironments<'a> {
                 ));
             }
             if parameter.id != source.id {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "linked implementation-head mirrors retain different binder identities",
+                    KindInternalCause::ImplementationBinderIdentity,
                 ));
             }
             budget.charge(1).map_err(|()| {
@@ -742,17 +868,17 @@ impl<'a> KindEnvironments<'a> {
         span: Span,
     ) -> Result<(), KindFailure> {
         if parameters.len() != source_parameters.len() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a linked source and checked scheme retain different binder counts",
+                KindInternalCause::SchemeBinderCount,
             ));
         }
         self.clear_declared();
         for ((identity, retained_kind), source) in parameters.iter().zip(source_parameters) {
             if *identity != source.id {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "a linked source and checked scheme retain different binder identities",
+                    KindInternalCause::SchemeBinderIdentity,
                 ));
             }
             budget.charge(1).map_err(|()| {
@@ -810,9 +936,9 @@ impl<'a> KindEnvironments<'a> {
             )
         })?;
         if self.omega.contains_key(&identity) {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 causal_span,
-                "an inference variable has more than one fixed kind",
+                KindInternalCause::DuplicateInferenceKind,
             ));
         }
         self.omega.try_reserve(1).map_err(|_| {
@@ -834,9 +960,9 @@ impl<'a> KindEnvironments<'a> {
             )
             .is_some()
         {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 causal_span,
-                "an inference variable has more than one fixed kind",
+                KindInternalCause::DuplicateInferenceKind,
             ));
         }
         Ok(())
@@ -1182,9 +1308,9 @@ impl<'a> KindEnvironments<'a> {
             &mut ledger,
         )?;
         if visited.len() != self.delta.len() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a linked value scheme retains an unused owner binder",
+                KindInternalCause::UnusedSchemeBinder,
             ));
         }
         let equal =
@@ -1290,9 +1416,9 @@ impl<'a> KindEnvironments<'a> {
             &mut ledger,
         )?;
         if visited.len() != self.delta.len() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a linked value scheme retains an unused owner binder",
+                KindInternalCause::UnusedSchemeBinder,
             ));
         }
         let equal =
@@ -1385,9 +1511,9 @@ impl<'a> KindEnvironments<'a> {
         })?;
         for identity in allowed_unused {
             if !self.delta.contains_key(identity) || !allowed.insert(*identity) {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "a linked global has an invalid dependent-only binder allowance",
+                    KindInternalCause::InvalidDependentAllowance,
                 ));
             }
         }
@@ -1402,9 +1528,9 @@ impl<'a> KindEnvironments<'a> {
             .keys()
             .any(|identity| !visited.contains(identity) && !allowed.contains(identity))
         {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a linked value scheme retains an unused owner binder",
+                KindInternalCause::UnusedSchemeBinder,
             ));
         }
         Ok(())
@@ -1419,9 +1545,9 @@ impl<'a> KindEnvironments<'a> {
     ) -> Result<(), KindFailure> {
         if self.xi.contains_key(&identity) {
             charge_lookup_attempt(origin, budget)?;
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 origin,
-                "a nominal type has more than one canonical kind",
+                KindInternalCause::DuplicateNominalKind,
             ));
         }
 
@@ -1458,9 +1584,9 @@ impl<'a> KindEnvironments<'a> {
     ) -> Result<(), KindFailure> {
         if self.xi.contains_key(&identity) {
             charge_lookup_attempt(origin, budget)?;
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 origin,
-                "a nominal type has more than one canonical kind",
+                KindInternalCause::DuplicateNominalKind,
             ));
         }
 
@@ -1502,9 +1628,9 @@ impl<'a> KindEnvironments<'a> {
         budget: &mut TypeWorkBudget,
     ) -> Result<(), KindFailure> {
         if parameters.is_empty() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 origin,
-                "an interface has no canonical parameter records",
+                KindInternalCause::MissingInterfaceParameters,
             ));
         }
         budget.charge(1).map_err(|()| {
@@ -1515,9 +1641,9 @@ impl<'a> KindEnvironments<'a> {
         })?;
         if let Some(existing) = self.iota.get(&identity) {
             if existing.parameters.len() != parameters.len() {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     origin,
-                    "an interface has conflicting canonical parameter counts",
+                    KindInternalCause::InterfaceParameterCount,
                 ));
             }
             for (existing, parameter) in existing.parameters.iter().zip(parameters) {
@@ -1532,9 +1658,9 @@ impl<'a> KindEnvironments<'a> {
                     || existing.origin.primary_span() != parameter.origin.primary_span()
                     || !equal
                 {
-                    return Err(KindFailure::internal(
+                    return Err(KindFailure::internal_cause(
                         origin,
-                        "an interface has conflicting canonical parameter records",
+                        KindInternalCause::InterfaceParameterRecords,
                     ));
                 }
             }
@@ -1792,9 +1918,9 @@ impl<'a> KindEnvironments<'a> {
             }
         }
         if visited.len() != self.delta.len() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a linked implementation head retains an unused rigid binder",
+                KindInternalCause::UnusedImplementationBinder,
             ));
         }
         Ok(())
@@ -2434,9 +2560,9 @@ impl<'a> KindEnvironments<'a> {
                                     | (Type::Unit, None | Some(Type::Unit))
                             );
                             if !mirror_matches {
-                                return Err(KindFailure::internal(
+                                return Err(KindFailure::internal_cause(
                                     span,
-                                    "a linked source type does not match its checked value type",
+                                    KindInternalCause::LinkedValueType,
                                 ));
                             }
                             require_fact_node(node, span, budget)?;
@@ -2452,10 +2578,7 @@ impl<'a> KindEnvironments<'a> {
                                 .is_some_and(|mirror| !matches!(mirror, Type::Variable(found) if found == identity))
                             {
                                 charge_lookup_attempt(span, budget)?;
-                                return Err(KindFailure::internal(
-                                    span,
-                                    "a linked source type does not match its checked value type",
-                                ));
+                                return Err(KindFailure::internal_cause(span, KindInternalCause::LinkedValueType));
                             }
                             require_fact_node(node, span, budget)?;
                             charge_lookup_attempt(span, budget)?;
@@ -2480,17 +2603,15 @@ impl<'a> KindEnvironments<'a> {
                                 fact.retained_mirrors,
                                 budget,
                             )
-                            .map_err(|failure| {
-                                match failure {
-                                    LinkedKindMirrorFailure::Resource => KindFailure::resource(
-                                        span,
-                                        "declaration kind lookup exceeded its type-work budget",
-                                    ),
-                                    LinkedKindMirrorFailure::Mismatch => KindFailure::internal(
-                                        span,
-                                        "a linked retained binder Kind does not match its canonical registry fact",
-                                    ),
-                                }
+                            .map_err(|failure| match failure {
+                                LinkedKindMirrorFailure::Resource => KindFailure::resource(
+                                    span,
+                                    "declaration kind lookup exceeded its type-work budget",
+                                ),
+                                LinkedKindMirrorFailure::Mismatch => KindFailure::internal_cause(
+                                    span,
+                                    KindInternalCause::RetainedBinderKind,
+                                ),
                             })?;
                             fact.occurrence = span;
                             State::Complete(fact)
@@ -2500,17 +2621,14 @@ impl<'a> KindEnvironments<'a> {
                                 .is_some_and(|mirror| !matches!(mirror, Type::Inference(found) if found == identity))
                             {
                                 charge_lookup_attempt(span, budget)?;
-                                return Err(KindFailure::internal(
-                                    span,
-                                    "a linked source type does not match its checked value type",
-                                ));
+                                return Err(KindFailure::internal_cause(span, KindInternalCause::LinkedValueType));
                             }
                             require_fact_node(node, span, budget)?;
                             charge_lookup_attempt(span, budget)?;
                             let mut fact = *self.omega.get(identity).ok_or_else(|| {
-                                KindFailure::internal(
+                                KindFailure::internal_cause(
                                     span,
-                                    "an inference variable has no fixed kind",
+                                    KindInternalCause::MissingInferenceKind,
                                 )
                             })?;
                             charge_kind_descendants_with_ledger(fact.kind, budget).map_err(
@@ -2529,15 +2647,15 @@ impl<'a> KindEnvironments<'a> {
                                 .is_some_and(|mirror| !matches!(mirror, Type::Nominal(found) if found == identity))
                             {
                                 charge_lookup_attempt(span, budget)?;
-                                return Err(KindFailure::internal(
-                                    span,
-                                    "a linked source type does not match its checked value type",
-                                ));
+                                return Err(KindFailure::internal_cause(span, KindInternalCause::LinkedValueType));
                             }
                             require_fact_node(node, span, budget)?;
                             charge_lookup_attempt(span, budget)?;
                             let fact = self.xi.get(identity).ok_or_else(|| {
-                                KindFailure::internal(span, "a nominal type has no canonical kind")
+                                KindFailure::internal_cause(
+                                    span,
+                                    KindInternalCause::MissingNominalKind,
+                                )
                             })?;
                             charge_kind_descendants_with_ledger(&fact.kind, budget).map_err(
                                 |()| {
@@ -2562,9 +2680,9 @@ impl<'a> KindEnvironments<'a> {
                                     Some(mirrors)
                                 }
                                 Some(_) => {
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         span,
-                                        "a linked source type does not match its checked value type",
+                                        KindInternalCause::LinkedValueType,
                                     ));
                                 }
                             };
@@ -2632,9 +2750,9 @@ impl<'a> KindEnvironments<'a> {
                                     (Some(function.as_ref()), Some(argument.as_ref()))
                                 }
                                 Some(_) => {
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         span,
-                                        "a linked source type does not match its checked value type",
+                                        KindInternalCause::LinkedValueType,
                                     ));
                                 }
                             };
@@ -2686,9 +2804,9 @@ impl<'a> KindEnvironments<'a> {
                                     (Some(domain.as_ref()), Some(codomain.value()))
                                 }
                                 Some(_) => {
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         span,
-                                        "a linked source type does not match its checked value type",
+                                        KindInternalCause::LinkedValueType,
                                     ));
                                 }
                             };
@@ -2706,9 +2824,9 @@ impl<'a> KindEnvironments<'a> {
                                         )
                                     })?;
                                     if !equal {
-                                        return Err(KindFailure::internal(
+                                        return Err(KindFailure::internal_cause(
                                             span,
-                                            "a linked source computation row does not match its checked row",
+                                            KindInternalCause::LinkedComputationRow,
                                         ));
                                     }
                                 }
@@ -2722,9 +2840,9 @@ impl<'a> KindEnvironments<'a> {
                             }
                             if domain_override.is_some() {
                                 if domain_mirror.is_some() {
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         span,
-                                        "a linked constructor domain has two retained mirrors",
+                                        KindInternalCause::DuplicateConstructorMirror,
                                     ));
                                 }
                                 domain_mirror = domain_override;
@@ -2771,9 +2889,9 @@ impl<'a> KindEnvironments<'a> {
                             if type_mirror
                                 .is_some_and(|mirror| !matches!(mirror, Type::Forall(_, _)))
                             {
-                                return Err(KindFailure::internal(
+                                return Err(KindFailure::internal_cause(
                                     span,
-                                    "a linked source type does not match its checked value type",
+                                    KindInternalCause::LinkedValueType,
                                 ));
                             }
                             return Err(KindFailure::internal(
@@ -5244,6 +5362,24 @@ mod tests {
             KindInternalCause::DuplicateBinder,
             KindInternalCause::OwnerEffectRow,
             KindInternalCause::MissingOwnerBinder,
+            KindInternalCause::ImplementationBinderCount,
+            KindInternalCause::ImplementationBinderIdentity,
+            KindInternalCause::SchemeBinderCount,
+            KindInternalCause::SchemeBinderIdentity,
+            KindInternalCause::RetainedBinderKind,
+            KindInternalCause::UnusedImplementationBinder,
+            KindInternalCause::UnusedSchemeBinder,
+            KindInternalCause::InvalidDependentAllowance,
+            KindInternalCause::LinkedValueType,
+            KindInternalCause::LinkedComputationRow,
+            KindInternalCause::DuplicateConstructorMirror,
+            KindInternalCause::MissingNominalKind,
+            KindInternalCause::DuplicateNominalKind,
+            KindInternalCause::MissingInferenceKind,
+            KindInternalCause::DuplicateInferenceKind,
+            KindInternalCause::MissingInterfaceParameters,
+            KindInternalCause::InterfaceParameterCount,
+            KindInternalCause::InterfaceParameterRecords,
         ] {
             let mut error = KindFailure::internal_cause(span, cause);
             let KindFailure::Internal(ref mut detail) = error else {
