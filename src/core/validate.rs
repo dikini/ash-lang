@@ -323,6 +323,28 @@ enum ValidationCause {
     UnresolvedCoreRow,
     UnknownCoreRowBinder,
     NonRowTailKind,
+    PatternDepth,
+    PatternTypeMismatch,
+    PatternInvalidType,
+    PatternBinderInvalidType,
+    PatternBinderArena,
+    PatternBinderType,
+    PatternDuplicateBinder,
+    PatternTupleType,
+    PatternTupleArity,
+    PatternHiddenConstructor,
+    PatternNominalType,
+    PatternUnknownConstructor,
+    PatternNewtypeConstructor,
+    PatternConstructorOwner,
+    PatternMissingParameters,
+    PatternNominalArity,
+    PatternArgumentSpine,
+    PatternMissingPayload,
+    PatternUnexpectedPayload,
+    PatternBooleanType,
+    PatternUnitType,
+    MatchScrutineeType,
     ExpectedTypeAbstraction,
     ExpectedTypeApplication,
     AdapterParameterIdentity,
@@ -445,6 +467,28 @@ impl ValidationError {
             ValidationCause::UnresolvedCoreRow => "unresolved-core-row",
             ValidationCause::UnknownCoreRowBinder => "unknown-core-row-binder",
             ValidationCause::NonRowTailKind => "non-row-tail-kind",
+            ValidationCause::PatternDepth => "pattern-depth",
+            ValidationCause::PatternTypeMismatch => "pattern-type-mismatch",
+            ValidationCause::PatternInvalidType => "pattern-invalid-type",
+            ValidationCause::PatternBinderInvalidType => "pattern-binder-invalid-type",
+            ValidationCause::PatternBinderArena => "pattern-binder-arena",
+            ValidationCause::PatternBinderType => "pattern-binder-type",
+            ValidationCause::PatternDuplicateBinder => "pattern-duplicate-binder",
+            ValidationCause::PatternTupleType => "pattern-tuple-type",
+            ValidationCause::PatternTupleArity => "pattern-tuple-arity",
+            ValidationCause::PatternHiddenConstructor => "pattern-hidden-constructor",
+            ValidationCause::PatternNominalType => "pattern-nominal-type",
+            ValidationCause::PatternUnknownConstructor => "pattern-unknown-constructor",
+            ValidationCause::PatternNewtypeConstructor => "pattern-newtype-constructor",
+            ValidationCause::PatternConstructorOwner => "pattern-constructor-owner",
+            ValidationCause::PatternMissingParameters => "pattern-missing-parameters",
+            ValidationCause::PatternNominalArity => "pattern-nominal-arity",
+            ValidationCause::PatternArgumentSpine => "pattern-argument-spine",
+            ValidationCause::PatternMissingPayload => "pattern-missing-payload",
+            ValidationCause::PatternUnexpectedPayload => "pattern-unexpected-payload",
+            ValidationCause::PatternBooleanType => "pattern-boolean-type",
+            ValidationCause::PatternUnitType => "pattern-unit-type",
+            ValidationCause::MatchScrutineeType => "match-scrutinee-type",
             ValidationCause::ExpectedTypeAbstraction => "expected-type-abstraction",
             ValidationCause::ExpectedTypeApplication => "expected-type-application",
             ValidationCause::AdapterParameterIdentity => "adapter-parameter-identity",
@@ -1261,6 +1305,136 @@ impl ValidationError {
                 (ValidationCause::TypeApplicationResult, Some(node)) => {
                     Message::core_validation_type_application_result_node(node)
                 }
+                (ValidationCause::PatternDepth, None) => Message::core_validation_pattern_depth(),
+                (ValidationCause::PatternDepth, Some(node)) => {
+                    Message::core_validation_pattern_depth_node(node)
+                }
+                (ValidationCause::PatternTypeMismatch, None) => {
+                    Message::core_validation_pattern_type_mismatch()
+                }
+                (ValidationCause::PatternTypeMismatch, Some(node)) => {
+                    Message::core_validation_pattern_type_mismatch_node(node)
+                }
+                (ValidationCause::PatternInvalidType, None) => {
+                    Message::core_validation_pattern_invalid_type()
+                }
+                (ValidationCause::PatternInvalidType, Some(node)) => {
+                    Message::core_validation_pattern_invalid_type_node(node)
+                }
+                (ValidationCause::PatternBinderInvalidType, None) => {
+                    Message::core_validation_pattern_binder_invalid_type()
+                }
+                (ValidationCause::PatternBinderInvalidType, Some(node)) => {
+                    Message::core_validation_pattern_binder_invalid_type_node(node)
+                }
+                (ValidationCause::PatternBinderArena, None) => {
+                    Message::core_validation_pattern_binder_arena()
+                }
+                (ValidationCause::PatternBinderArena, Some(node)) => {
+                    Message::core_validation_pattern_binder_arena_node(node)
+                }
+                (ValidationCause::PatternBinderType, None) => {
+                    Message::core_validation_pattern_binder_type()
+                }
+                (ValidationCause::PatternBinderType, Some(node)) => {
+                    Message::core_validation_pattern_binder_type_node(node)
+                }
+                (ValidationCause::PatternDuplicateBinder, None) => {
+                    Message::core_validation_pattern_duplicate_binder()
+                }
+                (ValidationCause::PatternDuplicateBinder, Some(node)) => {
+                    Message::core_validation_pattern_duplicate_binder_node(node)
+                }
+                (ValidationCause::PatternTupleType, None) => {
+                    Message::core_validation_pattern_tuple_type()
+                }
+                (ValidationCause::PatternTupleType, Some(node)) => {
+                    Message::core_validation_pattern_tuple_type_node(node)
+                }
+                (ValidationCause::PatternTupleArity, None) => {
+                    Message::core_validation_pattern_tuple_arity()
+                }
+                (ValidationCause::PatternTupleArity, Some(node)) => {
+                    Message::core_validation_pattern_tuple_arity_node(node)
+                }
+                (ValidationCause::PatternHiddenConstructor, None) => {
+                    Message::core_validation_pattern_hidden_constructor()
+                }
+                (ValidationCause::PatternHiddenConstructor, Some(node)) => {
+                    Message::core_validation_pattern_hidden_constructor_node(node)
+                }
+                (ValidationCause::PatternNominalType, None) => {
+                    Message::core_validation_pattern_nominal_type()
+                }
+                (ValidationCause::PatternNominalType, Some(node)) => {
+                    Message::core_validation_pattern_nominal_type_node(node)
+                }
+                (ValidationCause::PatternUnknownConstructor, None) => {
+                    Message::core_validation_pattern_unknown_constructor()
+                }
+                (ValidationCause::PatternUnknownConstructor, Some(node)) => {
+                    Message::core_validation_pattern_unknown_constructor_node(node)
+                }
+                (ValidationCause::PatternNewtypeConstructor, None) => {
+                    Message::core_validation_pattern_newtype_constructor()
+                }
+                (ValidationCause::PatternNewtypeConstructor, Some(node)) => {
+                    Message::core_validation_pattern_newtype_constructor_node(node)
+                }
+                (ValidationCause::PatternConstructorOwner, None) => {
+                    Message::core_validation_pattern_constructor_owner()
+                }
+                (ValidationCause::PatternConstructorOwner, Some(node)) => {
+                    Message::core_validation_pattern_constructor_owner_node(node)
+                }
+                (ValidationCause::PatternMissingParameters, None) => {
+                    Message::core_validation_pattern_missing_parameters()
+                }
+                (ValidationCause::PatternMissingParameters, Some(node)) => {
+                    Message::core_validation_pattern_missing_parameters_node(node)
+                }
+                (ValidationCause::PatternNominalArity, None) => {
+                    Message::core_validation_pattern_nominal_arity()
+                }
+                (ValidationCause::PatternNominalArity, Some(node)) => {
+                    Message::core_validation_pattern_nominal_arity_node(node)
+                }
+                (ValidationCause::PatternArgumentSpine, None) => {
+                    Message::core_validation_pattern_argument_spine()
+                }
+                (ValidationCause::PatternArgumentSpine, Some(node)) => {
+                    Message::core_validation_pattern_argument_spine_node(node)
+                }
+                (ValidationCause::PatternMissingPayload, None) => {
+                    Message::core_validation_pattern_missing_payload()
+                }
+                (ValidationCause::PatternMissingPayload, Some(node)) => {
+                    Message::core_validation_pattern_missing_payload_node(node)
+                }
+                (ValidationCause::PatternUnexpectedPayload, None) => {
+                    Message::core_validation_pattern_unexpected_payload()
+                }
+                (ValidationCause::PatternUnexpectedPayload, Some(node)) => {
+                    Message::core_validation_pattern_unexpected_payload_node(node)
+                }
+                (ValidationCause::PatternBooleanType, None) => {
+                    Message::core_validation_pattern_boolean_type()
+                }
+                (ValidationCause::PatternBooleanType, Some(node)) => {
+                    Message::core_validation_pattern_boolean_type_node(node)
+                }
+                (ValidationCause::PatternUnitType, None) => {
+                    Message::core_validation_pattern_unit_type()
+                }
+                (ValidationCause::PatternUnitType, Some(node)) => {
+                    Message::core_validation_pattern_unit_type_node(node)
+                }
+                (ValidationCause::MatchScrutineeType, None) => {
+                    Message::core_validation_match_scrutinee_type()
+                }
+                (ValidationCause::MatchScrutineeType, Some(node)) => {
+                    Message::core_validation_match_scrutinee_type_node(node)
+                }
                 (ValidationCause::NonRowTailKind, None) => {
                     Message::core_validation_non_row_tail_kind()
                 }
@@ -1393,6 +1567,28 @@ impl ValidationError {
                 | ValidationCause::UnresolvedCoreRow
                 | ValidationCause::UnknownCoreRowBinder
                 | ValidationCause::NonRowTailKind => ValidationReason::TypeScope,
+                ValidationCause::PatternDepth
+                | ValidationCause::PatternTypeMismatch
+                | ValidationCause::PatternInvalidType
+                | ValidationCause::PatternBinderInvalidType
+                | ValidationCause::PatternBinderArena
+                | ValidationCause::PatternBinderType
+                | ValidationCause::PatternDuplicateBinder
+                | ValidationCause::PatternTupleType
+                | ValidationCause::PatternTupleArity
+                | ValidationCause::PatternHiddenConstructor
+                | ValidationCause::PatternNominalType
+                | ValidationCause::PatternUnknownConstructor
+                | ValidationCause::PatternNewtypeConstructor
+                | ValidationCause::PatternConstructorOwner
+                | ValidationCause::PatternMissingParameters
+                | ValidationCause::PatternNominalArity
+                | ValidationCause::PatternArgumentSpine
+                | ValidationCause::PatternMissingPayload
+                | ValidationCause::PatternUnexpectedPayload
+                | ValidationCause::PatternBooleanType
+                | ValidationCause::PatternUnitType
+                | ValidationCause::MatchScrutineeType => ValidationReason::Pattern,
                 ValidationCause::ExpectedTypeAbstraction
                 | ValidationCause::ExpectedTypeApplication
                 | ValidationCause::AdapterParameterIdentity
@@ -6945,6 +7141,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             self.valid_monotype(Some(binder.ty()))?
         };
         if !type_valid {
+            if invalid_type == ValidationReason::Pattern {
+                return Err(ValidationError::with_cause(
+                    ValidationCause::PatternBinderInvalidType,
+                    Some(node),
+                ));
+            }
             return Err(ValidationError::new(invalid_type, Some(node)));
         }
         if self.binders.contains_key(&binder.id()) {
@@ -7394,7 +7596,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             PureComputation::Match(match_node) => {
                 let scrutinee = self.node(match_node.scrutinee())?;
                 if !self.valid_monotype(Some(&scrutinee.ty))? {
-                    return Err(ValidationError::new(ValidationReason::Pattern, Some(id)));
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::MatchScrutineeType,
+                        Some(id),
+                    ));
                 }
                 if match_node.arms().is_empty() {
                     return Err(ValidationError::with_cause(
@@ -8032,21 +8237,43 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
             };
             if depth > CORE_PATTERN_DEPTH_LIMIT {
-                return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                return Err(ValidationError::with_cause(
+                    ValidationCause::PatternDepth,
+                    Some(node),
+                ));
             }
             self.validate_origin(&pattern.origin, node)?;
-            if !self.same_type_charged(&pattern.ty, expected.as_type())?
-                || !self.valid_monotype(Some(&pattern.ty))?
-            {
-                return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+            if !self.same_type_charged(&pattern.ty, expected.as_type())? {
+                return Err(ValidationError::with_cause(
+                    ValidationCause::PatternTypeMismatch,
+                    Some(node),
+                ));
+            }
+            if !self.valid_monotype(Some(&pattern.ty))? {
+                return Err(ValidationError::with_cause(
+                    ValidationCause::PatternInvalidType,
+                    Some(node),
+                ));
             }
             match &pattern.kind {
                 CorePatternKind::Binder(binder) => {
-                    if binder.arena() != self.program.arena
-                        || !self.same_type_charged(binder.ty(), expected.as_type())?
-                        || !binders.insert(binder.id())
-                    {
-                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                    if binder.arena() != self.program.arena {
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternBinderArena,
+                            Some(node),
+                        ));
+                    }
+                    if !self.same_type_charged(binder.ty(), expected.as_type())? {
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternBinderType,
+                            Some(node),
+                        ));
+                    }
+                    if !binders.insert(binder.id()) {
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternDuplicateBinder,
+                            Some(node),
+                        ));
                     }
                     self.validate_origin(binder.origin(), node)?;
                 }
@@ -8065,8 +8292,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         let expected = expected.into_inner();
                         let Type::Tuple(types) = expected else {
                             discard_type_iteratively(expected);
-                            return Err(ValidationError::new(
-                                ValidationReason::Pattern,
+                            return Err(ValidationError::with_cause(
+                                ValidationCause::PatternTupleType,
                                 Some(node),
                             ));
                         };
@@ -8074,8 +8301,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             for ty in types {
                                 discard_type_iteratively(ty);
                             }
-                            return Err(ValidationError::new(
-                                ValidationReason::Pattern,
+                            return Err(ValidationError::with_cause(
+                                ValidationCause::PatternTupleArity,
                                 Some(node),
                             ));
                         }
@@ -8085,8 +8312,17 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             depth: depth.saturating_add(1),
                         });
                     }
+                    Expected::Borrowed(Type::Tuple(_)) => {
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternTupleArity,
+                            Some(node),
+                        ));
+                    }
                     _ => {
-                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternTupleType,
+                            Some(node),
+                        ));
                     }
                 },
                 CorePatternKind::Constructor {
@@ -8096,15 +8332,24 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     if crate::resolved::ResourceApi::for_module(constructor.owner().module())
                         .is_some_and(|api| api.hides_constructor(*constructor))
                     {
-                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternHiddenConstructor,
+                            Some(node),
+                        ));
                     }
                     let Some((owner, arity)) =
                         self.nominal_application_head_and_arity(expected.as_type())?
                     else {
-                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternNominalType,
+                            Some(node),
+                        ));
                     };
                     let Some(info) = self.program.registry.constructor(*constructor) else {
-                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternUnknownConstructor,
+                            Some(node),
+                        ));
                     };
                     if self
                         .program
@@ -8115,16 +8360,28 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                 == crate::resolved::ResolvedNominalDeclarationKind::Newtype
                         })
                     {
-                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternNewtypeConstructor,
+                            Some(node),
+                        ));
                     }
                     if info.owner != owner {
-                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternConstructorOwner,
+                            Some(node),
+                        ));
                     }
                     let Some(parameters) = self.program.registry.nominal_parameters(owner) else {
-                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternMissingParameters,
+                            Some(node),
+                        ));
                     };
                     if parameters.len() != arity {
-                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternNominalArity,
+                            Some(node),
+                        ));
                     }
                     let payload_type = if let Some(payload) = info.payload.as_ref() {
                         self.charge_type_work(parameters.len())?;
@@ -8135,8 +8392,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         let mut current = expected.as_type();
                         for parameter in parameters.iter().rev() {
                             let Type::Application(function, argument) = current else {
-                                return Err(ValidationError::new(
-                                    ValidationReason::Pattern,
+                                return Err(ValidationError::with_cause(
+                                    ValidationCause::PatternArgumentSpine,
                                     Some(node),
                                 ));
                             };
@@ -8160,16 +8417,31 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             Expected::Owned(payload_type),
                             depth.saturating_add(1),
                         )),
-                        _ => {
-                            return Err(ValidationError::new(
-                                ValidationReason::Pattern,
+                        (Some(_), None) => {
+                            return Err(ValidationError::with_cause(
+                                ValidationCause::PatternMissingPayload,
+                                Some(node),
+                            ));
+                        }
+                        (None, Some(_)) => {
+                            return Err(ValidationError::with_cause(
+                                ValidationCause::PatternUnexpectedPayload,
                                 Some(node),
                             ));
                         }
                     }
                 }
-                CorePatternKind::Boolean(_) | CorePatternKind::Unit => {
-                    return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                CorePatternKind::Boolean(_) => {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::PatternBooleanType,
+                        Some(node),
+                    ));
+                }
+                CorePatternKind::Unit => {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::PatternUnitType,
+                        Some(node),
+                    ));
                 }
             }
         }
@@ -10855,6 +11127,222 @@ pub(super) use tests::{registration_proof_check, registration_proof_program};
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn core_pattern_messages_preserve_the_failed_relationship() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, english) in [
+            (
+                ValidationCause::PatternDepth,
+                "pattern-depth",
+                "The compiler retained a Core pattern deeper than the validation limit.",
+            ),
+            (
+                ValidationCause::PatternTypeMismatch,
+                "pattern-type-mismatch",
+                "A Core pattern's recorded type differs from the type it must match.",
+            ),
+            (
+                ValidationCause::PatternInvalidType,
+                "pattern-invalid-type",
+                "The compiler retained a Core pattern without a valid monotype.",
+            ),
+            (
+                ValidationCause::PatternBinderInvalidType,
+                "pattern-binder-invalid-type",
+                "The compiler retained a pattern or operation binder without a valid monotype.",
+            ),
+            (
+                ValidationCause::PatternBinderArena,
+                "pattern-binder-arena",
+                "A Core pattern binder belongs to a different arena.",
+            ),
+            (
+                ValidationCause::PatternBinderType,
+                "pattern-binder-type",
+                "A Core pattern binder's type differs from the type it must match.",
+            ),
+            (
+                ValidationCause::PatternDuplicateBinder,
+                "pattern-duplicate-binder",
+                "The compiler bound the same identity more than once in a Core pattern.",
+            ),
+            (
+                ValidationCause::PatternTupleType,
+                "pattern-tuple-type",
+                "The compiler used a tuple pattern to match a non-tuple type.",
+            ),
+            (
+                ValidationCause::PatternTupleArity,
+                "pattern-tuple-arity",
+                "A Core tuple pattern has a different number of elements from its expected type.",
+            ),
+            (
+                ValidationCause::PatternHiddenConstructor,
+                "pattern-hidden-constructor",
+                "The compiler exposed a hidden resource constructor in a Core pattern.",
+            ),
+            (
+                ValidationCause::PatternNominalType,
+                "pattern-nominal-type",
+                "The compiler used a constructor pattern to match a type without a nominal head.",
+            ),
+            (
+                ValidationCause::PatternUnknownConstructor,
+                "pattern-unknown-constructor",
+                "A Core pattern names a constructor absent from the registry.",
+            ),
+            (
+                ValidationCause::PatternNewtypeConstructor,
+                "pattern-newtype-constructor",
+                "The compiler retained a newtype constructor in an ordinary Core constructor pattern.",
+            ),
+            (
+                ValidationCause::PatternConstructorOwner,
+                "pattern-constructor-owner",
+                "A Core pattern's constructor belongs to a different nominal type from the expected type.",
+            ),
+            (
+                ValidationCause::PatternMissingParameters,
+                "pattern-missing-parameters",
+                "The compiler has no nominal parameter declaration for a Core constructor pattern's expected type.",
+            ),
+            (
+                ValidationCause::PatternNominalArity,
+                "pattern-nominal-arity",
+                "A Core constructor pattern's expected type has a different argument count from its nominal declaration.",
+            ),
+            (
+                ValidationCause::PatternArgumentSpine,
+                "pattern-argument-spine",
+                "The compiler could not read a recorded nominal type argument while instantiating a pattern payload.",
+            ),
+            (
+                ValidationCause::PatternMissingPayload,
+                "pattern-missing-payload",
+                "A Core constructor pattern omits a payload required by its constructor.",
+            ),
+            (
+                ValidationCause::PatternUnexpectedPayload,
+                "pattern-unexpected-payload",
+                "A Core constructor pattern supplies a payload for a constructor that has none.",
+            ),
+            (
+                ValidationCause::PatternBooleanType,
+                "pattern-boolean-type",
+                "The compiler used a Boolean pattern to match a non-Boolean type.",
+            ),
+            (
+                ValidationCause::PatternUnitType,
+                "pattern-unit-type",
+                "The compiler used a Unit pattern to match a type other than Unit.",
+            ),
+            (
+                ValidationCause::MatchScrutineeType,
+                "match-scrutinee-type",
+                "The compiler retained a Core match whose scrutinee has no valid monotype.",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 42))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.pattern");
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(
+                    json["facts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn pattern_checks_distinguish_types_arity_and_binders() {
+        let file = source();
+        let mut builder = CoreBuilder::new();
+        let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let program = builder.finish(root).unwrap();
+        let validator = Validator::new(&program, &[&file]);
+        let binder = TypedBinder::new(program.arena, BinderId::new(0), Type::Bool, origin(&file));
+        for (ty, expected, kind, cause) in [
+            (
+                Type::Bool,
+                Type::Unit,
+                CorePatternKind::Unit,
+                ValidationCause::PatternTypeMismatch,
+            ),
+            (
+                Type::Bool,
+                Type::Bool,
+                CorePatternKind::Unit,
+                ValidationCause::PatternUnitType,
+            ),
+            (
+                Type::Unit,
+                Type::Unit,
+                CorePatternKind::Boolean(true),
+                ValidationCause::PatternBooleanType,
+            ),
+            (
+                Type::Bool,
+                Type::Bool,
+                CorePatternKind::Tuple(Box::new([])),
+                ValidationCause::PatternTupleType,
+            ),
+            (
+                Type::Tuple(Box::new([Type::Unit, Type::Unit])),
+                Type::Tuple(Box::new([Type::Unit, Type::Unit])),
+                CorePatternKind::Tuple(Box::new([])),
+                ValidationCause::PatternTupleArity,
+            ),
+            (
+                Type::Unit,
+                Type::Unit,
+                CorePatternKind::Binder(binder),
+                ValidationCause::PatternBinderType,
+            ),
+        ] {
+            let pattern = CorePattern::new(ty, origin(&file), kind);
+            let error = validator
+                .validate_pattern(&pattern, &expected, root)
+                .unwrap_err();
+            assert_eq!(error, ValidationError::with_cause(cause, Some(root)));
+        }
+        let binder = TypedBinder::new(program.arena, BinderId::new(0), Type::Unit, origin(&file));
+        let ty = Type::Tuple(Box::new([Type::Unit, Type::Unit]));
+        let pattern = CorePattern::new(
+            ty.clone(),
+            origin(&file),
+            CorePatternKind::Tuple(Box::new([
+                CorePattern::new(
+                    Type::Unit,
+                    origin(&file),
+                    CorePatternKind::Binder(binder.clone()),
+                ),
+                CorePattern::new(Type::Unit, origin(&file), CorePatternKind::Binder(binder)),
+            ])),
+        );
+        let error = validator.validate_pattern(&pattern, &ty, root).unwrap_err();
+        assert_eq!(error.cause, Some(ValidationCause::PatternDuplicateBinder));
+    }
 
     #[test]
     fn core_type_operation_messages_preserve_the_failed_check() {
@@ -23604,6 +24092,7 @@ mod tests {
         let error = validate(unchecked_pattern_program(&file, 41), &[&file])
             .expect_err("an unchecked 41-deep pattern must fail");
         assert_eq!(error.reason(), ValidationReason::Pattern);
+        assert!(crate::presentation::compile_core_validation_failure(&error, &[&file]).is_ok());
     }
 
     #[test]

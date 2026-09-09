@@ -763,6 +763,14 @@ localization language. Color is not required for completion.
   layouts. Existing type-application mutation tests also require presentation.
   Core coverage is 15/23 reasons and overall coverage is 171/197. All 1,275
   library tests, 86 diagnostic/catalogue tests and warnings-denied Clippy passed.
+- Core pattern diagnostics retain 22 causes for depth, recorded/expected types,
+  binders, tuple shape, constructor ownership/visibility, nominal arguments and
+  payload presence. Shared binder collection retains its Pattern classification;
+  other binder classifications are unchanged. Tests cover concrete type/arity/
+  binder failures, the exact depth boundary and 44 optional-node localized/JSON
+  layouts. Core coverage is 16/23 reasons and overall coverage is 172/197.
+  All 1,277 library tests, 86 diagnostic/catalogue tests and warnings-denied
+  Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
