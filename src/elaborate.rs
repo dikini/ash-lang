@@ -4689,11 +4689,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     )?;
                     diagnostic.expected = Some(self.registry.display_source_type(&expected));
                     diagnostic.found = Some(self.registry.display_source_type(&actual));
-                    diagnostic.help = Some(format!(
-                        "the known determinant key is {}",
-                        self.registry.display_source_type(&key)
-                    ));
-                    return Err(TypeError::interface(diagnostic));
+                    let key = self.registry.display_source_type(&key);
+                    diagnostic.help = Some(format!("the known determinant key is {key}"));
+                    return Err(TypeError::Interface(Box::new(
+                        crate::interface::InterfaceDiagnostic::with_determination_conflict(
+                            diagnostic,
+                            crate::interface::DeterminationConflictCause::Improvement { key },
+                        ),
+                    )));
                 }
             }
         }
@@ -16376,6 +16379,7 @@ fn check_determination_key(
     if determination.determinant.parameters.is_empty() {
         return Err(determination_parameter_error(
             determination.determinant.span,
+            crate::interface::DeterminationParameterCause::EmptyDeterminant,
             "the determinant key must contain an interface parameter",
             interface.parameters.first().map(|parameter| {
                 (
@@ -16389,6 +16393,7 @@ fn check_determination_key(
     if determination.dependent.parameters.is_empty() {
         return Err(determination_parameter_error(
             determination.dependent.span,
+            crate::interface::DeterminationParameterCause::EmptyDependent,
             "the dependent complement must contain an interface parameter",
             interface.parameters.first().map(|parameter| {
                 (
@@ -16438,6 +16443,7 @@ fn check_determination_key(
                     .ok_or_else(invalid_state)?;
                 return Err(determination_parameter_error(
                     dependent.origin.primary_span(),
+                    crate::interface::DeterminationParameterCause::BothSides,
                     "this parameter occurs on both sides of the determination",
                     Some((
                         determinant.origin.primary_span(),
@@ -16471,6 +16477,7 @@ fn check_determination_key(
         let missing = missing.ok_or_else(invalid_state)?;
         return Err(determination_parameter_error(
             determination.span,
+            crate::interface::DeterminationParameterCause::Omitted,
             "this determination does not cover every interface parameter",
             Some((
                 missing.origin.primary_span(),
@@ -16526,20 +16533,23 @@ fn determination_side_positions(
                 }
             }
             let actual = actual.ok_or_else(invalid_state)?;
-            let (message, related_message) =
+            let (cause, message, related_message) =
                 if previous.is_some_and(|(previous_position, _)| previous_position == actual) {
                     (
+                        crate::interface::DeterminationParameterCause::Repeated,
                         "this determination parameter is repeated",
                         "the first occurrence on this side is here",
                     )
                 } else {
                     (
+                        crate::interface::DeterminationParameterCause::OutOfOrder,
                         "this determination side does not follow interface declaration order",
                         "the preceding occurrence on this side is here",
                     )
                 };
             return Err(determination_parameter_error(
                 occurrence.origin.primary_span(),
+                cause,
                 message,
                 previous.map(
                     |(_, previous): (usize, &crate::resolved::ResolvedDeterminationParameter)| {
@@ -16557,6 +16567,7 @@ fn determination_side_positions(
 
 fn determination_parameter_error(
     primary: Span,
+    cause: crate::interface::DeterminationParameterCause,
     message: &'static str,
     related: Option<(Span, &'static str)>,
     budget: &mut InterfaceConstraintBudget,
@@ -16568,7 +16579,9 @@ fn determination_parameter_error(
     if let Some((span, message)) = related {
         retain_interface_label(&mut diagnostic, span, message, budget)?;
     }
-    Ok(TypeError::interface(diagnostic))
+    Ok(TypeError::Interface(Box::new(
+        crate::interface::InterfaceDiagnostic::with_determination_parameter(diagnostic, cause),
+    )))
 }
 
 fn check_global_requirements(
@@ -16720,7 +16733,12 @@ fn check_global_requirements(
                     first.application.span,
                     "this earlier requirement fixes a different dependent tuple for that key",
                 ));
-                return Err(TypeError::interface(diagnostic));
+                return Err(TypeError::Interface(Box::new(
+                    crate::interface::InterfaceDiagnostic::with_determination_conflict(
+                        diagnostic,
+                        crate::interface::DeterminationConflictCause::Requirements,
+                    ),
+                )));
             }
         }
         for requirement in requirements.iter() {
@@ -17470,7 +17488,12 @@ fn check_implementation_prerequisite_relations(
                     "this earlier prerequisite fixes a different dependent tuple for that key",
                     budget,
                 )?;
-                return Err(TypeError::interface(diagnostic));
+                return Err(TypeError::Interface(Box::new(
+                    crate::interface::InterfaceDiagnostic::with_determination_conflict(
+                        diagnostic,
+                        crate::interface::DeterminationConflictCause::Prerequisites,
+                    ),
+                )));
             }
         }
     }
@@ -23978,6 +24001,115 @@ mod tests {
             Ok(None)
         );
         assert_eq!(exact.used(), EXACT_WORK);
+    }
+
+    #[test]
+    fn determination_improvement_messages_retain_key_and_comparison() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_interface_diagnostic, write_human, write_json},
+        };
+        let source = SourceFile::new("improvement.ash", "source goal").unwrap();
+        let source_span = source.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let goal_span = source.span(ByteRange::new(7, 11).unwrap()).unwrap();
+        let task = ImprovementTask::for_test(
+            Box::new([Type::Unit]),
+            Box::new([Type::Int]),
+            Box::new([Type::Bool]),
+            goal_span,
+            source_span,
+        );
+        let mut elaborator = Elaborator::new();
+        let TypeError::Interface(mut error) = elaborator
+            .apply_improvement_tasks(std::iter::once(task))
+            .unwrap_err()
+        else {
+            panic!("expected determination conflict")
+        };
+        // Legacy prose is not an input to the presentation adapter.
+        error.help = Some("ignored".to_owned());
+        error.related[0] = SourceLabel::new(source_span, "ignored");
+        let view = compile_interface_diagnostic(&error, &[&source]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            for value in ["Unit", "Int", "Bool"] {
+                assert!(output.contains(value));
+            }
+            assert!(!output.contains("ignored"));
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        let (key, expected, found) = error.determination_comparison().unwrap();
+        for (index, (name, value)) in [
+            ("determinant_key", key),
+            ("expected", expected),
+            ("found", found),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(json["facts"][index]["name"], name);
+            assert_eq!(json["facts"][index]["value"], value);
+            assert_eq!(json["facts"][index]["kind"], "code");
+        }
+        assert_eq!(json["facts"][3]["value"], "conflicting-improvement");
+        assert_eq!(json["labels"][1]["relationship"], "determining_source");
+        let expected = error.expected.take();
+        assert!(compile_interface_diagnostic(&error, &[&source]).is_err());
+        error.expected = expected;
+        let found = error.found.take();
+        assert!(compile_interface_diagnostic(&error, &[&source]).is_err());
+        error.found = found;
+        error.related.clear();
+        assert!(compile_interface_diagnostic(&error, &[&source]).is_err());
+    }
+
+    #[test]
+    fn empty_determination_messages_preserve_optional_declaration() {
+        use crate::{
+            interface::DeterminationParameterCause,
+            message::{Catalogue, Locale},
+            presentation::{compile_interface_diagnostic, write_human},
+        };
+        let source = SourceFile::new("empty-side.ash", "where").unwrap();
+        let span = source.span(ByteRange::new(0, 5).unwrap()).unwrap();
+        for cause in [
+            DeterminationParameterCause::EmptyDeterminant,
+            DeterminationParameterCause::EmptyDependent,
+        ] {
+            for related in [None, Some((span, "ignored"))] {
+                let TypeError::Interface(mut error) = determination_parameter_error(
+                    span,
+                    cause,
+                    "ignored",
+                    related,
+                    &mut InterfaceConstraintBudget::with_limit(1),
+                )
+                .unwrap() else {
+                    panic!("expected interface diagnostic")
+                };
+                let view = compile_interface_diagnostic(&error, &[&source]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(match cause {
+                            DeterminationParameterCause::EmptyDeterminant => "The determining side must contain at least one interface parameter.",
+                            _ => "The dependent side must contain at least one interface parameter.",
+                        }));
+                    }
+                }
+                if related.is_some() {
+                    error.related.clear();
+                } else {
+                    error.related.push(SourceLabel::new(span, "ignored"));
+                }
+                assert!(compile_interface_diagnostic(&error, &[&source]).is_err());
+            }
+        }
     }
 
     #[test]

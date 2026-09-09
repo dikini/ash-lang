@@ -1895,6 +1895,98 @@ fn interface_parameter_causes_are_precise() {
     }
 }
 
+#[test]
+fn conflicting_determination_requirements_have_distinct_roles() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_interface_diagnostic, write_human, write_json},
+    };
+    for (declaration, relationship, explanation) in [
+        (
+            "use_value : Int -> Int where Relation<Int, Bool>, Relation<Int, Unit>\nuse_value value = value\n",
+            "earlier_requirement",
+            "These requirements have the same determining arguments but different dependent arguments.",
+        ),
+        (
+            "interface Target<A> {\ntarget : A -> A\n}\nimpl Target<Int> where Relation<Int, Bool>, Relation<Int, Unit> {\ntarget value = value\n}\n",
+            "earlier_prerequisite",
+            "These prerequisites have the same determining arguments but different dependent arguments.",
+        ),
+    ] {
+        let text = format!(
+            "interface Relation<Key, Value> where Key -> Value {{\nrelate : Key -> Int\n}}\n{declaration}"
+        );
+        let fixture = ModuleFixture::load("conflicting-requirements.ash", &text);
+        let TypeError::Interface(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected interface error")
+        };
+        assert_eq!(error.reason, InterfaceReason::DeterminationConflict);
+        let view = compile_interface_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(explanation));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["labels"][1]["relationship"], relationship);
+    }
+}
+
+#[test]
+fn determination_parameter_messages_preserve_causes() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_interface_diagnostic, write_human, write_json},
+    };
+    for (edge, explanation, relationship) in [
+        (
+            "(A, A) -> (B, C)",
+            "This parameter is repeated on the same side of the determination.",
+            "earlier_parameter_occurrence",
+        ),
+        (
+            "(B, A) -> C",
+            "Parameters on each side of a determination must follow their interface declaration order.",
+            "preceding_parameter_occurrence",
+        ),
+        (
+            "(A, B) -> (B, C)",
+            "An interface parameter cannot occur on both sides of a determination.",
+            "determinant_occurrence",
+        ),
+        (
+            "A -> B",
+            "The determination must include every interface parameter.",
+            "omitted_parameter",
+        ),
+    ] {
+        let text = format!("interface Bad<A, B, C> where {edge} {{\nbad : (A, B) -> C\n}}\n");
+        let fixture = ModuleFixture::load("determination-message.ash", &text);
+        let TypeError::Interface(mut error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected determination error for {edge}")
+        };
+        assert_eq!(error.reason, InterfaceReason::DeterminationParameter);
+        let view = compile_interface_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(explanation));
+            }
+        }
+        let mut json = Vec::new();
+        write_json(&mut json, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(json["labels"][1]["relationship"], relationship);
+        error.related.clear();
+        assert!(compile_interface_diagnostic(&error, &[fixture.loaded().source()]).is_err());
+    }
+}
+
 #[derive(Clone, Copy)]
 enum KindExpectationShape {
     Type,

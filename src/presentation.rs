@@ -294,7 +294,8 @@ pub fn compile_interface_diagnostic<'a>(
     sources: &[&'a SourceFile],
 ) -> Result<CompileDiagnostic<'a>, PresentationError> {
     let (message, relationship) = error.message().ok_or(PresentationError::Unsupported)?;
-    if error.expected.is_some() || error.found.is_some() {
+    let comparison = error.determination_comparison();
+    if comparison.is_none() && (error.expected.is_some() || error.found.is_some()) {
         return Err(PresentationError::Unsupported);
     }
     if error.related.len() < error.minimum_related() {
@@ -316,6 +317,26 @@ pub fn compile_interface_diagnostic<'a>(
                 },
             ]
         });
+    if let Some((key, expected, found)) = comparison {
+        for (name, value) in [
+            ("determinant_key", key),
+            ("expected", expected),
+            ("found", found),
+        ] {
+            facts.push(Fact {
+                name,
+                kind: "code",
+                value: FactValue::Text(value),
+            });
+        }
+    }
+    if let Some(cause) = error.determination_failure() {
+        facts.push(Fact {
+            name: "determination_failure",
+            kind: "determination-failure",
+            value: FactValue::Text(cause),
+        });
+    }
     if let Some(cause) = error.parameter_failure() {
         facts.push(Fact {
             name: "parameter_failure",

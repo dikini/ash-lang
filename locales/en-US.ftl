@@ -339,3 +339,19 @@ module-resource = Ash exhausted resources for { $resource ->
    *[pending-work] pending module-loading work
     }.
 syntax-work = Processing `{ $path }` reached the compiler's syntax-work limit of { $limit }.
+determination-empty-determinant = The determining side must contain at least one interface parameter.
+determination-empty-dependent = The dependent side must contain at least one interface parameter.
+determination-both-sides = An interface parameter cannot occur on both sides of a determination.
+determination-omitted = The determination must include every interface parameter.
+determination-repeated = This parameter is repeated on the same side of the determination.
+determination-order = Parameters on each side of a determination must follow their interface declaration order.
+determination-key-occurrence = This parameter also occurs on the determining side.
+determination-missing-parameter = This interface parameter is missing from the determination.
+determination-earlier-occurrence = The parameter already occurs here on this side.
+determination-preceding-occurrence = This preceding occurrence is out of declaration order with the highlighted parameter.
+determination-requirement-conflict = These requirements have the same determining arguments but different dependent arguments.
+determination-prerequisite-conflict = These prerequisites have the same determining arguments but different dependent arguments.
+determination-improvement-conflict = The determining arguments `{ $key }` require dependent arguments `{ $expected }`, but these dependent arguments are `{ $found }`.
+determination-earlier-requirement = This earlier requirement fixes different dependent arguments for the same determining arguments.
+determination-earlier-prerequisite = This earlier prerequisite fixes different dependent arguments for the same determining arguments.
+determination-expected-source = This source fixes the expected dependent tuple.

@@ -517,6 +517,16 @@ localization language. Color is not required for completion.
   Interface/constraint coverage is 26 of 28 reasons, with 242 templates per
   locale. Existing checks, precedence, work charges and legacy labels remain
   unchanged.
+- Determination declarations retain six typed causes and their optional causal
+  labels. Conflicting global requirements, implementation prerequisites and
+  inferred dependent tuples retain distinct roles. Improvement diagnostics
+  retain the already formatted determinant key with expected/found tuples;
+  human messages and JSON use these facts without parsing legacy help text.
+  Six source cases and focused unit cases cover both locales, structured facts,
+  optional labels and missing-fact rejection. Interface/constraint coverage is
+  28 of 28 reasons, with 258 templates per locale. All 1,245 library tests,
+  216 focused integration tests and warnings-denied Clippy passed. Existing
+  semantic checks, failure precedence and work charges remain unchanged.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

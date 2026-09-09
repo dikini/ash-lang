@@ -1970,6 +1970,11 @@ pub struct InterfaceDiagnostic {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum InterfaceDiagnosticContext {
     Plain,
+    DeterminationConflict(DeterminationConflictCause),
+    DeterminationParameter {
+        cause: DeterminationParameterCause,
+        related: bool,
+    },
     MethodParameter(MethodParameterCause),
     DeterminationCoverage {
         variable_label: bool,
@@ -1984,6 +1989,23 @@ enum InterfaceDiagnosticContext {
         earlier_imports: usize,
         later_imports: usize,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DeterminationParameterCause {
+    EmptyDeterminant,
+    EmptyDependent,
+    BothSides,
+    Omitted,
+    Repeated,
+    OutOfOrder,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum DeterminationConflictCause {
+    Requirements,
+    Prerequisites,
+    Improvement { key: String },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2016,6 +2038,56 @@ impl std::ops::DerefMut for InterfaceDiagnostic {
 }
 
 impl InterfaceDiagnostic {
+    pub(crate) fn with_determination_conflict(
+        diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>,
+        cause: DeterminationConflictCause,
+    ) -> Self {
+        Self {
+            diagnostic,
+            context: InterfaceDiagnosticContext::DeterminationConflict(cause),
+        }
+    }
+
+    pub(crate) fn determination_comparison(&self) -> Option<(&str, &str, &str)> {
+        let InterfaceDiagnosticContext::DeterminationConflict(
+            DeterminationConflictCause::Improvement { key },
+        ) = &self.context
+        else {
+            return None;
+        };
+        Some((key, self.expected.as_deref()?, self.found.as_deref()?))
+    }
+
+    pub(crate) fn determination_failure(&self) -> Option<&'static str> {
+        Some(match &self.context {
+            InterfaceDiagnosticContext::DeterminationParameter { cause, .. } => match cause {
+                DeterminationParameterCause::EmptyDeterminant => "empty-determinant",
+                DeterminationParameterCause::EmptyDependent => "empty-dependent",
+                DeterminationParameterCause::BothSides => "both-sides",
+                DeterminationParameterCause::Omitted => "omitted-parameter",
+                DeterminationParameterCause::Repeated => "repeated-parameter",
+                DeterminationParameterCause::OutOfOrder => "declaration-order",
+            },
+            InterfaceDiagnosticContext::DeterminationConflict(cause) => match cause {
+                DeterminationConflictCause::Requirements => "conflicting-requirements",
+                DeterminationConflictCause::Prerequisites => "conflicting-prerequisites",
+                DeterminationConflictCause::Improvement { .. } => "conflicting-improvement",
+            },
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn with_determination_parameter(
+        diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>,
+        cause: DeterminationParameterCause,
+    ) -> Self {
+        let related = !diagnostic.related.is_empty();
+        Self {
+            diagnostic,
+            context: InterfaceDiagnosticContext::DeterminationParameter { cause, related },
+        }
+    }
+
     pub(crate) fn with_method_parameter(
         diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>,
         cause: MethodParameterCause,
@@ -2062,6 +2134,10 @@ impl InterfaceDiagnostic {
 
     pub(crate) fn minimum_related(&self) -> usize {
         match &self.context {
+            InterfaceDiagnosticContext::DeterminationConflict(_) => 1,
+            InterfaceDiagnosticContext::DeterminationParameter { related, .. } => {
+                usize::from(*related)
+            }
             InterfaceDiagnosticContext::MethodParameter(_) => 1,
             InterfaceDiagnosticContext::DeterminationCoverage {
                 variable_label,
@@ -2116,7 +2192,44 @@ impl InterfaceDiagnostic {
         }
     }
 
-    pub(crate) fn message(&self) -> Option<(crate::message::Message<'static>, &'static str)> {
+    pub(crate) fn message(&self) -> Option<(crate::message::Message<'_>, &'static str)> {
+        if let InterfaceDiagnosticContext::DeterminationConflict(cause) = &self.context {
+            use crate::message::Message;
+            return Some(match cause {
+                DeterminationConflictCause::Requirements => {
+                    (Message::determination_requirement_conflict(), "requirement")
+                }
+                DeterminationConflictCause::Prerequisites => (
+                    Message::determination_prerequisite_conflict(),
+                    "prerequisite",
+                ),
+                DeterminationConflictCause::Improvement { .. } => {
+                    let (key, expected, found) = self.determination_comparison()?;
+                    (
+                        Message::determination_improvement_conflict(key, expected, found),
+                        "dependent_tuple",
+                    )
+                }
+            });
+        }
+        if let InterfaceDiagnosticContext::DeterminationParameter { cause, .. } = self.context {
+            use crate::message::Message;
+            return Some((
+                match cause {
+                    DeterminationParameterCause::EmptyDeterminant => {
+                        Message::determination_empty_determinant()
+                    }
+                    DeterminationParameterCause::EmptyDependent => {
+                        Message::determination_empty_dependent()
+                    }
+                    DeterminationParameterCause::BothSides => Message::determination_both_sides(),
+                    DeterminationParameterCause::Omitted => Message::determination_omitted(),
+                    DeterminationParameterCause::Repeated => Message::determination_repeated(),
+                    DeterminationParameterCause::OutOfOrder => Message::determination_order(),
+                },
+                "determination_parameter",
+            ));
+        }
         if let InterfaceDiagnosticContext::MethodParameter(cause) = self.context {
             use crate::message::Message;
             return Some((
@@ -2146,6 +2259,56 @@ impl InterfaceDiagnostic {
         &self,
         mut index: usize,
     ) -> Option<(crate::message::Message<'static>, &'static str)> {
+        if let InterfaceDiagnosticContext::DeterminationConflict(cause) = &self.context {
+            if index != 0 {
+                return None;
+            }
+            use crate::message::Message;
+            return Some(match cause {
+                DeterminationConflictCause::Requirements => (
+                    Message::determination_earlier_requirement(),
+                    "earlier_requirement",
+                ),
+                DeterminationConflictCause::Prerequisites => (
+                    Message::determination_earlier_prerequisite(),
+                    "earlier_prerequisite",
+                ),
+                DeterminationConflictCause::Improvement { .. } => (
+                    Message::determination_expected_source(),
+                    "determining_source",
+                ),
+            });
+        }
+        if let InterfaceDiagnosticContext::DeterminationParameter { cause, related } = self.context
+        {
+            if !related || index != 0 {
+                return None;
+            }
+            use crate::message::Message;
+            return Some(match cause {
+                DeterminationParameterCause::EmptyDeterminant
+                | DeterminationParameterCause::EmptyDependent => (
+                    Message::interface_parameter_declaration(),
+                    "interface_parameter",
+                ),
+                DeterminationParameterCause::BothSides => (
+                    Message::determination_key_occurrence(),
+                    "determinant_occurrence",
+                ),
+                DeterminationParameterCause::Omitted => (
+                    Message::determination_missing_parameter(),
+                    "omitted_parameter",
+                ),
+                DeterminationParameterCause::Repeated => (
+                    Message::determination_earlier_occurrence(),
+                    "earlier_parameter_occurrence",
+                ),
+                DeterminationParameterCause::OutOfOrder => (
+                    Message::determination_preceding_occurrence(),
+                    "preceding_parameter_occurrence",
+                ),
+            });
+        }
         if let InterfaceDiagnosticContext::MethodParameter(cause) = self.context {
             if index != 0 {
                 return None;

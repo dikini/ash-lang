@@ -150,6 +150,38 @@ macro_rules! messages {
 }
 
 messages! {
+    /// These requirements have the same determining arguments but different dependent arguments.
+    determination_requirement_conflict => "determination-requirement-conflict" {},
+    /// These prerequisites have the same determining arguments but different dependent arguments.
+    determination_prerequisite_conflict => "determination-prerequisite-conflict" {},
+    /// The known key fixes an expected dependent tuple, which conflicts with the found tuple.
+    determination_improvement_conflict => "determination-improvement-conflict" { key: &'a str = "(Unit)", expected: &'a str = "(Int)", found: &'a str = "(Bool)" },
+    /// This earlier requirement fixes different dependent arguments for the same determining arguments.
+    determination_earlier_requirement => "determination-earlier-requirement" {},
+    /// This earlier prerequisite fixes different dependent arguments for the same determining arguments.
+    determination_earlier_prerequisite => "determination-earlier-prerequisite" {},
+    /// This source fixes the expected dependent tuple.
+    determination_expected_source => "determination-expected-source" {},
+    /// The determining side must contain at least one interface parameter.
+    determination_empty_determinant => "determination-empty-determinant" {},
+    /// The dependent side must contain at least one interface parameter.
+    determination_empty_dependent => "determination-empty-dependent" {},
+    /// An interface parameter cannot occur on both sides of a determination.
+    determination_both_sides => "determination-both-sides" {},
+    /// The determination must include every interface parameter.
+    determination_omitted => "determination-omitted" {},
+    /// This parameter is repeated on the same side of the determination.
+    determination_repeated => "determination-repeated" {},
+    /// Parameters on each side of a determination must follow their interface declaration order.
+    determination_order => "determination-order" {},
+    /// This parameter also occurs on the determining side.
+    determination_key_occurrence => "determination-key-occurrence" {},
+    /// This interface parameter is missing from the determination.
+    determination_missing_parameter => "determination-missing-parameter" {},
+    /// The parameter already occurs here on this side.
+    determination_earlier_occurrence => "determination-earlier-occurrence" {},
+    /// This preceding occurrence is out of declaration order with the highlighted parameter.
+    determination_preceding_occurrence => "determination-preceding-occurrence" {},
     /// Method type parameters must be explicitly declared in the method's parameter list.
     method_implicit_parameters => "method-implicit-parameters" {},
     /// This method type must mention every interface parameter.
