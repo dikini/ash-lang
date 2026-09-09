@@ -1027,6 +1027,18 @@ impl TypeError {
     fn interface(diagnostic: Diagnostic<InterfaceReason>) -> Self {
         Self::Interface(Box::new(diagnostic.into()))
     }
+
+    fn interface_arity(
+        diagnostic: Diagnostic<InterfaceReason>,
+        expected: usize,
+        found: usize,
+    ) -> Self {
+        Self::Interface(Box::new(
+            crate::interface::InterfaceDiagnostic::with_argument_counts(
+                diagnostic, expected, found,
+            ),
+        ))
+    }
 }
 
 impl fmt::Display for TypeError {
@@ -10556,10 +10568,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 };
             let value_type = IterativeTypeOwner::new(value_type);
             if parameters.len() != application.arguments().len() {
-                return Err(lexical_evidence_error(
-                    InterfaceReason::ArgumentCount,
-                    source.application.span,
-                    interface_span,
+                return Err(TypeError::interface_arity(
+                    lexical_evidence_diagnostic(
+                        InterfaceReason::ArgumentCount,
+                        source.application.span,
+                        interface_span,
+                    ),
+                    parameters.len(),
+                    application.arguments().len(),
                 ));
             }
             let mut replacements = TypeReplacementBuffer::new();
@@ -17878,7 +17894,7 @@ fn check_application_arity_parts(
         declaration_span,
         "the interface parameter list is declared here",
     ));
-    Err(TypeError::interface(diagnostic))
+    Err(TypeError::interface_arity(diagnostic, expected, found))
 }
 
 fn same_resolved_application_arguments(
@@ -17999,6 +18015,14 @@ fn constraint_resource() -> TypeError {
 }
 
 fn lexical_evidence_error(reason: InterfaceReason, span: Span, related: Span) -> TypeError {
+    TypeError::interface(lexical_evidence_diagnostic(reason, span, related))
+}
+
+fn lexical_evidence_diagnostic(
+    reason: InterfaceReason,
+    span: Span,
+    related: Span,
+) -> Diagnostic<InterfaceReason> {
     let mut diagnostic = Diagnostic::new(
         reason,
         SourceLabel::new(span, "this lexical evidence declaration is not admitted"),
@@ -18008,7 +18032,7 @@ fn lexical_evidence_error(reason: InterfaceReason, span: Span, related: Span) ->
             .related
             .push(SourceLabel::new(related, "the related declaration is here"));
     }
-    TypeError::interface(diagnostic)
+    diagnostic
 }
 
 fn selection_failure(error: SelectionFailure, span: Option<Span>) -> TypeError {
@@ -23931,6 +23955,41 @@ mod tests {
             Ok(None)
         );
         assert_eq!(exact.used(), EXACT_WORK);
+    }
+
+    #[test]
+    fn interface_arity_messages_retain_numeric_counts() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_interface_diagnostic, write_human, write_json},
+        };
+        let source = SourceFile::new("arity.ash", "application declaration").unwrap();
+        let span = source.span(ByteRange::new(0, 11).unwrap()).unwrap();
+        let declaration = source.span(ByteRange::new(12, 23).unwrap()).unwrap();
+        for (expected, found) in [(1, 0), (1, 2), (2, 1), (3, 5)] {
+            let TypeError::Interface(error) =
+                check_application_arity_parts(expected, declaration, found, span).unwrap_err()
+            else {
+                unreachable!()
+            };
+            let view = compile_interface_diagnostic(&error, &[&source]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                if locale == Locale::English {
+                    assert!(
+                        String::from_utf8(output)
+                            .unwrap()
+                            .contains(&format!("expected {expected}, supplied {found}"))
+                    );
+                }
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["facts"][0]["value"], expected);
+            assert_eq!(json["facts"][1]["value"], found);
+        }
     }
 
     #[test]

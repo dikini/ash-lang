@@ -492,6 +492,14 @@ localization language. Color is not required for completion.
   All 1,240 library tests, 207 focused integration tests and warnings-denied
   Clippy passed. A medium-effort review found no bugs; its test suggestion
   added exact JSON relationship-sequence checks to the cross-file fixtures.
+- Interface arity retains typed expected/supplied counts at both producers.
+  The existing wrapper now distinguishes plain, selection and argument-count
+  context. Human messages and JSON integers use the same counts; neither
+  presentation path parses legacy text. Four count pairs and six source cases
+  cover global requirements, implementation heads and prerequisites. Legacy
+  messages, spans and checks are unchanged. Interface/constraint coverage is
+  21 of 28 reasons, with 226 templates per locale. All 169 focused tests and
+  warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

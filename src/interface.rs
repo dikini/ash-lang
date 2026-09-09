@@ -1957,21 +1957,28 @@ pub enum InterfaceReason {
     ImplExtraMethod,
 }
 
-/// An interface diagnostic retaining phase-owned selection context.
+/// An interface diagnostic retaining phase-owned context.
 ///
 /// Retain this wrapper for localized presentation; the common diagnostic
-/// projection alone does not retain selection-label roles.
+/// projection alone does not retain argument counts or selection-label roles.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InterfaceDiagnostic {
     diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>,
-    selection: Option<crate::evidence::SelectionError>,
+    context: InterfaceDiagnosticContext,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum InterfaceDiagnosticContext {
+    Plain,
+    Selection(crate::evidence::SelectionError),
+    ArgumentCount { expected: usize, found: usize },
 }
 
 impl From<crate::diagnostic::Diagnostic<InterfaceReason>> for InterfaceDiagnostic {
     fn from(diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>) -> Self {
         Self {
             diagnostic,
-            selection: None,
+            context: InterfaceDiagnosticContext::Plain,
         }
     }
 }
@@ -1996,26 +2003,59 @@ impl InterfaceDiagnostic {
     ) -> Self {
         Self {
             diagnostic,
-            selection: Some(selection),
+            context: InterfaceDiagnosticContext::Selection(selection),
         }
     }
 
     pub(crate) fn minimum_related(&self) -> usize {
-        self.selection.as_ref().map_or_else(
-            || self.reason.minimum_related(),
-            |selection| {
+        match &self.context {
+            InterfaceDiagnosticContext::Selection(selection) => {
                 usize::from(selection.declaration_span().is_some())
                     + usize::from(selection.import_span().is_some())
                     + selection.causes().len()
-            },
-        )
+            }
+            _ => self.reason.minimum_related(),
+        }
+    }
+
+    pub(crate) fn with_argument_counts(
+        diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>,
+        expected: usize,
+        found: usize,
+    ) -> Self {
+        Self {
+            diagnostic,
+            context: InterfaceDiagnosticContext::ArgumentCount { expected, found },
+        }
+    }
+
+    pub(crate) fn argument_counts(&self) -> Option<(usize, usize)> {
+        match self.context {
+            InterfaceDiagnosticContext::ArgumentCount { expected, found }
+                if self.reason == InterfaceReason::ArgumentCount =>
+            {
+                Some((expected, found))
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn message(&self) -> Option<(crate::message::Message<'static>, &'static str)> {
+        if self.reason == InterfaceReason::ArgumentCount {
+            let (expected, found) = self.argument_counts()?;
+            return Some((
+                crate::message::Message::interface_argument_count(expected, found),
+                "interface_application",
+            ));
+        }
+        self.reason.message()
     }
 
     pub(crate) fn related_message(
         &self,
         mut index: usize,
     ) -> Option<(crate::message::Message<'static>, &'static str)> {
-        let Some(selection) = &self.selection else {
+        let InterfaceDiagnosticContext::Selection(selection) = &self.context else {
             return self.reason.related_message(index);
         };
         use crate::{evidence::SelectionCauseKind, message::Message};
@@ -2136,6 +2176,7 @@ impl InterfaceReason {
             Self::ImplMissingMethod => (Message::evidence_required_method(), "required_method"),
             Self::ImplDuplicateMethod => (Message::evidence_earlier_method(), "earlier_method"),
             Self::ImplExtraMethod => (Message::impl_interface(), "interface_declaration"),
+            Self::ArgumentCount => (Message::interface_parameters(), "interface_parameters"),
             Self::ImplOrphan => (
                 Message::impl_foreign_interface(),
                 "selected_foreign_interface",

@@ -1760,6 +1760,45 @@ fn ambiguous_and_cyclic_selection_messages() {
     }
 }
 
+#[test]
+fn interface_argument_counts_reach_presentation_from_source() {
+    use ash::presentation::{compile_interface_diagnostic, write_json};
+    for (declaration, supplied) in [
+        ("value : Unit -> Unit where Pair<Int>\nvalue () = ()\n", 1),
+        (
+            "value : Unit -> Unit where Pair<Int, Bool, Unit>\nvalue () = ()\n",
+            3,
+        ),
+        ("impl Pair<Int> {\npair value = 1\n}\n", 1),
+        ("impl Pair<Int, Bool, Unit> {\npair value = 1\n}\n", 3),
+        (
+            "impl Keep<Int> where Pair<Int> {\nkeep value = value\n}\n",
+            1,
+        ),
+        (
+            "impl Keep<Int> where Pair<Int, Bool, Unit> {\nkeep value = value\n}\n",
+            3,
+        ),
+    ] {
+        let text = format!(
+            "interface Pair<Left, Right> {{\npair : (Left, Right) -> Left\n}}\ninterface Keep<Value> {{\nkeep : Value -> Value\n}}\n{declaration}"
+        );
+        let fixture = ModuleFixture::load("arity-source.ash", &text);
+        let TypeError::Interface(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected interface error")
+        };
+        assert_eq!(error.reason, InterfaceReason::ArgumentCount);
+        let view = compile_interface_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["facts"][0]["name"], "expected_count");
+        assert_eq!(json["facts"][0]["value"], 2);
+        assert_eq!(json["facts"][1]["name"], "supplied_count");
+        assert_eq!(json["facts"][1]["value"], supplied);
+    }
+}
+
 #[derive(Clone, Copy)]
 enum KindExpectationShape {
     Type,

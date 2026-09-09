@@ -150,6 +150,10 @@ macro_rules! messages {
 }
 
 messages! {
+    /// An interface application's argument count differs from its declaration.
+    interface_argument_count => "interface-argument-count" { expected: usize = 2, found: usize = 1 },
+    /// The interface parameter list fixes its arity.
+    interface_parameters => "interface-parameters" {},
     /// No available evidence satisfies this interface requirement.
     constraint_unsatisfied => "constraint-unsatisfied" {},
     /// The types in this interface requirement are not sufficiently determined to select evidence.

@@ -293,16 +293,29 @@ pub fn compile_interface_diagnostic<'a>(
     error: &'a crate::interface::InterfaceDiagnostic,
     sources: &[&'a SourceFile],
 ) -> Result<CompileDiagnostic<'a>, PresentationError> {
-    let (message, relationship) = error
-        .reason
-        .message()
-        .ok_or(PresentationError::Unsupported)?;
+    let (message, relationship) = error.message().ok_or(PresentationError::Unsupported)?;
     if error.expected.is_some() || error.found.is_some() {
         return Err(PresentationError::Unsupported);
     }
     if error.related.len() < error.minimum_related() {
         return Err(PresentationError::MissingFact);
     }
+    let facts = error
+        .argument_counts()
+        .map_or_else(Vec::new, |(expected, found)| {
+            vec![
+                Fact {
+                    name: "expected_count",
+                    kind: "count",
+                    value: FactValue::Integer(expected),
+                },
+                Fact {
+                    name: "supplied_count",
+                    kind: "count",
+                    value: FactValue::Integer(found),
+                },
+            ]
+        });
     let label = |span: Span, message, relationship| {
         let source = sources
             .iter()
@@ -333,7 +346,7 @@ pub fn compile_interface_diagnostic<'a>(
         primary: Some(label(error.primary.span(), message.clone(), relationship)?),
         message,
         related,
-        facts: Vec::new(),
+        facts,
     })
 }
 
