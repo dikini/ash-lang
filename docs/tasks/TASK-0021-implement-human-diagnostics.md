@@ -976,6 +976,17 @@ localization language. Color is not required for completion.
   regression caught boundary context replacing the underlying cause; context
   attachment now preserves any existing cause. All 135 resolver tests, five
   catalogue-contract tests and warnings-denied Clippy passed after that fix.
+- The resolver audit found and converted one remaining lexical-evidence identity
+  exhaustion check using the existing identity context. All 135 resolver tests
+  and warnings-denied Clippy passed. At Ash commit `3be285a`, the eight unchanged
+  migration entries from ash-doc commit `492a3abec1324c3c0c0e8f0376d380092e883561`
+  passed the explicit-JSON canary against the outcomes and ranges in the repair
+  report: both search stdout hashes matched, four constraint rejections retained
+  their four causal labels, and both opacity rejections retained their primary
+  and declaration ranges plus `Iterator`/opaque-access facts. Exit statuses and
+  empty output channels matched; no presentation fallback occurred. Ash-doc
+  remained clean and its historical pins and verifier were not changed. This is
+  an upstream compatibility canary, not adoption or an edition migration.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
