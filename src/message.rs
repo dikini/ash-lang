@@ -150,6 +150,22 @@ macro_rules! messages {
 }
 
 messages! {
+    /// Wrong Core dialect, retaining the arena-local node number.
+    core_validation_dialect_node => "core-validation-dialect-node" { node: usize = 42 },
+    /// Invalid Core root, retaining the arena-local node number.
+    core_validation_root_node => "core-validation-root-node" { node: usize = 42 },
+    /// Cyclic Core graph, retaining the arena-local node number.
+    core_validation_cycle_node => "core-validation-cycle-node" { node: usize = 42 },
+    /// Unreachable Core node, retaining the arena-local node number.
+    core_validation_unreachable_node => "core-validation-unreachable-node" { node: usize = 42 },
+    /// The compiler stored a Core node from a different dialect than the selected program.
+    core_validation_dialect => "core-validation-dialect" {},
+    /// The compiler selected a root node that is not valid in this Core arena.
+    core_validation_root => "core-validation-root" {},
+    /// The compiler constructed a cycle in the Core expression graph.
+    core_validation_cycle => "core-validation-cycle" {},
+    /// The compiler retained a Core node that cannot be reached from the program root.
+    core_validation_unreachable => "core-validation-unreachable" {},
     /// The compiler selected an implementation unavailable at this use.
     evidence_unavailable_implementation => "evidence-unavailable-implementation" {},
     /// The compiler ran out of resources for type checking and type construction.

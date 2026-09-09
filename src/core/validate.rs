@@ -255,6 +255,30 @@ pub struct ValidationError {
 }
 
 impl ValidationError {
+    pub(crate) fn diagnostic_message(&self) -> Option<crate::message::Message<'static>> {
+        use crate::message::Message;
+        let node = self
+            .node
+            .map(|node| usize::try_from(node.value()))
+            .transpose()
+            .ok()?;
+        Some(match (self.reason, node) {
+            (ValidationReason::DialectMembership, None) => Message::core_validation_dialect(),
+            (ValidationReason::Root, None) => Message::core_validation_root(),
+            (ValidationReason::Cycle, None) => Message::core_validation_cycle(),
+            (ValidationReason::Unreachable, None) => Message::core_validation_unreachable(),
+            (ValidationReason::DialectMembership, Some(node)) => {
+                Message::core_validation_dialect_node(node)
+            }
+            (ValidationReason::Root, Some(node)) => Message::core_validation_root_node(node),
+            (ValidationReason::Cycle, Some(node)) => Message::core_validation_cycle_node(node),
+            (ValidationReason::Unreachable, Some(node)) => {
+                Message::core_validation_unreachable_node(node)
+            }
+            _ => return None,
+        })
+    }
+
     pub(super) const fn new(reason: ValidationReason, node: Option<NodeId>) -> Self {
         Self { reason, node }
     }
@@ -9453,6 +9477,73 @@ pub(super) use tests::{registration_proof_check, registration_proof_program};
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn graph_failure_messages_preserve_optional_node_identity() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        for (reason, explanation) in [
+            (
+                ValidationReason::DialectMembership,
+                "The compiler stored a Core node from a different dialect than the selected program.",
+            ),
+            (
+                ValidationReason::Root,
+                "The compiler selected a root node that is not valid in this Core arena.",
+            ),
+            (
+                ValidationReason::Cycle,
+                "The compiler constructed a cycle in the Core expression graph.",
+            ),
+            (
+                ValidationReason::Unreachable,
+                "The compiler retained a Core node that cannot be reached from the program root.",
+            ),
+        ] {
+            for node in [
+                None,
+                Some(NodeId::new(
+                    super::super::dialect::ArenaId::new(100),
+                    u32::MAX,
+                )),
+            ] {
+                let error = ValidationError::new(reason, node);
+                let view = compile_core_validation_failure(&error).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    let output = String::from_utf8(output).unwrap();
+                    if locale == Locale::English {
+                        assert!(output.contains(explanation));
+                    }
+                    if node.is_some() {
+                        assert!(output.contains("4294967295"));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], reason.to_string());
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(json["labels"].as_array().unwrap().is_empty());
+                if node.is_some() {
+                    assert_eq!(json["facts"][0]["name"], "core_node");
+                    assert_eq!(json["facts"][0]["value"], u32::MAX);
+                } else {
+                    assert!(json["facts"].as_array().unwrap().is_empty());
+                }
+            }
+        }
+        assert!(
+            compile_core_validation_failure(&ValidationError::new(
+                ValidationReason::NodeBounds,
+                None
+            ))
+            .is_err()
+        );
+    }
+
     type HookFixture = (
         super::super::effect::UnvalidatedEffectProgram,
         Vec<SourceFile>,

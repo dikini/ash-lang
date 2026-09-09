@@ -450,6 +450,36 @@ pub fn compile_evidence_failure<'a>(
     })
 }
 
+/// Exposes a compiler-owned Core validation failure and its optional arena-local node.
+///
+/// # Errors
+/// Returns unsupported for causes not yet presented or a node handle that cannot be represented.
+pub fn compile_core_validation_failure(
+    error: &crate::core::validate::ValidationError,
+) -> Result<CompileDiagnostic<'static>, PresentationError> {
+    let message = error
+        .diagnostic_message()
+        .ok_or(PresentationError::Unsupported)?;
+    let mut facts = Vec::new();
+    if let Some(node) = error.node() {
+        facts.push(Fact {
+            name: "core_node",
+            kind: "core-node",
+            value: FactValue::Integer(
+                usize::try_from(node.value()).map_err(|_| PresentationError::Unsupported)?,
+            ),
+        });
+    }
+    Ok(CompileDiagnostic {
+        reason: error.reason().to_string(),
+        responsibility: "compiler",
+        message,
+        primary: None,
+        related: Vec::new(),
+        facts,
+    })
+}
+
 /// Exposes the entry module's local-main contract failure.
 ///
 /// # Errors

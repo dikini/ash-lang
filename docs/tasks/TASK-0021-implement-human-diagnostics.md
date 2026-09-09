@@ -556,6 +556,15 @@ localization language. Color is not required for completion.
   reasons, with 278 templates per locale. All 137 evidence-validation tests,
   three catalogue tests and warnings-denied Clippy passed. No validation check,
   resource charge or diagnostic precedence changed.
+- Core validation presents wrong-dialect, invalid-root, cyclic-graph and
+  unreachable-node failures. Human output and JSON retain an optional exact
+  arena-local node number; no source provenance is invented from invalid Core.
+  Node-bearing locale entries reference the base explanation to avoid duplicate
+  wording. Eight layouts cover both locales and the maximum node handle.
+  Core-validation coverage is four of 23 reasons, with 286 templates per
+  locale. All 1,247 library tests, three catalogue tests and warnings-denied
+  Clippy passed. Validation behavior is unchanged; broader invariant categories
+  remain unsupported pending precise cause retention.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
