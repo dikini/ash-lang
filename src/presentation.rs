@@ -538,6 +538,13 @@ pub fn compile_core_validation_failure(
             ),
         });
     }
+    if let Some(cause) = error.cause_name() {
+        facts.push(Fact {
+            name: "cause",
+            kind: "core-validation-cause",
+            value: FactValue::Text(cause),
+        });
+    }
     Ok(CompileDiagnostic {
         reason: error.reason().to_string(),
         responsibility: "compiler",

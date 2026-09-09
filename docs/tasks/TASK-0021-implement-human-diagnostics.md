@@ -674,6 +674,15 @@ localization language. Color is not required for completion.
   reason-family count changed. All 1,258 library tests and 86 diagnostic/catalogue
   tests passed. Warnings-denied Clippy passed after removing three unnecessary
   returns from the new match arms.
+- Core node-bound failures now retain four causes: missing child edge, foreign
+  arena, missing stored node and unrepresentable node identity. Graph traversal
+  retains the child lookup's cause while preserving its existing parent-node
+  context. Eight catalogue messages cover each cause with and without a node
+  handle; JSON records the same cause and optional node. Real corruption cases
+  cover missing and foreign-arena children, and an oversized index checks the
+  identity conversion. Core coverage is now 5/23 reasons and overall coverage
+  is 161/197. Catalogues contain 423 templates per locale. All 1,259 library
+  tests, 86 diagnostic/catalogue tests and warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

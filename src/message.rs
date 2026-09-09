@@ -414,6 +414,14 @@ messages! {
     core_validation_cycle_node => "core-validation-cycle-node" { node: usize = 42 },
     /// Unreachable Core node, retaining the arena-local node number.
     core_validation_unreachable_node => "core-validation-unreachable-node" { node: usize = 42 },
+    core_validation_missing_child => "core-validation-missing-child" {},
+    core_validation_missing_child_node => "core-validation-missing-child-node" { node: usize = 42 },
+    core_validation_foreign_arena => "core-validation-foreign-arena" {},
+    core_validation_foreign_arena_node => "core-validation-foreign-arena-node" { node: usize = 42 },
+    core_validation_missing_node => "core-validation-missing-node" {},
+    core_validation_missing_node_node => "core-validation-missing-node-node" { node: usize = 42 },
+    core_validation_identity_range => "core-validation-identity-range" {},
+    core_validation_identity_range_node => "core-validation-identity-range-node" { node: usize = 42 },
     /// The compiler stored a Core node from a different dialect than the selected program.
     core_validation_dialect => "core-validation-dialect" {},
     /// The compiler selected a root node that is not valid in this Core arena.

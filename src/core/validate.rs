@@ -252,9 +252,27 @@ impl fmt::Display for ValidationReason {
 pub struct ValidationError {
     reason: ValidationReason,
     node: Option<NodeId>,
+    cause: Option<ValidationCause>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ValidationCause {
+    MissingChild,
+    ForeignArena,
+    MissingNode,
+    NodeIdentityRange,
 }
 
 impl ValidationError {
+    pub(crate) fn cause_name(&self) -> Option<&'static str> {
+        Some(match self.cause? {
+            ValidationCause::MissingChild => "missing-child",
+            ValidationCause::ForeignArena => "foreign-arena",
+            ValidationCause::MissingNode => "missing-node",
+            ValidationCause::NodeIdentityRange => "node-identity-range",
+        })
+    }
+
     pub(crate) fn diagnostic_message(&self) -> Option<crate::message::Message<'static>> {
         use crate::message::Message;
         let node = self
@@ -262,6 +280,28 @@ impl ValidationError {
             .map(|node| usize::try_from(node.value()))
             .transpose()
             .ok()?;
+        if self.reason == ValidationReason::NodeBounds {
+            return Some(match (self.cause?, node) {
+                (ValidationCause::MissingChild, None) => Message::core_validation_missing_child(),
+                (ValidationCause::ForeignArena, None) => Message::core_validation_foreign_arena(),
+                (ValidationCause::MissingNode, None) => Message::core_validation_missing_node(),
+                (ValidationCause::NodeIdentityRange, None) => {
+                    Message::core_validation_identity_range()
+                }
+                (ValidationCause::MissingChild, Some(node)) => {
+                    Message::core_validation_missing_child_node(node)
+                }
+                (ValidationCause::ForeignArena, Some(node)) => {
+                    Message::core_validation_foreign_arena_node(node)
+                }
+                (ValidationCause::MissingNode, Some(node)) => {
+                    Message::core_validation_missing_node_node(node)
+                }
+                (ValidationCause::NodeIdentityRange, Some(node)) => {
+                    Message::core_validation_identity_range_node(node)
+                }
+            });
+        }
         Some(match (self.reason, node) {
             (ValidationReason::DialectMembership, None) => Message::core_validation_dialect(),
             (ValidationReason::Root, None) => Message::core_validation_root(),
@@ -280,7 +320,19 @@ impl ValidationError {
     }
 
     pub(super) const fn new(reason: ValidationReason, node: Option<NodeId>) -> Self {
-        Self { reason, node }
+        Self {
+            reason,
+            node,
+            cause: None,
+        }
+    }
+
+    const fn node_bounds(cause: ValidationCause, node: Option<NodeId>) -> Self {
+        Self {
+            reason: ValidationReason::NodeBounds,
+            node,
+            cause: Some(cause),
+        }
     }
 
     const fn at_node(mut self, node: NodeId) -> Self {
@@ -5549,16 +5601,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     work.push(GraphTask::Exit(id));
                     for child_index in (0..child_count).rev() {
                         let Some(child) = F::child_at(&node.kind, child_index) else {
-                            return Err(ValidationError::new(
-                                ValidationReason::NodeBounds,
+                            return Err(ValidationError::node_bounds(
+                                ValidationCause::MissingChild,
                                 Some(id),
                             ));
                         };
-                        if self.node(child).is_err() {
-                            return Err(ValidationError::new(
-                                ValidationReason::NodeBounds,
-                                Some(id),
-                            ));
+                        if let Err(mut error) = self.node(child) {
+                            error.node = Some(id);
+                            return Err(error);
                         }
                         work.push(GraphTask::Enter(child));
                     }
@@ -6431,11 +6481,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 .try_reserve(children)
                 .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
             for index in 0..children {
-                pending.push(
-                    F::child_at(&node.kind, index).ok_or_else(|| {
-                        ValidationError::new(ValidationReason::NodeBounds, Some(id))
-                    })?,
-                );
+                pending.push(F::child_at(&node.kind, index).ok_or_else(|| {
+                    ValidationError::node_bounds(ValidationCause::MissingChild, Some(id))
+                })?);
             }
         }
         Ok(false)
@@ -6649,7 +6697,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     work.push(Task::Finish(id));
                     for index in 0..child_count {
                         work.push(Task::Visit(F::child_at(&node.kind, index).ok_or_else(
-                            || ValidationError::new(ValidationReason::NodeBounds, Some(id)),
+                            || {
+                                ValidationError::node_bounds(
+                                    ValidationCause::MissingChild,
+                                    Some(id),
+                                )
+                            },
                         )?));
                     }
                 }
@@ -6664,7 +6717,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     self.charge_type_work(F::operation_extra_edge_count(&node.kind))?;
                     for index in 0..F::child_count(&node.kind) {
                         let child = F::child_at(&node.kind, index).ok_or_else(|| {
-                            ValidationError::new(ValidationReason::NodeBounds, Some(id))
+                            ValidationError::node_bounds(ValidationCause::MissingChild, Some(id))
                         })?;
                         reaches |= result.get(&child).copied().unwrap_or(false);
                     }
@@ -7889,12 +7942,15 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
     fn index(&self, id: NodeId) -> Result<usize, ValidationError> {
         if id.arena() != self.program.arena {
-            return Err(ValidationError::new(ValidationReason::NodeBounds, Some(id)));
+            return Err(ValidationError::node_bounds(
+                ValidationCause::ForeignArena,
+                Some(id),
+            ));
         }
         usize::try_from(id.value())
             .ok()
             .filter(|index| *index < self.program.nodes.len())
-            .ok_or_else(|| ValidationError::new(ValidationReason::NodeBounds, Some(id)))
+            .ok_or_else(|| ValidationError::node_bounds(ValidationCause::MissingNode, Some(id)))
     }
 
     fn node(&self, id: NodeId) -> Result<&'program StoredNode<F>, ValidationError> {
@@ -7902,7 +7958,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         self.program
             .nodes
             .get(index)
-            .ok_or_else(|| ValidationError::new(ValidationReason::NodeBounds, Some(id)))
+            .ok_or_else(|| ValidationError::node_bounds(ValidationCause::MissingNode, Some(id)))
     }
 
     fn pure_kind(&self, id: NodeId) -> Result<&'program PureExprKind, ValidationError> {
@@ -8159,16 +8215,16 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         for (index, node) in self.program.nodes.iter().enumerate() {
             self.charge_type_work(node.kind.child_count())?;
             for ordinal in 0..node.kind.child_count() {
-                let child = node
-                    .kind
-                    .child_at(ordinal)
-                    .ok_or_else(|| ValidationError::new(ValidationReason::NodeBounds, None))?;
-                let parent =
-                    parents
-                        .get_mut(child.index().map_err(|_| {
-                            ValidationError::new(ValidationReason::NodeBounds, None)
-                        })?)
-                        .ok_or_else(|| ValidationError::new(ValidationReason::NodeBounds, None))?;
+                let child = node.kind.child_at(ordinal).ok_or_else(|| {
+                    ValidationError::node_bounds(ValidationCause::MissingChild, None)
+                })?;
+                let parent = parents
+                    .get_mut(child.index().map_err(|_| {
+                        ValidationError::node_bounds(ValidationCause::MissingNode, None)
+                    })?)
+                    .ok_or_else(|| {
+                        ValidationError::node_bounds(ValidationCause::MissingNode, None)
+                    })?;
                 parent.0 = parent
                     .0
                     .checked_add(1)
@@ -9016,9 +9072,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         };
         if effectful_children {
             for child_index in 0..kind.child_count() {
-                let child = kind
-                    .child_at(child_index)
-                    .ok_or_else(|| ValidationError::new(ValidationReason::NodeBounds, Some(id)))?;
+                let child = kind.child_at(child_index).ok_or_else(|| {
+                    ValidationError::node_bounds(ValidationCause::MissingChild, Some(id))
+                })?;
                 expected =
                     self.union_effect_rows_charged(&expected, &self.node(child)?.effects, id)?;
             }
@@ -9088,7 +9144,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             for index in 0..child_count {
                 work.push(Task::Collect(
                     super::effect::EffectOperationFamily::child_at(&node.kind, index).ok_or_else(
-                        || ValidationError::new(ValidationReason::NodeBounds, Some(id)),
+                        || ValidationError::node_bounds(ValidationCause::MissingChild, Some(id)),
                     )?,
                 ));
             }
@@ -9126,7 +9182,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                         work.push(Task::Enter(
                             super::effect::EffectOperationFamily::child_at(&node.kind, index)
                                 .ok_or_else(|| {
-                                    ValidationError::new(ValidationReason::NodeBounds, Some(id))
+                                    ValidationError::node_bounds(
+                                        ValidationCause::MissingChild,
+                                        Some(id),
+                                    )
                                 })?,
                         ));
                     }
@@ -9149,8 +9208,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                                     row = self.union_effect_rows_charged(
                                         &row,
                                         child_row(kind.child_at(index).ok_or_else(|| {
-                                            ValidationError::new(
-                                                ValidationReason::NodeBounds,
+                                            ValidationError::node_bounds(
+                                                ValidationCause::MissingChild,
                                                 Some(id),
                                             )
                                         })?)?,
@@ -9469,7 +9528,7 @@ enum ScopeAnalysisTask {
 fn node_id(arena: super::dialect::ArenaId, index: usize) -> Result<NodeId, ValidationError> {
     u32::try_from(index)
         .map(|index| NodeId::new(arena, index))
-        .map_err(|_| ValidationError::new(ValidationReason::NodeBounds, None))
+        .map_err(|_| ValidationError::node_bounds(ValidationCause::NodeIdentityRange, None))
 }
 
 #[cfg(test)]
@@ -9477,6 +9536,66 @@ pub(super) use tests::{registration_proof_check, registration_proof_program};
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn node_bounds_messages_preserve_causes_and_optional_node() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, text) in [
+            (
+                ValidationCause::MissingChild,
+                "missing-child",
+                "child edge cannot be read",
+            ),
+            (
+                ValidationCause::ForeignArena,
+                "foreign-arena",
+                "different arena",
+            ),
+            (
+                ValidationCause::MissingNode,
+                "missing-node",
+                "outside the program's stored nodes",
+            ),
+            (
+                ValidationCause::NodeIdentityRange,
+                "node-identity-range",
+                "index as a node identity",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, u32::MAX))] {
+                let error = ValidationError::node_bounds(cause, node);
+                let view = compile_core_validation_failure(&error).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(text));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["responsibility"], "compiler");
+                assert_eq!(json["reason"], "core.validation.node-bounds");
+                let facts = json["facts"].as_array().unwrap();
+                assert_eq!(facts.last().unwrap()["name"], "cause");
+                assert_eq!(facts.last().unwrap()["value"], name);
+                if node.is_some() {
+                    assert_eq!(facts[0]["value"], u32::MAX);
+                }
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+        if let Ok(index) = usize::try_from(u64::from(u32::MAX) + 1) {
+            let error = node_id(arena, index).unwrap_err();
+            assert_eq!(error.cause_name(), Some("node-identity-range"));
+            assert_eq!(error.node(), None);
+        }
+    }
+
     #[test]
     fn graph_failure_messages_preserve_optional_node_identity() {
         use crate::{
@@ -23923,28 +24042,39 @@ mod tests {
     fn rejects_out_of_bounds_and_cycles_without_recursion() {
         let file = source();
         let arena = super::super::dialect::ArenaId::new(101);
-        let stored = StoredNode {
-            dialect: DialectId::PURE,
-            effects: (),
-            ty: Type::Function(Box::new(Type::Unit), Box::new(Type::Unit)),
-            origin: Some(origin(&file)),
-            kind: PureExprKind::Value(PureValue::Function(
-                super::super::function::FunctionNode::new(
-                    TypedBinder::new(arena, BinderId::new(0), Type::Unit, origin(&file)),
-                    NodeId::new(arena, 1),
-                ),
-            )),
-        };
-        let program = UnvalidatedProgram {
-            registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
-            method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
-            method_evidence_anchors: Box::new([]),
-            arena,
-            nodes: vec![stored],
-            root: NodeId::new(arena, 0),
-        };
-        let error = validate(program, &[&file]).expect_err("out-of-bounds child");
-        assert_eq!(error.reason(), ValidationReason::NodeBounds);
+        for (child, cause) in [
+            (NodeId::new(arena, 1), "missing-node"),
+            (
+                NodeId::new(super::super::dialect::ArenaId::new(102), 0),
+                "foreign-arena",
+            ),
+        ] {
+            let stored = StoredNode {
+                dialect: DialectId::PURE,
+                effects: (),
+                ty: Type::Function(Box::new(Type::Unit), Box::new(Type::Unit)),
+                origin: Some(origin(&file)),
+                kind: PureExprKind::Value(PureValue::Function(
+                    super::super::function::FunctionNode::new(
+                        TypedBinder::new(arena, BinderId::new(0), Type::Unit, origin(&file)),
+                        child,
+                    ),
+                )),
+            };
+            let program = UnvalidatedProgram {
+                registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
+                method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
+                method_evidence_anchors: Box::new([]),
+                arena,
+                nodes: vec![stored],
+                root: NodeId::new(arena, 0),
+            };
+            let error = validate(program, &[&file]).expect_err("out-of-bounds child");
+            assert_eq!(error.reason(), ValidationReason::NodeBounds);
+            assert_eq!(error.cause_name(), Some(cause));
+            assert_eq!(error.node(), Some(NodeId::new(arena, 0)));
+            assert!(crate::presentation::compile_core_validation_failure(&error).is_ok());
+        }
 
         let cyclic = StoredNode {
             dialect: DialectId::PURE,
