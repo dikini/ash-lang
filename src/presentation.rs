@@ -1124,8 +1124,14 @@ pub fn compile_file_diagnostics(
                 "internal.source-model",
             ),
             PipelineFailure::Projection(error) => compile_projection_error(error, None),
-            PipelineFailure::Syntax(_) => {
-                return Err(PresentationError::MissingSource);
+            PipelineFailure::Syntax(error) => {
+                return compile_syntax_diagnostics(
+                    &error.lexical,
+                    &error.parser,
+                    error.resource,
+                    &sources,
+                    None,
+                );
             }
         },
     };
@@ -1470,14 +1476,45 @@ fn compile_graph_syntax<'a>(
     failure: &'a ModuleSyntaxFailure,
 ) -> Result<Vec<CompileDiagnostic<'a>>, PresentationError> {
     let sources: Vec<_> = context.sources().collect();
+    let mut diagnostics = compile_syntax_diagnostics(
+        &failure.lexical,
+        &failure.parser,
+        failure.resource,
+        &sources,
+        Some(failure.source.display_path()),
+    )?;
+    for diagnostic in &mut diagnostics {
+        if let Some(import) = import_label(context, "import_context")? {
+            diagnostic.related.push(import);
+        }
+    }
+    Ok(diagnostics)
+}
+
+fn compile_syntax_diagnostics<'a>(
+    lexical: &'a [Diagnostic<LexReason>],
+    parser: &'a [ParseDiagnostic],
+    resource: Option<ResourceFailure>,
+    sources: &[&'a SourceFile],
+    path: Option<&'a str>,
+) -> Result<Vec<CompileDiagnostic<'a>>, PresentationError> {
     let mut diagnostics = Vec::new();
-    if let Some(resource) = failure.resource {
-        let path = failure.source.display_path();
+    if let Some(resource) = resource {
         let (limit, message) = match resource {
-            ResourceFailure::StructuralDepth { limit } => {
-                (limit, Message::syntax_depth(path, limit))
-            }
-            ResourceFailure::SyntaxWork { limit } => (limit, Message::syntax_work(path, limit)),
+            ResourceFailure::StructuralDepth { limit } => (
+                limit,
+                path.map_or_else(
+                    || Message::syntax_depth_unlocated(limit),
+                    |path| Message::syntax_depth(path, limit),
+                ),
+            ),
+            ResourceFailure::SyntaxWork { limit } => (
+                limit,
+                path.map_or_else(
+                    || Message::syntax_work_unlocated(limit),
+                    |path| Message::syntax_work(path, limit),
+                ),
+            ),
         };
         diagnostics.push(CompileDiagnostic {
             reason: resource.reason_code().into(),
@@ -1485,24 +1522,27 @@ fn compile_graph_syntax<'a>(
             message,
             primary: None,
             related: Vec::new(),
-            facts: vec![
-                Fact {
+            facts: {
+                let mut facts = vec![Fact {
                     name: "limit",
                     kind: "integer",
                     value: FactValue::Integer(limit),
-                },
-                Fact {
-                    name: "source_path",
-                    kind: "path-display",
-                    value: FactValue::Text(path),
-                },
-            ],
+                }];
+                if let Some(path) = path {
+                    facts.push(Fact {
+                        name: "source_path",
+                        kind: "path-display",
+                        value: FactValue::Text(path),
+                    });
+                }
+                facts
+            },
         });
     }
     // Merge the retained streams exactly as the established syntax reporter does.
     // Do not globally sort: parser insertion order also carries recovery causality.
-    let mut lexical = failure.lexical.iter().peekable();
-    let mut parser = failure.parser.iter().peekable();
+    let mut lexical = lexical.iter().peekable();
+    let mut parser = parser.iter().peekable();
     while lexical.peek().is_some() || parser.peek().is_some() {
         let take_parser = match (lexical.peek(), parser.peek()) {
             (Some(lexical), Some(parser)) => {
@@ -1512,21 +1552,16 @@ fn compile_graph_syntax<'a>(
             _ => false,
         };
         diagnostics.push(if take_parser {
-            compile_parse_diagnostic(parser.next().expect("observed parser diagnostic"), &sources)?
+            compile_parse_diagnostic(parser.next().expect("observed parser diagnostic"), sources)?
         } else {
             compile_lex_diagnostic(
                 lexical.next().expect("observed lexical diagnostic"),
-                &sources,
+                sources,
             )?
         });
     }
     if diagnostics.is_empty() {
         return Err(PresentationError::MissingFact);
-    }
-    for diagnostic in &mut diagnostics {
-        if let Some(import) = import_label(context, "import_context")? {
-            diagnostic.related.push(import);
-        }
     }
     Ok(diagnostics)
 }

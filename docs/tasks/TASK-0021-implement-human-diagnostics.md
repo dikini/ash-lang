@@ -925,6 +925,13 @@ localization language. Color is not required for completion.
   contract tests, file-dispatch, input and catalogue integration tests passed,
   as did warnings-denied Clippy. Missing-source fallback remains tested with
   an unretained lexical source rather than an already-supported projection error.
+- Bare and graph-owned syntax failures now share the existing stream merge and
+  diagnostic adapters. Resource-only failures need no source path and retain
+  their limit; empty failures report missing facts. Lexical/parser labels still
+  require their actual source, with the original-error fallback used when an
+  API caller discarded that context. The missing-source test now uses real
+  lexer output. File-dispatch, input, source and reporting tests passed, along
+  with warnings-denied Clippy. No syntax behavior or diagnostic ordering changed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

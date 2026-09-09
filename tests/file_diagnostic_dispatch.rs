@@ -143,6 +143,52 @@ fn unlocated_source_errors_preserve_facts_without_inventing_paths() {
 }
 
 #[test]
+fn bare_syntax_resource_failures_need_no_source_context() {
+    use ash::{driver::SyntaxFailure, parser::ResourceFailure};
+    for resource in [
+        ResourceFailure::StructuralDepth { limit: 42 },
+        ResourceFailure::SyntaxWork { limit: 43 },
+    ] {
+        let failure = FileFailure::from(PipelineFailure::Syntax(Box::new(SyntaxFailure {
+            lexical: Vec::new(),
+            parser: Vec::new(),
+            resource: Some(resource),
+        })));
+        let views = compile_file_diagnostics(&failure).unwrap();
+        assert_eq!(views.len(), 1);
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &views[0], &Catalogue::new(locale).unwrap()).unwrap();
+            assert!(!output.is_empty());
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &views[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], failure.reason_code());
+        assert_eq!(json["responsibility"], "compiler");
+        assert_eq!(json["labels"], serde_json::json!([]));
+        let limit = match resource {
+            ResourceFailure::StructuralDepth { limit } | ResourceFailure::SyntaxWork { limit } => {
+                limit
+            }
+        };
+        assert_eq!(
+            json["facts"],
+            serde_json::json!([{"name":"limit","kind":"integer","value":limit}])
+        );
+    }
+    let failure = FileFailure::from(PipelineFailure::Syntax(Box::new(SyntaxFailure {
+        lexical: Vec::new(),
+        parser: Vec::new(),
+        resource: None,
+    })));
+    assert!(matches!(
+        compile_file_diagnostics(&failure),
+        Err(ash::presentation::PresentationError::MissingFact)
+    ));
+}
+
+#[test]
 fn bare_projection_failures_keep_their_cause_or_limit() {
     use ash::{
         message::{Catalogue, Locale},
@@ -186,15 +232,9 @@ fn bare_projection_failures_keep_their_cause_or_limit() {
 #[test]
 fn missing_source_context_fallback_marks_the_gap_and_excludes_runtime() {
     let source = ash::source::SourceFile::new("unretained.ash", "\r").unwrap();
-    let span = source
-        .span(ash::source::ByteRange::new(0, 1).unwrap())
-        .unwrap();
     let failure = FileFailure::from(PipelineFailure::Syntax(Box::new(
         ash::driver::SyntaxFailure {
-            lexical: vec![ash::diagnostic::Diagnostic::new(
-                ash::lexer::LexReason::BareCarriageReturn,
-                ash::diagnostic::SourceLabel::new(span, "bare carriage return"),
-            )],
+            lexical: ash::lexer::lex(&source).unwrap().diagnostics,
             parser: Vec::new(),
             resource: None,
         },
