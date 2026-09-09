@@ -1170,6 +1170,17 @@ resolve-work-state = The compiler's name-resolution state { $problem ->
     [block-binding] a block binding
     [function-body] a function body
     [tuple-element] a tuple element
+    [hook-body] a hook body
+    [registration-body] a registration body
+    [registration-initializer] a registration initializer
+    [cleanup-body] a cleanup body
+    [cleanup-initializer] a cleanup initializer
+    [resource-initializer] a resource initializer
+    [resource-body] a resource body
+    [lexical-evidence-application] a lexical evidence application
+    [lexical-method-body] a lexical method body
+    [lexical-method-group] a lexical method group
+    [request-operand] a request operand
    *[expression] an expression
     [match-pattern] a match pattern
     [function-pattern] a function parameter pattern

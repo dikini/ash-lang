@@ -9484,6 +9484,10 @@ impl Resolver {
                             span,
                             "hook body resolution produced no expression",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "hook-body",
+                            problem: "missing",
+                        })
                     })?;
                     expressions.push(self.finish_hook(effect, span, body)?);
                 }
@@ -9494,6 +9498,10 @@ impl Resolver {
                             span,
                             "missing registration body",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "registration-body",
+                            problem: "missing",
+                        })
                     })?;
                     let initializer = expressions.pop_owned().ok_or_else(|| {
                         error(
@@ -9501,12 +9509,20 @@ impl Resolver {
                             span,
                             "missing registration initializer",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "registration-initializer",
+                            problem: "missing",
+                        })
                     })?;
                     expressions.push(self.finish_registration(effect, span, initializer, body)?);
                 }
                 ResolveTask::FinishCleanup { span } => {
                     let body = expressions.pop_owned().ok_or_else(|| {
                         error(ResolveReason::InternalState, span, "missing cleanup body")
+                            .with_context(ResolveContext::WorkState {
+                                part: "cleanup-body",
+                                problem: "missing",
+                            })
                     })?;
                     let initializer = expressions.pop_owned().ok_or_else(|| {
                         error(
@@ -9514,6 +9530,10 @@ impl Resolver {
                             span,
                             "missing cleanup initializer",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "cleanup-initializer",
+                            problem: "missing",
+                        })
                     })?;
                     expressions.push(self.finish_cleanup(span, initializer, body)?);
                 }
@@ -9558,6 +9578,10 @@ impl Resolver {
                             span,
                             "resource initializer is missing",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "resource-initializer",
+                            problem: "missing",
+                        })
                     })?;
                     let identity =
                         self.allocate_type_variable(&source.identity, None, Kind::Type)?;
@@ -9664,6 +9688,10 @@ impl Resolver {
                             span,
                             "resource body is missing",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "resource-body",
+                            problem: "missing",
+                        })
                     })?;
                     self.scopes.truncate(scope_checkpoint);
                     self.type_scopes.truncate(type_scope_checkpoint);
@@ -9890,6 +9918,12 @@ impl Resolver {
                                         state.source.span,
                                         "lexical evidence application is missing",
                                     )
+                                    .with_context(
+                                        ResolveContext::WorkState {
+                                            part: "lexical-evidence-application",
+                                            problem: "missing",
+                                        },
+                                    )
                                 })?,
                                 method_groups: std::mem::replace(
                                     &mut state.groups,
@@ -9943,6 +9977,10 @@ impl Resolver {
                             equation.span,
                             "lexical method body is missing",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "lexical-method-body",
+                            problem: "missing",
+                        })
                     })?;
                     let binder = state
                         .groups
@@ -9954,6 +9992,10 @@ impl Resolver {
                                 equation.span,
                                 "lexical method group is missing",
                             )
+                            .with_context(ResolveContext::WorkState {
+                                part: "lexical-method-group",
+                                problem: "missing",
+                            })
                         })?
                         .binder
                         .id;
@@ -10168,6 +10210,10 @@ impl Resolver {
                 span,
                 "request operand resolution produced no expression",
             )
+            .with_context(ResolveContext::WorkState {
+                part: "request-operand",
+                problem: "missing",
+            })
         })?;
         expressions.push(ResolvedExpr {
             kind: ResolvedExprKind::Perform(ResolvedPerformExpr {
@@ -14777,6 +14823,67 @@ mod tests {
         let source = SourceFile::new("state.ash", "name").unwrap();
         let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
         for (part, problem, en, bg) in [
+            ("hook-body", "missing", "a hook body", "тяло на кука"),
+            (
+                "registration-body",
+                "missing",
+                "a registration body",
+                "тяло на регистрация",
+            ),
+            (
+                "registration-initializer",
+                "missing",
+                "a registration initializer",
+                "начален израз на регистрация",
+            ),
+            (
+                "cleanup-body",
+                "missing",
+                "a cleanup body",
+                "тяло на почистване",
+            ),
+            (
+                "cleanup-initializer",
+                "missing",
+                "a cleanup initializer",
+                "начален израз на почистване",
+            ),
+            (
+                "resource-initializer",
+                "missing",
+                "a resource initializer",
+                "начален израз на ресурс",
+            ),
+            (
+                "resource-body",
+                "missing",
+                "a resource body",
+                "тяло на ресурс",
+            ),
+            (
+                "lexical-evidence-application",
+                "missing",
+                "a lexical evidence application",
+                "прилагане на лексикално свидетелство",
+            ),
+            (
+                "lexical-method-body",
+                "missing",
+                "a lexical method body",
+                "тяло на лексикален метод",
+            ),
+            (
+                "lexical-method-group",
+                "missing",
+                "a lexical method group",
+                "група лексикални методи",
+            ),
+            (
+                "request-operand",
+                "missing",
+                "a request operand",
+                "операнд на заявка",
+            ),
             ("equation", "missing", "an equation", "уравнение"),
             (
                 "operational-pattern",

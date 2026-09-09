@@ -961,6 +961,10 @@ localization language. Color is not required for completion.
   JSON. All existing distinctions are covered by the locale/JSON table. The
   checks, reasons and spans are unchanged. All 135 resolver tests, five
   catalogue-contract tests and warnings-denied Clippy passed.
+- Eleven effect, cleanup, registration and lexical-evidence missing-value checks
+  now reuse work-state presentation. Only value names were added to the existing
+  template and table; no new error category or template was needed. All 135
+  resolver tests, five catalogue-contract tests and warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

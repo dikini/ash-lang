@@ -1171,6 +1171,17 @@ resolve-work-state = Вътрешното състояние на компила
     [block-binding] обвързване в блок
     [function-body] тяло на функция
     [tuple-element] елемент на кортеж
+    [hook-body] тяло на кука
+    [registration-body] тяло на регистрация
+    [registration-initializer] начален израз на регистрация
+    [cleanup-body] тяло на почистване
+    [cleanup-initializer] начален израз на почистване
+    [resource-initializer] начален израз на ресурс
+    [resource-body] тяло на ресурс
+    [lexical-evidence-application] прилагане на лексикално свидетелство
+    [lexical-method-body] тяло на лексикален метод
+    [lexical-method-group] група лексикални методи
+    [request-operand] операнд на заявка
    *[expression] израз
     [match-pattern] шаблон на съпоставяне
     [function-pattern] шаблон на параметър на функция
