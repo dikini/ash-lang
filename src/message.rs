@@ -150,6 +150,46 @@ macro_rules! messages {
 }
 
 messages! {
+    /// The compiler retained invalid source provenance for a resolved type.
+    kind_internal_invalid_type_provenance => "kind-internal-invalid-type-provenance" {},
+    /// The compiler paired a resolved type with source provenance belonging to a different owner.
+    kind_internal_type_provenance_owner => "kind-internal-type-provenance-owner" {},
+    /// The compiler attached composite-type provenance to an atomic resolved type.
+    kind_internal_atomic_type_provenance => "kind-internal-atomic-type-provenance" {},
+    /// The compiler paired a resolved type application with provenance for a different type form.
+    kind_internal_application_provenance => "kind-internal-application-provenance" {},
+    /// The compiler paired a resolved function type with provenance for a different type form.
+    kind_internal_function_provenance => "kind-internal-function-provenance" {},
+    /// The compiler paired a resolved tuple type with provenance for a different type form.
+    kind_internal_tuple_provenance => "kind-internal-tuple-provenance" {},
+    /// The compiler retained incomplete source provenance for a resolved tuple type.
+    kind_internal_incomplete_tuple_provenance => "kind-internal-incomplete-tuple-provenance" {},
+    /// The compiler retained incomplete element provenance for a resolved tuple type.
+    kind_internal_tuple_child_provenance => "kind-internal-tuple-child-provenance" {},
+    /// The compiler paired an effect-bearing type with provenance belonging to a different owner.
+    kind_internal_effect_type_provenance_owner => "kind-internal-effect-type-provenance-owner" {},
+    /// The compiler paired an effect-bearing type with provenance for a different type structure.
+    kind_internal_effect_type_provenance_shape => "kind-internal-effect-type-provenance-shape" {},
+    /// The compiler retained provenance that does not match the elements of an effect-bearing tuple type.
+    kind_internal_effect_tuple_provenance => "kind-internal-effect-tuple-provenance" {},
+    /// The compiler retained incomplete provenance for an effectful function type.
+    kind_internal_effect_function_provenance => "kind-internal-effect-function-provenance" {},
+    /// The compiler retained effect-argument provenance for a pure computation.
+    kind_internal_pure_computation_provenance => "kind-internal-pure-computation-provenance" {},
+    /// The compiler retained a computation row with a missing or invalid effect-argument provenance record.
+    kind_internal_computation_missing_arguments => "kind-internal-computation-missing-arguments" {},
+    /// The compiler retained surplus effect-argument provenance records for a computation row.
+    kind_internal_computation_surplus_arguments => "kind-internal-computation-surplus-arguments" {},
+    /// The compiler retained too few argument provenance records for an effect row.
+    kind_internal_row_missing_arguments => "kind-internal-row-missing-arguments" {},
+    /// The compiler retained surplus argument provenance records for an effect row.
+    kind_internal_row_surplus_arguments => "kind-internal-row-surplus-arguments" {},
+    /// The compiler retained a hook argument without its source occurrence.
+    kind_internal_hook_argument_source => "kind-internal-hook-argument-source" {},
+    /// The compiler retained different numbers of hook arguments and argument provenance records.
+    kind_internal_hook_argument_provenance => "kind-internal-hook-argument-provenance" {},
+    /// The compiler has no canonical effect declaration for a hook target.
+    kind_internal_hook_missing_effect => "kind-internal-hook-missing-effect" {},
     /// The compiler retained different binder counts in the source and checked implementation head.
     kind_internal_implementation_binder_count => "kind-internal-implementation-binder-count" {},
     /// The compiler retained different binder identities in the source and checked implementation head.

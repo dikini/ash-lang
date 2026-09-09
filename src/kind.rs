@@ -225,6 +225,26 @@ pub enum KindFailure {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum KindInternalCause {
+    InvalidTypeProvenance,
+    TypeProvenanceOwner,
+    AtomicTypeProvenance,
+    ApplicationProvenance,
+    FunctionProvenance,
+    TupleProvenance,
+    IncompleteTupleProvenance,
+    TupleChildProvenance,
+    EffectTypeProvenanceOwner,
+    EffectTypeProvenanceShape,
+    EffectTupleProvenance,
+    EffectFunctionProvenance,
+    PureComputationProvenance,
+    ComputationMissingArguments,
+    ComputationSurplusArguments,
+    RowMissingArguments,
+    RowSurplusArguments,
+    HookArgumentSource,
+    HookArgumentProvenance,
+    HookMissingEffect,
     ImplementationBinderCount,
     ImplementationBinderIdentity,
     SchemeBinderCount,
@@ -254,6 +274,26 @@ enum KindInternalCause {
 impl KindInternalCause {
     fn name(self) -> &'static str {
         match self {
+            Self::InvalidTypeProvenance => "invalid-type-provenance",
+            Self::TypeProvenanceOwner => "type-provenance-owner",
+            Self::AtomicTypeProvenance => "atomic-type-provenance",
+            Self::ApplicationProvenance => "application-provenance",
+            Self::FunctionProvenance => "function-provenance",
+            Self::TupleProvenance => "tuple-provenance",
+            Self::IncompleteTupleProvenance => "incomplete-tuple-provenance",
+            Self::TupleChildProvenance => "tuple-child-provenance",
+            Self::EffectTypeProvenanceOwner => "effect-type-provenance-owner",
+            Self::EffectTypeProvenanceShape => "effect-type-provenance-shape",
+            Self::EffectTupleProvenance => "effect-tuple-provenance",
+            Self::EffectFunctionProvenance => "effect-function-provenance",
+            Self::PureComputationProvenance => "pure-computation-provenance",
+            Self::ComputationMissingArguments => "computation-missing-arguments",
+            Self::ComputationSurplusArguments => "computation-surplus-arguments",
+            Self::RowMissingArguments => "row-missing-arguments",
+            Self::RowSurplusArguments => "row-surplus-arguments",
+            Self::HookArgumentSource => "hook-argument-source",
+            Self::HookArgumentProvenance => "hook-argument-provenance",
+            Self::HookMissingEffect => "hook-missing-effect",
             Self::ImplementationBinderCount => "implementation-binder-count",
             Self::ImplementationBinderIdentity => "implementation-binder-identity",
             Self::SchemeBinderCount => "scheme-binder-count",
@@ -282,6 +322,36 @@ impl KindInternalCause {
     }
     fn legacy(self) -> &'static str {
         match self {
+            Self::InvalidTypeProvenance => "a resolved type has invalid provenance",
+            Self::TypeProvenanceOwner => "a resolved type has mismatched provenance ownership",
+            Self::AtomicTypeProvenance => "an atomic resolved type has structural provenance",
+            Self::ApplicationProvenance => "a resolved application has non-application provenance",
+            Self::FunctionProvenance => "a resolved function has non-function provenance",
+            Self::TupleProvenance => "a resolved tuple has non-tuple provenance",
+            Self::IncompleteTupleProvenance => "a resolved tuple has incomplete provenance",
+            Self::TupleChildProvenance => "a resolved tuple has incomplete child provenance",
+            Self::EffectTypeProvenanceOwner => {
+                "an effect-bearing type has mismatched provenance ownership"
+            }
+            Self::EffectTypeProvenanceShape => {
+                "an effect-bearing type has mismatched structural provenance"
+            }
+            Self::EffectTupleProvenance => "an effect-bearing tuple has incomplete provenance",
+            Self::EffectFunctionProvenance => "an effectful function has incomplete provenance",
+            Self::PureComputationProvenance => {
+                "a pure computation retained effect-argument provenance"
+            }
+            Self::ComputationMissingArguments => {
+                "a computation row has incomplete effect-argument provenance"
+            }
+            Self::ComputationSurplusArguments => {
+                "a computation row has surplus effect-argument provenance"
+            }
+            Self::RowMissingArguments => "an effect row has incomplete argument provenance",
+            Self::RowSurplusArguments => "an effect row has surplus argument provenance",
+            Self::HookArgumentSource => "a hook argument has no source occurrence",
+            Self::HookArgumentProvenance => "a hook target has incomplete argument provenance",
+            Self::HookMissingEffect => "a hook target has no canonical effect declaration",
             Self::ImplementationBinderCount => {
                 "linked implementation-head mirrors retain different binder counts"
             }
@@ -332,6 +402,62 @@ impl KindInternalCause {
     }
     fn message(self) -> crate::message::Message<'static> {
         match self {
+            Self::InvalidTypeProvenance => {
+                crate::message::Message::kind_internal_invalid_type_provenance()
+            }
+            Self::TypeProvenanceOwner => {
+                crate::message::Message::kind_internal_type_provenance_owner()
+            }
+            Self::AtomicTypeProvenance => {
+                crate::message::Message::kind_internal_atomic_type_provenance()
+            }
+            Self::ApplicationProvenance => {
+                crate::message::Message::kind_internal_application_provenance()
+            }
+            Self::FunctionProvenance => {
+                crate::message::Message::kind_internal_function_provenance()
+            }
+            Self::TupleProvenance => crate::message::Message::kind_internal_tuple_provenance(),
+            Self::IncompleteTupleProvenance => {
+                crate::message::Message::kind_internal_incomplete_tuple_provenance()
+            }
+            Self::TupleChildProvenance => {
+                crate::message::Message::kind_internal_tuple_child_provenance()
+            }
+            Self::EffectTypeProvenanceOwner => {
+                crate::message::Message::kind_internal_effect_type_provenance_owner()
+            }
+            Self::EffectTypeProvenanceShape => {
+                crate::message::Message::kind_internal_effect_type_provenance_shape()
+            }
+            Self::EffectTupleProvenance => {
+                crate::message::Message::kind_internal_effect_tuple_provenance()
+            }
+            Self::EffectFunctionProvenance => {
+                crate::message::Message::kind_internal_effect_function_provenance()
+            }
+            Self::PureComputationProvenance => {
+                crate::message::Message::kind_internal_pure_computation_provenance()
+            }
+            Self::ComputationMissingArguments => {
+                crate::message::Message::kind_internal_computation_missing_arguments()
+            }
+            Self::ComputationSurplusArguments => {
+                crate::message::Message::kind_internal_computation_surplus_arguments()
+            }
+            Self::RowMissingArguments => {
+                crate::message::Message::kind_internal_row_missing_arguments()
+            }
+            Self::RowSurplusArguments => {
+                crate::message::Message::kind_internal_row_surplus_arguments()
+            }
+            Self::HookArgumentSource => {
+                crate::message::Message::kind_internal_hook_argument_source()
+            }
+            Self::HookArgumentProvenance => {
+                crate::message::Message::kind_internal_hook_argument_provenance()
+            }
+            Self::HookMissingEffect => crate::message::Message::kind_internal_hook_missing_effect(),
             Self::ImplementationBinderCount => {
                 crate::message::Message::kind_internal_implementation_binder_count()
             }
@@ -2031,9 +2157,9 @@ impl<'a> KindEnvironments<'a> {
     {
         if row.is_empty() {
             if !argument_provenance.is_empty() || !argument_roots.is_empty() {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "a pure computation retained effect-argument provenance",
+                    KindInternalCause::PureComputationProvenance,
                 ));
             }
             return Ok(());
@@ -2064,9 +2190,9 @@ impl<'a> KindEnvironments<'a> {
                     .next()
                     .and_then(|root| argument_provenance.get(*root))
                     .ok_or_else(|| {
-                        KindFailure::internal(
+                        KindFailure::internal_cause(
                             span,
-                            "a computation row has incomplete effect-argument provenance",
+                            KindInternalCause::ComputationMissingArguments,
                         )
                     })?;
                 let found = self.synthesize_with_ledger(
@@ -2104,9 +2230,9 @@ impl<'a> KindEnvironments<'a> {
             }
         }
         if roots.next().is_some() || argument_provenance.len() != argument_roots.len() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a computation row has surplus effect-argument provenance",
+                KindInternalCause::ComputationSurplusArguments,
             ));
         }
         Ok(())
@@ -2134,9 +2260,9 @@ impl<'a> KindEnvironments<'a> {
                 (Some(provenance), Some(root)) => provenance.nodes().get(root),
                 (None, None) => None,
                 _ => {
-                    return Err(KindFailure::internal(
+                    return Err(KindFailure::internal_cause(
                         span,
-                        "an effect-bearing type has mismatched provenance ownership",
+                        KindInternalCause::EffectTypeProvenanceOwner,
                     ));
                 }
             };
@@ -2147,9 +2273,9 @@ impl<'a> KindEnvironments<'a> {
                             elements: roots, ..
                         }) if roots.len() == elements.len() => Some(roots.as_ref()),
                         Some(_) => {
-                            return Err(KindFailure::internal(
+                            return Err(KindFailure::internal_cause(
                                 span,
-                                "an effect-bearing tuple has incomplete provenance",
+                                KindInternalCause::EffectTupleProvenance,
                             ));
                         }
                         None => None,
@@ -2193,9 +2319,9 @@ impl<'a> KindEnvironments<'a> {
                             }),
                         ) if effect_arguments.is_empty() => (Some(*domain), Some(*codomain)),
                         (_, Some(_)) => {
-                            return Err(KindFailure::internal(
+                            return Err(KindFailure::internal_cause(
                                 span,
-                                "an effect-bearing type has mismatched structural provenance",
+                                KindInternalCause::EffectTypeProvenanceShape,
                             ));
                         }
                         (_, None) => (None, None),
@@ -2228,9 +2354,9 @@ impl<'a> KindEnvironments<'a> {
                             Some(effect_arguments.as_ref()),
                         ),
                         Some(_) => {
-                            return Err(KindFailure::internal(
+                            return Err(KindFailure::internal_cause(
                                 span,
-                                "an effectful function has incomplete provenance",
+                                KindInternalCause::EffectFunctionProvenance,
                             ));
                         }
                         None => (None, None, None),
@@ -2319,10 +2445,7 @@ impl<'a> KindEnvironments<'a> {
             for (argument, parameter) in instance.arguments().iter().zip(parameters.iter()) {
                 let argument_root = match roots.as_mut() {
                     Some(roots) => Some(*roots.next().ok_or_else(|| {
-                        KindFailure::internal(
-                            span,
-                            "an effect row has incomplete argument provenance",
-                        )
+                        KindFailure::internal_cause(span, KindInternalCause::RowMissingArguments)
                     })?),
                     None => None,
                 };
@@ -2381,9 +2504,9 @@ impl<'a> KindEnvironments<'a> {
             }
         }
         if roots.is_some_and(|mut roots| roots.next().is_some()) {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "an effect row has surplus argument provenance",
+                KindInternalCause::RowSurplusArguments,
             ));
         }
         Ok(())
@@ -2533,9 +2656,9 @@ impl<'a> KindEnvironments<'a> {
                         (Some(provenance), Some(root)) => {
                             let Some(node) = provenance.nodes().get(root) else {
                                 charge_lookup_attempt(fallback_span, budget)?;
-                                return Err(KindFailure::internal(
+                                return Err(KindFailure::internal_cause(
                                     fallback_span,
-                                    "a resolved type has invalid provenance",
+                                    KindInternalCause::InvalidTypeProvenance,
                                 ));
                             };
                             Some(node)
@@ -2543,9 +2666,9 @@ impl<'a> KindEnvironments<'a> {
                         (None, None) => None,
                         _ => {
                             charge_lookup_attempt(fallback_span, budget)?;
-                            return Err(KindFailure::internal(
+                            return Err(KindFailure::internal_cause(
                                 fallback_span,
-                                "a resolved type has mismatched provenance ownership",
+                                KindInternalCause::TypeProvenanceOwner,
                             ));
                         }
                     };
@@ -2691,9 +2814,9 @@ impl<'a> KindEnvironments<'a> {
                                     Some(elements.iter())
                                 }
                                 Some(_) => {
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         span,
-                                        "a resolved tuple has non-tuple provenance",
+                                        KindInternalCause::TupleProvenance,
                                     ));
                                 }
                                 None => None,
@@ -2702,9 +2825,9 @@ impl<'a> KindEnvironments<'a> {
                                 .as_ref()
                                 .is_some_and(|roots| elements.len() != roots.len())
                             {
-                                return Err(KindFailure::internal(
+                                return Err(KindFailure::internal_cause(
                                     span,
-                                    "a resolved tuple has incomplete provenance",
+                                    KindInternalCause::IncompleteTupleProvenance,
                                 ));
                             }
                             let mut remaining = elements.iter();
@@ -2717,9 +2840,9 @@ impl<'a> KindEnvironments<'a> {
                                 let first_root = roots.as_mut().and_then(Iterator::next).copied();
                                 if provenance.is_some() && first_root.is_none() {
                                     charge_lookup_attempt(span, budget)?;
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         span,
-                                        "a resolved tuple has incomplete child provenance",
+                                        KindInternalCause::TupleChildProvenance,
                                     ));
                                 }
                                 push_continuation!(
@@ -2764,9 +2887,9 @@ impl<'a> KindEnvironments<'a> {
                                     ..
                                 }) => (Some(*function), Some(*argument), *argument_span),
                                 Some(_) => {
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         span,
-                                        "a resolved application has non-application provenance",
+                                        KindInternalCause::ApplicationProvenance,
                                     ));
                                 }
                                 None => (None, None, span),
@@ -2865,9 +2988,9 @@ impl<'a> KindEnvironments<'a> {
                                     (Some(*domain), Some(*codomain))
                                 }
                                 Some(_) => {
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         span,
-                                        "a resolved function has non-function provenance",
+                                        KindInternalCause::FunctionProvenance,
                                     ));
                                 }
                                 None => (None, None),
@@ -2946,9 +3069,9 @@ impl<'a> KindEnvironments<'a> {
                                 let root = roots.as_mut().and_then(Iterator::next).copied();
                                 if provenance.is_some() && root.is_none() {
                                     charge_lookup_attempt(span, budget)?;
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         span,
-                                        "a resolved tuple has incomplete child provenance",
+                                        KindInternalCause::TupleChildProvenance,
                                     ));
                                 }
                                 work.push(Continuation::Tuple {
@@ -4947,19 +5070,16 @@ fn check_hook_target_kind(
         .as_ref()
         .and_then(|effects| effects.get(&target.instance.effect()))
         .ok_or_else(|| {
-            KindFailure::internal(
-                target.span,
-                "a hook target has no canonical effect declaration",
-            )
+            KindFailure::internal_cause(target.span, KindInternalCause::HookMissingEffect)
         })?;
     // Elaboration owns the existing source-facing instance arity diagnostic.
     if parameters.len() != target.instance.arguments().len() {
         return Ok(());
     }
     if target.argument_provenance.len() != target.instance.arguments().len() {
-        return Err(KindFailure::internal(
+        return Err(KindFailure::internal_cause(
             target.span,
-            "a hook target has incomplete argument provenance",
+            KindInternalCause::HookArgumentProvenance,
         ));
     }
     for ((argument, provenance), parameter) in target
@@ -4970,7 +5090,7 @@ fn check_hook_target_kind(
         .zip(parameters.iter())
     {
         let span = provenance.span().ok_or_else(|| {
-            KindFailure::internal(target.span, "a hook argument has no source occurrence")
+            KindFailure::internal_cause(target.span, KindInternalCause::HookArgumentSource)
         })?;
         let found = environments.synthesize(argument, Some(provenance), span, budget)?;
         if !same_kind_with_budget(&parameter.kind, found.kind, budget).map_err(|()| {
@@ -5335,9 +5455,9 @@ fn require_fact_node(
         Ok(())
     } else {
         charge_lookup_attempt(span, budget)?;
-        Err(KindFailure::internal(
+        Err(KindFailure::internal_cause(
             span,
-            "an atomic resolved type has structural provenance",
+            KindInternalCause::AtomicTypeProvenance,
         ))
     }
 }
@@ -5362,6 +5482,26 @@ mod tests {
             KindInternalCause::DuplicateBinder,
             KindInternalCause::OwnerEffectRow,
             KindInternalCause::MissingOwnerBinder,
+            KindInternalCause::InvalidTypeProvenance,
+            KindInternalCause::TypeProvenanceOwner,
+            KindInternalCause::AtomicTypeProvenance,
+            KindInternalCause::ApplicationProvenance,
+            KindInternalCause::FunctionProvenance,
+            KindInternalCause::TupleProvenance,
+            KindInternalCause::IncompleteTupleProvenance,
+            KindInternalCause::TupleChildProvenance,
+            KindInternalCause::EffectTypeProvenanceOwner,
+            KindInternalCause::EffectTypeProvenanceShape,
+            KindInternalCause::EffectTupleProvenance,
+            KindInternalCause::EffectFunctionProvenance,
+            KindInternalCause::PureComputationProvenance,
+            KindInternalCause::ComputationMissingArguments,
+            KindInternalCause::ComputationSurplusArguments,
+            KindInternalCause::RowMissingArguments,
+            KindInternalCause::RowSurplusArguments,
+            KindInternalCause::HookArgumentSource,
+            KindInternalCause::HookArgumentProvenance,
+            KindInternalCause::HookMissingEffect,
             KindInternalCause::ImplementationBinderCount,
             KindInternalCause::ImplementationBinderIdentity,
             KindInternalCause::SchemeBinderCount,
