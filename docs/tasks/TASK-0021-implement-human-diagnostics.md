@@ -535,6 +535,17 @@ localization language. Color is not required for completion.
   constructor. All 84 focused tests and warnings-denied Clippy passed. This
   covers one of the six elaboration internal/resource reasons and brings the
   catalogue to 272 templates per locale. No checks or budgets changed.
+- Elaboration presentation now also covers coverage resources, type resources,
+  constraint resources and effect syntax reaching the pure Core path. Coverage
+  retains `UsefulnessError` in its public failure payload rather than discarding
+  the state/work distinction. Existing reason codes, legacy text, checks and
+  charges are unchanged. Resource wording names the affected work without
+  guessing whether an allocation refusal or deterministic budget caused it.
+  Both locales and JSON cover the five new cases. The 32 data/ADT tests,
+  two shared-budget tests and 86 diagnostic/catalogue tests passed, along with
+  warnings-denied Clippy.
+  Elaboration internal/resource coverage is five of six reasons, with 277
+  templates per locale. Generic internal state still needs retained causes.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

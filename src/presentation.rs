@@ -378,17 +378,16 @@ pub fn compile_interface_diagnostic<'a>(
     })
 }
 
-/// Exposes a compiler-owned Core construction failure without inventing a source span.
+/// Exposes a compiler-owned elaboration failure without inventing a source span.
 ///
 /// # Errors
 /// Returns unsupported for elaboration failures whose precise context is not yet presented.
 pub fn compile_elaboration_failure(
     error: &crate::elaborate::ElaborationFailure,
 ) -> Result<CompileDiagnostic<'static>, PresentationError> {
-    let crate::elaborate::ElaborationFailure::Core(cause) = error else {
-        return Err(PresentationError::Unsupported);
-    };
-    let (message, cause) = cause.diagnostic_message();
+    let (message, name, kind, value) = error
+        .diagnostic_message()
+        .ok_or(PresentationError::Unsupported)?;
     Ok(CompileDiagnostic {
         reason: error.reason_code().to_owned(),
         responsibility: "compiler",
@@ -396,9 +395,9 @@ pub fn compile_elaboration_failure(
         primary: None,
         related: Vec::new(),
         facts: vec![Fact {
-            name: "cause",
-            kind: "core-build-failure",
-            value: FactValue::Text(cause),
+            name,
+            kind,
+            value: FactValue::Text(value),
         }],
     })
 }

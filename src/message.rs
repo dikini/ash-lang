@@ -150,6 +150,16 @@ macro_rules! messages {
 }
 
 messages! {
+    /// The compiler ran out of resources for type checking and type construction.
+    compiler_type_resources => "compiler-type-resources" {},
+    /// The compiler ran out of resources for interface and constraint processing.
+    compiler_constraint_resources => "compiler-constraint-resources" {},
+    /// The compiler tried to lower effect syntax through its pure Core path.
+    effect_core_unavailable => "effect-core-unavailable" {},
+    /// Pattern coverage analysis reached the compiler's state limit.
+    coverage_state_limit => "coverage-state-limit" {},
+    /// The compiler could not complete pattern coverage analysis within its work resources.
+    coverage_work_limit => "coverage-work-limit" {},
     /// The compiler has exhausted its Core arena identities.
     core_build_arena_id_exhausted => "core-build-arena-id-exhausted" {},
     /// The compiler has exhausted the node identities in this Core arena.

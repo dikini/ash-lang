@@ -637,7 +637,7 @@ pub enum ElaborationFailure {
     /// Effect syntax reached a checkpoint that still retains only pure Core.
     EffectCoreUnavailable,
     /// Pattern coverage exceeded its deterministic compiler resource budget.
-    CoverageResourceExhausted,
+    CoverageResourceExhausted(UsefulnessError),
     /// Cumulative inference and type construction exceeded its work budget.
     TypeResourceExhausted,
     /// Graph-wide interface and constraint processing exceeded its work budget.
@@ -645,6 +645,46 @@ pub enum ElaborationFailure {
 }
 
 impl ElaborationFailure {
+    pub(crate) fn diagnostic_message(
+        &self,
+    ) -> Option<(
+        crate::message::Message<'static>,
+        &'static str,
+        &'static str,
+        &'static str,
+    )> {
+        use crate::message::Message;
+        Some(match self {
+            Self::Core(cause) => {
+                let (message, cause) = cause.diagnostic_message();
+                (message, "cause", "core-build-failure", cause)
+            }
+            Self::CoverageResourceExhausted(cause) => {
+                let (message, resource) = cause.diagnostic_message();
+                (message, "resource", "resource", resource)
+            }
+            Self::TypeResourceExhausted => (
+                Message::compiler_type_resources(),
+                "resource",
+                "resource",
+                "type-work",
+            ),
+            Self::ConstraintResourceExhausted => (
+                Message::compiler_constraint_resources(),
+                "resource",
+                "resource",
+                "constraint-work",
+            ),
+            Self::EffectCoreUnavailable => (
+                Message::effect_core_unavailable(),
+                "cause",
+                "elaboration-failure",
+                "effect-core-unavailable",
+            ),
+            Self::InvalidState => return None,
+        })
+    }
+
     /// Returns the stable reason code owned by this elaboration failure.
     #[must_use]
     pub const fn reason_code(&self) -> &'static str {
@@ -652,7 +692,7 @@ impl ElaborationFailure {
             Self::Core(_) => "internal.core-build",
             Self::InvalidState => "type.internal",
             Self::EffectCoreUnavailable => "effect.core-unavailable",
-            Self::CoverageResourceExhausted => "internal.resource.coverage",
+            Self::CoverageResourceExhausted(_) => "internal.resource.coverage",
             Self::TypeResourceExhausted => "internal.resource.type-work",
             Self::ConstraintResourceExhausted => "internal.resource.constraint-work",
         }
@@ -667,7 +707,7 @@ impl fmt::Display for ElaborationFailure {
             Self::EffectCoreUnavailable => {
                 formatter.write_str("effect syntax requires the effect Core checkpoint")
             }
-            Self::CoverageResourceExhausted => {
+            Self::CoverageResourceExhausted(_) => {
                 formatter.write_str("pattern coverage resource limit exceeded")
             }
             Self::TypeResourceExhausted => formatter.write_str("type work resource limit exceeded"),
@@ -1065,8 +1105,8 @@ impl From<BuildError> for TypeError {
 }
 
 impl From<UsefulnessError> for TypeError {
-    fn from(_: UsefulnessError) -> Self {
-        Self::Internal(ElaborationFailure::CoverageResourceExhausted)
+    fn from(cause: UsefulnessError) -> Self {
+        Self::Internal(ElaborationFailure::CoverageResourceExhausted(cause))
     }
 }
 
@@ -27198,7 +27238,9 @@ mod tests {
 
         assert_eq!(
             failure,
-            TypeError::Internal(ElaborationFailure::CoverageResourceExhausted)
+            TypeError::Internal(ElaborationFailure::CoverageResourceExhausted(
+                UsefulnessError::WorkLimit
+            ))
         );
     }
 
@@ -27228,7 +27270,9 @@ mod tests {
 
         assert_eq!(
             failure,
-            TypeError::Internal(ElaborationFailure::CoverageResourceExhausted)
+            TypeError::Internal(ElaborationFailure::CoverageResourceExhausted(
+                UsefulnessError::WorkLimit
+            ))
         );
     }
 

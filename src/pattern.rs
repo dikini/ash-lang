@@ -126,6 +126,16 @@ pub enum UsefulnessError {
     WorkLimit,
 }
 
+impl UsefulnessError {
+    pub(crate) fn diagnostic_message(self) -> (crate::message::Message<'static>, &'static str) {
+        use crate::message::Message;
+        match self {
+            Self::StateLimit => (Message::coverage_state_limit(), "coverage-states"),
+            Self::WorkLimit => (Message::coverage_work_limit(), "coverage-work"),
+        }
+    }
+}
+
 /// Shared deterministic work budget for all usefulness queries in one pass.
 #[derive(Clone, Debug)]
 pub struct UsefulnessBudget {

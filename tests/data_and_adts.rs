@@ -607,7 +607,10 @@ fn an_over_budget_case_group_reports_an_internal_resource_failure() {
     let PipelineFailure::Typing(TypeError::Internal(failure)) = error else {
         panic!("coverage exhaustion must remain an internal resource failure")
     };
-    assert_eq!(failure, ElaborationFailure::CoverageResourceExhausted);
+    assert_eq!(
+        failure,
+        ElaborationFailure::CoverageResourceExhausted(ash::pattern::UsefulnessError::WorkLimit)
+    );
 }
 
 #[test]
@@ -635,7 +638,10 @@ fn a_wide_tuple_case_group_charges_type_and_specialization_cells() {
     let PipelineFailure::Typing(TypeError::Internal(failure)) = error else {
         panic!("coverage exhaustion must remain an internal resource failure")
     };
-    assert_eq!(failure, ElaborationFailure::CoverageResourceExhausted);
+    assert_eq!(
+        failure,
+        ElaborationFailure::CoverageResourceExhausted(ash::pattern::UsefulnessError::WorkLimit)
+    );
 }
 
 #[test]

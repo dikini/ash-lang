@@ -1896,6 +1896,92 @@ fn interface_parameter_causes_are_precise() {
 }
 
 #[test]
+fn elaboration_failures_identify_resources_and_the_core_path() {
+    use ash::{
+        elaborate::ElaborationFailure,
+        message::{Catalogue, Locale},
+        presentation::{compile_elaboration_failure, write_human, write_json},
+    };
+    for (error, name, value, explanation) in [
+        (
+            ElaborationFailure::TypeResourceExhausted,
+            "resource",
+            "type-work",
+            "The compiler ran out of resources for type checking and type construction.",
+        ),
+        (
+            ElaborationFailure::ConstraintResourceExhausted,
+            "resource",
+            "constraint-work",
+            "The compiler ran out of resources for interface and constraint processing.",
+        ),
+        (
+            ElaborationFailure::EffectCoreUnavailable,
+            "cause",
+            "effect-core-unavailable",
+            "The compiler tried to lower effect syntax through its pure Core path.",
+        ),
+    ] {
+        let view = compile_elaboration_failure(&error).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(explanation));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], error.reason_code());
+        assert_eq!(json["responsibility"], "compiler");
+        assert_eq!(json["facts"][0]["name"], name);
+        assert_eq!(json["facts"][0]["value"], value);
+    }
+    assert!(compile_elaboration_failure(&ElaborationFailure::InvalidState).is_err());
+}
+
+#[test]
+fn coverage_resource_messages_preserve_the_exhausted_limit() {
+    use ash::{
+        message::{Catalogue, Locale},
+        pattern::UsefulnessError,
+        presentation::{compile_elaboration_failure, write_human, write_json},
+    };
+    for (cause, name, explanation) in [
+        (
+            UsefulnessError::StateLimit,
+            "coverage-states",
+            "Pattern coverage analysis reached the compiler's state limit.",
+        ),
+        (
+            UsefulnessError::WorkLimit,
+            "coverage-work",
+            "The compiler could not complete pattern coverage analysis within its work resources.",
+        ),
+    ] {
+        let TypeError::Internal(error) = TypeError::from(cause) else {
+            panic!("expected compiler failure")
+        };
+        let view = compile_elaboration_failure(&error).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(explanation));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], "internal.resource.coverage");
+        assert_eq!(json["responsibility"], "compiler");
+        assert_eq!(json["facts"][0]["name"], "resource");
+        assert_eq!(json["facts"][0]["value"], name);
+    }
+}
+
+#[test]
 fn core_construction_messages_preserve_failure_causes() {
     use ash::{
         core::BuildError,
