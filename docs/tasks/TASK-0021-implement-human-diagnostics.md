@@ -970,6 +970,12 @@ localization language. Color is not required for completion.
   newtype representations and method parameters. The locale/JSON table retains
   those distinctions. All 135 resolver tests, five catalogue-contract tests and
   warnings-denied Clippy passed; no checks or original reasons changed.
+- Converted the remaining grouped shape/consistency explanations at 47 sites,
+  including duplicate names, empty vectors and conflicting imported metadata.
+  Work-state facts retain each component and problem. An existing kind-context
+  regression caught boundary context replacing the underlying cause; context
+  attachment now preserves any existing cause. All 135 resolver tests, five
+  catalogue-contract tests and warnings-denied Clippy passed after that fix.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

@@ -920,7 +920,10 @@ impl ResolveIdentitySpace {
 
 impl ResolveError {
     fn with_context(mut self, context: ResolveContext) -> Self {
-        self.1 = Some(context);
+        // A contextual boundary must not replace a more specific retained cause.
+        if self.1.is_none() {
+            self.1 = Some(context);
+        }
         self
     }
 
@@ -1866,7 +1869,11 @@ fn build_export_candidate(
                     ResolveReason::InternalState,
                     source.name.span,
                     "a private nominal reached public export candidate construction",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "public-nominal-visibility",
+                    problem: "wrong",
+                }));
             }
         };
         candidate
@@ -2168,14 +2175,22 @@ fn validate_newtype_shape(
             ResolveReason::InternalState,
             declaration.span,
             "a projected newtype does not retain exactly one constructor",
-        ));
+        )
+        .with_context(ResolveContext::WorkState {
+            part: "projected-newtype-constructor",
+            problem: "not-single",
+        }));
     };
     let [representation] = constructor.fields.as_slice() else {
         return Err(error(
             ResolveReason::InternalState,
             constructor.span,
             "a projected newtype does not retain exactly one representation",
-        ));
+        )
+        .with_context(ResolveContext::WorkState {
+            part: "projected-newtype-representation",
+            problem: "not-single",
+        }));
     };
     if constructor.name.text != declaration.name.text {
         let mut diagnostic = Diagnostic::new(
@@ -2842,7 +2857,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 module_span,
                 "the resolver retained mismatched effect preparation records",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "effect-preparation",
+                problem: "mismatch",
+            }));
         }
         let mut resolved_effects = Vec::new();
         let mut registry_parameters = Vec::new();
@@ -2863,7 +2882,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     declaration.span,
                     "the resolver retained mismatched operation identities",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "operation-identities",
+                    problem: "mismatch",
+                }));
             }
             for parameter in &parameters {
                 registry_parameters.push(self.clone_type_variable_for_retention(
@@ -2943,7 +2966,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 declaration.span,
                 "the projected interface parameter vector is empty",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "interface-parameters",
+                problem: "empty",
+            }));
         }
         validate_interface_type_parameters(
             &declaration.parameters,
@@ -2973,6 +3000,10 @@ impl Resolver {
                 declaration.span,
                 "the projected interface parameter vector is empty",
             )
+            .with_context(ResolveContext::WorkState {
+                part: "interface-parameters",
+                problem: "empty",
+            })
         })?;
         let mut methods = Vec::new();
         methods
@@ -3048,7 +3079,11 @@ impl Resolver {
                     .last()
                     .map_or(module_span, |declaration| declaration.span),
                 "the resolver retained mismatched interface preparation records",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "interface-preparation",
+                problem: "mismatch",
+            }));
         }
 
         let mut resolved = ResolvedInterfaceBuffer(Vec::with_capacity(declarations.len()));
@@ -3063,7 +3098,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     declaration.span,
                     "the resolver retained mismatched interface method preparation records",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "interface-method-preparation",
+                    problem: "mismatch",
+                }));
             }
             retained_type_variables
                 .try_reserve(pending.parameters.len())
@@ -3144,7 +3183,11 @@ impl Resolver {
                             ResolveReason::InternalState,
                             method.span,
                             "an interface method type scope repeats a prepared binder",
-                        ));
+                        )
+                        .with_context(ResolveContext::WorkState {
+                            part: "prepared-method-binder",
+                            problem: "duplicate",
+                        }));
                     }
                 }
                 self.type_scopes.try_reserve(1).map_err(|_| {
@@ -3214,7 +3257,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 implementation.head.span,
                 "the projected implementation head argument vector is empty",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "implementation-head-arguments",
+                problem: "empty",
+            }));
         }
         for head_argument in &implementation.head.arguments {
             collect_free_type_names(
@@ -3830,7 +3877,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     import_span,
                     "an export summary contains duplicate term spellings",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "export-term-name",
+                    problem: "duplicate",
+                }));
             }
         }
 
@@ -3857,7 +3908,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     import_span,
                     "an export summary contains duplicate interface spellings",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "export-interface-name",
+                    problem: "duplicate",
+                }));
             }
         }
 
@@ -3871,7 +3926,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     import_span,
                     "an export summary contains duplicate effect spellings",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "export-effect-name",
+                    problem: "duplicate",
+                }));
             }
             let fact = summary.effect(spelling).ok_or_else(|| {
                 error(
@@ -3934,7 +3993,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "alternate effect routes disagree on the canonical fact",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "alternate-effect-fact",
+                    problem: "mismatch",
+                }));
             }
             return Ok(());
         }
@@ -3998,7 +4061,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 span,
                 "an interface summary contains an identity at the wrong visibility boundary",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "interface-visibility",
+                problem: "wrong",
+            }));
         }
         if let Some(existing) = self.imported.interface(exported.id) {
             let mut nominal_identities = MatchedNominalIdentities::default();
@@ -4015,7 +4082,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "alternate interface routes disagree on the checked fact",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "alternate-interface-fact",
+                    problem: "mismatch",
+                }));
             }
             self.compare_retained_nominal_closure(&nominal_identities, summary, span)?;
             self.imported.merge_interface_route(
@@ -4071,7 +4142,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "an interface summary contains a method from another interface",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "method-interface-owner",
+                    problem: "wrong",
+                }));
             }
             let authority_work = method.authoritative_type_parameters().len();
             if authority_work != 0 {
@@ -4147,7 +4222,11 @@ impl Resolver {
                         context,
                         span,
                         "an imported method authority disagrees with its checked mirror",
-                    ),
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "imported-method-authority",
+                        problem: "mismatch",
+                    }),
                     ResolvedBuildFailure::TypeResource => error(
                         ResolveReason::TypeResourceExhausted,
                         span,
@@ -4162,7 +4241,11 @@ impl Resolver {
                         ResolveReason::InternalState,
                         span,
                         "an imported method authority disagrees with its checked mirror",
-                    ),
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "imported-method-authority",
+                        problem: "mismatch",
+                    }),
                 })?,
             );
             if authority_work != 0 {
@@ -4247,7 +4330,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 span,
                 "an implementation summary contains an invalid authorization route",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "implementation-authorization",
+                problem: "wrong",
+            }));
         }
         if let Some(existing) = self.imported.implementation(fact.id) {
             let mut nominal_identities = MatchedNominalIdentities::default();
@@ -4264,7 +4351,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "alternate implementation routes disagree on the checked fact",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "alternate-implementation-fact",
+                    problem: "mismatch",
+                }));
             }
             self.compare_retained_nominal_closure(&nominal_identities, summary, span)?;
         }
@@ -4497,7 +4588,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "an implementation summary contains an invalid prerequisite identity",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "implementation-prerequisite",
+                    problem: "wrong",
+                }));
             }
             for argument in prerequisite.arguments() {
                 self.constraint_work.charge_type(argument).map_err(|()| {
@@ -4594,6 +4689,10 @@ impl Resolver {
                     span,
                     "an implementation summary has an incomplete method relation",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "implementation-method-relation",
+                    problem: "incomplete",
+                })
             })?;
             let expected_parameter_count = fact
                 .head_parameters
@@ -4619,7 +4718,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "an implementation summary contains an unauthenticated method scheme",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "implementation-method-scheme",
+                    problem: "unvalidated",
+                }));
             }
             let parameters_match = same_kinded_parameters_with_two_binder_slices(
                 &method.scheme.type_parameters,
@@ -4651,7 +4754,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "an implementation summary contains an unauthenticated method scheme",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "implementation-method-scheme",
+                    problem: "unvalidated",
+                }));
             }
             self.constraint_work
                 .charge_type(&method.scheme.value_type)
@@ -4786,7 +4893,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 span,
                 "an implementation route rank was retained twice",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "implementation-route-rank",
+                problem: "duplicate",
+            }));
         }
         if public_authorization.is_some()
             && self
@@ -4798,7 +4909,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 span,
                 "a public implementation route rank was retained twice",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "public-implementation-route-rank",
+                problem: "duplicate",
+            }));
         }
         self.imported
             .insert_implementation(cloned_fact, authorization, public_authorization);
@@ -4852,7 +4967,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "alternate global routes disagree on the checked fact",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "alternate-global-fact",
+                    problem: "mismatch",
+                }));
             }
             self.compare_retained_nominal_closure(&nominal_identities, summary, span)?;
             return Ok(());
@@ -5435,7 +5554,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "alternate routes disagree on retained nominal metadata",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "alternate-nominal-metadata",
+                    problem: "mismatch",
+                }));
             }
         }
         Ok(())
@@ -5520,7 +5643,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "an ordinary opaque type cannot retain a canonical representation",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "opaque-data-representation",
+                    problem: "extra",
+                }));
             }
             let prepared = self
                 .imported
@@ -5640,7 +5767,11 @@ impl Resolver {
                         ResolveReason::InternalState,
                         span,
                         "alternate constructor routes disagree on the checked fact",
-                    ));
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "alternate-constructor-fact",
+                        problem: "mismatch",
+                    }));
                 }
                 constructor_routes.push(ValidatedImportedConstructorRoute {
                     exported,
@@ -5702,7 +5833,11 @@ impl Resolver {
                         ResolveReason::InternalState,
                         span,
                         "alternate constructor routes disagree on retained nominal metadata",
-                    ));
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "constructor-route-nominal",
+                        problem: "mismatch",
+                    }));
                 }
             } else {
                 let validated = self
@@ -6440,7 +6575,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 application.span,
                 "the projected interface argument vector is empty",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "interface-arguments",
+                problem: "empty",
+            }));
         }
         let mut arguments = ResolvedTypeOccurrenceBuffer(Vec::new());
         arguments
@@ -6620,7 +6759,11 @@ impl Resolver {
                         ResolveReason::InternalState,
                         definition.span,
                         "the equational definition has no clause",
-                    ));
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "definition-clause",
+                        problem: "missing",
+                    }));
                 }
                 for equation in &equational.equations {
                     if equational.interface.name.text != equation.name.text {
@@ -7116,6 +7259,12 @@ impl Resolver {
                                     implementation.span,
                                     "an implementation method group is empty",
                                 )
+                                .with_context(
+                                    ResolveContext::WorkState {
+                                        part: "implementation-method-group",
+                                        problem: "empty",
+                                    },
+                                )
                             })?;
                         group.binder =
                             Some(self.allocate_binder(&first.name.text, first.name.span)?);
@@ -7421,7 +7570,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 module_span,
                 "the resolver retained mismatched implementation plans",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "implementation-plans",
+                problem: "mismatch",
+            }));
         }
 
         let mut implementations =
@@ -7474,6 +7627,10 @@ impl Resolver {
                                 implementation.span,
                                 "the resolver retained an invalid method-group range",
                             )
+                            .with_context(ResolveContext::WorkState {
+                                part: "method-group-range",
+                                problem: "wrong",
+                            })
                         })?;
                     let first = equations.first().ok_or_else(|| {
                         error(
@@ -7481,6 +7638,10 @@ impl Resolver {
                             implementation.span,
                             "the resolver retained an empty method group",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "method-group",
+                            problem: "empty",
+                        })
                     })?;
                     let last = equations.last().ok_or_else(|| {
                         error(
@@ -7488,6 +7649,10 @@ impl Resolver {
                             implementation.span,
                             "the resolver retained an empty method group",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "method-group",
+                            problem: "empty",
+                        })
                     })?;
                     let span = first.span.cover(last.span).ok_or_else(|| {
                         error(
@@ -7495,6 +7660,10 @@ impl Resolver {
                             implementation.span,
                             "one implementation method group crosses source files",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "method-group-source",
+                            problem: "mismatch",
+                        })
                     })?;
                     let binder = group.binder.ok_or_else(|| {
                         error(
@@ -7714,7 +7883,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 declaration.span,
                 "a block-local nominal is not a newtype",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "local-nominal-kind",
+                problem: "wrong",
+            }));
         }
         let (constructor, representation) = validate_newtype_shape(declaration)?;
 
@@ -9358,6 +9531,10 @@ impl Resolver {
                     source.span,
                     "method equations cross source files",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "method-equation-source",
+                    problem: "mismatch",
+                })
             })?;
         Ok((
             ResolvedImplementationMethodGroup {
@@ -11198,12 +11375,20 @@ fn imported_nominal_merge_error(
             context,
             span,
             "imported routes disagree about nominal metadata",
-        ),
+        )
+        .with_context(ResolveContext::WorkState {
+            part: "imported-nominal-metadata",
+            problem: "mismatch",
+        }),
         ImportedNominalMergeFailure::Conflict => error(
             ResolveReason::InternalState,
             span,
             "imported routes disagree about nominal metadata",
-        ),
+        )
+        .with_context(ResolveContext::WorkState {
+            part: "imported-nominal-metadata",
+            problem: "mismatch",
+        }),
         ImportedNominalMergeFailure::TypeResource => error(
             ResolveReason::TypeResourceExhausted,
             span,
@@ -11226,7 +11411,11 @@ fn imported_fact_comparison_error(
             context,
             span,
             "alternate imported-fact comparison encountered invalid retained state",
-        ),
+        )
+        .with_context(ResolveContext::WorkState {
+            part: "imported-fact-comparison",
+            problem: "wrong",
+        }),
         ResolvedBuildFailure::TypeResource => error(
             ResolveReason::TypeResourceExhausted,
             span,
@@ -11241,7 +11430,11 @@ fn imported_fact_comparison_error(
             ResolveReason::InternalState,
             span,
             "alternate imported-fact comparison encountered invalid retained state",
-        ),
+        )
+        .with_context(ResolveContext::WorkState {
+            part: "imported-fact-comparison",
+            problem: "wrong",
+        }),
     }
 }
 
@@ -14967,6 +15160,247 @@ mod tests {
         let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
         for (part, problem, en, bg) in [
             (
+                "public-nominal-visibility",
+                "wrong",
+                "visibility of a nominal type in public exports",
+                "видимост на номинален тип в публичните експорти",
+            ),
+            (
+                "projected-newtype-constructor",
+                "not-single",
+                "the constructor of a projected newtype",
+                "конструктора на проектиран newtype",
+            ),
+            (
+                "projected-newtype-representation",
+                "not-single",
+                "the representation of a projected newtype",
+                "представянето на проектиран newtype",
+            ),
+            (
+                "effect-preparation",
+                "mismatch",
+                "effect preparation records",
+                "подготвителни записи за ефекти",
+            ),
+            (
+                "operation-identities",
+                "mismatch",
+                "operation identities",
+                "идентичности на операции",
+            ),
+            (
+                "interface-parameters",
+                "empty",
+                "the parameter vector of a projected interface",
+                "вектора от параметри на проектиран интерфейс",
+            ),
+            (
+                "interface-preparation",
+                "mismatch",
+                "interface preparation records",
+                "подготвителни записи за интерфейси",
+            ),
+            (
+                "interface-method-preparation",
+                "mismatch",
+                "interface method preparation records",
+                "подготвителни записи за методи на интерфейс",
+            ),
+            (
+                "prepared-method-binder",
+                "duplicate",
+                "a prepared binder in an interface method's type scope",
+                "подготвено обвързване в типовия обхват на метод на интерфейс",
+            ),
+            (
+                "implementation-head-arguments",
+                "empty",
+                "the argument vector of a projected implementation head",
+                "вектора от аргументи на проектирана глава на реализация",
+            ),
+            (
+                "export-term-name",
+                "duplicate",
+                "a term name in checked module information",
+                "име на терм в проверена информация за модул",
+            ),
+            (
+                "export-interface-name",
+                "duplicate",
+                "an interface name in checked module information",
+                "име на интерфейс в проверена информация за модул",
+            ),
+            (
+                "export-effect-name",
+                "duplicate",
+                "an effect name in checked module information",
+                "име на ефект в проверена информация за модул",
+            ),
+            (
+                "alternate-effect-fact",
+                "mismatch",
+                "canonical effect information from alternate import routes",
+                "канонична информация за ефект от алтернативни пътища на импорт",
+            ),
+            (
+                "interface-visibility",
+                "wrong",
+                "the visibility boundary of an imported interface identity",
+                "границата на видимост на импортирана идентичност на интерфейс",
+            ),
+            (
+                "alternate-interface-fact",
+                "mismatch",
+                "checked interface information from alternate import routes",
+                "проверена информация за интерфейс от алтернативни пътища на импорт",
+            ),
+            (
+                "method-interface-owner",
+                "wrong",
+                "interface ownership of an imported method",
+                "собствеността на импортиран метод от интерфейс",
+            ),
+            (
+                "imported-method-authority",
+                "mismatch",
+                "an imported method and its checked authority information",
+                "импортиран метод и проверената информация за неговите правомощия",
+            ),
+            (
+                "implementation-authorization",
+                "wrong",
+                "an imported implementation's authorization route",
+                "пътя на упълномощаване на импортирана реализация",
+            ),
+            (
+                "alternate-implementation-fact",
+                "mismatch",
+                "checked implementation information from alternate import routes",
+                "проверена информация за реализация от алтернативни пътища на импорт",
+            ),
+            (
+                "implementation-prerequisite",
+                "wrong",
+                "an imported implementation's prerequisite identity",
+                "идентичността на предпоставка на импортирана реализация",
+            ),
+            (
+                "implementation-method-relation",
+                "incomplete",
+                "an imported implementation's method relation",
+                "връзката между методите на импортирана реализация",
+            ),
+            (
+                "implementation-method-scheme",
+                "unvalidated",
+                "an imported implementation's method type scheme",
+                "типовата схема на метод на импортирана реализация",
+            ),
+            (
+                "implementation-route-rank",
+                "duplicate",
+                "an implementation route rank",
+                "ранг на път към реализация",
+            ),
+            (
+                "public-implementation-route-rank",
+                "duplicate",
+                "a public implementation route rank",
+                "ранг на публичен път към реализация",
+            ),
+            (
+                "alternate-global-fact",
+                "mismatch",
+                "checked global information from alternate import routes",
+                "проверена информация за глобална стойност от алтернативни пътища на импорт",
+            ),
+            (
+                "alternate-nominal-metadata",
+                "mismatch",
+                "nominal metadata retained through alternate import routes",
+                "номинални метаданни, запазени чрез алтернативни пътища на импорт",
+            ),
+            (
+                "opaque-data-representation",
+                "extra",
+                "a canonical representation for an opaque type that is not a newtype",
+                "канонично представяне на непрозрачен тип, който не е newtype",
+            ),
+            (
+                "alternate-constructor-fact",
+                "mismatch",
+                "checked constructor information from alternate import routes",
+                "проверена информация за конструктор от алтернативни пътища на импорт",
+            ),
+            (
+                "constructor-route-nominal",
+                "mismatch",
+                "nominal metadata retained through alternate constructor routes",
+                "номинални метаданни, запазени чрез алтернативни пътища към конструктор",
+            ),
+            (
+                "interface-arguments",
+                "empty",
+                "the argument vector of a projected interface application",
+                "вектора от аргументи на проектирано прилагане на интерфейс",
+            ),
+            (
+                "definition-clause",
+                "missing",
+                "a clause of an equational definition",
+                "клауза на уравнителна дефиниция",
+            ),
+            (
+                "implementation-method-group",
+                "empty",
+                "an implementation method group",
+                "група методи на реализация",
+            ),
+            (
+                "implementation-plans",
+                "mismatch",
+                "implementation plans",
+                "планове на реализации",
+            ),
+            (
+                "method-group-range",
+                "wrong",
+                "a method-group range",
+                "диапазон на група методи",
+            ),
+            ("method-group", "empty", "a method group", "група методи"),
+            (
+                "method-group-source",
+                "mismatch",
+                "source-file ownership within an implementation method group",
+                "принадлежност към изходен файл в група методи на реализация",
+            ),
+            (
+                "local-nominal-kind",
+                "wrong",
+                "the newtype declaration kind required for a block-local nominal",
+                "изисквания вид декларация newtype за локален номинален тип в блок",
+            ),
+            (
+                "method-equation-source",
+                "mismatch",
+                "source-file ownership of method equations",
+                "принадлежност към изходен файл на уравнения на метод",
+            ),
+            (
+                "imported-nominal-metadata",
+                "mismatch",
+                "nominal metadata from imported routes",
+                "номинални метаданни от пътища на импорт",
+            ),
+            (
+                "imported-fact-comparison",
+                "wrong",
+                "retained state used to compare imported information",
+                "запазено състояние за сравняване на импортирана информация",
+            ),
+            (
                 "private-constructor",
                 "missing",
                 "a private constructor",
@@ -15371,6 +15805,11 @@ mod tests {
                         "extra" => "unexpectedly retains",
                         "wrong" => "has the wrong value for",
                         "incomplete" => "is incomplete for",
+                        "not-single" => "does not retain exactly one value for",
+                        "mismatch" => "contains conflicting information for",
+                        "empty" => "is empty for",
+                        "duplicate" => "repeats",
+                        "unvalidated" => "cannot validate",
                         _ => unreachable!(),
                     };
                     assert!(output.contains(expected));

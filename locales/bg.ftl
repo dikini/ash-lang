@@ -1151,6 +1151,11 @@ resolve-work-state = Вътрешното състояние на компила
     [missing] не съдържа
     [extra] неочаквано съдържа
     [wrong] съдържа неправилна стойност за
+    [not-single] не запазва точно една стойност за
+    [mismatch] съдържа противоречива информация за
+    [empty] е празно за
+    [duplicate] повтаря
+    [unvalidated] не може да валидира
    *[incomplete] е непълно за
     } { $part ->
     [equation] уравнение
@@ -1211,6 +1216,47 @@ resolve-work-state = Вътрешното състояние на компила
     [pure-effect-origin] произход на аргументи на ефекти върху чиста функция
     [method-parameters] параметри на метод
     [resource-builtin-origin] произход в източника на вградена ресурсна операция
+    [public-nominal-visibility] видимост на номинален тип в публичните експорти
+    [projected-newtype-constructor] конструктора на проектиран newtype
+    [projected-newtype-representation] представянето на проектиран newtype
+    [effect-preparation] подготвителни записи за ефекти
+    [operation-identities] идентичности на операции
+    [interface-parameters] вектора от параметри на проектиран интерфейс
+    [interface-preparation] подготвителни записи за интерфейси
+    [interface-method-preparation] подготвителни записи за методи на интерфейс
+    [prepared-method-binder] подготвено обвързване в типовия обхват на метод на интерфейс
+    [implementation-head-arguments] вектора от аргументи на проектирана глава на реализация
+    [export-term-name] име на терм в проверена информация за модул
+    [export-interface-name] име на интерфейс в проверена информация за модул
+    [export-effect-name] име на ефект в проверена информация за модул
+    [alternate-effect-fact] канонична информация за ефект от алтернативни пътища на импорт
+    [interface-visibility] границата на видимост на импортирана идентичност на интерфейс
+    [alternate-interface-fact] проверена информация за интерфейс от алтернативни пътища на импорт
+    [method-interface-owner] собствеността на импортиран метод от интерфейс
+    [imported-method-authority] импортиран метод и проверената информация за неговите правомощия
+    [implementation-authorization] пътя на упълномощаване на импортирана реализация
+    [alternate-implementation-fact] проверена информация за реализация от алтернативни пътища на импорт
+    [implementation-prerequisite] идентичността на предпоставка на импортирана реализация
+    [implementation-method-relation] връзката между методите на импортирана реализация
+    [implementation-method-scheme] типовата схема на метод на импортирана реализация
+    [implementation-route-rank] ранг на път към реализация
+    [public-implementation-route-rank] ранг на публичен път към реализация
+    [alternate-global-fact] проверена информация за глобална стойност от алтернативни пътища на импорт
+    [alternate-nominal-metadata] номинални метаданни, запазени чрез алтернативни пътища на импорт
+    [opaque-data-representation] канонично представяне на непрозрачен тип, който не е newtype
+    [alternate-constructor-fact] проверена информация за конструктор от алтернативни пътища на импорт
+    [constructor-route-nominal] номинални метаданни, запазени чрез алтернативни пътища към конструктор
+    [interface-arguments] вектора от аргументи на проектирано прилагане на интерфейс
+    [definition-clause] клауза на уравнителна дефиниция
+    [implementation-method-group] група методи на реализация
+    [implementation-plans] планове на реализации
+    [method-group-range] диапазон на група методи
+    [method-group] група методи
+    [method-group-source] принадлежност към изходен файл в група методи на реализация
+    [local-nominal-kind] изисквания вид декларация newtype за локален номинален тип в блок
+    [method-equation-source] принадлежност към изходен файл на уравнения на метод
+    [imported-nominal-metadata] номинални метаданни от пътища на импорт
+    [imported-fact-comparison] запазено състояние за сравняване на импортирана информация
    *[expression] израз
     [match-pattern] шаблон на съпоставяне
     [function-pattern] шаблон на параметър на функция

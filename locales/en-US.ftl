@@ -1150,6 +1150,11 @@ resolve-work-state = The compiler's name-resolution state { $problem ->
     [missing] is missing
     [extra] unexpectedly retains
     [wrong] has the wrong value for
+    [not-single] does not retain exactly one value for
+    [mismatch] contains conflicting information for
+    [empty] is empty for
+    [duplicate] repeats
+    [unvalidated] cannot validate
    *[incomplete] is incomplete for
     } { $part ->
     [equation] an equation
@@ -1210,6 +1215,47 @@ resolve-work-state = The compiler's name-resolution state { $problem ->
     [pure-effect-origin] effect-argument provenance on a pure function
     [method-parameters] method parameters
     [resource-builtin-origin] the source origin of a resource builtin
+    [public-nominal-visibility] visibility of a nominal type in public exports
+    [projected-newtype-constructor] the constructor of a projected newtype
+    [projected-newtype-representation] the representation of a projected newtype
+    [effect-preparation] effect preparation records
+    [operation-identities] operation identities
+    [interface-parameters] the parameter vector of a projected interface
+    [interface-preparation] interface preparation records
+    [interface-method-preparation] interface method preparation records
+    [prepared-method-binder] a prepared binder in an interface method's type scope
+    [implementation-head-arguments] the argument vector of a projected implementation head
+    [export-term-name] a term name in checked module information
+    [export-interface-name] an interface name in checked module information
+    [export-effect-name] an effect name in checked module information
+    [alternate-effect-fact] canonical effect information from alternate import routes
+    [interface-visibility] the visibility boundary of an imported interface identity
+    [alternate-interface-fact] checked interface information from alternate import routes
+    [method-interface-owner] interface ownership of an imported method
+    [imported-method-authority] an imported method and its checked authority information
+    [implementation-authorization] an imported implementation's authorization route
+    [alternate-implementation-fact] checked implementation information from alternate import routes
+    [implementation-prerequisite] an imported implementation's prerequisite identity
+    [implementation-method-relation] an imported implementation's method relation
+    [implementation-method-scheme] an imported implementation's method type scheme
+    [implementation-route-rank] an implementation route rank
+    [public-implementation-route-rank] a public implementation route rank
+    [alternate-global-fact] checked global information from alternate import routes
+    [alternate-nominal-metadata] nominal metadata retained through alternate import routes
+    [opaque-data-representation] a canonical representation for an opaque type that is not a newtype
+    [alternate-constructor-fact] checked constructor information from alternate import routes
+    [constructor-route-nominal] nominal metadata retained through alternate constructor routes
+    [interface-arguments] the argument vector of a projected interface application
+    [definition-clause] a clause of an equational definition
+    [implementation-method-group] an implementation method group
+    [implementation-plans] implementation plans
+    [method-group-range] a method-group range
+    [method-group] a method group
+    [method-group-source] source-file ownership within an implementation method group
+    [local-nominal-kind] the newtype declaration kind required for a block-local nominal
+    [method-equation-source] source-file ownership of method equations
+    [imported-nominal-metadata] nominal metadata from imported routes
+    [imported-fact-comparison] retained state used to compare imported information
    *[expression] an expression
     [match-pattern] a match pattern
     [function-pattern] a function parameter pattern
