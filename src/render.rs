@@ -2,6 +2,9 @@
 
 use std::fmt::Write;
 
+mod runtime;
+pub use runtime::{PreparedRuntimeMessages, write_runtime_human, write_runtime_short};
+
 use crate::{
     diagnostic::{Diagnostic, compare_source_spans},
     driver::{FileFailure, Observation, PipelineFailure, SyntaxFailure},

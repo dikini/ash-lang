@@ -1,6 +1,7 @@
-//! Typed compile-time messages and embedded translations.
+//! Typed diagnostic messages and embedded translations.
 //!
 //! This allocating formatter is not the runtime resource-failure reporter.
+//! Runtime text is prepared with it before execution, then borrowed by reporting.
 
 use fluent_bundle::{FluentArgs, FluentBundle, FluentResource};
 use std::{borrow::Cow, path::Path};
@@ -150,6 +151,62 @@ macro_rules! messages {
 }
 
 messages! {
+    runtime_missing_node => "runtime-missing-node" {},
+    runtime_unexpected_primitive_value => "runtime-unexpected-primitive-value" {},
+    runtime_unexpected_function_value => "runtime-unexpected-function-value" {},
+    runtime_missing_binding => "runtime-missing-binding" {},
+    runtime_unexpected_recursive_binding => "runtime-unexpected-recursive-binding" {},
+    runtime_environment_capacity => "runtime-environment-capacity" {},
+    runtime_invalid_control_state => "runtime-invalid-control-state" {},
+    runtime_heap_capacity => "runtime-heap-capacity" {},
+    runtime_captured_control_capacity => "runtime-captured-control-capacity" {},
+    runtime_resource_capacity => "runtime-resource-capacity" {},
+    runtime_invalid_location => "runtime-invalid-location" {},
+    runtime_uninitialized_location => "runtime-uninitialized-location" {},
+    runtime_alias_loop => "runtime-alias-loop" {},
+    runtime_impossible_match => "runtime-impossible-match" {},
+    runtime_capacity_exhausted => "runtime-capacity-exhausted" {},
+    runtime_allocator_refused => "runtime-allocator-refused" {},
+    runtime_storage_reservation_failed => "runtime-storage-reservation-failed" {},
+    runtime_work_budget_exhausted => "runtime-work-budget-exhausted" {},
+    runtime_phase_acquisition => "runtime-phase-acquisition" {},
+    runtime_phase_capture => "runtime-phase-capture" {},
+    runtime_phase_evaluation => "runtime-phase-evaluation" {},
+    runtime_phase_cleanup => "runtime-phase-cleanup" {},
+    runtime_phase_access => "runtime-phase-access" {},
+    runtime_phase_teardown => "runtime-phase-teardown" {},
+    runtime_phase_diagnostic_preparation => "runtime-phase-diagnostic-preparation" {},
+    runtime_resource_type_disposal => "runtime-resource-type-disposal" {},
+    runtime_resource_kind_disposal => "runtime-resource-kind-disposal" {},
+    runtime_resource_environment_disposal => "runtime-resource-environment-disposal" {},
+    runtime_resource_captured_disposal => "runtime-resource-captured-disposal" {},
+    runtime_resource_work_units => "runtime-resource-work-units" {},
+    runtime_resource_resource_owners => "runtime-resource-resource-owners" {},
+    runtime_resource_cleanup_owners => "runtime-resource-cleanup-owners" {},
+    runtime_resource_registration_owners => "runtime-resource-registration-owners" {},
+    runtime_resource_registration_keys => "runtime-resource-registration-keys" {},
+    runtime_resource_registration_invocations => "runtime-resource-registration-invocations" {},
+    runtime_resource_activation_keys => "runtime-resource-activation-keys" {},
+    runtime_resource_environment_bindings => "runtime-resource-environment-bindings" {},
+    runtime_resource_frame_storage => "runtime-resource-frame-storage" {},
+    runtime_resource_effect_trace => "runtime-resource-effect-trace" {},
+    runtime_resource_evaluation_trace => "runtime-resource-evaluation-trace" {},
+    runtime_resource_result_heap_cells => "runtime-resource-result-heap-cells" {},
+    runtime_resource_heap_cells => "runtime-resource-heap-cells" {},
+    runtime_resource_instantiation_entries => "runtime-resource-instantiation-entries" {},
+    runtime_resource_instantiation_storage => "runtime-resource-instantiation-storage" {},
+    runtime_resource_capture_inspection => "runtime-resource-capture-inspection" {},
+    runtime_resource_registration_identities => "runtime-resource-registration-identities" {},
+    runtime_cleanup_complete => "runtime-cleanup-complete" {},
+    runtime_cleanup_incomplete => "runtime-cleanup-incomplete" {},
+    runtime_cleanup_unknown => "runtime-cleanup-unknown" {},
+    runtime_label_cause => "runtime-label-cause" {},
+    runtime_label_phase => "runtime-label-phase" {},
+    runtime_label_resource => "runtime-label-resource" {},
+    runtime_label_requested => "runtime-label-requested" {},
+    runtime_label_available => "runtime-label-available" {},
+    runtime_label_teardown => "runtime-label-teardown" {},
+    runtime_label_cleanup => "runtime-label-cleanup" {},
     /// Kind validation failed while checking evidence at this use.
     evidence_kind_use => "evidence-kind-use" {},
     elaboration_kind_use => "elaboration-kind-use" {},

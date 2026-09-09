@@ -823,6 +823,19 @@ localization language. Color is not required for completion.
   this does not count runtime reasons as fully presented. The unapplied capture
   catalogue expansion was set aside; remaining internal presentation must reuse
   existing classifications and retain only missing explanatory facts.
+- Runtime human and short reporting now borrow messages prepared before
+  execution from the English or Bulgarian catalogue. The 56 new templates
+  explain existing reasons, resource units, phases and cleanup states; no
+  failure categories were added. Reporting uses fixed-size failure data and
+  prepared strings without allocating or invoking the catalogue. Tests exercise
+  both formats after dropping the catalogue, all base reasons, resource causes,
+  phases, units and cleanup states, first-teardown retention, and failure at
+  every output byte in all formats and both locales. All 1,286 library tests,
+  14 executable tests, 13 CLI tests, three catalogue tests, four compile-time
+  rendering/JSON tests, eight runtime-reporting tests and warnings-denied Clippy
+  passed. Runtime presentation covers 14/14 base reasons, bringing presentation
+  coverage to 188/197; this is not an effort estimate. CLI format selection,
+  preparation fallback and the remaining compiler-internal paths are still open.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
