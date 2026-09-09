@@ -577,8 +577,13 @@ struct KindDiagnosticCase {
 }
 
 fn assert_public_kind_diagnostic(case: &KindDiagnosticCase) {
-    let failure = failure(case.name, &case.source);
-    let PipelineFailure::Kind(KindFailure::Source(error)) = failure else {
+    let fixture = ModuleFixture::load(case.name, &case.source);
+    let failure = run_path(RunConfiguration {
+        entry: fixture.loaded().canonical_path().to_path_buf(),
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap_err();
+    let Some(PipelineFailure::Kind(KindFailure::Source(error))) = failure.pipeline_failure() else {
         panic!("{} should fail at the public kind boundary", case.name);
     };
     let diagnostic = error.diagnostic();
@@ -643,6 +648,73 @@ fn assert_public_kind_diagnostic(case: &KindDiagnosticCase) {
             assert_eq!(diagnostic.found.as_deref(), Some("Type"));
         }
     }
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_kind_diagnostic, write_human, write_json},
+    };
+    let sources: Vec<_> = failure.sources().iter().collect();
+    let view = compile_kind_diagnostic(error, &sources).unwrap();
+    for locale in [Locale::English, Locale::Bulgarian] {
+        let mut output = Vec::new();
+        write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains(&format!("`{}`", diagnostic.found.as_deref().unwrap())));
+        if locale == Locale::English {
+            let expected = diagnostic.expected.as_deref().unwrap();
+            let found = diagnostic.found.as_deref().unwrap();
+            let title = match case.reason {
+                KindReason::ExpectedType => format!(
+                    "This position requires a complete value type (kind `Type`), but has kind `{found}`."
+                ),
+                KindReason::NotApplicable => {
+                    format!("The applied type has kind `{found}` and cannot take type arguments.")
+                }
+                KindReason::Argument => {
+                    format!("This argument needs kind `{expected}`, but has kind `{found}`.")
+                }
+            };
+            assert!(output.contains(&title), "{output}");
+        }
+    }
+    let mut output = Vec::new();
+    write_json(&mut output, &view).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["facts"][0]["name"], "expected_kind");
+    assert_eq!(
+        json["facts"][0]["value"],
+        diagnostic.expected.as_deref().unwrap()
+    );
+    assert_eq!(json["facts"][1]["name"], "found_kind");
+    assert_eq!(
+        json["facts"][1]["value"],
+        diagnostic.found.as_deref().unwrap()
+    );
+    assert_eq!(
+        json["facts"][2]["value"],
+        if case.reason == KindReason::NotApplicable {
+            "function"
+        } else {
+            "exact"
+        }
+    );
+    assert_eq!(
+        json["labels"][1]["relationship"],
+        if case.reason == KindReason::Argument {
+            "required_kind_declaration"
+        } else {
+            "found_kind_declaration"
+        }
+    );
+    for (label, original) in json["labels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(std::iter::once(&diagnostic.primary).chain(&diagnostic.related))
+    {
+        assert_eq!(label["byte_start"], original.span().range().start());
+        assert_eq!(label["byte_end"], original.span().range().end());
+    }
+    assert!(compile_kind_diagnostic(error, &[]).is_err());
 }
 
 #[test]
@@ -2673,6 +2745,58 @@ fn public_kind_failure_precedence_follows_causal_and_owner_order() {
             ),
             occurrence_range(&source, primary.0, primary.1),
             "case: {name}",
+        );
+    }
+}
+
+#[test]
+fn kind_presentation_handles_effect_and_type_arguments() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_kind_diagnostic, write_json, write_short},
+    };
+    for (text, reason, related_count) in [
+        (
+            "bad<A> : A<Int> -> Unit\nbad value = ()\n",
+            KindReason::NotApplicable,
+            1,
+        ),
+        (
+            "effect E<F : Type -> Type> {\nop : Unit -> F<Int>\n}\nprobe : Unit -> Unit ! {E<Int>}\nprobe () = ()\n",
+            KindReason::Argument,
+            1,
+        ),
+    ] {
+        let fixture = ModuleFixture::load("kind-origin.ash", text);
+        let failure = run_path(RunConfiguration {
+            entry: fixture.loaded().canonical_path().to_path_buf(),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        let Some(PipelineFailure::Kind(KindFailure::Source(error))) = failure.pipeline_failure()
+        else {
+            panic!("{failure:?}")
+        };
+        assert_eq!(error.reason, reason);
+        assert_eq!(error.related.len(), related_count);
+        let sources: Vec<_> = failure.sources().iter().collect();
+        let view = compile_kind_diagnostic(error, &sources).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_short(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            assert!(String::from_utf8(output).unwrap().contains("`Type`"));
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["labels"].as_array().unwrap().len(), related_count + 1);
+        assert_eq!(
+            json["labels"][1]["facts"][0]["value"],
+            if reason == KindReason::Argument {
+                "Type -> Type"
+            } else {
+                "Type"
+            }
         );
     }
 }

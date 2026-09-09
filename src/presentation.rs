@@ -160,6 +160,94 @@ pub fn compile_type_diagnostic<'a>(
     })
 }
 
+/// Exposes phase-owned kind facts without interpreting diagnostic prose.
+///
+/// # Errors
+/// Returns missing kind facts or source context.
+pub fn compile_kind_diagnostic<'a>(
+    error: &'a crate::kind::KindError,
+    sources: &[&'a SourceFile],
+) -> Result<CompileDiagnostic<'a>, PresentationError> {
+    let expected = error
+        .diagnostic()
+        .expected
+        .as_deref()
+        .ok_or(PresentationError::MissingFact)?;
+    let found = error
+        .diagnostic()
+        .found
+        .as_deref()
+        .ok_or(PresentationError::MissingFact)?;
+    let (shape, expected_format) = match error.expectation() {
+        crate::kind::KindExpectation::Exact(_) => ("exact", "kind"),
+        crate::kind::KindExpectation::Function { .. } => ("function", "kind-pattern"),
+    };
+    let expected_fact = Fact {
+        name: "expected_kind",
+        kind: expected_format,
+        value: FactValue::Text(expected),
+    };
+    let found_fact = Fact {
+        name: "found_kind",
+        kind: "kind",
+        value: FactValue::Text(found),
+    };
+    let label = |span: Span, message, relationship, fact| {
+        let source = sources
+            .iter()
+            .copied()
+            .find(|source| source.id() == span.source())
+            .ok_or(PresentationError::MissingSource)?;
+        source
+            .location(span)
+            .map_err(|_| PresentationError::MissingSource)?;
+        Ok(Label {
+            source,
+            span,
+            message,
+            relationship,
+            facts: vec![fact],
+        })
+    };
+    let mut related = Vec::with_capacity(error.related.len());
+    for original in &error.related {
+        let (message, relationship, kind) = error
+            .related_message()
+            .ok_or(PresentationError::MissingFact)?;
+        related.push(label(
+            original.span(),
+            message,
+            relationship,
+            Fact {
+                name: "kind",
+                kind: "kind",
+                value: FactValue::Text(kind),
+            },
+        )?);
+    }
+    Ok(CompileDiagnostic {
+        reason: error.reason.to_string(),
+        responsibility: "source",
+        message: error.message().ok_or(PresentationError::MissingFact)?,
+        primary: Some(label(
+            error.primary.span(),
+            Message::kind_found(found),
+            "kind_mismatch",
+            found_fact,
+        )?),
+        related,
+        facts: vec![
+            expected_fact,
+            found_fact,
+            Fact {
+                name: "expectation_shape",
+                kind: "kind-expectation",
+                value: FactValue::Text(shape),
+            },
+        ],
+    })
+}
+
 /// Exposes phase-owned resolution facts without interpreting diagnostic prose.
 ///
 /// # Errors

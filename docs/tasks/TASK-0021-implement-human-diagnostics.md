@@ -274,6 +274,16 @@ localization language. Color is not required for completion.
   identified the renamed-import label case; its regression fixture checks that
   only the occurrence carries the local alias spelling. After that correction,
   all 64 focused tests and warnings-denied Clippy passed again.
+- All three source kind reasons now render from the existing expected/found
+  facts. JSON distinguishes an exact kind from an applicable-kind pattern,
+  and labels distinguish required-kind declarations from found-kind
+  declarations. Existing causal fixtures cover type applications, interface
+  arguments, tuple/function components and binding annotations; additional
+  cases cover effect arguments and absent declaration origins. The batch
+  passed the 1,231 existing library tests, a new absent-origin unit test,
+  82 focused integration tests and warnings-denied Clippy. Kind-stage internal
+  and resource failures remain outstanding. The catalogues now contain 94
+  message templates per locale.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

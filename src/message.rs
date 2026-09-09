@@ -144,6 +144,18 @@ macro_rules! messages {
 }
 
 messages! {
+    /// A value-type position contains a type constructor or effect row.
+    kind_expected_type => "kind-expected-type" { found: &'a str = "Type -> Type" },
+    /// A type application applies something without an arrow kind.
+    kind_not_applicable => "kind-not-applicable" { found: &'a str = "Type" },
+    /// A type, interface or effect argument has the wrong kind.
+    kind_argument => "kind-argument" { expected: &'a str = "Type -> Type", found: &'a str = "Type" },
+    /// The kind of the causal source occurrence.
+    kind_found => "kind-found" { found: &'a str = "Type" },
+    /// A declaration fixes the actual kind of the source occurrence.
+    kind_found_declaration => "kind-found-declaration" { found: &'a str = "Type" },
+    /// A declaration determines the required argument kind.
+    kind_required_declaration => "kind-required-declaration" { expected: &'a str = "Type -> Type" },
     /// An ordinary type lookup failed.
     resolve_unknown_type => "resolve-unknown-type" { name: &'a str = "Missing" },
     /// An effect-row parameter lookup failed.

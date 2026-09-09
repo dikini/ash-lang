@@ -134,6 +134,40 @@ pub enum KindExpectation {
 }
 
 impl KindError {
+    pub(crate) fn message(&self) -> Option<crate::message::Message<'_>> {
+        let found = self.diagnostic.found.as_deref()?;
+        Some(match self.diagnostic.reason {
+            KindReason::ExpectedType => crate::message::Message::kind_expected_type(found),
+            KindReason::NotApplicable => crate::message::Message::kind_not_applicable(found),
+            KindReason::Argument => {
+                crate::message::Message::kind_argument(self.diagnostic.expected.as_deref()?, found)
+            }
+        })
+    }
+
+    pub(crate) fn related_message(
+        &self,
+    ) -> Option<(crate::message::Message<'_>, &'static str, &str)> {
+        match self.diagnostic.reason {
+            KindReason::Argument => {
+                let expected = self.diagnostic.expected.as_deref()?;
+                Some((
+                    crate::message::Message::kind_required_declaration(expected),
+                    "required_kind_declaration",
+                    expected,
+                ))
+            }
+            KindReason::ExpectedType | KindReason::NotApplicable => {
+                let found = self.diagnostic.found.as_deref()?;
+                Some((
+                    crate::message::Message::kind_found_declaration(found),
+                    "found_kind_declaration",
+                    found,
+                ))
+            }
+        }
+    }
+
     /// Returns the structured diagnostic fields and causal labels.
     #[must_use]
     pub const fn diagnostic(&self) -> &Diagnostic<KindReason> {
@@ -5120,6 +5154,31 @@ fn require_fact_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn kind_presentation_does_not_invent_an_absent_declaration() {
+        let source = crate::source::SourceFile::new("kind.ash", "Int").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 3).unwrap())
+            .unwrap();
+        let error = not_applicable_error(
+            KindReason::NotApplicable,
+            span,
+            "legacy wording",
+            &Kind::Type,
+            &Kind::Type,
+            None,
+            &mut TypeWorkBudget::with_limit(100),
+        )
+        .unwrap();
+        let view = crate::presentation::compile_kind_diagnostic(&error, &[&source]).unwrap();
+        let mut output = Vec::new();
+        crate::presentation::write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["labels"].as_array().unwrap().len(), 1);
+        assert_eq!(json["facts"][0]["value"], "Type -> _");
+        assert_eq!(json["facts"][0]["kind"], "kind-pattern");
+    }
+
     use crate::{
         interface::{ImplId, InterfaceId, MethodId, RequirementId, RequirementOwner},
         module::ModuleId,
