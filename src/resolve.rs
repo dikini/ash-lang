@@ -836,6 +836,8 @@ pub struct ResolveError(Box<Diagnostic<ResolveReason>>, Option<ResolveContext>);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ResolveContext {
+    DependencySummaryMismatch,
+    DependencySummaryInvalid,
     Kind(crate::kind::KindFailureContext),
     Term,
     EffectOperation,
@@ -881,6 +883,27 @@ impl ResolveIdentitySpace {
 }
 
 impl ResolveError {
+    fn with_context(mut self, context: ResolveContext) -> Self {
+        self.1 = Some(context);
+        self
+    }
+
+    fn dependency_summary_message(
+        &self,
+    ) -> Option<(crate::message::Message<'static>, &'static str)> {
+        use crate::message::Message;
+        match self.1 {
+            Some(ResolveContext::DependencySummaryMismatch) => Some((
+                Message::resolve_dependency_summary_mismatch(),
+                "dependency-summary-mismatch",
+            )),
+            Some(ResolveContext::DependencySummaryInvalid) => Some((
+                Message::resolve_dependency_summary_invalid(),
+                "dependency-summary-invalid",
+            )),
+            _ => None,
+        }
+    }
     pub(crate) fn kind_context(&self) -> Option<crate::kind::KindFailureContext> {
         match self.1 {
             Some(ResolveContext::Kind(context)) => Some(context),
@@ -927,6 +950,9 @@ impl ResolveError {
     }
 
     pub(crate) fn primary_message(&self) -> Option<(crate::message::Message<'_>, &'static str)> {
+        if let Some((message, _)) = self.dependency_summary_message() {
+            return Some((message, "resolution_site"));
+        }
         if let Some(context) = self.kind_context() {
             return Some((
                 if context.span() == self.primary.span() {
@@ -1064,12 +1090,17 @@ impl ResolveError {
                 | ResolveContext::MissingModuleAlias
                 | ResolveContext::MixedTypeRowRoles
                 | ResolveContext::Kind(_)
+                | ResolveContext::DependencySummaryMismatch
+                | ResolveContext::DependencySummaryInvalid
                 | ResolveContext::IdentityExhaustion(_),
             ) => None,
         }
     }
 
     pub(crate) fn subject_fact(&self) -> Option<(&'static str, &'static str, &str)> {
+        if let Some((_, cause)) = self.dependency_summary_message() {
+            return Some(("cause", "resolver-internal-cause", cause));
+        }
         if let Some(context) = self.kind_context() {
             return Some(("kind_cause", "kind-internal-cause", context.name()));
         }
@@ -1138,6 +1169,9 @@ impl ResolveError {
     }
 
     pub(crate) fn message(&self) -> Option<crate::message::Message<'_>> {
+        if let Some((message, _)) = self.dependency_summary_message() {
+            return Some(message);
+        }
         if let Some(context) = self.kind_context() {
             return Some(context.message());
         }
@@ -1265,7 +1299,10 @@ impl ResolveError {
             ResolveContext::MixedTypeRowRoles => {
                 crate::message::Message::resolve_mixed_type_row_roles(name)
             }
-            ResolveContext::IdentityExhaustion(_) | ResolveContext::Kind(_) => return None,
+            ResolveContext::IdentityExhaustion(_)
+            | ResolveContext::Kind(_)
+            | ResolveContext::DependencySummaryMismatch
+            | ResolveContext::DependencySummaryInvalid => return None,
         })
     }
     /// Returns the common structured diagnostic fields.
@@ -1427,7 +1464,8 @@ fn resolve_module_names_with_budget(
             ResolveReason::InternalState,
             surface.span,
             "the resolver received incomplete or mismatched dependency summaries",
-        ));
+        )
+        .with_context(ResolveContext::DependencySummaryMismatch));
     }
 
     for dependency in dependencies {
@@ -1451,10 +1489,14 @@ fn resolve_module_names_with_budget(
                         ResolveReason::ConstraintResourceExhausted,
                         "dependency-summary authentication exceeded its constraint-work budget",
                     ),
-                    ResolvedBuildFailure::InvalidState => (
-                        ResolveReason::InternalState,
-                        "a dependency summary failed body-free authentication",
-                    ),
+                    ResolvedBuildFailure::InvalidState => {
+                        return error(
+                            ResolveReason::InternalState,
+                            dependency.edge.import_span(),
+                            "a dependency summary failed body-free authentication",
+                        )
+                        .with_context(ResolveContext::DependencySummaryInvalid);
+                    }
                 };
                 error(reason, dependency.edge.import_span(), message)
             })?;
@@ -10613,7 +10655,9 @@ fn lookup_error(
         ResolveContext::Effect | ResolveContext::ExportedEffect => ResolveReason::UnknownEffect,
         ResolveContext::MixedTypeRowRoles => ResolveReason::TypeKind,
         ResolveContext::IdentityExhaustion(_) => ResolveReason::BinderIdExhausted,
-        ResolveContext::Kind(_) => ResolveReason::InternalState,
+        ResolveContext::Kind(_)
+        | ResolveContext::DependencySummaryMismatch
+        | ResolveContext::DependencySummaryInvalid => ResolveReason::InternalState,
         ResolveContext::PrivateExport
         | ResolveContext::MissingExport
         | ResolveContext::MissingModuleAlias => ResolveReason::UnavailableExport,
@@ -14241,6 +14285,54 @@ mod tests {
             assert_eq!(json["facts"][0]["kind"], "resolver-identity-space");
             assert_eq!(json["facts"][0]["value"], fact);
             assert_eq!(json["labels"][0]["relationship"], "identity_allocation");
+        }
+    }
+
+    #[test]
+    fn dependency_summary_messages_do_not_depend_on_legacy_prose() {
+        use crate::message::{Catalogue, Locale};
+        let source = SourceFile::new("import.ash", "import dep as Dep").unwrap();
+        let span = source.span(ByteRange::new(0, 17).unwrap()).unwrap();
+        for (context, cause, explanation) in [
+            (
+                ResolveContext::DependencySummaryMismatch,
+                "dependency-summary-mismatch",
+                "The compiler received incomplete or mismatched checked information for this module's imports.",
+            ),
+            (
+                ResolveContext::DependencySummaryInvalid,
+                "dependency-summary-invalid",
+                "The compiler could not validate the checked information for this imported module.",
+            ),
+        ] {
+            let error = error(
+                ResolveReason::InternalState,
+                span,
+                "legacy wording is not presentation input",
+            )
+            .with_context(context);
+            let view = crate::presentation::compile_resolve_diagnostic(&error, &[&source]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                crate::presentation::write_human(
+                    &mut output,
+                    &view,
+                    &Catalogue::new(locale).unwrap(),
+                )
+                .unwrap();
+                let output = String::from_utf8(output).unwrap();
+                assert!(!output.contains("legacy wording"));
+                if locale == Locale::English {
+                    assert!(output.contains(explanation));
+                }
+            }
+            let mut output = Vec::new();
+            crate::presentation::write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["reason"], "resolve.internal-state");
+            assert_eq!(json["responsibility"], "compiler");
+            assert_eq!(json["facts"][0]["value"], cause);
+            assert_eq!(json["labels"][0]["byte_end"], 17);
         }
     }
 

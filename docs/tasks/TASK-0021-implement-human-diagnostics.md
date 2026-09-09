@@ -932,6 +932,15 @@ localization language. Color is not required for completion.
   API caller discarded that context. The missing-source test now uses real
   lexer output. File-dispatch, input, source and reporting tests passed, along
   with warnings-denied Clippy. No syntax behavior or diagnostic ordering changed.
+- Dependency-summary mismatch and failed validation now retain presentation
+  context on the existing resolver error, preserving its reason and source span.
+  Both explanations are catalogue-owned and JSON retains the boundary cause;
+  kind-specific failures continue to retain their original context. The existing
+  reordered-dependency regression now checks presentation. A two-case table
+  confirms localization and JSON do not depend on the legacy prose. Library,
+  diagnostic and module-resolution tests and warnings-denied Clippy passed;
+  the additional prose-independence table passed separately. Other resolver
+  internal labels remain open; this does not complete that reason family.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

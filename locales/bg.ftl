@@ -1120,3 +1120,5 @@ source-foreign-span-unlocated = Ash използва диапазон от из�
 source-offset-unlocated = Ash използва байтово отместване { $offset } извън { $length } байта на източника.
 source-code-point-unlocated = Ash използва байтово отместване { $offset } във вътрешността на UTF-8 кодова точка.
 source-line-state-unlocated = Вътрешният индекс на редовете на източника в Ash е несъгласуван.
+resolve-dependency-summary-mismatch = Компилаторът получи непълна или несъответстваща проверена информация за импортите на този модул.
+resolve-dependency-summary-invalid = Компилаторът не успя да валидира проверената информация за този импортиран модул.

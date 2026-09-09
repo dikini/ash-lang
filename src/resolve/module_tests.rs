@@ -412,6 +412,26 @@ fn reordered_dependency_pairs_are_rejected_before_scope_installation() {
         panic!("mismatched dependencies should fail during resolution")
     };
     assert_eq!(error.reason, ResolveReason::InternalState);
+    let diagnostic =
+        crate::presentation::compile_resolve_diagnostic(&error, &[importer.source()]).unwrap();
+    for locale in [
+        crate::message::Locale::English,
+        crate::message::Locale::Bulgarian,
+    ] {
+        let mut output = Vec::new();
+        crate::presentation::write_human(
+            &mut output,
+            &diagnostic,
+            &crate::message::Catalogue::new(locale).unwrap(),
+        )
+        .unwrap();
+        assert!(!output.is_empty());
+    }
+    let mut output = Vec::new();
+    crate::presentation::write_json(&mut output, &diagnostic).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["responsibility"], "compiler");
+    assert_eq!(json["facts"][0]["value"], "dependency-summary-mismatch");
 }
 
 #[test]

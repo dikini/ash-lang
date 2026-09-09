@@ -984,6 +984,8 @@ messages! {
     core_validation_non_row_tail_kind => "core-validation-non-row-tail-kind" {},
     core_validation_non_row_tail_kind_node => "core-validation-non-row-tail-kind-node" { node: usize = 42 },
     core_validation_resource => "core-validation-resource" {},
+    resolve_dependency_summary_mismatch => "resolve-dependency-summary-mismatch" {},
+    resolve_dependency_summary_invalid => "resolve-dependency-summary-invalid" {},
     syntax_depth_unlocated => "syntax-depth-unlocated" { limit: usize = 128 },
     syntax_work_unlocated => "syntax-work-unlocated" { limit: usize = 1000 },
     projection_recovery_unlocated => "projection-recovery-unlocated" {},
