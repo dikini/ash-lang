@@ -322,6 +322,16 @@ pub struct ModuleGraph {
 }
 
 impl ModuleGraph {
+    /// Moves admitted sources out of a finished graph for compile diagnostics.
+    pub(crate) fn into_sources(self) -> Box<[SourceFile]> {
+        self.modules
+            .into_vec()
+            .into_iter()
+            .map(|module| module.source)
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
+    }
+
     /// Returns modules in deterministic dependency order.
     #[must_use]
     pub fn modules(&self) -> &[LoadedModule] {

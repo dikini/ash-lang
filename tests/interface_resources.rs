@@ -185,7 +185,9 @@ fn one_constraint_budget_persists_from_dependency_admission_through_validation()
         .expect_err("cumulative imported, linked, and validation work should exhaust one budget");
 
     assert_eq!(failure.reason_code(), "internal.resource.constraint-work");
-    let FileFailure::Pipeline(PipelineFailure::EvidenceValidation(validation)) = &failure else {
+    let PipelineFailure::EvidenceValidation(validation) =
+        failure.pipeline_failure().expect("pipeline failure")
+    else {
         panic!("the shared prefix should fit until interface-evidence validation: {failure:?}");
     };
     assert_eq!(
@@ -229,7 +231,8 @@ fn polymorphic_summary_resource_rejection_is_repeatable_and_a_fresh_run_recovers
             "internal.resource.constraint-work",
             "fresh rejected attempt {attempt} should reach the same owning budget",
         );
-        let FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Internal(_))) = &failure
+        let PipelineFailure::Typing(TypeError::Internal(_)) =
+            failure.pipeline_failure().expect("pipeline failure")
         else {
             panic!("polymorphic summary ingress should exhaust during typing: {failure:?}");
         };
@@ -278,7 +281,9 @@ fn cycle_precedes_constraint_resource_exhaustion_after_import_admission() {
         .expect_err("the active prerequisite must be recognized as a cycle");
 
     assert_eq!(failure.reason_code(), "constraint.cycle");
-    let FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Interface(_))) = failure else {
+    let PipelineFailure::Typing(TypeError::Interface(_)) =
+        failure.pipeline_failure().expect("pipeline failure")
+    else {
         panic!("the cycle should remain owned by interface checking");
     };
 }

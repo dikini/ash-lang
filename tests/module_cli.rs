@@ -7,7 +7,7 @@ use std::{
 };
 
 use ash::{
-    driver::{FileFailure, PipelineFailure, RunConfiguration, run_path},
+    driver::{PipelineFailure, RunConfiguration, run_path},
     elaborate::{TypeError, TypeReason},
     interface::InterfaceReason,
     kind::{KindFailure, KindReason},
@@ -426,8 +426,8 @@ fn cli_renders_the_structured_interface_diagnostic_without_reclassifying_it() {
         roots: ModuleRoots::empty(),
     })
     .expect_err("the interface obligation should remain unsatisfied");
-    let FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Interface(diagnostic))) =
-        &structured
+    let PipelineFailure::Typing(TypeError::Interface(diagnostic)) =
+        structured.pipeline_failure().expect("pipeline failure")
     else {
         panic!("the programmatic boundary should retain the structured interface diagnostic");
     };
@@ -494,8 +494,8 @@ fn method_parameter_cli_diagnostics_preserve_library_structure_exactly() {
         roots: ModuleRoots::empty(),
     })
     .expect_err("an absent method binder list should retain predecessor rejection");
-    let FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Interface(absent))) =
-        &absent_failure
+    let PipelineFailure::Typing(TypeError::Interface(absent)) =
+        absent_failure.pipeline_failure().expect("pipeline failure")
     else {
         panic!("the absent-list failure should remain an interface diagnostic");
     };
@@ -548,8 +548,9 @@ fn method_parameter_cli_diagnostics_preserve_library_structure_exactly() {
         roots: ModuleRoots::empty(),
     })
     .expect_err("a method-local recursive self-use must remain monomorphic");
-    let FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Source(recursive))) =
-        &recursive_failure
+    let PipelineFailure::Typing(TypeError::Source(recursive)) = recursive_failure
+        .pipeline_failure()
+        .expect("pipeline failure")
     else {
         panic!("method-local polymorphic recursion should retain a source diagnostic");
     };
@@ -628,8 +629,8 @@ fn cli_renders_a_selected_facade_prerequisite_route_without_reclassifying_it() {
         roots: ModuleRoots::empty(),
     })
     .expect_err("the selected implementation prerequisite should remain unsatisfied");
-    let FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Interface(diagnostic))) =
-        &structured
+    let PipelineFailure::Typing(TypeError::Interface(diagnostic)) =
+        structured.pipeline_failure().expect("pipeline failure")
     else {
         panic!("the programmatic boundary should retain the facade prerequisite diagnostic");
     };
@@ -710,8 +711,8 @@ fn cli_renders_each_structured_kind_reason_without_reclassifying_it() {
             roots: ModuleRoots::empty(),
         })
         .expect_err("the fixture should fail during kind checking");
-        let FileFailure::Pipeline(PipelineFailure::Kind(KindFailure::Source(diagnostic))) =
-            &structured
+        let PipelineFailure::Kind(KindFailure::Source(diagnostic)) =
+            structured.pipeline_failure().expect("pipeline failure")
         else {
             panic!(
                 "{} should retain the structured Kind failure, found {structured:?}",

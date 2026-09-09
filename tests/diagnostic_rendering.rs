@@ -1,10 +1,41 @@
 use ash::{
+    driver::{PipelineFailure, RunConfiguration, run_path},
     elaborate::{TypeError, check_module},
     message::{Catalogue, Locale},
     module::{ModuleRoots, load_module_graph},
     presentation::{compile_type_diagnostic, write_human, write_short},
     resolve::resolve_module,
 };
+
+#[test]
+fn driver_failure_owns_the_sources_needed_for_later_rendering() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/first-stratum/type/binding-initializer.ash");
+    let failure = run_path(RunConfiguration {
+        entry: path,
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap_err();
+    let PipelineFailure::Typing(TypeError::Source(error)) = failure.pipeline_failure().unwrap()
+    else {
+        panic!("expected the binding initializer failure");
+    };
+    let sources: Vec<_> = failure.sources().iter().collect();
+    assert_eq!(sources.len(), 1);
+    let view = compile_type_diagnostic(error, &sources).unwrap();
+    let mut output = Vec::new();
+    write_human(
+        &mut output,
+        &view,
+        &Catalogue::new(Locale::English).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        String::from_utf8(output)
+            .unwrap()
+            .contains("let value : Bool = 1")
+    );
+}
 
 #[test]
 fn real_binding_error_keeps_initializer_and_annotation_context() {
@@ -75,4 +106,33 @@ fn real_binding_error_keeps_initializer_and_annotation_context() {
             "{path}:3:24: Тази променлива изисква стойност от тип `Bool`, но началният израз има тип `Int`. [type.binding-initializer]\n"
         )
     );
+}
+
+#[test]
+fn driver_retains_the_dependency_source_not_just_the_entry_file() {
+    let entry = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/diagnostic-source-retention/entry.ash");
+    let failure = run_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap_err();
+    let PipelineFailure::Typing(TypeError::Source(error)) = failure.pipeline_failure().unwrap()
+    else {
+        panic!("expected the dependency initializer failure");
+    };
+    assert_eq!(failure.sources().len(), 2);
+    let sources: Vec<_> = failure.sources().iter().collect();
+    let view = compile_type_diagnostic(error, &sources).unwrap();
+    let mut output = Vec::new();
+    write_human(
+        &mut output,
+        &view,
+        &Catalogue::new(Locale::English).unwrap(),
+    )
+    .unwrap();
+    let output = String::from_utf8(output).unwrap();
+    assert!(output.contains("dependency.ash:3:24"));
+    assert!(output.contains("dependency.ash:3:17"));
+    assert!(!output.contains("entry.ash"));
 }

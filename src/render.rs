@@ -117,7 +117,7 @@ pub fn file_failure(failure: &FileFailure) -> String {
             format!("input.invalid-utf8\n{} is not UTF-8", path.display())
         }
         FileFailure::Source(error) => format!("input.source-model\n{error}"),
-        FileFailure::Pipeline(failure) => pipeline_failure(failure),
+        FileFailure::Pipeline(context) => pipeline_failure(context.failure()),
     };
     output.push('\n');
     output

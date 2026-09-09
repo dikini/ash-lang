@@ -20,7 +20,7 @@ use crate::{
     interface::InterfaceConstraintBudget,
     kind::KindFailure,
     lexer::LexReason,
-    module::{LoadGraphError, ModuleId, ModuleRoots, load_module_graph},
+    module::{LoadGraphError, ModuleGraph, ModuleId, ModuleRoots, load_module_graph},
     parser::{ParseDiagnostic, ProjectionError, ResourceFailure},
     pattern::UsefulnessBudget,
     resolve::{
@@ -448,6 +448,30 @@ impl fmt::Display for PipelineFailure {
 
 impl Error for PipelineFailure {}
 
+/// A pipeline failure and its admitted compile-time source context.
+///
+/// Runtime failures carry no source catalogue. Only the graph-owning driver
+/// attaches sources, by moving them after a compile-time failure.
+#[derive(Debug)]
+pub struct PipelineDiagnostic {
+    failure: PipelineFailure,
+    sources: Box<[SourceFile]>,
+}
+
+impl PipelineDiagnostic {
+    /// Returns the unchanged phase failure.
+    #[must_use]
+    pub const fn failure(&self) -> &PipelineFailure {
+        &self.failure
+    }
+
+    /// Consumes context when a caller needs only the semantic phase failure.
+    #[must_use]
+    pub fn into_failure(self) -> PipelineFailure {
+        self.failure
+    }
+}
+
 /// A file-input failure or a stage-preserving pipeline failure.
 #[derive(Debug)]
 pub enum FileFailure {
@@ -468,17 +492,45 @@ pub enum FileFailure {
     /// The UTF-8 text cannot fit the source representation.
     Source(SourceError),
     /// The admitted source reached a compiler or runtime stage failure.
-    Pipeline(PipelineFailure),
+    Pipeline(PipelineDiagnostic),
+}
+
+impl From<PipelineFailure> for FileFailure {
+    fn from(failure: PipelineFailure) -> Self {
+        Self::Pipeline(PipelineDiagnostic {
+            failure,
+            sources: Box::default(),
+        })
+    }
 }
 
 impl FileFailure {
+    /// Borrows the underlying phase failure, when graph loading succeeded.
+    #[must_use]
+    pub fn pipeline_failure(&self) -> Option<&PipelineFailure> {
+        match self {
+            Self::Pipeline(context) => Some(&context.failure),
+            _ => None,
+        }
+    }
+
+    /// Returns sources retained for a compile-time pipeline diagnostic.
+    /// Input failures and runtime reports do not acquire a source catalogue.
+    #[must_use]
+    pub fn sources(&self) -> &[SourceFile] {
+        match self {
+            Self::Pipeline(context) => &context.sources,
+            _ => &[],
+        }
+    }
+
     /// Reports whether this failure rejects Ash source rather than invocation,
     /// input, compiler, or runtime state.
     #[must_use]
     pub fn is_source_rejection(&self) -> bool {
         match self {
             Self::Graph(error) => error.is_source_rejection(),
-            Self::Pipeline(failure) => failure.is_source_rejection(),
+            Self::Pipeline(context) => context.failure.is_source_rejection(),
             Self::Read { .. } | Self::InvalidUtf8 { .. } | Self::Source(_) => false,
         }
     }
@@ -500,7 +552,7 @@ impl FileFailure {
             Self::Read { .. } => "input.read".to_owned(),
             Self::InvalidUtf8 { .. } => "input.invalid-utf8".to_owned(),
             Self::Source(_) => "input.source-model".to_owned(),
-            Self::Pipeline(failure) => failure.reason_code(),
+            Self::Pipeline(context) => context.failure.reason_code(),
         }
     }
 }
@@ -536,7 +588,7 @@ impl fmt::Display for FileFailure {
                 write!(formatter, "{} is not a UTF-8 source file", path.display())
             }
             Self::Source(error) => error.fmt(formatter),
-            Self::Pipeline(error) => error.fmt(formatter),
+            Self::Pipeline(context) => context.failure.fmt(formatter),
         }
     }
 }
@@ -644,6 +696,46 @@ where
 {
     let graph = load_module_graph(&configuration.entry, &configuration.roots)
         .map_err(FileFailure::Graph)?;
+    let result = run_graph_with_consumers(
+        &graph,
+        constraint_work,
+        interface_validator,
+        validator,
+        evaluator,
+        select_effect_core,
+    );
+    match result {
+        Err(FileFailure::Pipeline(mut context))
+            if !matches!(context.failure, PipelineFailure::Runtime(_)) =>
+        {
+            context.sources = graph.into_sources();
+            Err(FileFailure::Pipeline(context))
+        }
+        other => other,
+    }
+}
+
+fn run_graph_with_consumers<I, V, E>(
+    graph: &ModuleGraph,
+    constraint_work: &mut InterfaceConstraintBudget,
+    interface_validator: I,
+    validator: V,
+    evaluator: E,
+    select_effect_core: bool,
+) -> Result<Observation, FileFailure>
+where
+    I: FnOnce(
+        ResolvedModuleProgram,
+        &mut InterfaceConstraintBudget,
+        &mut TypeWorkBudget,
+    ) -> Result<ValidatedInterfaceProgram, EvidenceValidationFailure>,
+    V: FnOnce(
+        UnvalidatedProgram,
+        &[&SourceFile],
+        &[(ModuleId, SourceId)],
+    ) -> Result<ValidatedProgram, ValidationError>,
+    E: FnOnce(&ValidatedProgram) -> Result<Evaluation, RuntimeFailure>,
+{
     let mut checked: Vec<crate::resolved::CheckedModule> =
         Vec::with_capacity(graph.modules().len());
     let mut checked_by_module: HashMap<ModuleId, usize> =
@@ -669,7 +761,7 @@ where
                 })
             })
             .collect::<Result<Vec<_>, _>>()
-            .map_err(FileFailure::Pipeline)?;
+            .map_err(FileFailure::from)?;
         let resolved = resolve_module_with_budget(
             module,
             &dependencies,
@@ -680,7 +772,7 @@ where
             ResolveModuleError::Resolution(error) => PipelineFailure::Resolution(error),
             ResolveModuleError::Kind(error) => PipelineFailure::Kind(error),
         })
-        .map_err(FileFailure::Pipeline)?;
+        .map_err(FileFailure::from)?;
         drop(dependencies);
         let checked_module = check_module_with_budget(
             resolved,
@@ -689,7 +781,7 @@ where
             constraint_work,
         )
         .map_err(PipelineFailure::Typing)
-        .map_err(FileFailure::Pipeline)?;
+        .map_err(FileFailure::from)?;
         checked_by_module.insert(module.id(), checked.len());
         checked.push(checked_module);
     }
@@ -703,7 +795,7 @@ where
         .iter()
         .find(|scheme| scheme.spelling == "main")
         .ok_or_else(|| {
-            FileFailure::Pipeline(PipelineFailure::Entry(EntryFailure::new(
+            FileFailure::from(PipelineFailure::Entry(EntryFailure::new(
                 EntryReason::MissingMain,
                 entry.span(),
             )))
@@ -746,7 +838,7 @@ where
     }
     let linked = link_modules_with_budget(checked, graph.entry(), constraint_work)
         .map_err(PipelineFailure::Typing)
-        .map_err(FileFailure::Pipeline)?;
+        .map_err(FileFailure::from)?;
     let sources = graph
         .modules()
         .iter()
@@ -762,33 +854,33 @@ where
         let validated_interfaces =
             interface_validator(linked, constraint_work, &mut linked_type_work)
                 .map_err(PipelineFailure::EvidenceValidation)
-                .map_err(FileFailure::Pipeline)?;
+                .map_err(FileFailure::from)?;
         let registry = Arc::clone(validated_interfaces.registry());
         if select_effect_core
             && checked_program_contains_effect_syntax(&validated_interfaces, &mut linked_type_work)
                 .map_err(PipelineFailure::Typing)
-                .map_err(FileFailure::Pipeline)?
+                .map_err(FileFailure::from)?
         {
             return finish_effect_observation(&validated_interfaces, &sources, &module_sources);
         }
         let mut elaborator = Elaborator::for_module_program(&validated_interfaces)
             .map_err(TypeError::Internal)
             .map_err(PipelineFailure::Typing)
-            .map_err(FileFailure::Pipeline)?;
+            .map_err(FileFailure::from)?;
         let typed = if select_effect_core {
             elaborator.synthesize_module_program_after_effect_scan(&validated_interfaces)
         } else {
             elaborator.synthesize_module_program(&validated_interfaces)
         }
         .map_err(PipelineFailure::Typing)
-        .map_err(FileFailure::Pipeline)?;
+        .map_err(FileFailure::from)?;
         let ty = IterativeTypeOwner::new(typed.ty);
         let type_display = registry.display_type(&ty);
         let unchecked = elaborator
             .finish(typed.node)
             .map_err(TypeError::Internal)
             .map_err(PipelineFailure::Typing)
-            .map_err(FileFailure::Pipeline)?;
+            .map_err(FileFailure::from)?;
         ::std::mem::drop(validated_interfaces);
         (ty, type_display, unchecked)
     };
@@ -812,24 +904,24 @@ fn finish_effect_observation(
     let mut elaborator = EffectElaborator::for_module_program(validated_interfaces)
         .map_err(TypeError::Internal)
         .map_err(PipelineFailure::Typing)
-        .map_err(FileFailure::Pipeline)?;
+        .map_err(FileFailure::from)?;
     let typed = elaborator
         .synthesize_effect_module_program(validated_interfaces)
         .map_err(PipelineFailure::Typing)
-        .map_err(FileFailure::Pipeline)?;
+        .map_err(FileFailure::from)?;
     let ty = IterativeTypeOwner::new(typed.ty);
     let type_display = validated_interfaces.registry().display_type(&ty);
     let unchecked = elaborator
         .finish(typed.node)
         .map_err(TypeError::Internal)
         .map_err(PipelineFailure::Typing)
-        .map_err(FileFailure::Pipeline)?;
+        .map_err(FileFailure::from)?;
     let validated = validate_effect_modules(unchecked, sources, module_sources)
         .map_err(PipelineFailure::Validation)
-        .map_err(FileFailure::Pipeline)?;
+        .map_err(FileFailure::from)?;
     let evaluation = evaluate_effect(&validated)
         .map_err(PipelineFailure::Runtime)
-        .map_err(FileFailure::Pipeline)?;
+        .map_err(FileFailure::from)?;
     let (value, heap) = evaluation.into_observation_parts();
     Ok(Observation {
         value,
@@ -858,10 +950,10 @@ where
 {
     let validated = validator(unchecked, sources, module_sources)
         .map_err(PipelineFailure::Validation)
-        .map_err(FileFailure::Pipeline)?;
+        .map_err(FileFailure::from)?;
     let evaluation = evaluator(&validated)
         .map_err(PipelineFailure::Runtime)
-        .map_err(FileFailure::Pipeline)?;
+        .map_err(FileFailure::from)?;
     let (value, heap) = evaluation.into_observation_parts();
     Ok(Observation {
         value,
@@ -872,11 +964,11 @@ where
 }
 
 fn entry_failure(reason: EntryReason, primary: Span) -> FileFailure {
-    FileFailure::Pipeline(PipelineFailure::Entry(EntryFailure::new(reason, primary)))
+    FileFailure::from(PipelineFailure::Entry(EntryFailure::new(reason, primary)))
 }
 
 fn internal_file_failure() -> FileFailure {
-    FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Internal(
+    FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
         crate::elaborate::ElaborationFailure::InvalidState,
     )))
 }
@@ -1099,6 +1191,52 @@ mod tests {
     }
 
     #[test]
+    fn runtime_failures_do_not_retain_compile_time_sources() {
+        let source = TestSource::write("main : Unit -> Int\nmain () = 1\n");
+        let failure = run_path_with_consumers(
+            source.configuration(),
+            validate_interface_evidence_with_budget,
+            validate_modules,
+            |_| Err(RuntimeFailure::InvalidControlState),
+        )
+        .expect_err("injected runtime failure");
+        assert!(matches!(
+            failure.pipeline_failure(),
+            Some(PipelineFailure::Runtime(
+                RuntimeFailure::InvalidControlState
+            ))
+        ));
+        assert!(failure.sources().is_empty());
+        assert!(!failure.is_source_rejection());
+    }
+
+    #[test]
+    fn compile_failure_can_render_after_the_input_has_been_removed() {
+        let text = include_str!("../tests/fixtures/first-stratum/type/binding-initializer.ash");
+        let source = TestSource::write(text);
+        let path = source.configuration().entry;
+        let failure = run_path(source.configuration()).expect_err("wrong initializer type");
+        drop(source);
+        assert!(!path.exists());
+        let Some(PipelineFailure::Typing(TypeError::Source(diagnostic))) =
+            failure.pipeline_failure()
+        else {
+            panic!("expected the original type error");
+        };
+        let sources: Vec<_> = failure.sources().iter().collect();
+        assert_eq!(sources[0].text(), text);
+        let view = crate::presentation::compile_type_diagnostic(diagnostic, &sources).unwrap();
+        let catalogue = crate::message::Catalogue::new(crate::message::Locale::English).unwrap();
+        let mut output = Vec::new();
+        crate::presentation::write_human(&mut output, &view, &catalogue).unwrap();
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains("let value : Bool = 1")
+        );
+    }
+
+    #[test]
     fn injected_validation_failure_stops_before_evaluation() {
         let source = TestSource::write("main : Unit -> Int\nmain () = 1\n");
         let evaluation_called = Cell::new(false);
@@ -1114,7 +1252,9 @@ mod tests {
         )
         .expect_err("omitting the admitted source must fail provenance validation");
 
-        let FileFailure::Pipeline(PipelineFailure::Validation(error)) = failure else {
+        let PipelineFailure::Validation(error) =
+            failure.pipeline_failure().expect("pipeline failure")
+        else {
             panic!("the injected validator failure should retain its stage");
         };
         assert_eq!(error.reason(), crate::core::ValidationReason::Provenance);
@@ -1163,8 +1303,8 @@ mod tests {
                 )
                 .expect_err("omitting the source rejects Core provenance");
                 assert!(matches!(
-                    error,
-                    FileFailure::Pipeline(PipelineFailure::Validation(_))
+                    error.pipeline_failure(),
+                    Some(PipelineFailure::Validation(_))
                 ));
             })
             .expect("small-stack pipeline thread should start")
@@ -1193,8 +1333,8 @@ mod tests {
                 )
                 .expect_err("the injected evaluator failure is preserved");
                 assert!(matches!(
-                    error,
-                    FileFailure::Pipeline(PipelineFailure::Runtime(
+                    error.pipeline_failure(),
+                    Some(PipelineFailure::Runtime(
                         RuntimeFailure::InvalidControlState
                     ))
                 ));
@@ -1241,7 +1381,9 @@ mod tests {
         )
         .expect_err("the forged linked interface identity should fail evidence validation");
 
-        let FileFailure::Pipeline(PipelineFailure::EvidenceValidation(error)) = failure else {
+        let PipelineFailure::EvidenceValidation(error) =
+            failure.pipeline_failure().expect("pipeline failure")
+        else {
             panic!("the injected evidence validator failure should retain its stage");
         };
         assert_eq!(
@@ -1338,7 +1480,9 @@ mod tests {
         )
         .expect_err("one less than the cumulative work must exhaust validation");
         assert!(one_short_entered_validation.get());
-        let FileFailure::Pipeline(PipelineFailure::EvidenceValidation(error)) = failure else {
+        let PipelineFailure::EvidenceValidation(error) =
+            failure.pipeline_failure().expect("pipeline failure")
+        else {
             panic!("the one-short cumulative budget should fail in evidence validation");
         };
         assert_eq!(
@@ -1510,7 +1654,9 @@ mod tests {
             |_| panic!("one-short linked evidence must stop before evaluation"),
         )
         .expect_err("one less relational work unit must reject atomically");
-        let FileFailure::Pipeline(PipelineFailure::EvidenceValidation(error)) = failure else {
+        let PipelineFailure::EvidenceValidation(error) =
+            failure.pipeline_failure().expect("pipeline failure")
+        else {
             panic!("the relational one-short boundary should fail in evidence validation");
         };
         assert_eq!(
@@ -1720,7 +1866,7 @@ mod tests {
                 )
                 .expect_err("one less than the measured deep-route work must fail");
                 assert!(validation_entered.get());
-                let FileFailure::Pipeline(PipelineFailure::EvidenceValidation(error)) = &failure
+                let PipelineFailure::EvidenceValidation(error) = failure.pipeline_failure().expect("pipeline failure")
                 else {
                     panic!("the one-short deep-route budget should fail in evidence validation");
                 };

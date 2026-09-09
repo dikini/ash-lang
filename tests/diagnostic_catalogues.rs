@@ -2,21 +2,18 @@ use ash::message::{Catalogue, Locale, Message};
 
 #[test]
 fn binding_messages_have_precise_english_and_bulgarian_text() {
-    let message = Message::BindingInitializer {
-        expected: "Bool",
-        found: "Int",
-    };
+    let message = Message::binding_initializer("Bool", "Int");
     assert_eq!(
         Catalogue::new(Locale::English)
             .unwrap()
-            .format(message)
+            .format(&message)
             .unwrap(),
         "This binding needs a value of type `Bool`, but its initializer has type `Int`."
     );
     assert_eq!(
         Catalogue::new(Locale::Bulgarian)
             .unwrap()
-            .format(message)
+            .format(&message)
             .unwrap(),
         "Тази променлива изисква стойност от тип `Bool`, но началният израз има тип `Int`."
     );
@@ -26,18 +23,18 @@ fn binding_messages_have_precise_english_and_bulgarian_text() {
 fn label_messages_use_the_same_formatter_without_renderer_mappings() {
     for (message, expected) in [
         (
-            Message::Initializer { found: "Int" },
+            Message::initializer("Int"),
             "This initializer has type `Int`.",
         ),
         (
-            Message::BindingAnnotation { expected: "Bool" },
+            Message::binding_annotation("Bool"),
             "This annotation requires type `Bool`.",
         ),
     ] {
         assert_eq!(
             Catalogue::new(Locale::English)
                 .unwrap()
-                .format(message)
+                .format(&message)
                 .unwrap(),
             expected
         );
@@ -55,7 +52,7 @@ fn locale_names_normalize_and_fall_back_without_affecting_ash_spellings() {
     let value = "Модул.Type<A -> B>";
     let text = Catalogue::new(Locale::Bulgarian)
         .unwrap()
-        .format(Message::Initializer { found: value })
+        .format(&Message::initializer(value))
         .unwrap();
     assert!(text.contains(value));
 }

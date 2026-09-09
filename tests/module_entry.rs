@@ -5,7 +5,7 @@ use std::{
 };
 
 use ash::{
-    driver::{EntryReason, FileFailure, PipelineFailure, RunConfiguration, run_path},
+    driver::{EntryReason, PipelineFailure, RunConfiguration, run_path},
     module::ModuleRoots,
     types::Type,
 };
@@ -255,7 +255,8 @@ fn existing_entry_shape_failures_precede_main_constrained() {
         let tree = TempTree::create();
         let entry = tree.write("entry.ash", source);
         let failure = run(&entry).expect_err("the earlier entry-shape judgment should reject main");
-        let FileFailure::Pipeline(PipelineFailure::Entry(failure)) = failure else {
+        let PipelineFailure::Entry(failure) = failure.pipeline_failure().expect("pipeline failure")
+        else {
             panic!("entry precedence should retain an entry-contract failure");
         };
 

@@ -147,7 +147,8 @@ fn wide_source_argument_vector_crosses_body_free_link_and_core_on_a_small_stack(
             let failure = rejected
                 .run()
                 .expect_err("the final source argument has kind Type, not Type -> Type");
-            let FileFailure::Pipeline(PipelineFailure::Kind(KindFailure::Source(error))) = failure
+            let PipelineFailure::Kind(KindFailure::Source(error)) =
+                failure.pipeline_failure().expect("pipeline failure")
             else {
                 panic!("the rejected source vector should retain kind ownership");
             };

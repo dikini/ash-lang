@@ -73,15 +73,32 @@ localization language. Color is not required for completion.
   message-test inventory. A failing JSON-independence regression drove semantic
   fact separation; a private declaration macro now derives the typed messages,
   formatting arguments and exhaustive catalogue examples together.
-- Slice 1 remains in progress. Driver-owned source retention and final slice
-  review are outstanding; current rendering tests retain the loaded graph.
-  Broad phase migration, internal causes, runtime formats and CLI integration
-  remain later slices. No diagnostic implementation is merged into main.
+- Driver-owned source retention is implemented: after a compile-time pipeline
+  failure, the graph moves admitted sources into its private failure context.
+  Source text is not cloned or reread. Runtime failures retain an empty source
+  slice and still use the bounded reporter directly. Tests cover entry and
+  dependency sources, rendering after input removal, and runtime exclusion.
+- The ownership check exposed the macro-generated enum's declaration scope.
+  Messages now use a concrete private-field carrier with declaration-generated
+  constructors and test cases. No scanner exemption or macro-expansion engine
+  was added. The new pipeline context is recorded in the ownership manifest.
+- Source-retention review found no important defects. Slice 1 passed the full
+  `cargo xtask verify` gate: formatting, build, warnings-denied Clippy, workspace
+  tests and warnings-denied documentation. This includes 1,227 library tests,
+  14 executable tests and all 32 architecture checks. Markdown lint and
+  `git diff --check` also passed. Slice 1 is complete as an internal checkpoint;
+  no diagnostic implementation is merged into main.
+- Slice 2 starts with lexical and parser messages. Retain existing expected-form
+  and found-token facts before localization; do not interpret legacy English
+  strings. Graph-loading failures also need the admitted importer sources
+  retained at their owner. Broad phase migration, internal causes, runtime
+  formats and CLI integration remain outstanding.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
   human/short output. Followup review confirmed both foundation findings were
-  resolved. These checks do not replace the final workspace gate.
+  resolved. The subsequent full workspace gate covers source retention and the
+  concrete message carrier as well.
 
 ## Verification
 

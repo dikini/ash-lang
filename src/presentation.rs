@@ -96,16 +96,16 @@ pub fn compile_type_diagnostic<'a>(
     };
     Ok(CompileDiagnostic {
         reason: diagnostic.reason,
-        message: Message::BindingInitializer { expected, found },
+        message: Message::binding_initializer(expected, found),
         primary: label(
             diagnostic.primary.span(),
-            Message::Initializer { found },
+            Message::initializer(found),
             "initializer",
             found_fact,
         )?,
         related: vec![label(
             annotation.span(),
-            Message::BindingAnnotation { expected },
+            Message::binding_annotation(expected),
             "binding_annotation",
             expected_fact,
         )?],
@@ -145,7 +145,7 @@ pub fn write_human(
     diagnostic: &CompileDiagnostic<'_>,
     catalogue: &Catalogue,
 ) -> Result<(), RenderError> {
-    writeln!(writer, "{}", catalogue.format(diagnostic.message)?)?;
+    writeln!(writer, "{}", catalogue.format(&diagnostic.message)?)?;
     for label in std::iter::once(&diagnostic.primary).chain(&diagnostic.related) {
         // Sources and spans were checked by the adapter above.
         let location = label
@@ -170,7 +170,7 @@ pub fn write_human(
             writer,
             "  | {}^ {}",
             " ".repeat((column - 1) as usize),
-            catalogue.format(label.message)?
+            catalogue.format(&label.message)?
         )?;
     }
     writeln!(writer, "reason: {}", diagnostic.reason)?;
@@ -197,7 +197,7 @@ pub fn write_short(
         label.source.display_path(),
         location.start().line(),
         location.start().column(),
-        catalogue.format(diagnostic.message)?,
+        catalogue.format(&diagnostic.message)?,
         diagnostic.reason
     )?;
     Ok(())
@@ -296,12 +296,8 @@ mod tests {
         let mut view = compile_type_diagnostic(&diagnostic, &[&source]).unwrap();
         let mut before = Vec::new();
         write_json(&mut before, &view).unwrap();
-        view.message = Message::Initializer {
-            found: "presentation-only",
-        };
-        view.primary.message = Message::BindingAnnotation {
-            expected: "presentation-only",
-        };
+        view.message = Message::initializer("presentation-only");
+        view.primary.message = Message::binding_annotation("presentation-only");
         let mut after = Vec::new();
         write_json(&mut after, &view).unwrap();
         assert_eq!(before, after);

@@ -29,50 +29,58 @@ impl Locale {
     }
 }
 
-// One local declaration supplies construction, formatting and test coverage.
-// This is deliberately limited to the retained messages' borrowed code values.
-macro_rules! messages {
-    ($( $(#[$doc:meta])* $variant:ident => $key:literal { $($argument:ident),* } ),* $(,)?) => {
-        /// A message with checked argument names and arity, borrowing phase facts.
-        /// Presentation identities are not JSON reason codes.
-        ///
-        /// Missing arguments and wrong value types fail to compile:
-        /// ```compile_fail
-        /// use ash::message::Message;
-        /// let _ = Message::BindingInitializer { expected: "Bool" };
-        /// ```
-        /// ```compile_fail
-        /// use ash::message::Message;
-        /// let _ = Message::Initializer { found: 42 };
-        /// ```
-        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-        pub enum Message<'a> {
-            $( $(#[$doc])* $variant { $($argument: &'a str),* } ),*
-        }
+/// A checked message borrowing phase facts. Private fields restrict construction
+/// to declared keys and named arguments. Presentation keys are not JSON reasons.
+///
+/// Missing arguments and wrong value types fail to compile:
+/// ```compile_fail
+/// use ash::message::Message;
+/// let _ = Message::binding_initializer("Bool");
+/// ```
+/// ```compile_fail
+/// use ash::message::Message;
+/// let _ = Message::initializer(42);
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Message<'a> {
+    key: &'static str,
+    arguments: Vec<(&'static str, &'a str)>,
+}
 
+impl<'a> Message<'a> {
+    fn parts(&self) -> (&'static str, &[(&'static str, &'a str)]) {
+        (self.key, &self.arguments)
+    }
+}
+
+// One declaration supplies typed constructors and exhaustive test examples.
+// The concrete carrier remains visible to the source ownership inventory.
+macro_rules! messages {
+    ($( $(#[$doc:meta])* $constructor:ident => $key:literal { $($argument:ident),* } ),* $(,)?) => {
         impl<'a> Message<'a> {
-            fn parts(self) -> (&'static str, Vec<(&'static str, &'a str)>) {
-                match self {
-                    $(Self::$variant { $($argument),* } =>
-                        ($key, vec![$((stringify!($argument), $argument)),*])),*
+            $(
+                $(#[$doc])*
+                #[must_use]
+                pub fn $constructor($($argument: &'a str),*) -> Self {
+                    Self { key: $key, arguments: vec![$((stringify!($argument), $argument)),*] }
                 }
-            }
+            )*
 
             #[cfg(test)]
-            const EXAMPLES: &'static [Message<'static>] = &[
-                $(Message::$variant { $($argument: stringify!($argument)),* }),*
-            ];
+            fn examples() -> Vec<Message<'static>> {
+                vec![$(Message::$constructor($(stringify!($argument)),*)),*]
+            }
         }
     };
 }
 
 messages! {
     /// A binding initializer disagrees with its annotation.
-    BindingInitializer => "binding-initializer" { expected, found },
+    binding_initializer => "binding-initializer" { expected, found },
     /// The initializer's actual type.
-    Initializer => "initializer" { found },
+    initializer => "initializer" { found },
     /// The annotated type requirement.
-    BindingAnnotation => "binding-annotation" { expected },
+    binding_annotation => "binding-annotation" { expected },
 }
 
 /// A defect in an embedded catalogue or its message contract.
@@ -118,10 +126,10 @@ impl Catalogue {
     ///
     /// # Errors
     /// Returns a missing template or argument defect, never a generic message.
-    pub fn format(&self, message: Message<'_>) -> Result<String, CatalogueError> {
+    pub fn format(&self, message: &Message<'_>) -> Result<String, CatalogueError> {
         let (key, values) = message.parts();
         let mut args = FluentArgs::new();
-        for (name, value) in values {
+        for &(name, value) in values {
             args.set(name, value);
         }
         let message = self
@@ -177,12 +185,11 @@ mod tests {
         let Ok(resource) = fluent_syntax::parser::parse(source) else {
             return false;
         };
-        let expected: BTreeMap<_, BTreeSet<_>> = Message::EXAMPLES
-            .iter()
-            .copied()
+        let expected: BTreeMap<_, BTreeSet<_>> = Message::examples()
+            .into_iter()
             .map(|message| {
                 let (key, values) = message.parts();
-                (key, values.into_iter().map(|(name, _)| name).collect())
+                (key, values.iter().map(|(name, _)| *name).collect())
             })
             .collect();
         let mut actual = BTreeMap::new();
@@ -210,8 +217,8 @@ mod tests {
         assert!(contract_matches(include_str!("../locales/bg.ftl")));
         for locale in [Locale::English, Locale::Bulgarian] {
             let catalogue = Catalogue::new(locale).unwrap();
-            for &message in Message::EXAMPLES {
-                assert!(!catalogue.format(message).unwrap().is_empty());
+            for message in Message::examples() {
+                assert!(!catalogue.format(&message).unwrap().is_empty());
             }
         }
     }
@@ -231,7 +238,7 @@ mod tests {
 
     #[test]
     fn wording_changes_preserve_message_arguments_and_machine_facts() {
-        let message = Message::Initializer { found: "Int" };
+        let message = Message::initializer("Int");
         let before = message.parts();
         let text = include_str!("../locales/en-US.ftl")
             .replace("This initializer has type", "The initial value has type");
@@ -242,7 +249,7 @@ mod tests {
             .add_resource(FluentResource::try_new(text).unwrap())
             .unwrap();
         assert_eq!(
-            Catalogue { bundle }.format(message).unwrap(),
+            Catalogue { bundle }.format(&message).unwrap(),
             "The initial value has type `Int`."
         );
         assert_eq!(message.parts(), before);

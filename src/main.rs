@@ -62,11 +62,13 @@ where
                 2
             }
         }
-        Err(FileFailure::Pipeline(PipelineFailure::Runtime(RuntimeFailure::Report(report)))) => {
-            let _ = render::write_runtime_report(stderr, &report);
-            2
-        }
         Err(failure) => {
+            if let Some(PipelineFailure::Runtime(RuntimeFailure::Report(report))) =
+                failure.pipeline_failure()
+            {
+                let _ = render::write_runtime_report(stderr, report);
+                return 2;
+            }
             let status = if failure.is_source_rejection() { 1 } else { 2 };
             if write_output(stderr, render::file_failure(&failure).as_bytes()).is_ok() {
                 status
@@ -407,7 +409,7 @@ mod tests {
             &mut stdout,
             &mut stderr,
             |_| {
-                Err(FileFailure::Pipeline(PipelineFailure::Runtime(
+                Err(FileFailure::from(PipelineFailure::Runtime(
                     RuntimeFailure::MissingBinding,
                 )))
             },
@@ -463,7 +465,7 @@ mod tests {
                 &mut stdout.as_mut_slice(),
                 &mut remaining,
                 |_| {
-                    Err(FileFailure::Pipeline(PipelineFailure::Runtime(
+                    Err(FileFailure::from(PipelineFailure::Runtime(
                         RuntimeFailure::Report(report),
                     )))
                 },
@@ -510,7 +512,7 @@ mod tests {
             [OsString::from("injected.ash")],
             &mut stdout,
             &mut stderr,
-            |_| Err(FileFailure::Pipeline(PipelineFailure::Runtime(failure))),
+            |_| Err(FileFailure::from(PipelineFailure::Runtime(failure))),
         );
         assert_eq!(status, 2);
         assert!(stdout.is_empty());
@@ -545,7 +547,7 @@ mod tests {
             [OsString::from("injected.ash")],
             &mut stdout,
             &mut stderr,
-            |_| Err(FileFailure::Pipeline(PipelineFailure::Runtime(failure))),
+            |_| Err(FileFailure::from(PipelineFailure::Runtime(failure))),
         );
         assert_eq!(status, 2);
         assert!(stdout.is_empty());
@@ -643,6 +645,6 @@ mod tests {
             &[&source],
         )
         .expect_err("independent validation should reject the malformed type");
-        FileFailure::Pipeline(PipelineFailure::Validation(error))
+        FileFailure::from(PipelineFailure::Validation(error))
     }
 }

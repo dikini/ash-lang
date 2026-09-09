@@ -52,7 +52,7 @@ pub fn run_module(name: &str, source: &str) -> Result<Observation, PipelineFailu
         roots: ModuleRoots::empty(),
     }) {
         Ok(observation) => Ok(observation),
-        Err(FileFailure::Pipeline(failure)) => Err(failure),
+        Err(FileFailure::Pipeline(context)) => Err(context.into_failure()),
         Err(FileFailure::Graph(LoadGraphError::Syntax(failure))) => {
             Err(PipelineFailure::Syntax(Box::new(SyntaxFailure {
                 lexical: failure.lexical,

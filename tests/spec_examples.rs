@@ -725,7 +725,7 @@ fn run(name: &str, text: &str) -> Result<ash::driver::Observation, PipelineFailu
         roots: ModuleRoots::empty(),
     }) {
         Ok(observation) => Ok(observation),
-        Err(FileFailure::Pipeline(failure)) => Err(failure),
+        Err(FileFailure::Pipeline(context)) => Err(context.into_failure()),
         Err(FileFailure::Graph(LoadGraphError::Syntax(failure))) => {
             Err(PipelineFailure::Syntax(Box::new(SyntaxFailure {
                 lexical: failure.lexical,
@@ -1046,7 +1046,8 @@ fn overview_name_only_import_has_structured_unsatisfied_constraint() {
         roots: ModuleRoots::empty(),
     })
     .expect_err("a name-only import should not make implementation evidence available");
-    let FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Interface(diagnostic))) = failure
+    let PipelineFailure::Typing(TypeError::Interface(diagnostic)) =
+        failure.pipeline_failure().expect("pipeline failure")
     else {
         panic!("the name-only method use should retain an interface diagnostic")
     };

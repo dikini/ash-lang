@@ -511,7 +511,9 @@ fn module_newtype_mixed_failures_report_the_earlier_ordinary_payload_kind_owner(
     }
 
     let failure = run(PATH).expect_err("the first ordinary payload kind error must reject");
-    let FileFailure::Pipeline(PipelineFailure::Kind(KindFailure::Source(error))) = failure else {
+    let PipelineFailure::Kind(KindFailure::Source(error)) =
+        failure.pipeline_failure().expect("pipeline failure")
+    else {
         panic!("the earlier ordinary payload must own the mixed failure");
     };
     assert_eq!(error.reason, KindReason::NotApplicable);
@@ -817,18 +819,25 @@ fn assert_source_reason(case: &InvalidCase, failure: &FileFailure) {
         (
             Stage::Resolution,
             ExpectedReason::Resolution(expected),
-            FileFailure::Pipeline(PipelineFailure::Resolution(actual)),
-        ) => assert_eq!(actual.reason, expected, "{}", case.id),
-        (
-            Stage::Kinding,
-            ExpectedReason::Kinding(expected),
-            FileFailure::Pipeline(PipelineFailure::Kind(KindFailure::Source(actual))),
-        ) => assert_eq!(actual.reason, expected, "{}", case.id),
-        (
-            Stage::Typing,
-            ExpectedReason::Typing(expected),
-            FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Source(actual))),
-        ) => assert_eq!(actual.reason, expected, "{}", case.id),
+            FileFailure::Pipeline(context),
+        ) => {
+            let PipelineFailure::Resolution(actual) = context.failure() else {
+                panic!("{} must retain its resolution stage", case.id);
+            };
+            assert_eq!(actual.reason, expected, "{}", case.id);
+        }
+        (Stage::Kinding, ExpectedReason::Kinding(expected), FileFailure::Pipeline(context)) => {
+            let PipelineFailure::Kind(KindFailure::Source(actual)) = context.failure() else {
+                panic!("{} must retain its kind stage", case.id);
+            };
+            assert_eq!(actual.reason, expected, "{}", case.id);
+        }
+        (Stage::Typing, ExpectedReason::Typing(expected), FileFailure::Pipeline(context)) => {
+            let PipelineFailure::Typing(TypeError::Source(actual)) = context.failure() else {
+                panic!("{} must retain its typing stage", case.id);
+            };
+            assert_eq!(actual.reason, expected, "{}", case.id);
+        }
         _ => panic!(
             "{} expected {:?} at {:?}, found {failure:?}",
             case.id, case.reason, case.stage

@@ -5,7 +5,7 @@ use std::{
 };
 
 use ash::{
-    driver::{FileFailure, PipelineFailure, RunConfiguration, run_path},
+    driver::{PipelineFailure, RunConfiguration, run_path},
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, ResolveModuleError, ResolveReason, resolve_module},
     resolved::{Binder, ResolvedDefinition, ResolvedDefinitionKind, ResolvedModule},
@@ -291,7 +291,8 @@ fn repeated_summary_imports_share_one_graph_type_work_budget() {
     })
     .expect_err("repeated dependency-summary retention must share graph type work");
 
-    let FileFailure::Pipeline(PipelineFailure::Resolution(error)) = failure else {
+    let PipelineFailure::Resolution(error) = failure.pipeline_failure().expect("pipeline failure")
+    else {
         panic!("graph type work should remain owned by resolution: {failure:?}");
     };
     assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
@@ -326,7 +327,8 @@ fn repeated_targeted_nominal_metadata_shares_one_graph_type_work_budget() {
     })
     .expect_err("repeated nominal metadata retention must share graph type work");
 
-    let FileFailure::Pipeline(PipelineFailure::Resolution(error)) = failure else {
+    let PipelineFailure::Resolution(error) = failure.pipeline_failure().expect("pipeline failure")
+    else {
         panic!("graph type work should remain owned by resolution: {failure:?}");
     };
     assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
