@@ -918,6 +918,13 @@ localization language. Color is not required for completion.
   variants in both operations. File-dispatch, input, catalogue and reporting
   tests passed, followed by the five catalogue-contract tests and warnings-denied
   Clippy. Bare syntax/projection context and resolver labels remain open.
+- Bare projection errors now render their existing recovery/structure cause or
+  resource limit without requiring a source path. Graph projection errors use
+  the same fact mapping and keep their source path and import label. Four
+  pathless templates cover the retained variants in both locales. Catalogue
+  contract tests, file-dispatch, input and catalogue integration tests passed,
+  as did warnings-denied Clippy. Missing-source fallback remains tested with
+  an unretained lexical source rather than an already-supported projection error.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

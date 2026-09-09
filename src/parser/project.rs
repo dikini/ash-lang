@@ -59,6 +59,20 @@ impl ProjectionError {
             Self::MalformedTree(cause) => Message::projection_malformed(path, cause),
         }
     }
+
+    pub(crate) fn message_without_path(self) -> crate::message::Message<'static> {
+        use crate::message::Message;
+        match self {
+            Self::ResourceLimit(ResourceFailure::StructuralDepth { limit }) => {
+                Message::syntax_depth_unlocated(limit)
+            }
+            Self::ResourceLimit(ResourceFailure::SyntaxWork { limit }) => {
+                Message::syntax_work_unlocated(limit)
+            }
+            Self::RecoveryNodesPresent => Message::projection_recovery_unlocated(),
+            Self::MalformedTree(cause) => Message::projection_malformed_unlocated(cause),
+        }
+    }
 }
 
 /// Projects a complete, recovery-free module tree to surface syntax.

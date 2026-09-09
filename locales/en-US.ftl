@@ -331,6 +331,21 @@ projection-malformed = Ash found inconsistent internal syntax for `{ $path }`: {
     [invalid-span] source spans or end-of-input markers are inconsistent.
    *[unexpected-shape] a syntax node has an unexpected structure.
     }
+syntax-depth-unlocated = Source processing reached the compiler's structural-depth limit of { $limit }.
+syntax-work-unlocated = Source processing reached the compiler's syntax-work limit of { $limit }.
+projection-recovery-unlocated = Ash encountered syntax-recovery markers while converting source syntax to its internal form.
+projection-malformed-unlocated = Ash found inconsistent internal syntax: { $cause ->
+    [unexpected-finish] a closing event has no opening event.
+    [unclosed-node] a syntax node was not closed.
+    [invalid-root-count] syntax events do not form one complete rooted tree.
+    [token-out-of-range] a token index is outside the retained token stream.
+    [duplicate-token] a token was retained more than once.
+    [missing-token] a token is missing from the syntax tree.
+    [token-out-of-order] tokens are not in source order.
+    [foreign-span] a span belongs to another source file.
+    [invalid-span] source spans or end-of-input markers are inconsistent.
+   *[unexpected-shape] a syntax node has an unexpected structure.
+    }
 source-unrepresentable-span = Ash encountered an unrepresentable source length or token offset while constructing a span for `{ $path }`.
 source-path-limit = The display path for `{ $path }` exceeds Ash's source-model limit.
 source-text-limit = The text in `{ $path }` exceeds Ash's source-model size limit.

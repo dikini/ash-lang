@@ -1076,7 +1076,7 @@ pub fn compile_parse_diagnostic<'a>(
 ///
 /// # Errors
 /// Returns an unsupported staged cause or missing source context. Legacy bare
-/// syntax and projection failures do not identify their owning
+/// syntax failures do not identify their owning
 /// source; graph-loading failures retain that context and use the graph adapter.
 pub fn compile_file_diagnostics(
     failure: &crate::driver::FileFailure,
@@ -1123,12 +1123,54 @@ pub fn compile_file_diagnostics(
                 None,
                 "internal.source-model",
             ),
-            PipelineFailure::Syntax(_) | PipelineFailure::Projection(_) => {
+            PipelineFailure::Projection(error) => compile_projection_error(error, None),
+            PipelineFailure::Syntax(_) => {
                 return Err(PresentationError::MissingSource);
             }
         },
     };
     Ok(vec![diagnostic])
+}
+
+fn compile_projection_error<'a>(
+    error: &crate::parser::ProjectionError,
+    path: Option<&'a str>,
+) -> CompileDiagnostic<'a> {
+    let mut facts = Vec::new();
+    if let Some(path) = path {
+        facts.push(Fact {
+            name: "source_path",
+            kind: "path-display",
+            value: FactValue::Text(path),
+        });
+    }
+    match error {
+        crate::parser::ProjectionError::ResourceLimit(
+            ResourceFailure::StructuralDepth { limit } | ResourceFailure::SyntaxWork { limit },
+        ) => facts.push(Fact {
+            name: "limit",
+            kind: "integer",
+            value: FactValue::Integer(*limit),
+        }),
+        crate::parser::ProjectionError::RecoveryNodesPresent => facts.push(Fact {
+            name: "cause",
+            kind: "projection",
+            value: FactValue::Text("recovery-nodes"),
+        }),
+        crate::parser::ProjectionError::MalformedTree(cause) => facts.push(Fact {
+            name: "cause",
+            kind: "projection",
+            value: FactValue::Text(cause.diagnostic_name()),
+        }),
+    }
+    CompileDiagnostic {
+        reason: error.reason_code().into(),
+        responsibility: "compiler",
+        message: path.map_or_else(|| error.message_without_path(), |path| error.message(path)),
+        primary: None,
+        related: Vec::new(),
+        facts,
+    }
 }
 
 fn compile_source_model_error<'a>(
@@ -1295,39 +1337,9 @@ pub fn compile_graph_diagnostics(
 ) -> Result<Vec<CompileDiagnostic<'_>>, PresentationError> {
     let failure = context.failure();
     if let LoadGraphError::Projection { source, error, .. } = failure {
-        let path = source.display_path();
-        let mut facts = vec![Fact {
-            name: "source_path",
-            kind: "path-display",
-            value: FactValue::Text(path),
-        }];
-        match error {
-            crate::parser::ProjectionError::ResourceLimit(
-                ResourceFailure::StructuralDepth { limit } | ResourceFailure::SyntaxWork { limit },
-            ) => facts.push(Fact {
-                name: "limit",
-                kind: "integer",
-                value: FactValue::Integer(*limit),
-            }),
-            crate::parser::ProjectionError::RecoveryNodesPresent => facts.push(Fact {
-                name: "cause",
-                kind: "projection",
-                value: FactValue::Text("recovery-nodes"),
-            }),
-            crate::parser::ProjectionError::MalformedTree(cause) => facts.push(Fact {
-                name: "cause",
-                kind: "projection",
-                value: FactValue::Text(cause.diagnostic_name()),
-            }),
-        }
-        return Ok(vec![CompileDiagnostic {
-            reason: error.reason_code().into(),
-            responsibility: "compiler",
-            message: error.message(path),
-            primary: import_label(context, "import_context")?,
-            related: Vec::new(),
-            facts,
-        }]);
+        let mut diagnostic = compile_projection_error(error, Some(source.display_path()));
+        diagnostic.primary = import_label(context, "import_context")?;
+        return Ok(vec![diagnostic]);
     }
     if let LoadGraphError::SourceModel {
         path,
