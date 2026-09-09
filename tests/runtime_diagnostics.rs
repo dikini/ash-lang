@@ -55,6 +55,26 @@ fn failure() -> RuntimeFailure {
 }
 
 #[test]
+fn runtime_dispatch_preserves_json_when_preexecution_preparation_failed() {
+    use ash::diagnostic_options::MessageFormat;
+    let mut expected = [0; 4096];
+    let mut remaining = expected.as_mut_slice();
+    render::write_runtime_json(&mut remaining, failure()).unwrap();
+    let length = 4096 - remaining.len();
+    for format in [
+        MessageFormat::Human,
+        MessageFormat::Short,
+        MessageFormat::Json,
+    ] {
+        let mut output = [0; 4096];
+        let mut remaining = output.as_mut_slice();
+        render::write_runtime_diagnostic(&mut remaining, failure(), format, None).unwrap();
+        let used = 4096 - remaining.len();
+        assert_eq!(&output[..used], &expected[..length]);
+    }
+}
+
+#[test]
 fn runtime_human_leads_with_an_explanation() {
     let catalogue = ash::message::Catalogue::new(ash::message::Locale::English).unwrap();
     let messages = render::PreparedRuntimeMessages::new(&catalogue).unwrap();

@@ -1619,6 +1619,81 @@ mod tests {
     use fluent_syntax::ast::{Entry, Expression, InlineExpression, Pattern, PatternElement};
     use std::collections::{BTreeMap, BTreeSet};
 
+    #[test]
+    fn catalogue_failure_falls_back_before_output_and_retains_all_diagnostic_data() {
+        use crate::{
+            diagnostic::{Diagnostic, SourceLabel},
+            diagnostic_options::MessageFormat,
+            elaborate::TypeReason,
+            presentation::{
+                compile_type_diagnostic, write_compile_diagnostic, write_human, write_json,
+            },
+            source::{ByteRange, SourceFile},
+        };
+        let source = SourceFile::new("fallback.ash", "Bool 1").unwrap();
+        let mut diagnostic = Diagnostic::new(
+            TypeReason::BindingInitializer,
+            SourceLabel::new(
+                source.span(ByteRange::new(5, 6).unwrap()).unwrap(),
+                "ignored",
+            ),
+        );
+        diagnostic.related.push(SourceLabel::new(
+            source.span(ByteRange::new(0, 4).unwrap()).unwrap(),
+            "ignored",
+        ));
+        diagnostic.expected = Some("Bool".into());
+        diagnostic.found = Some("Int".into());
+        let diagnostic = diagnostic.into();
+        let view = compile_type_diagnostic(&diagnostic, &[&source]).unwrap();
+        let mut expected = Vec::new();
+        write_json(&mut expected, &view).unwrap();
+        for text in [
+            "",
+            "binding-initializer = { $absent }\n",
+            "binding-initializer = Prepared headline\n",
+        ] {
+            let mut bundle = FluentBundle::new(vec!["en-US".parse().unwrap()]);
+            bundle
+                .add_resource(FluentResource::try_new(text.to_owned()).unwrap())
+                .unwrap();
+            let catalogue = Catalogue { bundle };
+            let mut output = Vec::new();
+            assert!(write_human(&mut output, &view, &catalogue).is_err());
+            assert!(
+                output.is_empty(),
+                "a later label defect must not leave a partial headline"
+            );
+            write_compile_diagnostic(&mut output, &view, MessageFormat::Human, Some(&catalogue))
+                .unwrap();
+            assert_eq!(output, expected);
+            if !text.contains("Prepared headline") {
+                output.clear();
+                write_compile_diagnostic(
+                    &mut output,
+                    &view,
+                    MessageFormat::Short,
+                    Some(&catalogue),
+                )
+                .unwrap();
+                assert_eq!(output, expected);
+            }
+            output.clear();
+            write_compile_diagnostic(&mut output, &view, MessageFormat::Json, Some(&catalogue))
+                .unwrap();
+            assert_eq!(output, expected);
+        }
+        for format in [
+            MessageFormat::Human,
+            MessageFormat::Short,
+            MessageFormat::Json,
+        ] {
+            let mut output = Vec::new();
+            write_compile_diagnostic(&mut output, &view, format, None).unwrap();
+            assert_eq!(output, expected);
+        }
+    }
+
     fn variables<'a>(
         pattern: &'a Pattern<&'a str>,
         patterns: &BTreeMap<&'a str, &'a Pattern<&'a str>>,

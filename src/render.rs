@@ -3,7 +3,9 @@
 use std::fmt::Write;
 
 mod runtime;
-pub use runtime::{PreparedRuntimeMessages, write_runtime_human, write_runtime_short};
+pub use runtime::{
+    PreparedRuntimeMessages, write_runtime_diagnostic, write_runtime_human, write_runtime_short,
+};
 
 use crate::{
     diagnostic::{Diagnostic, compare_source_spans},
@@ -207,6 +209,23 @@ fn resource_details(
         }
     }
     Ok(())
+}
+
+/// Gives formatting and serialization the same no-retry write policy as runtime reporting.
+pub(crate) struct DiagnosticWriter<'a, W>(pub(crate) &'a mut W);
+
+impl<W: std::io::Write> std::io::Write for DiagnosticWriter<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.write(bytes)
+    }
+
+    fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        fragment(self.0, bytes)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
 }
 
 fn fragment(writer: &mut impl std::io::Write, mut bytes: &[u8]) -> std::io::Result<()> {

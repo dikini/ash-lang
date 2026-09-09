@@ -1391,8 +1391,23 @@ pub fn write_human(
     diagnostic: &CompileDiagnostic<'_>,
     catalogue: &Catalogue,
 ) -> Result<(), RenderError> {
-    writeln!(writer, "{}", catalogue.format(&diagnostic.message)?)?;
-    for label in diagnostic.primary.iter().chain(&diagnostic.related) {
+    // Finish catalogue work before publishing any text. A failed catalogue can
+    // then fall back without leaving a half-written localized diagnostic.
+    let message = catalogue.format(&diagnostic.message)?;
+    let label_messages = diagnostic
+        .primary
+        .iter()
+        .chain(&diagnostic.related)
+        .map(|label| catalogue.format(&label.message))
+        .collect::<Result<Vec<_>, _>>()?;
+    let writer = &mut crate::render::DiagnosticWriter(writer);
+    writeln!(writer, "{message}")?;
+    for (label, message) in diagnostic
+        .primary
+        .iter()
+        .chain(&diagnostic.related)
+        .zip(label_messages)
+    {
         // Sources and spans were checked by the adapter above.
         let location = label
             .source
@@ -1416,7 +1431,7 @@ pub fn write_human(
             writer,
             "  | {}^ {}",
             " ".repeat((column - 1) as usize),
-            catalogue.format(&label.message)?
+            message
         )?;
     }
     writeln!(writer, "reason: {}", diagnostic.reason)?;
@@ -1432,6 +1447,8 @@ pub fn write_short(
     diagnostic: &CompileDiagnostic<'_>,
     catalogue: &Catalogue,
 ) -> Result<(), RenderError> {
+    let message = catalogue.format(&diagnostic.message)?;
+    let writer = &mut crate::render::DiagnosticWriter(writer);
     if let Some(label) = &diagnostic.primary {
         let location = label
             .source
@@ -1445,12 +1462,7 @@ pub fn write_short(
             location.start().column()
         )?;
     }
-    writeln!(
-        writer,
-        "{} [{}]",
-        catalogue.format(&diagnostic.message)?,
-        diagnostic.reason
-    )?;
+    writeln!(writer, "{} [{}]", message, diagnostic.reason)?;
     Ok(())
 }
 
@@ -1500,6 +1512,7 @@ pub fn write_json(
     writer: &mut impl Write,
     diagnostic: &CompileDiagnostic<'_>,
 ) -> Result<(), RenderError> {
+    let writer = &mut crate::render::DiagnosticWriter(writer);
     let labels = diagnostic
         .primary
         .iter()
@@ -1524,6 +1537,35 @@ pub fn write_json(
     serde_json::to_writer(&mut *writer, &data).map_err(RenderError::Json)?;
     writer.write_all(b"\n")?;
     Ok(())
+}
+
+/// Writes and flushes one compile-time diagnostic in the selected format.
+///
+/// An absent or defective catalogue falls back to the same locale-independent
+/// JSON record, preserving the original reason, facts and labels. JSON output
+/// never needs a catalogue. This allocating compile-time interface must not be
+/// used for runtime resource failures.
+///
+/// # Errors
+/// Returns the first output failure without retrying, flushing after a failed
+/// write, or recursively reporting the reporting failure.
+pub fn write_compile_diagnostic(
+    writer: &mut impl Write,
+    diagnostic: &CompileDiagnostic<'_>,
+    format: crate::diagnostic_options::MessageFormat,
+    catalogue: Option<&Catalogue>,
+) -> Result<(), RenderError> {
+    use crate::diagnostic_options::MessageFormat;
+    let result = match (format, catalogue) {
+        (MessageFormat::Json, _) | (_, None) => write_json(writer, diagnostic),
+        (MessageFormat::Human, Some(catalogue)) => write_human(writer, diagnostic, catalogue),
+        (MessageFormat::Short, Some(catalogue)) => write_short(writer, diagnostic, catalogue),
+    };
+    match result {
+        Err(RenderError::Catalogue(_)) => write_json(writer, diagnostic)?,
+        other => other?,
+    }
+    writer.flush().map_err(RenderError::Write)
 }
 
 #[cfg(test)]

@@ -848,6 +848,20 @@ localization language. Color is not required for completion.
   14 executable tests, 13 CLI tests, three catalogue tests, one compile-time JSON
   test and warnings-denied Clippy passed. Selection is not yet wired into the
   executable; its current default remains unchanged.
+- Compile-time and runtime reporting now have separate format-dispatch entry
+  points. Missing or defective localization falls back to the original JSON
+  record, retaining reasons, facts and labels; runtime fallback does not
+  allocate. Compile-time human output prepares its message and labels before
+  writing, so a later catalogue defect cannot publish a partial diagnostic.
+  A regression test exposed interrupted-write retries in compile-time formatting;
+  a small writer adapter now applies the existing no-retry policy to text and
+  serialization. Tests cover absent, missing and malformed catalogue messages,
+  label failure after a valid headline, byte-by-byte writer failure in both
+  locales and all formats, and flush failure without retry. All 1,287 library
+  tests, 14 executable tests, 13 CLI tests, 93 compile-time diagnostic/catalogue/
+  reporting tests, nine runtime-reporting tests and warnings-denied Clippy
+  passed. These APIs are ready for executable dispatch; the CLI itself is not
+  wired yet and the remaining compiler-internal presentation gaps stay open.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

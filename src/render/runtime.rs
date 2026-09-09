@@ -258,6 +258,28 @@ fn prepared<T: PartialEq>(entries: &[(T, String)], key: T) -> io::Result<&str> {
         .ok_or_else(|| io::ErrorKind::InvalidData.into())
 }
 
+/// Writes one runtime diagnostic using the selected format and prepared text.
+///
+/// If pre-execution catalogue preparation failed, pass `None` to retain the
+/// original diagnostic as allocation-independent JSON in every format. This
+/// interface never prepares messages or attempts to recover from a writer error.
+///
+/// # Errors
+/// Returns the first reporting error without retry or recursive reporting.
+pub fn write_runtime_diagnostic(
+    writer: &mut impl Write,
+    failure: RuntimeFailure,
+    format: crate::diagnostic_options::MessageFormat,
+    messages: Option<&PreparedRuntimeMessages>,
+) -> io::Result<()> {
+    use crate::diagnostic_options::MessageFormat;
+    match (format, messages) {
+        (MessageFormat::Json, _) | (_, None) => super::write_runtime_json(writer, failure),
+        (MessageFormat::Human, Some(messages)) => write_runtime_human(writer, failure, messages),
+        (MessageFormat::Short, Some(messages)) => write_runtime_short(writer, failure, messages),
+    }
+}
+
 /// Writes a human-first runtime report using previously prepared messages.
 ///
 /// The writer owns its storage policy. Reporting allocates no storage, invokes
