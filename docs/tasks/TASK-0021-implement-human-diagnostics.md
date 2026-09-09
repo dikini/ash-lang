@@ -599,6 +599,13 @@ localization language. Color is not required for completion.
   kind-checker tests, three catalogue tests and warnings-denied Clippy passed.
   There are 333 templates per locale. Existing checks, work charges, spans and
   legacy explanations are unchanged.
+- Nominal, newtype and declaration-order kind failures add 23 causes at 24
+  sites, including payload ownership/provenance and invalid preflight indices.
+  The cumulative internal-state migration covers 67 causes at 89 sites. Shared
+  lookup helpers and other remaining paths still require cause retention, so
+  the family is not complete. All 28 kind-checker tests, three catalogue tests
+  and warnings-denied Clippy passed. Catalogues contain 356 templates each;
+  validation checks, resource charges and legacy text remain unchanged.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

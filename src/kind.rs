@@ -225,6 +225,29 @@ pub enum KindFailure {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum KindInternalCause {
+    ConstructorMovedProvenance,
+    ConstructorOwner,
+    PayloadCardinality,
+    PayloadIdentity,
+    NominalPayloadProvenance,
+    NewtypePayload,
+    NewtypeConstructorCount,
+    NewtypeRepresentationCount,
+    NewtypeRepresentation,
+    NewtypeFieldProvenance,
+    LexicalNominal,
+    LexicalNewtypeConstructor,
+    LexicalNewtypeCount,
+    LexicalNewtypeRepresentation,
+    LexicalNewtypeProvenance,
+    ImportedNominalParameters,
+    PayloadSchemeFunction,
+    DeclarationOrder,
+    DeclarationCoverage,
+    KindPreflightGlobal,
+    KindPreflightImplementation,
+    PreflightGlobal,
+    PreflightImplementation,
     InvalidTypeProvenance,
     TypeProvenanceOwner,
     AtomicTypeProvenance,
@@ -274,6 +297,29 @@ enum KindInternalCause {
 impl KindInternalCause {
     fn name(self) -> &'static str {
         match self {
+            Self::ConstructorMovedProvenance => "constructor-moved-provenance",
+            Self::ConstructorOwner => "constructor-owner",
+            Self::PayloadCardinality => "payload-cardinality",
+            Self::PayloadIdentity => "payload-identity",
+            Self::NominalPayloadProvenance => "nominal-payload-provenance",
+            Self::NewtypePayload => "newtype-payload",
+            Self::NewtypeConstructorCount => "newtype-constructor-count",
+            Self::NewtypeRepresentationCount => "newtype-representation-count",
+            Self::NewtypeRepresentation => "newtype-representation",
+            Self::NewtypeFieldProvenance => "newtype-field-provenance",
+            Self::LexicalNominal => "lexical-nominal",
+            Self::LexicalNewtypeConstructor => "lexical-newtype-constructor",
+            Self::LexicalNewtypeCount => "lexical-newtype-count",
+            Self::LexicalNewtypeRepresentation => "lexical-newtype-representation",
+            Self::LexicalNewtypeProvenance => "lexical-newtype-provenance",
+            Self::ImportedNominalParameters => "imported-nominal-parameters",
+            Self::PayloadSchemeFunction => "payload-scheme-function",
+            Self::DeclarationOrder => "declaration-order",
+            Self::DeclarationCoverage => "declaration-coverage",
+            Self::KindPreflightGlobal => "kind-preflight-global",
+            Self::KindPreflightImplementation => "kind-preflight-implementation",
+            Self::PreflightGlobal => "preflight-global",
+            Self::PreflightImplementation => "preflight-implementation",
             Self::InvalidTypeProvenance => "invalid-type-provenance",
             Self::TypeProvenanceOwner => "type-provenance-owner",
             Self::AtomicTypeProvenance => "atomic-type-provenance",
@@ -322,6 +368,65 @@ impl KindInternalCause {
     }
     fn legacy(self) -> &'static str {
         match self {
+            Self::ConstructorMovedProvenance => {
+                "a constructor payload and its moved provenance disagree"
+            }
+            Self::ConstructorOwner => "canonical constructor ownership disagrees with its nominal",
+            Self::PayloadCardinality => {
+                "constructor payload provenance has the wrong outer cardinality"
+            }
+            Self::PayloadIdentity => {
+                "constructor payload provenance is paired with the wrong identity"
+            }
+            Self::NominalPayloadProvenance => {
+                "a nominal has incomplete constructor payload provenance"
+            }
+            Self::NewtypePayload => "a newtype constructor retains an ordinary payload",
+            Self::NewtypeConstructorCount => {
+                "a newtype does not retain exactly one constructor identity"
+            }
+            Self::NewtypeRepresentationCount => {
+                "a newtype does not retain exactly one representation provenance"
+            }
+            Self::NewtypeRepresentation => "a newtype does not retain its canonical representation",
+            Self::NewtypeFieldProvenance => {
+                "a newtype representation does not retain exactly one field provenance"
+            }
+            Self::LexicalNominal => "a lexical nominal fact is not a lexical newtype",
+            Self::LexicalNewtypeConstructor => {
+                "a lexical newtype constructor has invalid ownership or payload"
+            }
+            Self::LexicalNewtypeCount => {
+                "a lexical newtype does not retain exactly one constructor identity"
+            }
+            Self::LexicalNewtypeRepresentation => {
+                "a lexical newtype does not retain its canonical representation"
+            }
+            Self::LexicalNewtypeProvenance => {
+                "a lexical newtype does not retain representation provenance"
+            }
+            Self::ImportedNominalParameters => {
+                "an imported nominal has an incomplete canonical parameter slice"
+            }
+            Self::PayloadSchemeFunction => {
+                "a payload constructor scheme does not have an outer function"
+            }
+            Self::DeclarationOrder => {
+                "declaration order contains a duplicate or out of source order index"
+            }
+            Self::DeclarationCoverage => "declaration order under-covers local declarations",
+            Self::KindPreflightGlobal => {
+                "interface-application kind preflight found an invalid global index"
+            }
+            Self::KindPreflightImplementation => {
+                "interface-application kind preflight found an invalid implementation index"
+            }
+            Self::PreflightGlobal => {
+                "interface-application preflight found an invalid global index"
+            }
+            Self::PreflightImplementation => {
+                "interface-application preflight found an invalid implementation index"
+            }
             Self::InvalidTypeProvenance => "a resolved type has invalid provenance",
             Self::TypeProvenanceOwner => "a resolved type has mismatched provenance ownership",
             Self::AtomicTypeProvenance => "an atomic resolved type has structural provenance",
@@ -402,6 +507,63 @@ impl KindInternalCause {
     }
     fn message(self) -> crate::message::Message<'static> {
         match self {
+            Self::ConstructorMovedProvenance => {
+                crate::message::Message::kind_internal_constructor_moved_provenance()
+            }
+            Self::ConstructorOwner => crate::message::Message::kind_internal_constructor_owner(),
+            Self::PayloadCardinality => {
+                crate::message::Message::kind_internal_payload_cardinality()
+            }
+            Self::PayloadIdentity => crate::message::Message::kind_internal_payload_identity(),
+            Self::NominalPayloadProvenance => {
+                crate::message::Message::kind_internal_nominal_payload_provenance()
+            }
+            Self::NewtypePayload => crate::message::Message::kind_internal_newtype_payload(),
+            Self::NewtypeConstructorCount => {
+                crate::message::Message::kind_internal_newtype_constructor_count()
+            }
+            Self::NewtypeRepresentationCount => {
+                crate::message::Message::kind_internal_newtype_representation_count()
+            }
+            Self::NewtypeRepresentation => {
+                crate::message::Message::kind_internal_newtype_representation()
+            }
+            Self::NewtypeFieldProvenance => {
+                crate::message::Message::kind_internal_newtype_field_provenance()
+            }
+            Self::LexicalNominal => crate::message::Message::kind_internal_lexical_nominal(),
+            Self::LexicalNewtypeConstructor => {
+                crate::message::Message::kind_internal_lexical_newtype_constructor()
+            }
+            Self::LexicalNewtypeCount => {
+                crate::message::Message::kind_internal_lexical_newtype_count()
+            }
+            Self::LexicalNewtypeRepresentation => {
+                crate::message::Message::kind_internal_lexical_newtype_representation()
+            }
+            Self::LexicalNewtypeProvenance => {
+                crate::message::Message::kind_internal_lexical_newtype_provenance()
+            }
+            Self::ImportedNominalParameters => {
+                crate::message::Message::kind_internal_imported_nominal_parameters()
+            }
+            Self::PayloadSchemeFunction => {
+                crate::message::Message::kind_internal_payload_scheme_function()
+            }
+            Self::DeclarationOrder => crate::message::Message::kind_internal_declaration_order(),
+            Self::DeclarationCoverage => {
+                crate::message::Message::kind_internal_declaration_coverage()
+            }
+            Self::KindPreflightGlobal => {
+                crate::message::Message::kind_internal_kind_preflight_global()
+            }
+            Self::KindPreflightImplementation => {
+                crate::message::Message::kind_internal_kind_preflight_implementation()
+            }
+            Self::PreflightGlobal => crate::message::Message::kind_internal_preflight_global(),
+            Self::PreflightImplementation => {
+                crate::message::Message::kind_internal_preflight_implementation()
+            }
             Self::InvalidTypeProvenance => {
                 crate::message::Message::kind_internal_invalid_type_provenance()
             }
@@ -1182,9 +1344,9 @@ impl<'a> KindEnvironments<'a> {
             (Some(payload), Type::Function(_, _)) => Some(payload),
             (None, _) => None,
             (Some(_), _) => {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "a payload constructor scheme does not have an outer function",
+                    KindInternalCause::PayloadSchemeFunction,
                 ));
             }
         };
@@ -3531,22 +3693,22 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                 )?;
                 if payload_provenance.len() != nominal.constructors.len() {
                     charge_lookup_attempt(nominal.origin.primary_span(), budget)?;
-                    return Err(KindFailure::internal(
+                    return Err(KindFailure::internal_cause(
                         nominal.origin.primary_span(),
-                        "a nominal has incomplete constructor payload provenance",
+                        KindInternalCause::NominalPayloadProvenance,
                     ));
                 }
                 if nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype {
                     let [constructor_id] = nominal.constructors.as_ref() else {
-                        return Err(KindFailure::internal(
+                        return Err(KindFailure::internal_cause(
                             nominal.origin.primary_span(),
-                            "a newtype does not retain exactly one constructor identity",
+                            KindInternalCause::NewtypeConstructorCount,
                         ));
                     };
                     let [payload_provenance] = payload_provenance.as_slice() else {
-                        return Err(KindFailure::internal(
+                        return Err(KindFailure::internal_cause(
                             nominal.origin.primary_span(),
-                            "a newtype does not retain exactly one representation provenance",
+                            KindInternalCause::NewtypeRepresentationCount,
                         ));
                     };
                     budget.charge(1).map_err(|()| {
@@ -3556,9 +3718,9 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                         )
                     })?;
                     if payload_provenance.constructor != *constructor_id {
-                        return Err(KindFailure::internal(
+                        return Err(KindFailure::internal_cause(
                             nominal.origin.primary_span(),
-                            "constructor payload provenance is paired with the wrong identity",
+                            KindInternalCause::PayloadIdentity,
                         ));
                     }
                     let constructor = required_lookup(
@@ -3568,21 +3730,21 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                         budget,
                     )?;
                     if constructor.owner != nominal.id || constructor.payload.is_some() {
-                        return Err(KindFailure::internal(
+                        return Err(KindFailure::internal_cause(
                             constructor.origin.primary_span(),
-                            "a newtype constructor retains an ordinary payload",
+                            KindInternalCause::NewtypePayload,
                         ));
                     }
                     let [field] = payload_provenance.fields.as_slice() else {
-                        return Err(KindFailure::internal(
+                        return Err(KindFailure::internal_cause(
                             constructor.origin.primary_span(),
-                            "a newtype representation does not retain exactly one field provenance",
+                            KindInternalCause::NewtypeFieldProvenance,
                         ));
                     };
                     let representation = nominal.representation.as_ref().ok_or_else(|| {
-                        KindFailure::internal(
+                        KindFailure::internal_cause(
                             nominal.origin.primary_span(),
-                            "a newtype does not retain its canonical representation",
+                            KindInternalCause::NewtypeRepresentation,
                         )
                     })?;
                     environments.expect_value_type_parts(
@@ -3604,9 +3766,9 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                         )
                     })?;
                         if payload_provenance.constructor != *constructor_id {
-                            return Err(KindFailure::internal(
+                            return Err(KindFailure::internal_cause(
                                 nominal.origin.primary_span(),
-                                "constructor payload provenance is paired with the wrong identity",
+                                KindInternalCause::PayloadIdentity,
                             ));
                         }
                         let constructor = required_lookup(
@@ -3616,9 +3778,9 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                             budget,
                         )?;
                         if constructor.id != *constructor_id || constructor.owner != nominal.id {
-                            return Err(KindFailure::internal(
+                            return Err(KindFailure::internal_cause(
                                 constructor.origin.primary_span(),
-                                "canonical constructor ownership disagrees with its nominal",
+                                KindInternalCause::ConstructorOwner,
                             ));
                         }
                         check_constructor_payload(
@@ -3693,15 +3855,15 @@ fn check_lexical_newtype<'a>(
     if nominal.declaration_kind != ResolvedNominalDeclarationKind::Newtype
         || !nominal.id.is_lexical()
     {
-        return Err(KindFailure::internal(
+        return Err(KindFailure::internal_cause(
             nominal.origin.primary_span(),
-            "a lexical nominal fact is not a lexical newtype",
+            KindInternalCause::LexicalNominal,
         ));
     }
     let [constructor_id] = nominal.constructors.as_ref() else {
-        return Err(KindFailure::internal(
+        return Err(KindFailure::internal_cause(
             nominal.origin.primary_span(),
-            "a lexical newtype does not retain exactly one constructor identity",
+            KindInternalCause::LexicalNewtypeCount,
         ));
     };
     let constructor = required_lookup(
@@ -3711,21 +3873,21 @@ fn check_lexical_newtype<'a>(
         budget,
     )?;
     if constructor.owner != nominal.id || constructor.payload.is_some() {
-        return Err(KindFailure::internal(
+        return Err(KindFailure::internal_cause(
             constructor.origin.primary_span(),
-            "a lexical newtype constructor has invalid ownership or payload",
+            KindInternalCause::LexicalNewtypeConstructor,
         ));
     }
     let representation = nominal.representation.as_ref().ok_or_else(|| {
-        KindFailure::internal(
+        KindFailure::internal_cause(
             nominal.origin.primary_span(),
-            "a lexical newtype does not retain its canonical representation",
+            KindInternalCause::LexicalNewtypeRepresentation,
         )
     })?;
     let provenance = nominal.representation_provenance.as_ref().ok_or_else(|| {
-        KindFailure::internal(
+        KindFailure::internal_cause(
             nominal.origin.primary_span(),
-            "a lexical newtype does not retain representation provenance",
+            KindInternalCause::LexicalNewtypeProvenance,
         )
     })?;
     environments.extend_owner_parameters(parameters, budget)?;
@@ -3795,9 +3957,9 @@ fn authenticate_declaration_order(
             }
         };
         if !ordered {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 module.span,
-                "declaration order contains a duplicate or out of source order index",
+                KindInternalCause::DeclarationOrder,
             ));
         }
     }
@@ -3814,9 +3976,9 @@ fn authenticate_declaration_order(
         || next_global != module.definitions.len()
         || next_implementation != module.implementations.len()
     {
-        return Err(KindFailure::internal(
+        return Err(KindFailure::internal_cause(
             module.span,
-            "declaration order under-covers local declarations",
+            KindInternalCause::DeclarationCoverage,
         ));
     }
 
@@ -3827,9 +3989,9 @@ fn authenticate_declaration_order(
         )
     })?;
     if constructor_payload_provenance.len() != module.registry.nominals().len() {
-        return Err(KindFailure::internal(
+        return Err(KindFailure::internal_cause(
             module.span,
-            "constructor payload provenance has the wrong outer cardinality",
+            KindInternalCause::PayloadCardinality,
         ));
     }
     Ok(())
@@ -3843,9 +4005,9 @@ fn authenticate_imported_environments<'a>(
     let imported = &module.imported;
     for nominal in imported.nominals() {
         if nominal.parameter_count != nominal.parameters.len() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 nominal.origin.primary_span(),
-                "an imported nominal has an incomplete canonical parameter slice",
+                KindInternalCause::ImportedNominalParameters,
             ));
         }
         authenticate_unique_parameter_ids(
@@ -3997,9 +4159,9 @@ fn check_constructor_payload(
             })?;
             Ok(())
         }
-        _ => Err(KindFailure::internal(
+        _ => Err(KindFailure::internal_cause(
             constructor.origin.primary_span(),
-            "a constructor payload and its moved provenance disagree",
+            KindInternalCause::ConstructorMovedProvenance,
         )),
     }
 }
@@ -4216,10 +4378,7 @@ fn check_interface_application_kinds_in_owner_environments<'a>(
             | crate::resolved::ResolvedDeclarationIndex::Effect(_) => {}
             crate::resolved::ResolvedDeclarationIndex::Global(index) => {
                 let definition = module.definitions.get(index).ok_or_else(|| {
-                    KindFailure::internal(
-                        module.span,
-                        "interface-application kind preflight found an invalid global index",
-                    )
+                    KindFailure::internal_cause(module.span, KindInternalCause::KindPreflightGlobal)
                 })?;
                 let (parameters, requirements) = match &definition.kind {
                     ResolvedDefinitionKind::Equational(global) => (
@@ -4238,9 +4397,9 @@ fn check_interface_application_kinds_in_owner_environments<'a>(
             }
             crate::resolved::ResolvedDeclarationIndex::Implementation(index) => {
                 let implementation = module.implementations.get(index).ok_or_else(|| {
-                    KindFailure::internal(
+                    KindFailure::internal_cause(
                         module.span,
-                        "interface-application kind preflight found an invalid implementation index",
+                        KindInternalCause::KindPreflightImplementation,
                     )
                 })?;
                 authenticate_owner_parameters(
@@ -4299,10 +4458,7 @@ fn visit_interface_applications(
             | crate::resolved::ResolvedDeclarationIndex::Effect(_) => {}
             crate::resolved::ResolvedDeclarationIndex::Global(index) => {
                 let definition = module.definitions.get(index).ok_or_else(|| {
-                    KindFailure::internal(
-                        module.span,
-                        "interface-application preflight found an invalid global index",
-                    )
+                    KindFailure::internal_cause(module.span, KindInternalCause::PreflightGlobal)
                 })?;
                 let requirements = match &definition.kind {
                     ResolvedDefinitionKind::Equational(global) => &global.interface.requirements,
@@ -4318,9 +4474,9 @@ fn visit_interface_applications(
             }
             crate::resolved::ResolvedDeclarationIndex::Implementation(index) => {
                 let implementation = module.implementations.get(index).ok_or_else(|| {
-                    KindFailure::internal(
+                    KindFailure::internal_cause(
                         module.span,
-                        "interface-application preflight found an invalid implementation index",
+                        KindInternalCause::PreflightImplementation,
                     )
                 })?;
                 if !visit(&implementation.head, budget)? {
@@ -5482,6 +5638,29 @@ mod tests {
             KindInternalCause::DuplicateBinder,
             KindInternalCause::OwnerEffectRow,
             KindInternalCause::MissingOwnerBinder,
+            KindInternalCause::ConstructorMovedProvenance,
+            KindInternalCause::ConstructorOwner,
+            KindInternalCause::PayloadCardinality,
+            KindInternalCause::PayloadIdentity,
+            KindInternalCause::NominalPayloadProvenance,
+            KindInternalCause::NewtypePayload,
+            KindInternalCause::NewtypeConstructorCount,
+            KindInternalCause::NewtypeRepresentationCount,
+            KindInternalCause::NewtypeRepresentation,
+            KindInternalCause::NewtypeFieldProvenance,
+            KindInternalCause::LexicalNominal,
+            KindInternalCause::LexicalNewtypeConstructor,
+            KindInternalCause::LexicalNewtypeCount,
+            KindInternalCause::LexicalNewtypeRepresentation,
+            KindInternalCause::LexicalNewtypeProvenance,
+            KindInternalCause::ImportedNominalParameters,
+            KindInternalCause::PayloadSchemeFunction,
+            KindInternalCause::DeclarationOrder,
+            KindInternalCause::DeclarationCoverage,
+            KindInternalCause::KindPreflightGlobal,
+            KindInternalCause::KindPreflightImplementation,
+            KindInternalCause::PreflightGlobal,
+            KindInternalCause::PreflightImplementation,
             KindInternalCause::InvalidTypeProvenance,
             KindInternalCause::TypeProvenanceOwner,
             KindInternalCause::AtomicTypeProvenance,

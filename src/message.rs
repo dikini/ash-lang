@@ -150,6 +150,52 @@ macro_rules! messages {
 }
 
 messages! {
+    /// The compiler retained constructor payload provenance that disagrees with the moved payload.
+    kind_internal_constructor_moved_provenance => "kind-internal-constructor-moved-provenance" {},
+    /// The compiler retained a canonical constructor owned by a different nominal type.
+    kind_internal_constructor_owner => "kind-internal-constructor-owner" {},
+    /// The compiler retained the wrong number of outer provenance records for a constructor payload.
+    kind_internal_payload_cardinality => "kind-internal-payload-cardinality" {},
+    /// The compiler paired constructor payload provenance with the wrong constructor identity.
+    kind_internal_payload_identity => "kind-internal-payload-identity" {},
+    /// The compiler retained different numbers of nominal constructors and payload provenance records.
+    kind_internal_nominal_payload_provenance => "kind-internal-nominal-payload-provenance" {},
+    /// The compiler retained an ordinary constructor payload for a newtype constructor.
+    kind_internal_newtype_payload => "kind-internal-newtype-payload" {},
+    /// The compiler retained a newtype without exactly one constructor identity.
+    kind_internal_newtype_constructor_count => "kind-internal-newtype-constructor-count" {},
+    /// The compiler retained a newtype without exactly one representation provenance record.
+    kind_internal_newtype_representation_count => "kind-internal-newtype-representation-count" {},
+    /// The compiler failed to retain a newtype's canonical representation.
+    kind_internal_newtype_representation => "kind-internal-newtype-representation" {},
+    /// The compiler retained a newtype representation without exactly one field provenance record.
+    kind_internal_newtype_field_provenance => "kind-internal-newtype-field-provenance" {},
+    /// The compiler retained a lexical nominal record that is not a lexical newtype.
+    kind_internal_lexical_nominal => "kind-internal-lexical-nominal" {},
+    /// The compiler retained a lexical newtype constructor with invalid ownership or an ordinary payload.
+    kind_internal_lexical_newtype_constructor => "kind-internal-lexical-newtype-constructor" {},
+    /// The compiler retained a lexical newtype without exactly one constructor identity.
+    kind_internal_lexical_newtype_count => "kind-internal-lexical-newtype-count" {},
+    /// The compiler failed to retain a lexical newtype's canonical representation.
+    kind_internal_lexical_newtype_representation => "kind-internal-lexical-newtype-representation" {},
+    /// The compiler failed to retain representation provenance for a lexical newtype.
+    kind_internal_lexical_newtype_provenance => "kind-internal-lexical-newtype-provenance" {},
+    /// The compiler retained an imported nominal type whose parameter records disagree with its parameter count.
+    kind_internal_imported_nominal_parameters => "kind-internal-imported-nominal-parameters" {},
+    /// The compiler retained a payload constructor scheme without an outer function type.
+    kind_internal_payload_scheme_function => "kind-internal-payload-scheme-function" {},
+    /// The compiler retained duplicate or out-of-order declaration indices.
+    kind_internal_declaration_order => "kind-internal-declaration-order" {},
+    /// The compiler's declaration order omits local declarations.
+    kind_internal_declaration_coverage => "kind-internal-declaration-coverage" {},
+    /// The compiler encountered an invalid global-definition index during interface-application kind preflight.
+    kind_internal_kind_preflight_global => "kind-internal-kind-preflight-global" {},
+    /// The compiler encountered an invalid implementation index during interface-application kind preflight.
+    kind_internal_kind_preflight_implementation => "kind-internal-kind-preflight-implementation" {},
+    /// The compiler encountered an invalid global-definition index during interface-application preflight.
+    kind_internal_preflight_global => "kind-internal-preflight-global" {},
+    /// The compiler encountered an invalid implementation index during interface-application preflight.
+    kind_internal_preflight_implementation => "kind-internal-preflight-implementation" {},
     /// The compiler retained invalid source provenance for a resolved type.
     kind_internal_invalid_type_provenance => "kind-internal-invalid-type-provenance" {},
     /// The compiler paired a resolved type with source provenance belonging to a different owner.
