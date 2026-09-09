@@ -778,6 +778,14 @@ localization language. Color is not required for completion.
   34 optional-node localized/JSON layouts. Core coverage is 17/23 reasons and
   overall coverage is 173/197. All 1,280 library tests, 86 diagnostic/catalogue
   tests and warnings-denied Clippy passed.
+- Core effect-row diagnostics retain 25 causes for union/removal, dialect and
+  linked-root constraints, request/resource/handler relationships, row-owner
+  exclusion checks and missing inferred rows. Cleanup-row failures retain their
+  source span. Existing permissive removal of absent scoped effects is unchanged.
+  Tests cover row operations, row-owner failures, cleanup source retention and
+  50 optional-node localized/JSON layouts. Core coverage is 18/23 reasons and
+  overall coverage is 174/197. All 1,283 library tests, 86 diagnostic/catalogue
+  tests and warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

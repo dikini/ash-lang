@@ -323,6 +323,31 @@ enum ValidationCause {
     UnresolvedCoreRow,
     UnknownCoreRowBinder,
     NonRowTailKind,
+    CoreCleanupRow(crate::source::Span),
+    RowUnionAmbiguous,
+    RowUnionMissing,
+    RowUnionInfinite,
+    RowRemovalAmbiguous,
+    RowRemovalMissing,
+    RowRemovalInfinite,
+    PureDialectRow,
+    ResourceScopeRow,
+    RequestArgumentType,
+    RequestResultType,
+    RequestEffectRow,
+    LinkedRootEffects,
+    RowOwnerInference,
+    MissingRowOwner,
+    RowOwnerKind,
+    RowOwnerScheme,
+    UnprovedRowLacks,
+    PureNodeEffectRow,
+    MissingChildRow,
+    MissingRowSlot,
+    MissingRootRow,
+    HandlerBodyType,
+    HandlerBodyEffects,
+    HandlerOutputRow,
     UnboundContinuation,
     ContinuationBranchUsage,
     MissingClauseConsumption,
@@ -421,6 +446,27 @@ enum ValidationCause {
 }
 
 impl ValidationError {
+    fn row_union_failure(error: crate::types::EffectRowError, node: NodeId) -> Self {
+        Self::with_cause(
+            match error {
+                crate::types::EffectRowError::Ambiguous => ValidationCause::RowUnionAmbiguous,
+                crate::types::EffectRowError::Missing => ValidationCause::RowUnionMissing,
+                crate::types::EffectRowError::Infinite => ValidationCause::RowUnionInfinite,
+            },
+            Some(node),
+        )
+    }
+
+    fn row_removal_failure(error: crate::types::EffectRowError, node: NodeId) -> Self {
+        Self::with_cause(
+            match error {
+                crate::types::EffectRowError::Ambiguous => ValidationCause::RowRemovalAmbiguous,
+                crate::types::EffectRowError::Missing => ValidationCause::RowRemovalMissing,
+                crate::types::EffectRowError::Infinite => ValidationCause::RowRemovalInfinite,
+            },
+            Some(node),
+        )
+    }
     pub(crate) fn cause_name(&self) -> Option<&'static str> {
         Some(match self.cause? {
             ValidationCause::CapturedResourceEscape { .. } => "captured-resource-escape",
@@ -484,6 +530,31 @@ impl ValidationError {
             ValidationCause::UnresolvedCoreRow => "unresolved-core-row",
             ValidationCause::UnknownCoreRowBinder => "unknown-core-row-binder",
             ValidationCause::NonRowTailKind => "non-row-tail-kind",
+            ValidationCause::CoreCleanupRow(_) => "cleanup-effect-row",
+            ValidationCause::RowUnionAmbiguous => "row-union-ambiguous",
+            ValidationCause::RowUnionMissing => "row-union-missing",
+            ValidationCause::RowUnionInfinite => "row-union-infinite",
+            ValidationCause::RowRemovalAmbiguous => "row-removal-ambiguous",
+            ValidationCause::RowRemovalMissing => "row-removal-missing",
+            ValidationCause::RowRemovalInfinite => "row-removal-infinite",
+            ValidationCause::PureDialectRow => "pure-dialect-row",
+            ValidationCause::ResourceScopeRow => "resource-scope-row",
+            ValidationCause::RequestArgumentType => "request-argument-type",
+            ValidationCause::RequestResultType => "request-result-type",
+            ValidationCause::RequestEffectRow => "request-effect-row",
+            ValidationCause::LinkedRootEffects => "linked-root-effects",
+            ValidationCause::RowOwnerInference => "row-owner-inference",
+            ValidationCause::MissingRowOwner => "missing-row-owner",
+            ValidationCause::RowOwnerKind => "row-owner-kind",
+            ValidationCause::RowOwnerScheme => "row-owner-scheme",
+            ValidationCause::UnprovedRowLacks => "unproved-row-lacks",
+            ValidationCause::PureNodeEffectRow => "pure-node-effect-row",
+            ValidationCause::MissingChildRow => "missing-child-row",
+            ValidationCause::MissingRowSlot => "missing-row-slot",
+            ValidationCause::MissingRootRow => "missing-root-row",
+            ValidationCause::HandlerBodyType => "handler-body-type",
+            ValidationCause::HandlerBodyEffects => "handler-body-effects",
+            ValidationCause::HandlerOutputRow => "handler-output-row",
             ValidationCause::UnboundContinuation => "unbound-continuation",
             ValidationCause::ContinuationBranchUsage => "continuation-branch-usage",
             ValidationCause::MissingClauseConsumption => "missing-clause-consumption",
@@ -609,6 +680,11 @@ impl ValidationError {
     > {
         use crate::message::Message;
         let labels = match self.cause {
+            Some(ValidationCause::CoreCleanupRow(source)) => [
+                Some((source, Message::effect_row_discard_cleanup(), "discard")),
+                None,
+                None,
+            ],
             Some(ValidationCause::CapturedResourceEscape {
                 source,
                 acquisition,
@@ -1571,6 +1647,152 @@ impl ValidationError {
                 (ValidationCause::ResumeArgumentEffects, Some(node)) => {
                     Message::core_validation_resume_argument_effects_node(node)
                 }
+                (ValidationCause::CoreCleanupRow(_), None) => Message::core_cleanup_effect_row(),
+                (ValidationCause::CoreCleanupRow(_), Some(node)) => {
+                    Message::core_cleanup_effect_row_node(node)
+                }
+                (ValidationCause::RowUnionAmbiguous, None) => {
+                    Message::core_validation_row_union_ambiguous()
+                }
+                (ValidationCause::RowUnionAmbiguous, Some(node)) => {
+                    Message::core_validation_row_union_ambiguous_node(node)
+                }
+                (ValidationCause::RowUnionMissing, None) => {
+                    Message::core_validation_row_union_missing()
+                }
+                (ValidationCause::RowUnionMissing, Some(node)) => {
+                    Message::core_validation_row_union_missing_node(node)
+                }
+                (ValidationCause::RowUnionInfinite, None) => {
+                    Message::core_validation_row_union_infinite()
+                }
+                (ValidationCause::RowUnionInfinite, Some(node)) => {
+                    Message::core_validation_row_union_infinite_node(node)
+                }
+                (ValidationCause::RowRemovalAmbiguous, None) => {
+                    Message::core_validation_row_removal_ambiguous()
+                }
+                (ValidationCause::RowRemovalAmbiguous, Some(node)) => {
+                    Message::core_validation_row_removal_ambiguous_node(node)
+                }
+                (ValidationCause::RowRemovalMissing, None) => {
+                    Message::core_validation_row_removal_missing()
+                }
+                (ValidationCause::RowRemovalMissing, Some(node)) => {
+                    Message::core_validation_row_removal_missing_node(node)
+                }
+                (ValidationCause::RowRemovalInfinite, None) => {
+                    Message::core_validation_row_removal_infinite()
+                }
+                (ValidationCause::RowRemovalInfinite, Some(node)) => {
+                    Message::core_validation_row_removal_infinite_node(node)
+                }
+                (ValidationCause::PureDialectRow, None) => {
+                    Message::core_validation_pure_dialect_row()
+                }
+                (ValidationCause::PureDialectRow, Some(node)) => {
+                    Message::core_validation_pure_dialect_row_node(node)
+                }
+                (ValidationCause::ResourceScopeRow, None) => {
+                    Message::core_validation_resource_scope_row()
+                }
+                (ValidationCause::ResourceScopeRow, Some(node)) => {
+                    Message::core_validation_resource_scope_row_node(node)
+                }
+                (ValidationCause::RequestArgumentType, None) => {
+                    Message::core_validation_request_argument_type()
+                }
+                (ValidationCause::RequestArgumentType, Some(node)) => {
+                    Message::core_validation_request_argument_type_node(node)
+                }
+                (ValidationCause::RequestResultType, None) => {
+                    Message::core_validation_request_result_type()
+                }
+                (ValidationCause::RequestResultType, Some(node)) => {
+                    Message::core_validation_request_result_type_node(node)
+                }
+                (ValidationCause::RequestEffectRow, None) => {
+                    Message::core_validation_request_effect_row()
+                }
+                (ValidationCause::RequestEffectRow, Some(node)) => {
+                    Message::core_validation_request_effect_row_node(node)
+                }
+                (ValidationCause::LinkedRootEffects, None) => {
+                    Message::core_validation_linked_root_effects()
+                }
+                (ValidationCause::LinkedRootEffects, Some(node)) => {
+                    Message::core_validation_linked_root_effects_node(node)
+                }
+                (ValidationCause::RowOwnerInference, None) => {
+                    Message::core_validation_row_owner_inference()
+                }
+                (ValidationCause::RowOwnerInference, Some(node)) => {
+                    Message::core_validation_row_owner_inference_node(node)
+                }
+                (ValidationCause::MissingRowOwner, None) => {
+                    Message::core_validation_missing_row_owner()
+                }
+                (ValidationCause::MissingRowOwner, Some(node)) => {
+                    Message::core_validation_missing_row_owner_node(node)
+                }
+                (ValidationCause::RowOwnerKind, None) => Message::core_validation_row_owner_kind(),
+                (ValidationCause::RowOwnerKind, Some(node)) => {
+                    Message::core_validation_row_owner_kind_node(node)
+                }
+                (ValidationCause::RowOwnerScheme, None) => {
+                    Message::core_validation_row_owner_scheme()
+                }
+                (ValidationCause::RowOwnerScheme, Some(node)) => {
+                    Message::core_validation_row_owner_scheme_node(node)
+                }
+                (ValidationCause::UnprovedRowLacks, None) => {
+                    Message::core_validation_unproved_row_lacks()
+                }
+                (ValidationCause::UnprovedRowLacks, Some(node)) => {
+                    Message::core_validation_unproved_row_lacks_node(node)
+                }
+                (ValidationCause::PureNodeEffectRow, None) => {
+                    Message::core_validation_pure_node_effect_row()
+                }
+                (ValidationCause::PureNodeEffectRow, Some(node)) => {
+                    Message::core_validation_pure_node_effect_row_node(node)
+                }
+                (ValidationCause::MissingChildRow, None) => {
+                    Message::core_validation_missing_child_row()
+                }
+                (ValidationCause::MissingChildRow, Some(node)) => {
+                    Message::core_validation_missing_child_row_node(node)
+                }
+                (ValidationCause::MissingRowSlot, None) => {
+                    Message::core_validation_missing_row_slot()
+                }
+                (ValidationCause::MissingRowSlot, Some(node)) => {
+                    Message::core_validation_missing_row_slot_node(node)
+                }
+                (ValidationCause::MissingRootRow, None) => {
+                    Message::core_validation_missing_root_row()
+                }
+                (ValidationCause::MissingRootRow, Some(node)) => {
+                    Message::core_validation_missing_root_row_node(node)
+                }
+                (ValidationCause::HandlerBodyType, None) => {
+                    Message::core_validation_handler_body_type()
+                }
+                (ValidationCause::HandlerBodyType, Some(node)) => {
+                    Message::core_validation_handler_body_type_node(node)
+                }
+                (ValidationCause::HandlerBodyEffects, None) => {
+                    Message::core_validation_handler_body_effects()
+                }
+                (ValidationCause::HandlerBodyEffects, Some(node)) => {
+                    Message::core_validation_handler_body_effects_node(node)
+                }
+                (ValidationCause::HandlerOutputRow, None) => {
+                    Message::core_validation_handler_output_row()
+                }
+                (ValidationCause::HandlerOutputRow, Some(node)) => {
+                    Message::core_validation_handler_output_row_node(node)
+                }
                 (ValidationCause::NonRowTailKind, None) => {
                     Message::core_validation_non_row_tail_kind()
                 }
@@ -1703,6 +1925,31 @@ impl ValidationError {
                 | ValidationCause::UnresolvedCoreRow
                 | ValidationCause::UnknownCoreRowBinder
                 | ValidationCause::NonRowTailKind => ValidationReason::TypeScope,
+                ValidationCause::CoreCleanupRow(_)
+                | ValidationCause::RowUnionAmbiguous
+                | ValidationCause::RowUnionMissing
+                | ValidationCause::RowUnionInfinite
+                | ValidationCause::RowRemovalAmbiguous
+                | ValidationCause::RowRemovalMissing
+                | ValidationCause::RowRemovalInfinite
+                | ValidationCause::PureDialectRow
+                | ValidationCause::ResourceScopeRow
+                | ValidationCause::RequestArgumentType
+                | ValidationCause::RequestResultType
+                | ValidationCause::RequestEffectRow
+                | ValidationCause::LinkedRootEffects
+                | ValidationCause::RowOwnerInference
+                | ValidationCause::MissingRowOwner
+                | ValidationCause::RowOwnerKind
+                | ValidationCause::RowOwnerScheme
+                | ValidationCause::UnprovedRowLacks
+                | ValidationCause::PureNodeEffectRow
+                | ValidationCause::MissingChildRow
+                | ValidationCause::MissingRowSlot
+                | ValidationCause::MissingRootRow
+                | ValidationCause::HandlerBodyType
+                | ValidationCause::HandlerBodyEffects
+                | ValidationCause::HandlerOutputRow => ValidationReason::EffectRow,
                 ValidationCause::UnboundContinuation
                 | ValidationCause::ContinuationBranchUsage
                 | ValidationCause::MissingClauseConsumption
@@ -6499,7 +6746,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         self.charge_type_work(budget.used())?;
         result
             .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(node)))?
-            .map_err(|_| ValidationError::new(ValidationReason::EffectRow, Some(node)))
+            .map_err(|error| ValidationError::row_union_failure(error, node))
     }
 
     fn remove_effect_row_charged(
@@ -6515,7 +6762,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         self.charge_type_work(budget.used())?;
         result
             .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(node)))?
-            .map_err(|_| ValidationError::new(ValidationReason::EffectRow, Some(node)))
+            .map_err(|error| ValidationError::row_removal_failure(error, node))
     }
 
     fn handler_outward_row(
@@ -6537,10 +6784,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             Err(crate::types::EffectRowError::Missing) => {
                 self.union_effect_rows_charged(&EffectRow::empty(), row, node)
             }
-            Err(_) => Err(ValidationError::new(
-                ValidationReason::EffectRow,
-                Some(node),
-            )),
+            Err(error) => Err(ValidationError::row_removal_failure(error, node)),
         }
     }
 
@@ -7019,7 +7263,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
             }
             if F::REQUIRES_EMPTY_ROWS && !F::effect_row(&node.effects).is_empty() {
-                return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+                return Err(ValidationError::with_cause(
+                    ValidationCause::PureDialectRow,
+                    Some(id),
+                ));
             }
             if node.dialect != DialectId::named(F::DIALECT_NAME) {
                 return Err(ValidationError::new(
@@ -10112,8 +10359,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 },
                 None,
             ),
-            super::capture::Failure::CleanupRow { node, .. } => ValidationError::new(
-                ValidationReason::EffectRow,
+            super::capture::Failure::CleanupRow { node, source } => ValidationError::with_cause(
+                ValidationCause::CoreCleanupRow(source),
                 Some(NodeId::new(self.program.arena, node as u32)),
             ),
         })?;
@@ -10376,7 +10623,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             Err(crate::types::EffectRowError::Missing) => {
                 self.union_effect_rows_charged(&EffectRow::empty(), body, id)
             }
-            Err(_) => Err(ValidationError::new(ValidationReason::EffectRow, Some(id))),
+            Err(error) => Err(ValidationError::row_removal_failure(error, id)),
         }
     }
 
@@ -10407,7 +10654,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         let outward = self.resource_outward_row(&body.effects, authority, id)?;
         let expected = self.union_effect_rows_charged(&initializer.effects, &outward, id)?;
         if !self.same_effect_row_charged(&node.effects, &expected, id)? {
-            return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+            return Err(ValidationError::with_cause(
+                ValidationCause::ResourceScopeRow,
+                Some(id),
+            ));
         }
         if authority
             .methods
@@ -10522,15 +10772,25 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     )?;
                     let operand = self.node(request.operand)?;
                     if !self.same_type_charged(&operand.ty, &domain)? {
-                        return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::RequestArgumentType,
+                            Some(id),
+                        ));
                     }
                     let requested = self.singleton_effect_row_charged(&request.effect, id)?;
                     let expected =
                         self.union_effect_rows_charged(&operand.effects, &requested, id)?;
-                    if !self.same_type_charged(&node.ty, &result)?
-                        || !self.same_effect_row_charged(&node.effects, &expected, id)?
-                    {
-                        return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+                    if !self.same_type_charged(&node.ty, &result)? {
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::RequestResultType,
+                            Some(id),
+                        ));
+                    }
+                    if !self.same_effect_row_charged(&node.effects, &expected, id)? {
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::RequestEffectRow,
+                            Some(id),
+                        ));
                     }
                 }
                 EffectExprKind::Operation(EffectOperation::Resume(resume)) => {
@@ -10591,8 +10851,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             }
         }
         if self.module_sources.is_some() && !self.node(self.program.root)?.effects.is_empty() {
-            return Err(ValidationError::new(
-                ValidationReason::EffectRow,
+            return Err(ValidationError::with_cause(
+                ValidationCause::LinkedRootEffects,
                 Some(self.program.root),
             ));
         }
@@ -10670,17 +10930,20 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         type_binders: &CoreTypeBinders<'_>,
         id: NodeId,
     ) -> Result<bool, ValidationError> {
-        let invalid = || ValidationError::new(ValidationReason::EffectRow, Some(id));
+        let invalid = |cause| ValidationError::with_cause(cause, Some(id));
         let resource = || ValidationError::new(ValidationReason::Resource, Some(id));
         self.charge_type_work(1)?;
         let crate::types::EffectRowVariable::Rigid(variable_id) = variable else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::RowOwnerInference));
         };
-        let Some((Kind::EffectRow, owner)) = type_binders.get(&variable_id) else {
-            return Err(invalid());
+        let Some((kind, owner)) = type_binders.get(&variable_id) else {
+            return Err(invalid(ValidationCause::MissingRowOwner));
         };
+        if !matches!(kind, Kind::EffectRow) {
+            return Err(invalid(ValidationCause::RowOwnerKind));
+        }
         let Type::Forall(_, contract) = &self.node(*owner)?.ty else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::RowOwnerScheme));
         };
         let mut work = Vec::new();
         self.charge_type_work(1)?;
@@ -10792,7 +11055,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             }
             if !found {
                 if !self.row_owner_proves_lacks(tail.variable(), fact, type_binders, id)? {
-                    return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::UnprovedRowLacks,
+                        Some(id),
+                    ));
                 }
                 added = true;
             }
@@ -10860,7 +11126,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         if self.same_effect_row_charged(&node.effects, &expected, id)? {
             Ok(())
         } else {
-            Err(ValidationError::new(ValidationReason::EffectRow, Some(id)))
+            Err(ValidationError::with_cause(
+                ValidationCause::PureNodeEffectRow,
+                Some(id),
+            ))
         }
     }
 
@@ -10960,7 +11229,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     let node = self.node(id)?;
                     let child_row = |child: NodeId| {
                         rows.get(&child).and_then(Option::as_ref).ok_or_else(|| {
-                            ValidationError::new(ValidationReason::EffectRow, Some(id))
+                            ValidationError::with_cause(ValidationCause::MissingChildRow, Some(id))
                         })
                     };
                     let row = match &node.kind {
@@ -11055,14 +11324,14 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                         }
                     };
                     *rows.get_mut(&id).ok_or_else(|| {
-                        ValidationError::new(ValidationReason::EffectRow, Some(id))
+                        ValidationError::with_cause(ValidationCause::MissingRowSlot, Some(id))
                     })? = Some(row);
                 }
             }
         }
         rows.remove(&root)
             .flatten()
-            .ok_or_else(|| ValidationError::new(ValidationReason::EffectRow, Some(root)))
+            .ok_or_else(|| ValidationError::with_cause(ValidationCause::MissingRootRow, Some(root)))
     }
 
     fn validate_effect_handler(
@@ -11166,10 +11435,17 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             }
         }
         let remainder = self.handler_outward_row(&body.effects, handler, id)?;
-        if !self.same_type_charged(&body.ty, &node.ty)?
-            || !self.effect_row_subset_charged(&remainder, &node.effects, id)?
-        {
-            return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+        if !self.same_type_charged(&body.ty, &node.ty)? {
+            return Err(ValidationError::with_cause(
+                ValidationCause::HandlerBodyType,
+                Some(id),
+            ));
+        }
+        if !self.effect_row_subset_charged(&remainder, &node.effects, id)? {
+            return Err(ValidationError::with_cause(
+                ValidationCause::HandlerBodyEffects,
+                Some(id),
+            ));
         }
         self.charge_type_work(declaration.operations.len())?;
         let mut covered = Vec::new();
@@ -11225,7 +11501,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         }
         let least = self.least_handler_output(id, type_binders)?;
         if !self.same_effect_row_charged(&node.effects, &least, id)? {
-            return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+            return Err(ValidationError::with_cause(
+                ValidationCause::HandlerOutputRow,
+                Some(id),
+            ));
         }
         Ok(())
     }
@@ -11316,6 +11595,260 @@ pub(super) use tests::{registration_proof_check, registration_proof_program};
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn core_effect_row_messages_preserve_the_failed_relationship() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, english) in [
+            (
+                ValidationCause::RowUnionAmbiguous,
+                "row-union-ambiguous",
+                "Core effect-row union would strengthen or equate unrelated open tails.",
+            ),
+            (
+                ValidationCause::RowUnionMissing,
+                "row-union-missing",
+                "Core effect-row union requires an effect instance that is absent.",
+            ),
+            (
+                ValidationCause::RowUnionInfinite,
+                "row-union-infinite",
+                "Core effect-row union would make a row tail contain itself.",
+            ),
+            (
+                ValidationCause::RowRemovalAmbiguous,
+                "row-removal-ambiguous",
+                "Core effect removal cannot establish the required relation with an open row tail.",
+            ),
+            (
+                ValidationCause::RowRemovalMissing,
+                "row-removal-missing",
+                "The compiler tried to remove an effect instance absent from a Core row.",
+            ),
+            (
+                ValidationCause::RowRemovalInfinite,
+                "row-removal-infinite",
+                "Core effect removal would make a row tail contain itself.",
+            ),
+            (
+                ValidationCause::PureDialectRow,
+                "pure-dialect-row",
+                "The compiler retained effects in a Core dialect that requires empty rows.",
+            ),
+            (
+                ValidationCause::ResourceScopeRow,
+                "resource-scope-row",
+                "A Core resource scope's effects differ from its initializer and outward body effects.",
+            ),
+            (
+                ValidationCause::RequestArgumentType,
+                "request-argument-type",
+                "A Core effect request's operand type differs from its operation's domain.",
+            ),
+            (
+                ValidationCause::RequestResultType,
+                "request-result-type",
+                "A Core effect request's result type differs from its operation's result type.",
+            ),
+            (
+                ValidationCause::RequestEffectRow,
+                "request-effect-row",
+                "A Core effect request's row differs from the union of its operand effects and requested effect.",
+            ),
+            (
+                ValidationCause::LinkedRootEffects,
+                "linked-root-effects",
+                "The compiler retained unhandled effects at the linked Core program's root.",
+            ),
+            (
+                ValidationCause::RowOwnerInference,
+                "row-owner-inference",
+                "The compiler tried to authenticate row exclusions using an unresolved inference tail.",
+            ),
+            (
+                ValidationCause::MissingRowOwner,
+                "missing-row-owner",
+                "The compiler has no type-binder owner for a row exclusion check.",
+            ),
+            (
+                ValidationCause::RowOwnerKind,
+                "row-owner-kind",
+                "The compiler used a binder of a kind other than EffectRow to authenticate row exclusions.",
+            ),
+            (
+                ValidationCause::RowOwnerScheme,
+                "row-owner-scheme",
+                "The owner of a Core row tail has no quantified type from which to authenticate exclusions.",
+            ),
+            (
+                ValidationCause::UnprovedRowLacks,
+                "unproved-row-lacks",
+                "A Core row reports an effect exclusion not established by its binder's contract.",
+            ),
+            (
+                ValidationCause::PureNodeEffectRow,
+                "pure-node-effect-row",
+                "A Core node's recorded effects differ from its evaluated children and latent function effects.",
+            ),
+            (
+                ValidationCause::MissingChildRow,
+                "missing-child-row",
+                "The compiler needs a child's inferred handler-output row before it is available.",
+            ),
+            (
+                ValidationCause::MissingRowSlot,
+                "missing-row-slot",
+                "The compiler has no result slot for a node's inferred handler-output row.",
+            ),
+            (
+                ValidationCause::MissingRootRow,
+                "missing-root-row",
+                "The compiler has no inferred output row for the handler root.",
+            ),
+            (
+                ValidationCause::HandlerBodyType,
+                "handler-body-type",
+                "A Core handler's body type differs from its result type.",
+            ),
+            (
+                ValidationCause::HandlerBodyEffects,
+                "handler-body-effects",
+                "A Core handler's body has outward effects absent from the handler's output row.",
+            ),
+            (
+                ValidationCause::HandlerOutputRow,
+                "handler-output-row",
+                "A Core handler's recorded output row differs from its least inferred output row.",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 42))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.effect-row");
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(
+                    json["facts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn core_cleanup_row_presentation_retains_its_source() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{
+                PresentationError, compile_core_validation_failure, write_human, write_json,
+            },
+        };
+        let file = source();
+        let span = origin(&file).primary_span();
+        for node in [
+            None,
+            Some(NodeId::new(super::super::dialect::ArenaId::new(101), 42)),
+        ] {
+            let error = ValidationError::with_cause(ValidationCause::CoreCleanupRow(span), node);
+            assert!(matches!(
+                compile_core_validation_failure(&error, &[]),
+                Err(PresentationError::MissingSource)
+            ));
+            let view = compile_core_validation_failure(&error, &[&file]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                if locale == Locale::English {
+                    assert!(
+                        String::from_utf8(output)
+                            .unwrap()
+                            .contains("does not match its cleanup obligations")
+                    );
+                }
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["reason"], "core.validation.effect-row");
+            assert_eq!(json["responsibility"], "compiler");
+            assert_eq!(json["labels"][0]["relationship"], "discard");
+            assert_eq!(json["labels"][0]["byte_start"], span.range().start());
+            assert_eq!(json["labels"][0]["byte_end"], span.range().end());
+        }
+    }
+
+    #[test]
+    fn core_row_operations_retain_their_failure_cause() {
+        let file = source();
+        let mut builder =
+            crate::core::EffectCoreBuilder::with_effect_registry(Arc::new(Default::default()));
+        let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let program = builder.finish(root).unwrap();
+        let validator = Validator::new(&program, &[&file]);
+        let row = |id| {
+            EffectRow::open(
+                crate::types::EffectRowVariable::Rigid(crate::types::TypeVariableId::new(id)),
+                Box::new([]),
+            )
+        };
+        let error = validator
+            .union_effect_rows_charged(&row(0), &row(1), root)
+            .unwrap_err();
+        assert_eq!(error.reason(), ValidationReason::EffectRow);
+        assert_eq!(error.cause, Some(ValidationCause::RowUnionAmbiguous));
+        assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
+        validator
+            .union_effect_rows_charged(&row(0), &row(0), root)
+            .unwrap();
+        let effect = EffectInstance::new(
+            crate::types::EffectId::new(ModuleId::from(file.id()), 0),
+            Box::new([]),
+        );
+        let error = validator
+            .remove_effect_row_charged(&EffectRow::empty(), &effect, root)
+            .unwrap_err();
+        assert_eq!(error.cause, Some(ValidationCause::RowRemovalMissing));
+        let identity = crate::types::TypeVariableId::new(0);
+        let rigid = crate::types::EffectRowVariable::Rigid(identity);
+        let inferred =
+            crate::types::EffectRowVariable::Inference(crate::types::InferenceVariableId::new(0));
+        for (variable, kind, cause) in [
+            (inferred, None, ValidationCause::RowOwnerInference),
+            (rigid, None, ValidationCause::MissingRowOwner),
+            (rigid, Some(Kind::Type), ValidationCause::RowOwnerKind),
+            (
+                rigid,
+                Some(Kind::EffectRow),
+                ValidationCause::RowOwnerScheme,
+            ),
+        ] {
+            let binders = kind
+                .as_ref()
+                .map(|kind| HashMap::from([(identity, (kind, root))]))
+                .unwrap_or_default();
+            let error = validator
+                .row_owner_proves_lacks(variable, &effect, &binders, root)
+                .unwrap_err();
+            assert_eq!(error.cause, Some(cause));
+        }
+    }
 
     #[test]
     fn core_continuation_messages_preserve_the_failed_relationship() {
