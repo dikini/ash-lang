@@ -17147,7 +17147,13 @@ where
                         )?;
                     }
                 }
-                return Err(TypeError::interface(diagnostic));
+                return Err(TypeError::Interface(Box::new(
+                    crate::interface::InterfaceDiagnostic::with_implementation_pair(
+                        diagnostic,
+                        previous.import_route().len(),
+                        later_route.len(),
+                    ),
+                )));
             }
         }
     }
@@ -23955,6 +23961,53 @@ mod tests {
             Ok(None)
         );
         assert_eq!(exact.used(), EXACT_WORK);
+    }
+
+    #[test]
+    fn implementation_pair_messages_preserve_import_route_roles() {
+        use crate::{
+            interface::InterfaceDiagnostic,
+            presentation::{compile_interface_diagnostic, write_json},
+        };
+        let source = SourceFile::new("pair.ash", "head").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        for earlier in 0..3 {
+            for later in 0..3 {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::ImplOverlap,
+                    SourceLabel::new(span, "ignored"),
+                );
+                let mut roles = vec!["earlier_implementation"];
+                roles.extend(std::iter::repeat_n(
+                    "earlier_implementation_import",
+                    earlier,
+                ));
+                if later > 0 {
+                    roles.push("later_implementation");
+                    roles.extend(std::iter::repeat_n(
+                        "later_implementation_import",
+                        later - 1,
+                    ));
+                }
+                for _ in &roles {
+                    diagnostic.related.push(SourceLabel::new(span, "ignored"));
+                }
+                let mut error =
+                    InterfaceDiagnostic::with_implementation_pair(diagnostic, earlier, later);
+                let view = compile_interface_diagnostic(&error, &[&source]).unwrap();
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                for (label, role) in json["labels"].as_array().unwrap().iter().skip(1).zip(roles) {
+                    assert_eq!(label["relationship"], role);
+                }
+                let last = error.related.pop().unwrap();
+                assert!(compile_interface_diagnostic(&error, &[&source]).is_err());
+                error.related.push(last.clone());
+                error.related.push(last);
+                assert!(compile_interface_diagnostic(&error, &[&source]).is_err());
+            }
+        }
     }
 
     #[test]

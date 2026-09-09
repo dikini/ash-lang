@@ -1971,7 +1971,14 @@ pub struct InterfaceDiagnostic {
 enum InterfaceDiagnosticContext {
     Plain,
     Selection(crate::evidence::SelectionError),
-    ArgumentCount { expected: usize, found: usize },
+    ArgumentCount {
+        expected: usize,
+        found: usize,
+    },
+    ImplementationPair {
+        earlier_imports: usize,
+        later_imports: usize,
+    },
 }
 
 impl From<crate::diagnostic::Diagnostic<InterfaceReason>> for InterfaceDiagnostic {
@@ -2009,6 +2016,10 @@ impl InterfaceDiagnostic {
 
     pub(crate) fn minimum_related(&self) -> usize {
         match &self.context {
+            InterfaceDiagnosticContext::ImplementationPair {
+                earlier_imports,
+                later_imports,
+            } => 1 + earlier_imports + later_imports,
             InterfaceDiagnosticContext::Selection(selection) => {
                 usize::from(selection.declaration_span().is_some())
                     + usize::from(selection.import_span().is_some())
@@ -2026,6 +2037,20 @@ impl InterfaceDiagnostic {
         Self {
             diagnostic,
             context: InterfaceDiagnosticContext::ArgumentCount { expected, found },
+        }
+    }
+
+    pub(crate) fn with_implementation_pair(
+        diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>,
+        earlier_imports: usize,
+        later_imports: usize,
+    ) -> Self {
+        Self {
+            diagnostic,
+            context: InterfaceDiagnosticContext::ImplementationPair {
+                earlier_imports,
+                later_imports,
+            },
         }
     }
 
@@ -2055,6 +2080,30 @@ impl InterfaceDiagnostic {
         &self,
         mut index: usize,
     ) -> Option<(crate::message::Message<'static>, &'static str)> {
+        if let InterfaceDiagnosticContext::ImplementationPair {
+            earlier_imports,
+            later_imports,
+        } = self.context
+        {
+            use crate::message::Message;
+            return if index == 0 {
+                Some((Message::earlier_implementation(), "earlier_implementation"))
+            } else if index <= earlier_imports {
+                Some((
+                    Message::earlier_implementation_import(),
+                    "earlier_implementation_import",
+                ))
+            } else if later_imports > 0 && index == earlier_imports + 1 {
+                Some((Message::later_implementation(), "later_implementation"))
+            } else if later_imports > 0 && index <= earlier_imports + later_imports {
+                Some((
+                    Message::later_implementation_import(),
+                    "later_implementation_import",
+                ))
+            } else {
+                None
+            };
+        }
         let InterfaceDiagnosticContext::Selection(selection) = &self.context else {
             return self.reason.related_message(index);
         };
@@ -2111,6 +2160,11 @@ impl InterfaceReason {
     pub(crate) fn message(self) -> Option<(crate::message::Message<'static>, &'static str)> {
         use crate::message::Message;
         Some(match self {
+            Self::UndeterminedParameter => (Message::undetermined_parameter(), "requirement_key"),
+            Self::ImplOverlap => (Message::impl_overlap(), "implementation_head"),
+            Self::ImplDeterminationConflict => {
+                (Message::impl_determination_conflict(), "implementation_key")
+            }
             Self::Unsatisfied => (Message::constraint_unsatisfied(), "interface_obligation"),
             Self::Ambiguous => (Message::constraint_ambiguous(), "interface_obligation"),
             Self::Cycle => (Message::constraint_cycle(), "interface_obligation"),
@@ -2176,6 +2230,10 @@ impl InterfaceReason {
             Self::ImplMissingMethod => (Message::evidence_required_method(), "required_method"),
             Self::ImplDuplicateMethod => (Message::evidence_earlier_method(), "earlier_method"),
             Self::ImplExtraMethod => (Message::impl_interface(), "interface_declaration"),
+            Self::UndeterminedParameter => (
+                Message::requirement_only_parameter(),
+                "undetermined_parameter",
+            ),
             Self::ArgumentCount => (Message::interface_parameters(), "interface_parameters"),
             Self::ImplOrphan => (
                 Message::impl_foreign_interface(),

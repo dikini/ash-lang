@@ -1799,6 +1799,58 @@ fn interface_argument_counts_reach_presentation_from_source() {
     }
 }
 
+#[test]
+fn implementation_pair_and_undetermined_parameter_messages() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_interface_diagnostic, write_human, write_json},
+    };
+    for (text, reason) in [
+        (
+            "interface Equal<A> {\nequal : (A, A) -> Bool\n}\nsame : A -> Bool where Equal<B>\nsame value = true\n",
+            InterfaceReason::UndeterminedParameter,
+        ),
+        (
+            "interface Equal<A> {\nequal : A -> A\n}\nimpl Equal<Int> {\nequal value = value\n}\nimpl Equal<Int> {\nequal value = value\n}\n",
+            InterfaceReason::ImplOverlap,
+        ),
+        (
+            "type List<A> =\nNil\n| Cons(A, List<A>)\ninterface Relation<A, B> where A -> B {\nrelate : A -> Int\n}\nimpl<A> Relation<List<A>, A> {\nrelate value = 0\n}\nimpl Relation<List<Int>, Bool> {\nrelate value = 0\n}\n",
+            InterfaceReason::ImplDeterminationConflict,
+        ),
+    ] {
+        let fixture = ModuleFixture::load("interface-pair-message.ash", text);
+        let TypeError::Interface(mut error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected interface error")
+        };
+        assert_eq!(error.reason, reason);
+        for label in &mut error.related {
+            *label = ash::diagnostic::SourceLabel::new(label.span(), "ignored legacy prose");
+        }
+        let view = compile_interface_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            assert!(
+                !String::from_utf8(output)
+                    .unwrap()
+                    .contains("ignored legacy prose")
+            );
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(
+            json["labels"][1]["relationship"],
+            if reason == InterfaceReason::UndeterminedParameter {
+                "undetermined_parameter"
+            } else {
+                "earlier_implementation"
+            }
+        );
+    }
+}
+
 #[derive(Clone, Copy)]
 enum KindExpectationShape {
     Type,

@@ -150,6 +150,22 @@ macro_rules! messages {
 }
 
 messages! {
+    /// A type variable in this requirement's selection key is absent from the definition's value type. It cannot be determined from that type.
+    undetermined_parameter => "undetermined-parameter" {},
+    /// This type parameter does not occur in the definition's value type.
+    requirement_only_parameter => "requirement-only-parameter" {},
+    /// This implementation can match the same interface application as an earlier available implementation.
+    impl_overlap => "impl-overlap" {},
+    /// These implementations can match the same determining arguments but require incompatible dependent arguments.
+    impl_determination_conflict => "impl-determination-conflict" {},
+    /// The earlier implementation is defined here.
+    earlier_implementation => "earlier-implementation" {},
+    /// This import made the earlier implementation available.
+    earlier_implementation_import => "earlier-implementation-import" {},
+    /// The later implementation is defined here.
+    later_implementation => "later-implementation" {},
+    /// This import made the later implementation available.
+    later_implementation_import => "later-implementation-import" {},
     /// An interface application's argument count differs from its declaration.
     interface_argument_count => "interface-argument-count" { expected: usize = 2, found: usize = 1 },
     /// The interface parameter list fixes its arity.

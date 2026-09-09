@@ -500,6 +500,14 @@ localization language. Color is not required for completion.
   messages, spans and checks are unchanged. Interface/constraint coverage is
   21 of 28 reasons, with 226 templates per locale. All 169 focused tests and
   warnings-denied Clippy passed.
+- Undetermined requirement parameters, implementation overlap and incompatible
+  implementation dependents now have precise messages. Pair diagnostics retain
+  the two import-route lengths already available at the producer; these preserve
+  earlier/later definition and import roles without parsing labels. Three source
+  cases and nine route combinations cover both locales, ordered JSON roles and
+  rejection of missing/extra labels. Interface/constraint coverage is 24 of 28
+  reasons, with 234 templates per locale. Checks, work charges and legacy labels
+  are unchanged. All 229 focused tests and warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
