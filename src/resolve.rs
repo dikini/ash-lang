@@ -10171,6 +10171,11 @@ impl Resolver {
                                 source.span,
                                 "lexical evidence identity space is exhausted",
                             )
+                            .with_context(
+                                ResolveContext::IdentityExhaustion(
+                                    ResolveIdentitySpace::LexicalEvidence,
+                                ),
+                            )
                         })?;
                     self.constraint_work.charge(1).map_err(|()| {
                         error(
@@ -15009,6 +15014,12 @@ mod tests {
         let source = SourceFile::new("capacity.ash", "name").unwrap();
         let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
         for (space, name, en, bg) in [
+            (
+                ResolveIdentitySpace::LexicalEvidence,
+                "lexical-evidence",
+                "lexical evidence and resource providers",
+                "лексикални свидетелства и доставчици на ресурси",
+            ),
             (
                 ResolveIdentitySpace::Interface,
                 "interface",
