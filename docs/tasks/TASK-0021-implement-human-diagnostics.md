@@ -149,6 +149,15 @@ localization language. Color is not required for completion.
   warnings-denied Clippy. Review confirmed target/importer distinction and
   responsibility; an actual imported non-UTF-8 test exercises the import label.
   The full slice-2 gate and remaining graph/module adapters are still open.
+- Graph syntax failures now render as an ordered collection, retaining the
+  established lexical/parser stream merge and attaching the selecting import
+  as related context. Syntax resource failures precede independent source
+  diagnostics and retain compiler responsibility and exact integer limits.
+  Tests cover rendering after input removal and limits through `usize::MAX`.
+- Graph syntax review found no actionable defects. The six focused suites,
+  all 1,227 library tests, nine rustdoc tests and warnings-denied Clippy passed.
+  Remaining graph/module adapters, broad phase coverage and the full slice-2
+  gate are still outstanding; runtime reporting and CLI defaults are unchanged.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

@@ -591,3 +591,36 @@ fn imported_non_utf8_input_keeps_input_responsibility_and_the_import_label() {
             .ends_with("child.ash")
     );
 }
+#[test]
+fn graph_syntax_rendering_merges_stages_and_retains_import_context() {
+    let tree = TempTree::create();
+    let entry = tree.write("entry.ash", "import child as Child\n");
+    tree.write(
+        "child.ash",
+        "import @ as Missing\nmain : Unit -> Int\nmain () = 42 #\n",
+    );
+    let failure = load_module_graph(&entry, &ModuleRoots::empty()).unwrap_err();
+    drop(tree);
+    let diagnostics = ash::presentation::compile_graph_diagnostics(&failure).unwrap();
+    assert!(diagnostics.len() >= 2);
+    let mut output = Vec::new();
+    for diagnostic in &diagnostics {
+        ash::presentation::write_json(&mut output, diagnostic).unwrap();
+    }
+    let output = String::from_utf8(output).unwrap();
+    let json: Vec<serde_json::Value> = output
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(json[0]["reason"], "parse.expected-form");
+    assert_eq!(json.last().unwrap()["reason"], "lex.unknown-character");
+    for item in json {
+        assert_eq!(item["responsibility"], "source");
+        let labels = item["labels"].as_array().unwrap();
+        assert!(labels[0]["path"].as_str().unwrap().ends_with("child.ash"));
+        let import = labels.last().unwrap();
+        assert_eq!(import["role"], "related");
+        assert_eq!(import["relationship"], "import_context");
+        assert!(import["path"].as_str().unwrap().ends_with("entry.ash"));
+    }
+}

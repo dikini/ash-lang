@@ -363,3 +363,57 @@ fn every_retained_io_category_has_a_precise_translation_and_machine_name() {
         assert_eq!(json["facts"][1]["value"], code);
     }
 }
+#[test]
+fn syntax_resource_failure_precedes_independent_source_diagnostics() {
+    use ash::{
+        lexer::lex, module::ModuleSyntaxFailure, parser::ResourceFailure, source::SourceFile,
+    };
+    for resource in [
+        ResourceFailure::StructuralDepth { limit: 128 },
+        ResourceFailure::SyntaxWork { limit: 1_500_000 },
+        ResourceFailure::SyntaxWork { limit: usize::MAX },
+    ] {
+        let source = SourceFile::new("large.ash", "#").unwrap();
+        let lexical = lex(&source).unwrap().diagnostics;
+        let failure =
+            GraphDiagnostic::from(LoadGraphError::Syntax(Box::new(ModuleSyntaxFailure {
+                source,
+                import_span: None,
+                lexical,
+                parser: Vec::new(),
+                resource: Some(resource),
+            })));
+        let diagnostics = compile_graph_diagnostics(&failure).unwrap();
+        assert_eq!(diagnostics.len(), 2);
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], resource.reason_code());
+        assert_eq!(json["responsibility"], "compiler");
+        let limit = match resource {
+            ResourceFailure::StructuralDepth { limit } | ResourceFailure::SyntaxWork { limit } => {
+                limit
+            }
+        };
+        assert_eq!(
+            json["facts"][0],
+            serde_json::json!({"name":"limit", "kind":"integer", "value":limit})
+        );
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostics[1]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], "lex.unknown-character");
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_short(
+                &mut output,
+                &diagnostics[0],
+                &Catalogue::new(locale).unwrap(),
+            )
+            .unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains("large.ash"));
+            assert!(output.contains(&limit.to_string()));
+        }
+    }
+}

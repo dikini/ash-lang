@@ -6,12 +6,12 @@ use std::{
 };
 
 use crate::{
-    diagnostic::Diagnostic,
+    diagnostic::{Diagnostic, compare_source_spans},
     elaborate::TypeReason,
     lexer::LexReason,
     message::{Catalogue, CatalogueError, Message},
-    module::{GraphDiagnostic, LoadGraphError, io_kind_name},
-    parser::{FoundToken, ParseContext, ParseDiagnostic, SynchronizationBoundary},
+    module::{GraphDiagnostic, LoadGraphError, ModuleSyntaxFailure, io_kind_name},
+    parser::{FoundToken, ParseContext, ParseDiagnostic, ResourceFailure, SynchronizationBoundary},
     source::{SourceFile, Span},
 };
 
@@ -46,12 +46,14 @@ struct Fact<'a> {
 enum FactValue<'a> {
     Text(&'a str),
     Path(&'a Path),
+    Integer(usize),
 }
 
 impl serde::Serialize for FactValue<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
             Self::Text(value) => value.serialize(serializer),
+            Self::Integer(value) => value.serialize(serializer),
             Self::Path(path) => {
                 if let Some(text) = path.to_str() {
                     return text.serialize(serializer);
@@ -297,6 +299,9 @@ pub fn compile_graph_diagnostics(
     context: &GraphDiagnostic,
 ) -> Result<Vec<CompileDiagnostic<'_>>, PresentationError> {
     let failure = context.failure();
+    if let LoadGraphError::Syntax(failure) = failure {
+        return compile_graph_syntax(context, failure);
+    }
     let (reason, message, path, kind) = match failure {
         LoadGraphError::Read { path, kind, .. } => (
             "input.read",
@@ -324,7 +329,23 @@ pub fn compile_graph_diagnostics(
             value: FactValue::Text(io_kind_name(kind)),
         });
     }
-    let primary = failure
+    let primary = import_label(context, "import_target")?;
+    Ok(vec![CompileDiagnostic {
+        reason: reason.into(),
+        responsibility: "input",
+        message,
+        primary,
+        related: Vec::new(),
+        facts,
+    }])
+}
+
+fn import_label<'a>(
+    context: &'a GraphDiagnostic,
+    relationship: &'static str,
+) -> Result<Option<Label<'a>>, PresentationError> {
+    context
+        .failure()
         .import_span()
         .map(|span| {
             let source = context
@@ -338,19 +359,77 @@ pub fn compile_graph_diagnostics(
                 source,
                 span,
                 message: Message::import_target(),
-                relationship: "import_target",
+                relationship,
                 facts: Vec::new(),
             })
         })
-        .transpose()?;
-    Ok(vec![CompileDiagnostic {
-        reason: reason.into(),
-        responsibility: "input",
-        message,
-        primary,
-        related: Vec::new(),
-        facts,
-    }])
+        .transpose()
+}
+
+fn compile_graph_syntax<'a>(
+    context: &'a GraphDiagnostic,
+    failure: &'a ModuleSyntaxFailure,
+) -> Result<Vec<CompileDiagnostic<'a>>, PresentationError> {
+    let sources: Vec<_> = context.sources().collect();
+    let mut diagnostics = Vec::new();
+    if let Some(resource) = failure.resource {
+        let path = failure.source.display_path();
+        let (limit, message) = match resource {
+            ResourceFailure::StructuralDepth { limit } => {
+                (limit, Message::syntax_depth(path, limit))
+            }
+            ResourceFailure::SyntaxWork { limit } => (limit, Message::syntax_work(path, limit)),
+        };
+        diagnostics.push(CompileDiagnostic {
+            reason: resource.reason_code().into(),
+            responsibility: "compiler",
+            message,
+            primary: None,
+            related: Vec::new(),
+            facts: vec![
+                Fact {
+                    name: "limit",
+                    kind: "integer",
+                    value: FactValue::Integer(limit),
+                },
+                Fact {
+                    name: "source_path",
+                    kind: "path-display",
+                    value: FactValue::Text(path),
+                },
+            ],
+        });
+    }
+    // Merge the retained streams exactly as the established syntax reporter does.
+    // Do not globally sort: parser insertion order also carries recovery causality.
+    let mut lexical = failure.lexical.iter().peekable();
+    let mut parser = failure.parser.iter().peekable();
+    while lexical.peek().is_some() || parser.peek().is_some() {
+        let take_parser = match (lexical.peek(), parser.peek()) {
+            (Some(lexical), Some(parser)) => {
+                compare_source_spans(parser.primary.span(), lexical.primary.span()).is_lt()
+            }
+            (None, Some(_)) => true,
+            _ => false,
+        };
+        diagnostics.push(if take_parser {
+            compile_parse_diagnostic(parser.next().expect("observed parser diagnostic"), &sources)?
+        } else {
+            compile_lex_diagnostic(
+                lexical.next().expect("observed lexical diagnostic"),
+                &sources,
+            )?
+        });
+    }
+    if diagnostics.is_empty() {
+        return Err(PresentationError::MissingFact);
+    }
+    for diagnostic in &mut diagnostics {
+        if let Some(import) = import_label(context, "import_context")? {
+            diagnostic.related.push(import);
+        }
+    }
+    Ok(diagnostics)
 }
 
 /// A renderer failure, distinct from the diagnostic being presented.

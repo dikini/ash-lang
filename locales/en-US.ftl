@@ -99,3 +99,5 @@ input-read =
         [other] an uncategorized I/O error occurred.
        *[uncategorized] an uncategorized I/O error occurred.
     }
+syntax-depth = Parsing `{ $path }` reached the compiler's nesting limit of { $limit }.
+syntax-work = Processing `{ $path }` reached the compiler's syntax-work limit of { $limit }.

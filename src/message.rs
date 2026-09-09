@@ -51,6 +51,11 @@ impl Locale {
 /// use ash::{message::Message, parser::ExpectedForm};
 /// let _ = Message::parse_found(ExpectedForm::Expression);
 /// ```
+/// Resource quantities are checked integers, not preformatted descriptions:
+/// ```compile_fail
+/// use ash::message::Message;
+/// let _ = Message::syntax_depth("source.ash", "128");
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Message<'a> {
     key: &'static str,
@@ -98,6 +103,13 @@ impl Argument<'_> for std::io::ErrorKind {
     }
 }
 
+impl Argument<'_> for usize {
+    fn value(self) -> Cow<'static, str> {
+        // Resource limits are exact decimal quantities, not floating-point counts.
+        Cow::Owned(self.to_string())
+    }
+}
+
 // One declaration supplies typed constructors and exhaustive test examples.
 // The concrete carrier remains visible to the source ownership inventory.
 macro_rules! messages {
@@ -120,6 +132,10 @@ macro_rules! messages {
 }
 
 messages! {
+    /// Compiler protection for syntax nesting stopped parsing.
+    syntax_depth => "syntax-depth" { path: &'a str = "source.ash", limit: usize = 128 },
+    /// Cumulative retained syntax work reached the compiler budget.
+    syntax_work => "syntax-work" { path: &'a str = "source.ash", limit: usize = 1_500_000 },
     /// An input read failure with its native target path and I/O category.
     input_read => "input-read" { path: &'a Path = Path::new("input.ash"), kind: std::io::ErrorKind = std::io::ErrorKind::NotFound },
     /// Input bytes do not encode UTF-8 source text.
